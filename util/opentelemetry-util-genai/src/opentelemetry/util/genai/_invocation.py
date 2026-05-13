@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Iterator, Sequence
+from typing import TYPE_CHECKING, Any, Generator, Sequence
 
 from typing_extensions import Self, TypeAlias
 
@@ -166,7 +166,7 @@ class GenAIInvocation(ABC):
         self._finish(error)
 
     @contextmanager
-    def _managed(self) -> Iterator[Self]:
+    def _managed(self) -> Generator[Self, None, None]:
         """Context manager that calls stop() on success or fail() on exception."""
         try:
             yield self
