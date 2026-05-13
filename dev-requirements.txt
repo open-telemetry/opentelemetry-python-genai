@@ -1,7 +1,7 @@
-pyright==v1.1.404
+pyright==1.1.409
 sphinx==7.1.2
-sphinx-rtd-theme==2.0.0rc4
-sphinx-autodoc-typehints==1.25.2
+sphinx-rtd-theme==2.0.0
+sphinx-autodoc-typehints==1.25.3
 pytest==9.0.3
 pytest-cov==4.1.0
 readme-renderer==42.0

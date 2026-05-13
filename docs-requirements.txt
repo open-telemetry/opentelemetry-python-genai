@@ -1,6 +1,6 @@
 sphinx==7.1.2
-sphinx-rtd-theme==2.0.0rc4
-sphinx-autodoc-typehints==1.25.2
+sphinx-rtd-theme==2.0.0
+sphinx-autodoc-typehints==1.25.3
 
 # Required by opentelemetry-util-genai
 fsspec>=2025.9.0
