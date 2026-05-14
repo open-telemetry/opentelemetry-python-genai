@@ -68,9 +68,33 @@ uv run tox -e typecheck
 
 ### 4. Update the changelog
 
-Add an entry to the affected package's `CHANGELOG.md` under the `Unreleased`
-section for any change with user-visible impact. Pure docs and tooling
-changes don't need an entry.
+This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage
+changelogs. Each PR with user-visible impact must add a changelog fragment
+under the affected package's `.changelog/` directory rather than editing
+`CHANGELOG.md` directly.
+
+**Fragment path:** `<package>/.changelog/<PR_NUMBER>.<TYPE>`
+
+**Types:** `added`, `changed`, `deprecated`, `removed`, `fixed`.
+
+The file contains a one-line description. For example,
+`instrumentation/opentelemetry-instrumentation-anthropic/.changelog/123.fixed`:
+
+```
+fix request hook not being called when stream=True
+```
+
+Don't include the PR number in the body — towncrier appends it from the
+filename.
+
+Preview the rendered changelogs locally:
+
+```sh
+uv run tox -e changelog-preview
+```
+
+If your change doesn't need an entry (pure docs/tooling), add the
+`Skip Changelog` label to the PR.
 
 ## Keep PRs small
 

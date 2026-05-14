@@ -117,4 +117,5 @@ dev = [
     "tox",
     "tox-uv>=1",
     "pre-commit",
+    "towncrier",
 ]
