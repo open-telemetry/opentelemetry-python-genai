@@ -70,6 +70,19 @@ uv run tox -e typecheck
   `typing.cast(...)`, unless the referenced type is imported at runtime.
 - Whenever applicable, all code changes should have tests that actually validate the changes.
 
+## Changelog
+
+This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage changelogs.
+
+- Do not edit `CHANGELOG.md` directly — the `changelog` workflow rejects PRs that do.
+- For changes with user-visible impact, add a fragment at `<package>/.changelog/<PR_NUMBER>.<type>`
+  containing a one-line description. Types: `added`, `changed`, `deprecated`, `removed`, `fixed`.
+- Don't include the PR number in the body — towncrier appends it from the filename.
+- Preview locally with `uv run tox -e changelog-preview`.
+- If the change needs no entry (pure docs or tooling), add the `Skip Changelog` label to the PR.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#4-update-the-changelog) for full details.
+
 ## Instrumentation rules
 
 Apply to packages under `instrumentation/`.
