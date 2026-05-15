@@ -12,6 +12,11 @@ bulk-release tooling carried over from `opentelemetry-python-contrib`.
 > `opentelemetry-python-contrib`. Until they are, releases are performed
 > manually using the steps below. Tracked in #15.
 
+> [!NOTE]
+> The changelog steps below assume the towncrier setup introduced in #16.
+> That PR adds `towncrier` to the dev dependencies and per-package
+> `[tool.towncrier]` config. This document should only land after #16.
+
 ## Publishable packages
 
 | Package | PyPI name |
