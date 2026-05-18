@@ -265,8 +265,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Read pinned weaver version
         id: versions
@@ -285,7 +285,7 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: tox -e py312-test-instrumentation-openai-v2-conformance -- -ra
+        run: uvx --with tox-uv tox -e py312-test-instrumentation-openai-v2-conformance -- -ra
 
   py313-test-instrumentation-openai-v2-conformance_ubuntu-latest:
     name: instrumentation-openai-v2-conformance 3.13 Ubuntu
@@ -300,8 +300,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Read pinned weaver version
         id: versions
@@ -320,7 +320,7 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: tox -e py313-test-instrumentation-openai-v2-conformance -- -ra
+        run: uvx --with tox-uv tox -e py313-test-instrumentation-openai-v2-conformance -- -ra
 
   py310-test-instrumentation-openai_agents-v2-oldest_ubuntu-latest:
     name: instrumentation-openai_agents-v2-oldest 3.10 Ubuntu
@@ -905,8 +905,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Read pinned weaver version
         id: versions
@@ -925,7 +925,7 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: tox -e py312-test-instrumentation-anthropic-conformance -- -ra
+        run: uvx --with tox-uv tox -e py312-test-instrumentation-anthropic-conformance -- -ra
 
   py313-test-instrumentation-anthropic-conformance_ubuntu-latest:
     name: instrumentation-anthropic-conformance 3.13 Ubuntu
@@ -940,8 +940,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Read pinned weaver version
         id: versions
@@ -960,7 +960,7 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: tox -e py313-test-instrumentation-anthropic-conformance -- -ra
+        run: uvx --with tox-uv tox -e py313-test-instrumentation-anthropic-conformance -- -ra
 
   py310-test-instrumentation-claude-agent-sdk-oldest_ubuntu-latest:
     name: instrumentation-claude-agent-sdk-oldest 3.10 Ubuntu
@@ -1127,8 +1127,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Read pinned weaver version
         id: versions
@@ -1147,7 +1147,7 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: tox -e py312-test-instrumentation-langchain-conformance -- -ra
+        run: uvx --with tox-uv tox -e py312-test-instrumentation-langchain-conformance -- -ra
 
   py313-test-instrumentation-langchain-conformance_ubuntu-latest:
     name: instrumentation-langchain-conformance 3.13 Ubuntu
@@ -1162,8 +1162,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Read pinned weaver version
         id: versions
@@ -1182,7 +1182,7 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: tox -e py313-test-instrumentation-langchain-conformance -- -ra
+        run: uvx --with tox-uv tox -e py313-test-instrumentation-langchain-conformance -- -ra
 
   py310-test-util-genai_ubuntu-latest:
     name: util-genai 3.10 Ubuntu
