@@ -28,6 +28,6 @@ See [CONTRIBUTING.md](https://github.com/open-telemetry/opentelemetry-python-gen
 for the style guide, changelog guidance, and more.
 
 - [ ] Followed the style guidelines of this project
-- [ ] Changelog updated (or `Skip Changelog` label applied if no entry is needed)
+- [ ] Changelog updated if the change requires an entry
 - [ ] Unit tests added
 - [ ] Documentation updated

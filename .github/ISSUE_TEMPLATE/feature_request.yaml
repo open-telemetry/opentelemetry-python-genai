@@ -42,7 +42,7 @@ body:
   - type: dropdown
     id: contribute
     attributes:
-      label: Would you like to implement a fix?
+      label: Would you like to implement it?
       description: |
         For guidance on how to get started, refer to the [contribution guide](https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTRIBUTING.md).
       options:
