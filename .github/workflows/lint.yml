@@ -37,11 +37,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-openai-v2
+        run: uvx --with tox-uv tox -e lint-instrumentation-openai-v2
 
   lint-instrumentation-openai_agents-v2:
     name: instrumentation-openai_agents-v2
@@ -56,11 +56,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-openai_agents-v2
+        run: uvx --with tox-uv tox -e lint-instrumentation-openai_agents-v2
 
   lint-instrumentation-google-genai:
     name: instrumentation-google-genai
@@ -75,11 +75,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-google-genai
+        run: uvx --with tox-uv tox -e lint-instrumentation-google-genai
 
   lint-instrumentation-anthropic:
     name: instrumentation-anthropic
@@ -94,11 +94,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-anthropic
+        run: uvx --with tox-uv tox -e lint-instrumentation-anthropic
 
   lint-instrumentation-claude-agent-sdk:
     name: instrumentation-claude-agent-sdk
@@ -113,11 +113,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-claude-agent-sdk
+        run: uvx --with tox-uv tox -e lint-instrumentation-claude-agent-sdk
 
   lint-instrumentation-langchain:
     name: instrumentation-langchain
@@ -132,11 +132,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-langchain
+        run: uvx --with tox-uv tox -e lint-instrumentation-langchain
 
   lint-instrumentation-weaviate:
     name: instrumentation-weaviate
@@ -151,11 +151,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-weaviate
+        run: uvx --with tox-uv tox -e lint-instrumentation-weaviate
 
   lint-util-genai:
     name: util-genai
@@ -170,11 +170,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-util-genai
+        run: uvx --with tox-uv tox -e lint-util-genai
 
   lint-license-header-check:
     name: license-header-check
@@ -189,8 +189,8 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-license-header-check
+        run: uvx --with tox-uv tox -e lint-license-header-check

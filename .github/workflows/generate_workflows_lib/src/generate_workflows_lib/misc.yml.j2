@@ -65,8 +65,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       {%- if job_data == "docker-tests" %}
 
@@ -75,7 +75,7 @@ jobs:
       {%- endif %}
 
       - name: Run tests
-        run: tox -e {{ job_data }}
+        run: uvx --with tox-uv tox -e {{ job_data }}
       {%- if job_data == "generate-workflows" %}
 
       - name: Check workflows are up to date

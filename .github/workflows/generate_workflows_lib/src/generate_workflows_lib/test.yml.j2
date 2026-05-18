@@ -38,8 +38,8 @@ jobs:
         with:
           python-version: "{{ job_data.python_version }}"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       {%- if job_data.os == "windows-latest" %}
 
       - name: Configure git to support long filenames
@@ -47,5 +47,5 @@ jobs:
       {%- endif %}
 
       - name: Run tests
-        run: tox -e {{ job_data.tox_env }} -- -ra
+        run: uvx --with tox-uv tox -e {{ job_data.tox_env }} -- -ra
   {%- endfor %}

@@ -38,9 +38,9 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e {{ job_data.tox_env }}
+        run: uvx --with tox-uv tox -e {{ job_data.tox_env }}
   {%- endfor %}
