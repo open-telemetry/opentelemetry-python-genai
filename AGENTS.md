@@ -79,9 +79,6 @@ This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage changelo
   containing a one-line description. Types: `added`, `changed`, `deprecated`, `removed`, `fixed`.
 - Don't include the PR number in the body — towncrier appends it from the filename.
 - Preview locally with `uv run tox -e changelog-preview`.
-- If the change needs no entry (pure docs or tooling), add the `Skip Changelog` label to the PR.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md#4-update-the-changelog) for full details.
 
 ## Instrumentation rules
 
