@@ -109,6 +109,21 @@ Apply to packages under `instrumentation/`.
   `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`) rather
   than re-implementing provider/exporter/VCR plumbing.
 
+### Conformance tests
+
+Packages with substantive instrumentation ship `tests/conformance/<scenario>.py`
+scenarios and a `tests/test_conformance.py` that validates emitted telemetry
+against the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+via Weaver live-check. Each scenario module defines a subclass of
+`opentelemetry.test_util_genai.conformance.Scenario` that sets
+`expected_spans`, `expected_metrics`, and implements
+`run(*, tracer_provider, meter_provider, logger_provider, vcr)`.
+
+`tests/test_conformance.py` must set `pytestmark = pytest.mark.conformance` at
+module level.
+
+Run via `tox -e py312-test-instrumentation-<pkg>-conformance`.
+
 The parallel PR-review rules live in
 [`.github/instructions/instrumentation.instructions.md`](.github/instructions/instrumentation.instructions.md)
 and should be kept in sync with this section.

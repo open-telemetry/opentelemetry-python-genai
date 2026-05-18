@@ -1,0 +1,4 @@
+contact_links:
+  - name: Slack
+    url: https://cloud-native.slack.com/archives/C06KR7ARS3X
+    about: Or the `#otel-genai-instrumentation` channel in the CNCF Slack instance.

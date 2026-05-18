@@ -66,6 +66,27 @@ Run type checking across the workspace:
 uv run tox -e typecheck
 ```
 
+#### Managing cassettes (test recordings)
+
+GenAI tests replay recorded HTTP interactions (cassettes) stored under each
+package's `tests/cassettes/`.
+
+- **Run**: nothing extra — cassettes replay automatically when present. Tests
+  that need a cassette skip if it is missing and no real API key is set.
+- **Record**: delete the target `tests/cassettes/<test_name>.yaml`, export a
+  real provider API key (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), and
+  rerun the test. `pytest-vcr` writes the cassette on the live call.
+- **Sanitize**: every package's `vcr_config()` in `tests/conftest.py` must
+  scrub auth via `filter_headers` and strip identifying response headers via
+  `scrub_response_headers(...)` from `opentelemetry.test_util_genai.vcr`.
+  Diff each new cassette before committing — leaked API keys, org ids, or
+  `Set-Cookie` values block the PR.
+- **AI-generated cassettes**: if you lack provider access, you may
+  synthesize a cassette from the provider's API reference via AI. Make sure
+  to mention it in the PR and open a follow-up issue to re-record it in CI
+  against the real provider.
+- **CI**: replay-only; recording in CI is a future improvement.
+
 ### 4. Update the changelog
 
 This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage
@@ -136,3 +157,4 @@ For more information about the maintainer role, see the [community repository](h
 - [Leighton Chen](https://github.com/lzchen), Microsoft
 
 For more information about the approver role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#approver).
+

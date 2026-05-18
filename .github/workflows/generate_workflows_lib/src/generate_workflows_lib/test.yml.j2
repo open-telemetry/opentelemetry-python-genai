@@ -45,6 +45,47 @@ jobs:
       - name: Configure git to support long filenames
         run: git config --system core.longpaths true
       {%- endif %}
+      {%- if job_data.needs_weaver %}
+
+      - name: Read pinned weaver version
+        id: versions
+        {%- if job_data.os == "windows-latest" %}
+        shell: pwsh
+        run: |
+          Select-String -Path versions.env -Pattern '^WEAVER_VERSION=' | ForEach-Object { $_.Line } | Add-Content $env:GITHUB_OUTPUT
+        {%- else %}
+        run: |
+          # shellcheck disable=SC2002
+          cat versions.env | grep -E '^WEAVER_VERSION=' >> "$GITHUB_OUTPUT"
+        {%- endif %}
+
+      - name: Install weaver ${% raw %}{{ steps.versions.outputs.WEAVER_VERSION }}{% endraw %}
+        env:
+          WEAVER_VERSION: ${% raw %}{{ steps.versions.outputs.WEAVER_VERSION }}{% endraw %}
+        {%- if job_data.os == "windows-latest" %}
+        shell: pwsh
+        run: |
+          $url = "https://github.com/open-telemetry/weaver/releases/download/$env:WEAVER_VERSION/weaver-x86_64-pc-windows-msvc.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\weaver.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\weaver.zip" -DestinationPath "$env:RUNNER_TEMP\weaver"
+          "$env:RUNNER_TEMP\weaver" | Add-Content $env:GITHUB_PATH
+          & "$env:RUNNER_TEMP\weaver\weaver.exe" --version
+        {%- elif job_data.os == "macos-latest" %}
+        run: |
+          WEAVER_ASSET="weaver-aarch64-apple-darwin"
+          WEAVER_URL="https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${WEAVER_ASSET}.tar.xz"
+          curl -sSL "$WEAVER_URL" | tar -xJ -C /tmp "${WEAVER_ASSET}/weaver"
+          sudo mv "/tmp/${WEAVER_ASSET}/weaver" /usr/local/bin/weaver
+          weaver --version
+        {%- else %}
+        run: |
+          WEAVER_ASSET="weaver-x86_64-unknown-linux-gnu"
+          WEAVER_URL="https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${WEAVER_ASSET}.tar.xz"
+          curl -sSL "$WEAVER_URL" | tar -xJ -C /tmp "${WEAVER_ASSET}/weaver"
+          sudo mv "/tmp/${WEAVER_ASSET}/weaver" /usr/local/bin/weaver
+          weaver --version
+        {%- endif %}
+      {%- endif %}
 
       - name: Run tests
         run: uvx --with tox-uv tox -e {{ job_data.tox_env }} -- -ra

@@ -1,6 +1,11 @@
 version = 1
 revision = 3
 requires-python = ">=3.10"
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version == '3.13.*'",
+    "python_full_version < '3.13'",
+]
 
 [manifest]
 members = [
@@ -1206,7 +1211,7 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "google-genai", marker = "extra == 'instruments'", specifier = ">=1.32.0" },
+    { name = "google-genai", marker = "extra == 'instruments'", specifier = ">=1.32.0,<3" },
     { name = "opentelemetry-api", specifier = "~=1.40" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.61b0,<2" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.61b0,<2" },
@@ -1397,6 +1402,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
     { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-test-utils" },
     { name = "opentelemetry-util-genai" },
     { name = "pytest" },
     { name = "pyyaml" },
@@ -1408,6 +1414,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
     { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-test-utils" },
     { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
     { name = "pytest" },
     { name = "pyyaml" },

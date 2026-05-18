@@ -38,6 +38,7 @@ opentelemetry-instrumentation-openai-v2 = { workspace = true }
 opentelemetry-instrumentation-openai-agents-v2 = { workspace = true }
 opentelemetry-instrumentation-weaviate = { workspace = true }
 
+
 # https://docs.astral.sh/uv/reference/settings/#workspace
 [tool.uv.workspace]
 members = [

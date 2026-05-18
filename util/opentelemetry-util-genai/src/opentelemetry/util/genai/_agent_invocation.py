@@ -36,9 +36,8 @@ _GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 class AgentInvocation(GenAIInvocation):
     """Represents a single agent invocation (invoke_agent span).
 
-    Use handler.start_invoke_local_agent() / handler.start_invoke_remote_agent()
-    or the handler.invoke_local_agent() / handler.invoke_remote_agent() context
-    managers rather than constructing this directly.
+    Use handler.invoke_local_agent() or handler.invoke_remote_agent()
+    rather than constructing this directly.
 
     Reference:
         Client span: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-client-span
@@ -59,7 +58,7 @@ class AgentInvocation(GenAIInvocation):
         server_port: int | None = None,
         agent_name: str | None = None,
     ) -> None:
-        """Use handler.start_invoke_local_agent() or handler.start_invoke_remote_agent() instead of calling this directly."""
+        """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
         super().__init__(
             tracer,
