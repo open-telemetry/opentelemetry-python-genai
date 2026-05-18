@@ -13,6 +13,18 @@
     // requirements.latest.txt files are skipped without this.
     "managerFilePatterns": ["/(^|/)requirements\\.latest\\.txt$/"]
   },
+  // Manage WEAVER_VERSION and SEMCONV_GENAI_REF in versions.env via their
+  // `# renovate:` annotations.
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^versions\\.env$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+WEAVER_VERSION=(?<currentValue>\\S+)",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) packageName=(?<packageName>\\S+) versioning=(?<versioning>\\S+)\\s+SEMCONV_GENAI_REF=(?<currentValue>\\S+)"
+      ]
+    }
+  ],
   "packageRules": [
     {
       "groupName": "all patch versions",

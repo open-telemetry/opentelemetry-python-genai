@@ -20,8 +20,7 @@ from opentelemetry.util.types import AttributeValue
 class EmbeddingInvocation(GenAIInvocation):
     """Represents a single embedding model invocation.
 
-    Use handler.start_embedding(provider) or the handler.embedding(provider)
-    context manager rather than constructing this directly.
+    Use handler.embedding(provider) rather than constructing this directly.
     """
 
     def __init__(
@@ -36,7 +35,7 @@ class EmbeddingInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
     ) -> None:
-        """Use handler.start_embedding(provider) or handler.embedding(provider) instead of calling this directly."""
+        """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
         super().__init__(
             tracer,

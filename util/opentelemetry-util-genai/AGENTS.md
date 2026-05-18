@@ -25,7 +25,7 @@ applicable ones.
 Every new operation type must follow this pattern:
 
 ```python
-invocation = handler.start_inference(provider, request_model, server_address=..., server_port=...)
+invocation = handler.inference(provider, request_model, server_address=..., server_port=...)
 invocation.temperature = ...
 try:
     response = client.call(...)
@@ -39,24 +39,23 @@ except Exception as exc:
 
 Factory methods on `TelemetryHandler` (`handler.py`):
 
-- `start_inference(provider, request_model, *, server_address, server_port)` → `InferenceInvocation`
-- `start_embedding(provider, request_model, *, server_address, server_port)` → `EmbeddingInvocation`
-- `start_tool(name, *, arguments, tool_call_id, tool_type, tool_description)` → `ToolInvocation`
-- `start_workflow(name)` → `WorkflowInvocation`
+- `inference(provider, request_model, *, server_address, server_port)` → `InferenceInvocation`
+- `embedding(provider, request_model, *, server_address, server_port)` → `EmbeddingInvocation`
+- `tool(name, *, arguments, tool_call_id, tool_type, tool_description)` → `ToolInvocation`
+- `workflow(name)` → `WorkflowInvocation`
 
-Context manager equivalents (`handler.inference()`, `handler.embedding()`, `handler.tool()`,
-`handler.workflow()`) are available when the span lifetime maps cleanly to a `with` block.
+The returned object can also be used as a context manager (`with ... as invocation:`) when the span lifetime maps cleanly to a `with` block.
 
-`start_*()` factories must map 1:1 to distinct semconv operation types (inference, embeddings,
+The above factories must map 1:1 to distinct semconv operation types (inference, embeddings,
 tool execution, agent invocation, workflow invocation). Names must match the operation
 unambiguously — for example, `create_agent` and `invoke_agent` are different operations, so a
-single `start_agent()` would be ambiguous and is not acceptable. Add a new factory per operation
+single `agent()` would be ambiguous and is not acceptable. Add a new factory per operation
 instead.
 
-Factory names are Python-style singular verbs (`start_embedding`, `start_tool`); the op names
-they map to follow semconv (`embeddings`, `tool execution`, future operations).
+Factory names are Python-style singular verbs (`inference`, `embedding`, `tool`, `workflow`); the op names
+they map to follow semconv operations.
 
-`start_*()` factories must accept all attributes that semconv marks as important for sampling
+Factory methods must accept all attributes that semconv marks as important for sampling
 decisions as parameters, so they are on the span at creation time. Attributes that are also
 marked required by semconv must be required parameters (no default value). Operation name
 is usually hardcoded in specific invocation and does not need to be passed.
@@ -65,7 +64,7 @@ is usually hardcoded in specific invocation and does not need to be passed.
 
 **Never construct invocation types directly** (`InferenceInvocation(...)`, `ToolInvocation(...)`,
 etc.) in instrumentation or production code — direct construction skips span creation and context
-propagation, so all telemetry calls become no-ops. Always use `handler.start_*()`.
+propagation, so all telemetry calls become no-ops. Always use `handler.*()`.
 
 ## 3. Exception Handling
 

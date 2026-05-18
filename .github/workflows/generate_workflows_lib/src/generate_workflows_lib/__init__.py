@@ -88,6 +88,7 @@ def get_test_job_datas(tox_envs: list, operating_systems: list) -> list:
                     "python_version": aliased_python_version,
                     "tox_env": tox_env,
                     "os": operating_system,
+                    "needs_weaver": tox_env.endswith("-conformance"),
                 }
             )
 
