@@ -1,133 +1,104 @@
 # Release process
 
-This repo follows an **independent per-package release model**: every
-publishable package owns its own version, `CHANGELOG.md`, and release cadence.
-There is no coordinated bulk release across packages. The packages listed in
-`[exclude_release]` of [`eachdist.ini`](eachdist.ini) are excluded from any
-bulk-release tooling carried over from `opentelemetry-python-contrib`.
+Every package in this repo releases independently. There is no coordinated
+bulk release across packages.
 
-> [!IMPORTANT]
-> The CI workflows for fully automated releases (`prepare-release`,
-> `package-release`, etc.) have **not yet been ported** from
-> `opentelemetry-python-contrib`. Until they are, releases are performed
-> manually using the steps below. Tracked in #15.
+Releases are driven by GitHub Actions workflows ported from
+`opentelemetry-python-contrib`. They handle version bumps, changelog
+generation (via [towncrier](https://towncrier.readthedocs.io/)), tagging,
+PyPI publishing, GitHub releases, and back-merging the changelog to `main`.
 
-## Publishable packages
+## Prerequisites (one-time, repo-level)
 
-| Package | PyPI name |
-| --- | --- |
-| `opentelemetry-instrumentation-anthropic`        | _TBD_ |
-| `opentelemetry-instrumentation-claude-agent-sdk` | _TBD_ |
-| `opentelemetry-instrumentation-google-genai`     | _TBD_ |
-| `opentelemetry-instrumentation-langchain`        | _TBD_ |
-| `opentelemetry-instrumentation-openai-agents-v2` | _TBD_ |
-| `opentelemetry-instrumentation-openai-v2`        | _TBD_ |
-| `opentelemetry-instrumentation-weaviate`         | _TBD_ |
-| `opentelemetry-util-genai`                       | _TBD_ |
+These must be configured by maintainers before the workflows can run:
 
-> [!NOTE]
-> The PyPI names will differ from the names used in
-> `opentelemetry-python-contrib`. Until each name is chosen and reserved on
-> PyPI, packages cannot be published from this repo. Tracked in #15.
+- **`OTELBOT_APP_ID`** (repo or org variable) and **`OTELBOT_PRIVATE_KEY`**
+  (repo or org secret) — credentials for the `otelbot` GitHub App. The
+  workflows commit and open PRs through this App so the resulting PRs
+  trigger CI (a plain `GITHUB_TOKEN` doesn't).
+- **`pypi_password`** (repo secret) — a PyPI API token with publish rights
+  on the relevant packages. Tracked in #15: migrating to PyPI trusted
+  publishing once package names are decided.
+- **Branch protection** on `package-release/*/v*` branches so changes only
+  land via reviewed PRs.
 
-## Releasing a package
+## Minor/major release flow
 
-The steps below cover releasing a single package end-to-end. Repeat per
-package as needed.
+For releasing `<pkg>` (e.g. `opentelemetry-instrumentation-anthropic`):
 
-### 1. Prepare the changelog
+1. Run the
+   [`[Package] Prepare release`](./.github/workflows/package-prepare-release.yml)
+   workflow against `main`. Select the package from the dropdown.
+   - Creates a long-term release branch
+     `package-release/<pkg>/v<X>.<Y>.x` (or `v<X>.<Y>bx` for unstable).
+   - Opens **two PRs**:
+     - PR against the release branch: drops the `.dev` suffix from
+       `version.py`, builds the changelog via `towncrier build`.
+     - PR against `main`: bumps `version.py` to the next `.dev` version,
+       builds the changelog via `towncrier build` (so fragments don't
+       carry over to the next release cycle).
+2. Review and merge **both** PRs.
+3. Run the
+   [`[Package] Release`](./.github/workflows/package-release.yml)
+   workflow against the `package-release/<pkg>/v*` branch.
+   - Verifies the changelog PR was merged to `main`.
+   - Builds the wheel via `scripts/build_a_package.sh` and publishes to
+     PyPI via `twine`.
+   - Creates a GitHub release tagged `<pkg>==<version>`.
+   - Opens a back-merge PR against `main` copying the resolved changelog
+     section (in case any edits landed on the release branch).
+4. Review and merge the back-merge PR if one was created.
 
-Changelog entries are managed with [towncrier](https://towncrier.readthedocs.io/).
-Each PR adds a fragment under `<package>/.changelog/<PR_NUMBER>.<type>`; at
-release time those fragments are compiled into the package's `CHANGELOG.md`.
+## Patch release flow
 
-From the package directory, build the new release section into `CHANGELOG.md`:
+1. Check out the package's existing release branch
+   `package-release/<pkg>/v<X>.<Y>.x`.
+2. Land any patch PRs against this branch (cherry-pick or direct).
+3. Run the
+   [`[Package] Prepare patch release`](./.github/workflows/package-prepare-patch-release.yml)
+   workflow with the release branch selected.
+   - Opens a PR against the release branch bumping the patch version and
+     running `towncrier build` against the patch fragments.
+4. Review and merge the PR.
+5. Run the
+   [`[Package] Release`](./.github/workflows/package-release.yml)
+   workflow against the release branch. Same effect as for a
+   minor/major release.
 
-```sh
-cd <path/to/package>
-uv run towncrier build --version <new-version>
-```
+## Pre-existing static `## Unreleased` entries
 
-This consumes every fragment under `./.changelog/` and inserts a new
-`## Version <new-version> (<date>)` block. Commit the resulting changes.
+Several packages carry CHANGELOG entries that pre-date towncrier (added
+before the towncrier marker was inserted). `towncrier build` does **not**
+fold them into the generated release section. Before the first towncrier
+release of a given package, fold those entries by hand into the new
+release section produced by `towncrier build` (or convert them into
+fragments first). The do-not-edit comment in each `CHANGELOG.md` flags
+this.
 
-> [!NOTE]
-> Several `CHANGELOG.md` files have pre-existing entries under the static
-> `## Unreleased` section that pre-date towncrier. These entries are **not**
-> picked up by `towncrier build`. Fold them by hand into the new release
-> block before committing.
+## Claiming a PyPI namespace for a new package
 
-### 2. Bump the version
+When a new package is introduced, release the current `.dev` version under
+the `opentelemetry` PyPI org to prevent name-squatting. Do this shortly
+after the introductory PR lands on `main`.
 
-Each package's version lives in
-`<package>/src/.../version.py` (path depends on the package). Bump the
-version (e.g. drop the `.dev` suffix for the release, then bump it back
-afterwards for the next development cycle).
+## Troubleshooting
 
-### 3. Tag and build
+### PyPI publish failed mid-workflow
 
-Tags follow the format `<pypi-name>==<version>` (matches the contrib
-convention, used by [`scripts/build_a_package.sh`](scripts/build_a_package.sh)).
-
-```sh
-git tag <pypi-name>==<version>
-git push --tags
-
-PACKAGE_NAME=<pypi-name> VERSION=<version> ./scripts/build_a_package.sh
-```
-
-`build_a_package.sh` writes the `.tar.gz` and `.whl` into `dist/`.
-
-### 4. Publish to PyPI
-
-```sh
-twine upload --skip-existing dist/*
-```
-
-> [!IMPORTANT]
-> Publishing requires PyPI maintainer rights on the package. The token / API
-> credential setup is not yet automated. Maintainers should publish from a
-> machine that already has `~/.pypirc` configured, or via a dedicated CI
-> workflow once one exists.
-
-### 5. Create a GitHub release
+Switch to the release branch locally and re-run the publish step manually:
 
 ```sh
-gh release create <pypi-name>==<version> \
-  --title "<pypi-name> <version>" \
-  --notes-file <(awk '/^## Version <version>/,/^## /{print}' <package>/CHANGELOG.md | sed '$d')
+git checkout package-release/<pkg>/v<X>.<Y>.x
+./scripts/build_a_package.sh
+twine upload --skip-existing --verbose dist/*
 ```
 
-Or use the GitHub UI: navigate to the new tag and click "Draft release",
-pasting in the relevant section from the package's `CHANGELOG.md`.
+Then re-run the `[Package] Release` workflow to pick up the remaining
+steps (GitHub release + back-merge PR).
 
-### 6. Bump to the next development version
+## Out of scope
 
-Open a follow-up PR bumping the package's `version.py` to the next
-`X.Yb<N>.dev` (or `X.Y.<N>.dev` for stable components), so subsequent
-fragments accumulate against the next release.
-
-## Releasing a dev version to claim the PyPI namespace
-
-When introducing a new package, release the current development version
-under the `opentelemetry` PyPI org to prevent name-squatting. Do this
-shortly after the introductory PR lands on `main`.
-
-## Version numbering
-
-- **Unstable components** (everything currently in this repo): versions look
-  like `0.Yb0.dev` on `main`, `0.Yb0` at release time, then bump to
-  `0.{Y+1}b0.dev`.
-- **Stable components**: versions look like `X.Y.0.dev` on `main`, `X.Y.0`
-  at release time, then bump to `X.{Y+1}.0.dev`. None of the current
-  packages are stable.
-
-## What's still missing
-
-Tracked in #15:
-
-- New PyPI names for each package
-- `prepare-release` workflow (cuts the release PR and bumps versions)
-- `package-release` workflow (tags, builds, publishes, opens GitHub release)
-- `backport` workflow for patch releases on long-term release branches
-- Patch release tooling once a package has a long-term release branch
+- A `backport` workflow (none yet — add when there's a real long-term
+  release branch to backport into).
+- Coordinated cross-package releases (every package here is independent;
+  `eachdist.ini` lists all publishable packages under `[exclude_release]`).
