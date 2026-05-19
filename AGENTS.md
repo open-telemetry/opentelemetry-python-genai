@@ -70,6 +70,16 @@ uv run tox -e typecheck
   `typing.cast(...)`, unless the referenced type is imported at runtime.
 - Whenever applicable, all code changes should have tests that actually validate the changes.
 
+## Changelog
+
+This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage changelogs.
+
+- Do not edit `CHANGELOG.md` directly — the `changelog` workflow rejects PRs that do.
+- For changes with user-visible impact, add a fragment at `<package>/.changelog/<PR_NUMBER>.<type>`
+  containing a one-line description. Types: `added`, `changed`, `deprecated`, `removed`, `fixed`.
+- Don't include the PR number in the body — towncrier appends it from the filename.
+- Preview locally with `uv run tox -e changelog-preview`.
+
 ## Instrumentation rules
 
 Apply to packages under `instrumentation/`.
@@ -98,6 +108,21 @@ Apply to packages under `instrumentation/`.
   `opentelemetry.test_util_genai` (`from opentelemetry.test_util_genai.fixtures import *` and
   `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`) rather
   than re-implementing provider/exporter/VCR plumbing.
+
+### Conformance tests
+
+Packages with substantive instrumentation ship `tests/conformance/<scenario>.py`
+scenarios and a `tests/test_conformance.py` that validates emitted telemetry
+against the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+via Weaver live-check. Each scenario module defines a subclass of
+`opentelemetry.test_util_genai.conformance.Scenario` that sets
+`expected_spans`, `expected_metrics`, and implements
+`run(*, tracer_provider, meter_provider, logger_provider, vcr)`.
+
+`tests/test_conformance.py` must set `pytestmark = pytest.mark.conformance` at
+module level.
+
+Run via `tox -e py312-test-instrumentation-<pkg>-conformance`.
 
 The parallel PR-review rules live in
 [`.github/instructions/instrumentation.instructions.md`](.github/instructions/instrumentation.instructions.md)

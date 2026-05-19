@@ -32,8 +32,7 @@ class WorkflowInvocation(GenAIInvocation):
     and retrieval invocations). A workflow groups multiple operations together,
     accepting input(s) and producing final output(s).
 
-    Use handler.start_workflow(name) or the handler.workflow(name) context
-    manager rather than constructing this directly.
+    Use handler.workflow(name) rather than constructing this directly.
     """
 
     def __init__(
@@ -44,7 +43,7 @@ class WorkflowInvocation(GenAIInvocation):
         completion_hook: CompletionHook,
         name: str | None,
     ) -> None:
-        """Use handler.start_workflow(name) or handler.workflow(name) instead of calling this directly."""
+        """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = "invoke_workflow"
         super().__init__(
             tracer,

@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import timeit
-from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from abc import abstractmethod
+from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Generator, Sequence
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Sequence
 
-from typing_extensions import Self, TypeAlias
+from typing_extensions import TypeAlias
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach
@@ -39,10 +40,11 @@ from opentelemetry.util.genai.utils import (
 if TYPE_CHECKING:
     from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 
+
 ContextToken: TypeAlias = Token[Context]
 
 
-class GenAIInvocation(ABC):
+class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     """
     Base class for all GenAI invocation types. Manages the lifecycle of a single
     GenAI operation (LLM call, embedding, tool execution, workflow, etc.).
@@ -165,15 +167,19 @@ class GenAIInvocation(ABC):
             error = Error(type=type(error), message=str(error))
         self._finish(error)
 
-    @contextmanager
-    def _managed(self) -> Generator[Self, None, None]:
-        """Context manager that calls stop() on success or fail() on exception."""
-        try:
-            yield self
-        except Exception as exc:
-            self.fail(exc)
-            raise
-        self.stop()
+    def __enter__(self) -> GenAIInvocation:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if exc_value is not None and isinstance(exc_value, Exception):
+            self.fail(exc_value)
+        else:
+            self.stop()
 
 
 def get_content_attributes(

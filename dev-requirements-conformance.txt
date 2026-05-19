@@ -1,0 +1,14 @@
+# Conformance tests use `opentelemetry.test.weaver_live_check`, not yet on
+# PyPI. Pin the whole stack from git so versions stay coherent. Mirrors
+# pyproject.toml's [tool.uv.sources]. Drop once the file ships to PyPI.
+#
+# TODO: switch to PyPI versions once the test utils are released
+
+opentelemetry-api @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-api
+opentelemetry-sdk @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-sdk
+opentelemetry-semantic-conventions @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-semantic-conventions
+opentelemetry-test-utils @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=tests/opentelemetry-test-utils
+opentelemetry-instrumentation @ git+https://github.com/open-telemetry/opentelemetry-python-contrib@d2f396de68a969dfb74b8afc247e1d0dc6739b67#subdirectory=opentelemetry-instrumentation
+opentelemetry-exporter-otlp-proto-grpc @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-common @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-common
+opentelemetry-proto @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-proto
