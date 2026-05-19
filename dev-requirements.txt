@@ -7,6 +7,6 @@ pytest-cov==4.1.0
 readme-renderer==42.0
 bleach==4.1.0 # transient dependency for readme-renderer
 markupsafe>=2.0.1
-codespell==2.1.0
+codespell==2.4.2
 pre-commit==3.7.0
 ruff==0.14.1

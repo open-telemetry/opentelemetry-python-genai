@@ -130,20 +130,6 @@ def fixture_vcr(vcr: Any) -> Any:
     return vcr
 
 
-@pytest.fixture
-def vcr_cassette_name(request: pytest.FixtureRequest) -> str:
-    """Cassette name = the test function name, without parametrize suffix.
-
-    Override of pytest-vcr's default, which uses ``request.node.name`` and
-    so includes the ``[...]`` parametrize ID — causing tests that fan out
-    via the shared ``content_capture`` matrix to look for cassettes named
-    ``test_foo[NO_CONTENT].yaml`` instead of ``test_foo.yaml``. The actual
-    HTTP request is identical across capture-mode cells, so all cells
-    share the same cassette.
-    """
-    return request.node.originalname or request.node.name
-
-
 def scrub_response_headers(
     headers_to_scrub: Iterable[str],
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:

@@ -30,18 +30,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-openai-v2
+        run: uvx --with tox-uv tox -e lint-instrumentation-openai-v2
 
   lint-instrumentation-openai_agents-v2:
     name: instrumentation-openai_agents-v2
@@ -49,18 +49,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-openai_agents-v2
+        run: uvx --with tox-uv tox -e lint-instrumentation-openai_agents-v2
 
   lint-instrumentation-google-genai:
     name: instrumentation-google-genai
@@ -68,18 +68,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-google-genai
+        run: uvx --with tox-uv tox -e lint-instrumentation-google-genai
 
   lint-instrumentation-anthropic:
     name: instrumentation-anthropic
@@ -87,18 +87,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-anthropic
+        run: uvx --with tox-uv tox -e lint-instrumentation-anthropic
 
   lint-instrumentation-claude-agent-sdk:
     name: instrumentation-claude-agent-sdk
@@ -106,18 +106,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-claude-agent-sdk
+        run: uvx --with tox-uv tox -e lint-instrumentation-claude-agent-sdk
 
   lint-instrumentation-langchain:
     name: instrumentation-langchain
@@ -125,18 +125,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-langchain
+        run: uvx --with tox-uv tox -e lint-instrumentation-langchain
 
   lint-instrumentation-weaviate:
     name: instrumentation-weaviate
@@ -144,18 +144,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-instrumentation-weaviate
+        run: uvx --with tox-uv tox -e lint-instrumentation-weaviate
 
   lint-util-genai:
     name: util-genai
@@ -163,18 +163,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-util-genai
+        run: uvx --with tox-uv tox -e lint-util-genai
 
   lint-license-header-check:
     name: license-header-check
@@ -182,15 +182,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
 
-      - name: Install tox
-        run: pip install tox-uv
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run tests
-        run: tox -e lint-license-header-check
+        run: uvx --with tox-uv tox -e lint-license-header-check

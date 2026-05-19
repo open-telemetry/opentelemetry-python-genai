@@ -69,6 +69,12 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   (`from opentelemetry.test_util_genai.fixtures import *` and
   `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`). Do not
   re-implement in-memory provider/exporter setup or the VCR pretty-print serializer locally.
+- Conformance: packages ship `tests/conformance/<scenario>.py` modules (each
+  defining a subclass of
+  `opentelemetry.test_util_genai.conformance.Scenario` that sets
+  `expected_spans`, `expected_metrics`, and implements `run(...)`) and a
+  `tests/test_conformance.py` that runs them via
+  `opentelemetry.test_util_genai.conformance.run_conformance`.
 
 ## 6. Examples
 

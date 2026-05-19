@@ -66,11 +66,56 @@ Run type checking across the workspace:
 uv run tox -e typecheck
 ```
 
+#### Managing cassettes (test recordings)
+
+GenAI tests replay recorded HTTP interactions (cassettes) stored under each
+package's `tests/cassettes/`.
+
+- **Run**: nothing extra — cassettes replay automatically when present. Tests
+  that need a cassette skip if it is missing and no real API key is set.
+- **Record**: delete the target `tests/cassettes/<test_name>.yaml`, export a
+  real provider API key (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), and
+  rerun the test. `pytest-vcr` writes the cassette on the live call.
+- **Sanitize**: every package's `vcr_config()` in `tests/conftest.py` must
+  scrub auth via `filter_headers` and strip identifying response headers via
+  `scrub_response_headers(...)` from `opentelemetry.test_util_genai.vcr`.
+  Diff each new cassette before committing — leaked API keys, org ids, or
+  `Set-Cookie` values block the PR.
+- **AI-generated cassettes**: if you lack provider access, you may
+  synthesize a cassette from the provider's API reference via AI. Make sure
+  to mention it in the PR and open a follow-up issue to re-record it in CI
+  against the real provider.
+- **CI**: replay-only; recording in CI is a future improvement.
+
 ### 4. Update the changelog
 
-Add an entry to the affected package's `CHANGELOG.md` under the `Unreleased`
-section for any change with user-visible impact. Pure docs and tooling
-changes don't need an entry.
+This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage
+changelogs. Each PR with user-visible impact must add a changelog fragment
+under the affected package's `.changelog/` directory rather than editing
+`CHANGELOG.md` directly.
+
+**Fragment path:** `<package>/.changelog/<PR_NUMBER>.<TYPE>`
+
+**Types:** `added`, `changed`, `deprecated`, `removed`, `fixed`.
+
+The file contains a one-line description. For example,
+`instrumentation/opentelemetry-instrumentation-anthropic/.changelog/123.fixed`:
+
+```
+fix request hook not being called when stream=True
+```
+
+Don't include the PR number in the body — towncrier appends it from the
+filename.
+
+Preview the rendered changelogs locally:
+
+```sh
+uv run tox -e changelog-preview
+```
+
+If your change doesn't need an entry (pure docs/tooling), add the
+`Skip Changelog` label to the PR.
 
 ## Keep PRs small
 
@@ -112,3 +157,4 @@ For more information about the maintainer role, see the [community repository](h
 - [Leighton Chen](https://github.com/lzchen), Microsoft
 
 For more information about the approver role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#approver).
+

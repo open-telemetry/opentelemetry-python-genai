@@ -15,6 +15,7 @@ dependencies = [
   "opentelemetry-instrumentation",
   "opentelemetry-sdk",
   "opentelemetry-semantic-conventions",
+  "opentelemetry-test-utils",
   "opentelemetry-util-genai",
   "pytest",
   "PyYAML",

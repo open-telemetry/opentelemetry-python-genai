@@ -33,11 +33,8 @@ else
 fi
 
 
-# Get the latest versions of packaging tools
-python3 -m pip install --upgrade pip build setuptools wheel packaging
-
 # Validate version against PEP 440 conventions: https://packaging.pypa.io/en/latest/version.html
-python3 -c "from packaging.version import Version; Version('${pkg_version}')"
+uv run --with packaging python -c "from packaging.version import Version; Version('${pkg_version}')"
 
 basedir=$(git rev-parse --show-toplevel)
 cd $basedir
@@ -57,7 +54,7 @@ directory_with_package=$(dirname $pyproject_toml_file_path)
 
 cd $directory_with_package
 
-python3 -m build --outdir ${distdir}
+uv build --out-dir ${distdir}
 
 cd $distdir
 
@@ -74,4 +71,4 @@ if ! [ -f $pkg_tar_gz_file ]; then
 fi
 
 # Build a wheel for the source distribution
-pip wheel --no-deps $pkg_tar_gz_file
+uv build --wheel --out-dir ${distdir} $pkg_tar_gz_file

@@ -1,0 +1,1 @@
+Add `tool_result` as a parameter to `ToolInvocation`, add `tool_result` and `arguments` as span attributes to the `execute_tool` span if `ContentCapture` flag is set.

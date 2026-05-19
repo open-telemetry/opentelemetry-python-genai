@@ -37,8 +37,7 @@ _GEN_AI_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
 class InferenceInvocation(GenAIInvocation):
     """Represents a single LLM chat/completion call.
 
-    Use handler.start_inference(provider) or the handler.inference(provider)
-    context manager rather than constructing this directly.
+    Use handler.inference(provider) rather than constructing this directly.
     """
 
     def __init__(
@@ -57,7 +56,7 @@ class InferenceInvocation(GenAIInvocation):
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
         )
-        """Use handler.start_inference(provider) or handler.inference(provider) instead of calling this directly."""
+        """Use handler.inference(provider) rather than calling this directly."""
         super().__init__(
             tracer,
             metrics_recorder,
