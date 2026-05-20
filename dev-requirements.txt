@@ -1,5 +1,5 @@
 pyright==1.1.409
-sphinx==7.1.2
+sphinx==7.4.7
 sphinx-rtd-theme==2.0.0
 sphinx-autodoc-typehints==1.25.3
 pytest==9.0.3
