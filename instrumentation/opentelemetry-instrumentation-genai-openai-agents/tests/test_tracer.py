@@ -6,16 +6,20 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 from types import SimpleNamespace
 from typing import Any
 
 import agents.tracing as agents_tracing
 from agents.tracing import (
     agent_span,
+    custom_span,
     function_span,
     generation_span,
+    mcp_tools_span,
     response_span,
     set_trace_processors,
+    speech_group_span,
     trace,
 )
 from openai.types.responses import FunctionTool  # noqa: E402
@@ -27,7 +31,12 @@ from opentelemetry.instrumentation.genai.openai_agents.span_processor import (  
     ContentPayload,
     GenAISemanticProcessor,
 )
+from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.semconv._incubating.metrics import (  # noqa: E402
+    gen_ai_metrics,
+)
 
 try:
     from opentelemetry.sdk.trace.export import (  # type: ignore[attr-defined]
@@ -59,6 +68,10 @@ GEN_AI_OUTPUT_MESSAGES = getattr(
 GEN_AI_TOOL_DEFINITIONS = getattr(
     GenAI, "GEN_AI_TOOL_DEFINITIONS", "gen_ai.tool.definitions"
 )
+GEN_AI_DATA_SOURCE_ID = getattr(
+    GenAI, "GEN_AI_DATA_SOURCE_ID", "gen_ai.data_source.id"
+)
+GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
 
 
 def _instrument_with_provider(**instrument_kwargs):
@@ -106,6 +119,179 @@ def test_generation_span_creates_client_span():
             client_span.attributes[ServerAttributes.SERVER_ADDRESS]
             == "api.openai.com"
         )
+    finally:
+        instrumentor.uninstrument()
+        exporter.clear()
+
+
+def test_response_span_string_input_records_single_user_message():
+    instrumentor, exporter = _instrument_with_provider(
+        include_sensitive_data=True
+    )
+
+    class _Response:
+        def __init__(self) -> None:
+            self.id = "resp-456"
+            self.model = "gpt-4o-mini"
+            self.output = []
+            self.usage = None
+            self.tools = []
+
+    try:
+        provider = agents_tracing.get_trace_provider()
+        with trace("workflow") as workflow:
+            response_span_obj = provider.create_span(
+                agents_tracing.ResponseSpanData(
+                    input="single user prompt",
+                    response=_Response(),
+                ),
+                parent=workflow,
+            )
+            response_span_obj.start()
+            response_span_obj.finish()
+
+        spans = exporter.get_finished_spans()
+        response = next(
+            span
+            for span in spans
+            if span.attributes.get(GenAI.GEN_AI_RESPONSE_ID) == "resp-456"
+        )
+
+        prompt = json.loads(response.attributes[GEN_AI_INPUT_MESSAGES])
+        assert prompt == [
+            {
+                "role": "user",
+                "parts": [{"type": "text", "content": "single user prompt"}],
+            }
+        ]
+        assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in response.attributes
+    finally:
+        instrumentor.uninstrument()
+        exporter.clear()
+
+
+def _assert_current_sdk_non_genai_spans(spans):
+    task = next(span for span in spans if span.name == "Agent workflow")
+    assert GenAI.GEN_AI_OPERATION_NAME not in task.attributes
+    assert task.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 20
+    assert task.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
+
+    turn = next(span for span in spans if span.name == "turn")
+    assert GenAI.GEN_AI_OPERATION_NAME not in turn.attributes
+    assert turn.attributes[GenAI.GEN_AI_AGENT_NAME] == "Support Agent"
+    assert turn.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 8
+    assert turn.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 4
+
+    mcp = next(span for span in spans if span.name == "mcp_tools")
+    assert GenAI.GEN_AI_OPERATION_NAME not in mcp.attributes
+    assert mcp.attributes[GenAI.GEN_AI_TOOL_NAME] == "list_tools"
+    assert mcp.attributes[GenAI.GEN_AI_TOOL_TYPE] == "extension"
+    assert mcp.attributes[GEN_AI_DATA_SOURCE_ID] == "filesystem"
+    assert json.loads(mcp.attributes[GEN_AI_TOOL_CALL_RESULT]) == [
+        "read_file",
+        "write_file",
+    ]
+
+    speech = next(span for span in spans if span.name == "speech_group")
+    assert GenAI.GEN_AI_OPERATION_NAME not in speech.attributes
+    assert speech.attributes[GenAI.GEN_AI_OUTPUT_TYPE] == "speech"
+
+    custom = next(span for span in spans if span.name == "application work")
+    assert GenAI.GEN_AI_OPERATION_NAME not in custom.attributes
+    assert custom.attributes["step"] == "local"
+
+
+def _assert_sandbox_custom_span_attributes(spans):
+    sandbox = next(span for span in spans if span.name == "sandbox.exec")
+    assert GenAI.GEN_AI_OPERATION_NAME not in sandbox.attributes
+    assert sandbox.attributes["sandbox.backend"] == "unix_local"
+    assert sandbox.attributes["sandbox.operation"] == "exec"
+    assert sandbox.attributes["sandbox.session.id"] == "session-123"
+    assert sandbox.attributes["exit_code"] == 0
+    assert sandbox.attributes["process.exit.code"] == 0
+    assert sandbox.attributes["error_code"] == "workspace_read_not_found"
+    assert sandbox.attributes["path.parts"] == ("case", "scenario.json")
+    assert json.loads(sandbox.attributes["nested"]) == {
+        "path": "missing.txt",
+        "error_code": "workspace_read_not_found",
+    }
+    assert "none" not in sandbox.attributes
+    assert GenAI.GEN_AI_OPERATION_NAME not in sandbox.attributes
+    assert "otel.status_code" not in sandbox.attributes
+    assert (
+        sandbox.attributes[ServerAttributes.SERVER_ADDRESS] == "api.openai.com"
+    )
+
+
+def test_current_agents_sdk_span_types_do_not_emit_unknown_operations():
+    class ErrorCode(Enum):
+        WORKSPACE_READ_NOT_FOUND = "workspace_read_not_found"
+
+    instrumentor, exporter = _instrument_with_provider()
+
+    try:
+        provider = agents_tracing.get_trace_provider()
+        with trace("workflow") as workflow:
+            task_span_obj = provider.create_span(
+                agents_tracing.TaskSpanData(
+                    name="Agent workflow",
+                    usage={"input_tokens": 20, "output_tokens": 6},
+                ),
+                parent=workflow,
+            )
+            task_span_obj.start()
+            task_span_obj.finish()
+
+            turn_span_obj = provider.create_span(
+                agents_tracing.TurnSpanData(
+                    turn=1,
+                    agent_name="Support Agent",
+                    usage={"input_tokens": 8, "output_tokens": 4},
+                ),
+                parent=workflow,
+            )
+            turn_span_obj.start()
+            turn_span_obj.finish()
+
+            with mcp_tools_span(
+                server="filesystem",
+                result=["read_file", "write_file"],
+            ):
+                pass
+            with speech_group_span(input="say hello"):
+                pass
+            with custom_span(name="application work", data={"step": "local"}):
+                pass
+            with custom_span(
+                name="sandbox.exec",
+                data={
+                    "sandbox.backend": "unix_local",
+                    "sandbox.operation": "exec",
+                    "sandbox.session.id": "session-123",
+                    "exit_code": 0,
+                    "process.exit.code": 0,
+                    "error_code": ErrorCode.WORKSPACE_READ_NOT_FOUND,
+                    "path.parts": ["case", "scenario.json"],
+                    "nested": {
+                        "path": "missing.txt",
+                        "error_code": ErrorCode.WORKSPACE_READ_NOT_FOUND,
+                    },
+                    "none": None,
+                    "gen_ai.operation.name": "unknown",
+                    "otel.status_code": "ERROR",
+                    "server.address": "malicious.example",
+                },
+            ):
+                pass
+
+        spans = exporter.get_finished_spans()
+        assert all(
+            span.attributes.get(GenAI.GEN_AI_OPERATION_NAME) != "unknown"
+            for span in spans
+        )
+
+        _assert_current_sdk_non_genai_spans(spans)
+        _assert_sandbox_custom_span_attributes(spans)
     finally:
         instrumentor.uninstrument()
         exporter.clear()
@@ -161,6 +347,7 @@ def test_function_span_records_tool_attributes():
             tool_span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "execute_tool"
         )
         assert tool_span.attributes[GenAI.GEN_AI_TOOL_NAME] == "fetch_weather"
+        assert GenAI.GEN_AI_TOOL_CALL_ID in tool_span.attributes
         assert tool_span.attributes[GenAI.GEN_AI_TOOL_TYPE] == "function"
         assert tool_span.attributes[GEN_AI_PROVIDER_NAME] == "openai"
     finally:
@@ -198,10 +385,38 @@ def test_agent_invoke_span_records_attributes():
         exporter.clear()
 
 
+def test_handoff_span_does_not_emit_undocumented_genai_operation():
+    instrumentor, exporter = _instrument_with_provider()
+
+    try:
+        provider = agents_tracing.get_trace_provider()
+        with trace("workflow") as workflow:
+            handoff = provider.create_span(
+                agents_tracing.HandoffSpanData(
+                    from_agent="triage", to_agent="weather_specialist"
+                ),
+                parent=workflow,
+            )
+            handoff.start()
+            handoff.finish()
+
+        handoff_span = next(
+            span
+            for span in exporter.get_finished_spans()
+            if span.name == "handoff"
+        )
+        assert GenAI.GEN_AI_OPERATION_NAME not in handoff_span.attributes
+        assert "gen_ai.handoff.from_agent" not in handoff_span.attributes
+        assert "gen_ai.handoff.to_agent" not in handoff_span.attributes
+    finally:
+        instrumentor.uninstrument()
+        exporter.clear()
+
+
 def _placeholder_message() -> dict[str, Any]:
     return {
         "role": "user",
-        "parts": [{"type": "text", "content": "readacted"}],
+        "parts": [{"type": "text", "content": "redacted"}],
     }
 
 
@@ -237,7 +452,7 @@ def test_agent_content_aggregation_skips_duplicate_snapshots():
             {"role": "user", "parts": [{"type": "text", "content": "hello"}]},
             {
                 "role": "user",
-                "parts": [{"type": "text", "content": "readacted"}],
+                "parts": [{"type": "text", "content": "redacted"}],
             },
         ]
     )
@@ -549,3 +764,35 @@ def test_response_span_records_response_attributes():
     finally:
         instrumentor.uninstrument()
         exporter.clear()
+
+
+def test_metrics_are_emitted_with_configured_meter_provider():
+    metric_reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(metric_readers=[metric_reader])
+    instrumentor, exporter = _instrument_with_provider(
+        meter_provider=meter_provider
+    )
+
+    try:
+        with trace("workflow"):
+            with generation_span(
+                input=[{"role": "user", "content": "hi"}],
+                output=[{"type": "text", "content": "hello"}],
+                model="gpt-4o-mini",
+                usage={"input_tokens": 12, "output_tokens": 3},
+            ):
+                pass
+
+        metrics_data = metric_reader.get_metrics_data()
+        metrics = {
+            metric.name: metric
+            for resource_metric in metrics_data.resource_metrics
+            for scope_metric in resource_metric.scope_metrics
+            for metric in scope_metric.metrics
+        }
+        assert gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION in metrics
+        assert gen_ai_metrics.GEN_AI_CLIENT_TOKEN_USAGE in metrics
+    finally:
+        instrumentor.uninstrument()
+        exporter.clear()
+        meter_provider.shutdown()

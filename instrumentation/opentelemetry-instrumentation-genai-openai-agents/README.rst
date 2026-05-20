@@ -21,8 +21,12 @@ Features
 
 * Generates spans for agents, tools, generations, guardrails, and handoffs using
   the OpenTelemetry GenAI semantic conventions.
-* Captures prompts, responses, tool arguments, and system instructions when content
-  capture is enabled.
+* Captures prompts, responses, tool arguments, tool results, and system
+  instructions when content capture is enabled.
+* Handles current Agents SDK response and generation payloads, including response
+  IDs, models, token usage, and string response inputs.
+* Preserves custom span attributes from Agents SDK custom spans, including
+  sandbox attributes such as ``sandbox.*`` and process exit data.
 * Publishes duration and token metrics for every operation.
 * Supports environment overrides so you can configure agent metadata or disable
   telemetry without code changes.
@@ -75,6 +79,12 @@ Configure OpenTelemetry as usual, then call :class:`OpenAIAgentsInstrumentor`.
 
     result = Runner.run_sync(assistant, "I'm visiting Barcelona this weekend. How should I pack?")
     print(result.final_output)
+
+The instrumentation maps Agents SDK spans to OpenTelemetry GenAI semantic
+attributes where applicable. Custom Agents SDK spans are preserved without a
+placeholder GenAI operation name, and supported ``CustomSpanData.data`` values
+are copied to OpenTelemetry attributes, including sandbox attributes such as
+``sandbox.*`` and process exit data.
 
 Configuration
 -------------

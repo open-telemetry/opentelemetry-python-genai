@@ -142,6 +142,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
             tracer_provider,
             schema_url=Schemas.V1_28_0.value,
         )
+        meter_provider = kwargs.get("meter_provider")
 
         system_override = kwargs.get("system") or os.getenv(
             _SYSTEM_OVERRIDE_ENV
@@ -174,6 +175,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
             != ContentCaptureMode.NO_CONTENT,
             content_mode=content_mode,
             metrics_enabled=metrics_enabled,
+            meter_provider=meter_provider,
             agent_name=agent_name,
             agent_id=agent_id,
             agent_description=agent_description,

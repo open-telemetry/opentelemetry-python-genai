@@ -18,6 +18,7 @@ from agents.tracing import (
     AgentSpanData,
     FunctionSpanData,
     GenerationSpanData,
+    HandoffSpanData,
     ResponseSpanData,
 )
 
@@ -184,11 +185,18 @@ def test_operation_and_span_naming(processor_setup):
         == sp.GenAIOperationName.CHAT
     )
 
+    assert (
+        processor._get_operation_name(
+            HandoffSpanData(from_agent=None, to_agent=None)
+        )
+        is None
+    )
+
     class UnknownSpanData:
         pass
 
     unknown = UnknownSpanData()
-    assert processor._get_operation_name(unknown) == "unknown"
+    assert processor._get_operation_name(unknown) is None
 
     assert processor._get_span_kind(GenerationSpanData()) is SpanKind.CLIENT
     assert (
@@ -232,6 +240,7 @@ def test_attribute_builders(processor_setup):
             {
                 "role": "assistant",
                 "parts": [{"type": "text", "content": "hello"}],
+                "finish_reason": "stop",
             }
         ],
         system_instructions=[{"type": "text", "content": "be helpful"}],
@@ -368,6 +377,44 @@ def test_attribute_builders(processor_setup):
     assert function_attrs[sp.GEN_AI_TOOL_CALL_RESULT] == {"temperature": 70}
     assert function_attrs[sp.GEN_AI_OUTPUT_TYPE] == sp.GenAIOutputType.JSON
 
+    generation_no_finish_reason = GenerationSpanData(
+        input=[{"role": "user"}],
+        output=[{"type": "text", "content": "hello"}],
+    )
+    generation_no_finish_attrs = _collect(
+        processor._get_attributes_from_generation_span_data(
+            generation_no_finish_reason, sp.ContentPayload()
+        )
+    )
+    assert sp.GEN_AI_RESPONSE_FINISH_REASONS not in generation_no_finish_attrs
+    assert processor._normalize_output_messages_to_role_parts(
+        generation_no_finish_reason
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "hello"}],
+        }
+    ]
+
+    function_without_call_id = FunctionSpanData(
+        name="lookup_weather", input=None, output=None
+    )
+    function_attrs_with_fallback = _collect(
+        processor._get_attributes_from_function_span_data(
+            function_without_call_id, sp.ContentPayload(), "span-42"
+        )
+    )
+    assert function_attrs_with_fallback[sp.GEN_AI_TOOL_CALL_ID] == "span-42"
+
+    handoff_attrs = _collect(
+        processor._get_attributes_from_handoff_span_data(
+            HandoffSpanData(from_agent="triage", to_agent="weather")
+        )
+    )
+    assert sp.GEN_AI_OPERATION_NAME not in handoff_attrs
+    assert "gen_ai.handoff.from_agent" not in handoff_attrs
+    assert "gen_ai.handoff.to_agent" not in handoff_attrs
+
 
 def test_extract_genai_attributes_unknown_type(processor_setup):
     processor, _ = processor_setup
@@ -385,7 +432,6 @@ def test_extract_genai_attributes_unknown_type(processor_setup):
         )
     )
     assert attrs[sp.GEN_AI_PROVIDER_NAME] == "openai"
-    assert attrs[sp.GEN_AI_SYSTEM_KEY] == "openai"
     assert sp.GEN_AI_OPERATION_NAME not in attrs
 
 
@@ -396,8 +442,7 @@ def test_span_status_helper():
     assert status.status_code is StatusCode.ERROR
     assert status.description == "boom: bad"
 
-    ok_status = sp._get_span_status(SimpleNamespace(error=None))
-    assert ok_status.status_code is StatusCode.OK
+    assert sp._get_span_status(SimpleNamespace(error=None)) is None
 
 
 @dataclass
@@ -487,8 +532,8 @@ def test_span_lifecycle_and_shutdown(processor_setup):
         statuses["execute_tool lookup"].status_code is StatusCode.ERROR
         and statuses["execute_tool lookup"].description == "boom: bad"
     )
-    assert statuses["invoke_agent agent"].status_code is StatusCode.OK
-    assert statuses["workflow"].status_code is StatusCode.OK
+    assert statuses["invoke_agent agent"].status_code is StatusCode.UNSET
+    assert statuses["workflow"].status_code is StatusCode.UNSET
     assert (
         statuses["invoke_agent"].status_code is StatusCode.ERROR
         and statuses["invoke_agent"].description == "Application shutdown"
@@ -498,10 +543,7 @@ def test_span_lifecycle_and_shutdown(processor_setup):
         and statuses["linger"].description == "Application shutdown"
     )
     workflow_span = next(span for span in finished if span.name == "workflow")
-    assert (
-        workflow_span.attributes[sp.GEN_AI_OPERATION_NAME]
-        == sp.GenAIOperationName.INVOKE_AGENT
-    )
+    assert sp.GEN_AI_OPERATION_NAME not in workflow_span.attributes
 
 
 def test_chat_span_renamed_with_model(processor_setup):

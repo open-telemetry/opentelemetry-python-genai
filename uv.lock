@@ -1248,7 +1248,7 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "openai-agents", marker = "extra == 'instruments'", specifier = ">=0.3.3" },
+    { name = "openai-agents", marker = "extra == 'instruments'", specifier = ">=0.17.0" },
     { name = "opentelemetry-api", specifier = ">=1.40" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.61b0" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.61b0" },

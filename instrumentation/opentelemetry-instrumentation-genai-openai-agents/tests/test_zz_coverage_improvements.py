@@ -320,12 +320,12 @@ class TestNormalizeOutputType:
 class TestGetSpanName:
     """Tests for get_span_name function."""
 
-    def test_span_name_handoff(self):
+    def test_span_name_unsupported_operation(self):
         sp, _ = _get_modules()
         name = sp.get_span_name("agent_handoff", agent_name="target_agent")
-        assert name == "agent_handoff target_agent"
+        assert name == "agent_handoff"
 
-    def test_span_name_handoff_no_agent(self):
+    def test_span_name_unsupported_operation_no_agent(self):
         sp, _ = _get_modules()
         name = sp.get_span_name("agent_handoff")
         assert name == "agent_handoff"
@@ -493,7 +493,7 @@ class TestNormalizeMessagesToRoleParts:
         processor = self._make_processor(sensitive=False)
         messages = [{"role": "user", "content": "Secret message"}]
         normalized = processor._normalize_messages_to_role_parts(messages)
-        assert normalized[0]["parts"][0]["content"] == "readacted"
+        assert normalized[0]["parts"][0]["content"] == "redacted"
 
     def test_normalize_empty_messages_returns_empty_list(self):
         processor = self._make_processor()
@@ -546,18 +546,18 @@ class TestNormalizeMessagesToRoleParts:
         tool_call = next(
             p for p in normalized[0]["parts"] if p["type"] == "tool_call"
         )
-        assert tool_call["arguments"] == "readacted"
+        assert tool_call["arguments"] == "redacted"
 
         tool_response = next(
             p
             for p in normalized[0]["parts"]
             if p["type"] == "tool_call_response"
         )
-        assert tool_response["result"] == "readacted"
+        assert tool_response["result"] == "redacted"
 
         assert normalized[1]["role"] == "tool"
         assert normalized[1]["parts"][0]["type"] == "tool_call_response"
-        assert normalized[1]["parts"][0]["result"] == "readacted"
+        assert normalized[1]["parts"][0]["result"] == "redacted"
 
 
 # ============================================================================
@@ -567,17 +567,6 @@ class TestNormalizeMessagesToRoleParts:
 
 class TestHelperFunctions:
     """Tests for various helper functions."""
-
-    def test_is_instance_of_single_class(self):
-        sp, _ = _get_modules()
-        assert sp._is_instance_of("hello", str) is True
-        assert sp._is_instance_of(123, str) is False
-
-    def test_is_instance_of_tuple_classes(self):
-        sp, _ = _get_modules()
-        assert sp._is_instance_of("hello", (str, int)) is True
-        assert sp._is_instance_of(123, (str, int)) is True
-        assert sp._is_instance_of(3.14, (str, int)) is False
 
     def test_span_status_helper(self):
         from types import SimpleNamespace
@@ -592,8 +581,7 @@ class TestHelperFunctions:
         assert status.status_code is StatusCode.ERROR
         assert status.description == "boom: bad"
 
-        ok_status = sp._get_span_status(SimpleNamespace(error=None))
-        assert ok_status.status_code is StatusCode.OK
+        assert sp._get_span_status(SimpleNamespace(error=None)) is None
 
 
 # ============================================================================
@@ -695,7 +683,7 @@ class TestRecordMetrics:
             def __init__(self) -> None:
                 self.records = []
 
-            def record(self, value, attributes) -> None:
+            def record(self, value, attributes=None) -> None:
                 self.records.append((value, attributes))
 
         duration_histogram = _Histogram()
@@ -709,8 +697,8 @@ class TestRecordMetrics:
         processor._token_usage_histogram = token_histogram
 
         span = SimpleNamespace(
-            started_at="2024-01-01T00:00:00+00:00",
-            ended_at="2024-01-01T00:00:02+00:00",
+            started_at="2024-01-01T00:00:00Z",
+            ended_at="2024-01-01T00:00:02Z",
             error={"type": "timeout"},
         )
         attributes = {
@@ -736,6 +724,41 @@ class TestRecordMetrics:
             for _, token_attrs in token_histogram.records
         }
         assert token_types == {"input", "output"}
+
+    def test_record_metrics_skips_spans_without_operation_name(self):
+        from types import SimpleNamespace
+
+        sp, _ = _get_modules()
+
+        class _Histogram:
+            def __init__(self) -> None:
+                self.records = []
+
+            def record(self, value, attributes=None) -> None:
+                self.records.append((value, attributes))
+
+        duration_histogram = _Histogram()
+        token_histogram = _Histogram()
+
+        processor = sp.GenAISemanticProcessor(metrics_enabled=False)
+        processor._metrics_enabled = True
+        processor._duration_histogram = duration_histogram
+        processor._token_usage_histogram = token_histogram
+
+        span = SimpleNamespace(
+            started_at="2024-01-01T00:00:00Z",
+            ended_at="2024-01-01T00:00:02Z",
+        )
+        attributes = {
+            sp.GEN_AI_PROVIDER_NAME: "openai",
+            sp.GEN_AI_USAGE_INPUT_TOKENS: 2,
+            sp.GEN_AI_USAGE_OUTPUT_TOKENS: 3,
+        }
+
+        processor._record_metrics(span, attributes)
+
+        assert duration_histogram.records == []
+        assert token_histogram.records == []
 
     def test_record_metrics_swallows_exceptions(self):
         from types import SimpleNamespace
