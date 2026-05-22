@@ -46,7 +46,7 @@ packaging==24.2
 wrapt==1.17.3
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 grpcio>=1.60.0; implementation_name != "pypy"
-grpcio<1.60.0; implementation_name == "pypy"
+grpcio<1.80.1; implementation_name == "pypy"
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-openai-agents
