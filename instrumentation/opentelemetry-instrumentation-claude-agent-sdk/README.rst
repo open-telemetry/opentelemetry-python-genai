@@ -80,5 +80,6 @@ References
 ----------
 
 * `OpenTelemetry Project <https://opentelemetry.io/>`_
+* `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
 * `Claude Agent SDK (Python) <https://github.com/anthropics/claude-agent-sdk-python>`_
 * `Anthropic Documentation <https://docs.anthropic.com/>`_

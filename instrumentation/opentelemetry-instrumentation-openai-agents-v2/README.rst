@@ -104,6 +104,7 @@ The :mod:`examples` directory contains runnable scenarios, including:
 References
 ----------
 
-* `OpenTelemetry Python Contrib <https://github.com/open-telemetry/opentelemetry-python-contrib>`_
-* `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>`_
-* `OpenAI Agents SDK <https://github.com/openai/openai-agents-python>`_
+* `OpenTelemetry Project <https://opentelemetry.io/>`_
+* `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
+* `OpenAI Agents SDK (Python) <https://github.com/openai/openai-agents-python>`_
+* `OpenAI Documentation <https://developers.openai.com/api/docs>`_

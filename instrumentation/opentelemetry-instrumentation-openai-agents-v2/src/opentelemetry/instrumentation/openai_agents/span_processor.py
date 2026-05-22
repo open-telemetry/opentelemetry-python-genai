@@ -11,7 +11,7 @@ generative AI operations using iterator-based attribute extraction.
 
 References:
 - OpenTelemetry GenAI Semantic Conventions:
-    https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
+    https://opentelemetry.io/docs/specs/semconv/gen-ai/
 - OpenInference Pattern: https://github.com/Arize-ai/openinference
 """
 
