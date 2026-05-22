@@ -17,7 +17,11 @@ permissions:
 jobs:
   changelog:
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'Skip Changelog') }}
+    if: >-
+      ${{
+        !contains(github.event.pull_request.labels.*.name, 'dependencies') &&
+        !contains(github.event.pull_request.labels.*.name, 'Skip Changelog')
+      }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
