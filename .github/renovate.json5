@@ -4,6 +4,7 @@
     "config:best-practices",
     "helpers:pinGitHubActionDigestsToSemver"
   ],
+  "rebaseWhen": "conflicted", // Avoid rebasing after every main update
   // requirements.oldest.txt pins exist to test against the oldest
   // supported versions and must not be auto-updated.
   "ignorePaths": ["**/requirements.oldest.txt"],
