@@ -32,6 +32,13 @@
       "schedule": ["before 8am every weekday"]
     },
     {
+      // jiter >= 0.13 bumps PyO3 to 0.28, which drops PyPy 3.10 support.
+      // Our openai-latest test matrix still includes PyPy 3.10, so pin
+      // jiter to the 0.11.x line until PyPy 3.10 is removed from the matrix.
+      "matchPackageNames": ["jiter"],
+      "allowedVersions": "<0.12"
+    },
+    {
       "matchUpdateTypes": ["minor", "major"],
       "schedule": ["before 8am on Monday"]
     },
