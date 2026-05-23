@@ -66,6 +66,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.test_util_genai._setup_weaver import (
     policies_dir,
     semconv_registry,
+    weaver_config_file,
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -212,6 +213,6 @@ def weaver_live_check() -> Iterator[Any]:
     with WeaverLiveCheck(
         registry=registry,
         policies_dir=policies,
-        extra_args=["--include-unreferenced"],
+        extra_args=["--config", str(weaver_config_file())],
     ) as weaver:
         yield weaver

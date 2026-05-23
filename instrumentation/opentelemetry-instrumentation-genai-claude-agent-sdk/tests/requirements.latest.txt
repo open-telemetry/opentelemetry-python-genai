@@ -38,7 +38,7 @@
 # the newest supported version of external dependencies.
 
 claude-agent-sdk
-wrapt==1.17.3
+wrapt==2.2.1
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e util/opentelemetry-util-genai
