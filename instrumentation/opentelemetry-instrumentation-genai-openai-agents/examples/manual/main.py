@@ -6,7 +6,12 @@
 
 from __future__ import annotations
 
-from agents import Agent, RunConfig, Runner, function_tool
+from agents import (
+    Agent,
+    RunConfig,
+    Runner,
+    function_tool,
+)
 from dotenv import load_dotenv
 
 from opentelemetry import trace
@@ -20,6 +25,7 @@ from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter,
 )
+from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai_agents import (
     OpenAIAgentsInstrumentor,
 )
@@ -52,6 +58,11 @@ def configure_otel() -> tuple[TracerProvider, MeterProvider, LoggerProvider]:
     )
     set_logger_provider(logger_provider)
 
+    OpenAIInstrumentor().instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
     OpenAIAgentsInstrumentor().instrument(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
