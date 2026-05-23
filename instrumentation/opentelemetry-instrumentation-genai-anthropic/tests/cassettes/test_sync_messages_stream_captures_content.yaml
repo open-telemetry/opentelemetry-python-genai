@@ -132,9 +132,6 @@ interactions:
       - req_011CaStaA8ttNQuUt57xTZuL
       server-timing:
       - x-originResponse;dur=1160
-      set-cookie:
-      - _cfuvid=MYGinn5q2GajEKA_1ZXEQSMPZFa_pITpAgkkbV8.mqM-1777229656.10707-1.0.1.1-7.CYqTxyXg1Q3PxRwisVM9dNE5a3H9KCY5kZiqcw9qk;
-        HttpOnly; SameSite=None; Secure; Path=/; Domain=api.anthropic.com
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       vary:
