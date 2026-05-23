@@ -166,13 +166,13 @@ def test_operation_and_span_naming(processor_setup):
         == sp.GenAIOperationName.INVOKE_AGENT
     )
 
-    agent_default = AgentSpanData()
+    agent_default = AgentSpanData(name="")
     assert (
         processor._get_operation_name(agent_default)
         == sp.GenAIOperationName.INVOKE_AGENT
     )
 
-    function_data = FunctionSpanData()
+    function_data = FunctionSpanData(name="", input=None, output=None)
     assert (
         processor._get_operation_name(function_data)
         == sp.GenAIOperationName.EXECUTE_TOOL
@@ -191,7 +191,12 @@ def test_operation_and_span_naming(processor_setup):
     assert processor._get_operation_name(unknown) == "unknown"
 
     assert processor._get_span_kind(GenerationSpanData()) is SpanKind.CLIENT
-    assert processor._get_span_kind(FunctionSpanData()) is SpanKind.INTERNAL
+    assert (
+        processor._get_span_kind(
+            FunctionSpanData(name="", input=None, output=None)
+        )
+        is SpanKind.INTERNAL
+    )
 
     assert (
         sp.get_span_name(sp.GenAIOperationName.CHAT, model="gpt-4o")
@@ -340,7 +345,9 @@ def test_attribute_builders(processor_setup):
     )
     assert agent_attrs_fallback[sp.GEN_AI_REQUEST_MODEL] == "gpt-fallback"
 
-    function_span = FunctionSpanData(name="lookup_weather")
+    function_span = FunctionSpanData(
+        name="lookup_weather", input=None, output=None
+    )
     function_span.tool_type = "extension"
     function_span.call_id = "call-42"
     function_span.description = "desc"
@@ -435,7 +442,7 @@ def test_span_lifecycle_and_shutdown(processor_setup):
     missing_span = FakeSpan(
         trace_id="trace-1",
         span_id="missing",
-        span_data=FunctionSpanData(name="lookup"),
+        span_data=FunctionSpanData(name="lookup", input=None, output=None),
         started_at="2024-01-01T00:00:01Z",
         ended_at="2024-01-01T00:00:02Z",
     )
@@ -445,7 +452,7 @@ def test_span_lifecycle_and_shutdown(processor_setup):
         trace_id="trace-1",
         span_id="span-2",
         parent_id="span-1",
-        span_data=FunctionSpanData(name="lookup"),
+        span_data=FunctionSpanData(name="lookup", input=None, output=None),
         started_at="2024-01-01T00:00:02Z",
         ended_at="2024-01-01T00:00:03Z",
         error={"message": "boom", "data": "bad"},
@@ -465,7 +472,7 @@ def test_span_lifecycle_and_shutdown(processor_setup):
     linger_span = FakeSpan(
         trace_id="trace-2",
         span_id="span-3",
-        span_data=AgentSpanData(),
+        span_data=AgentSpanData(name=""),
         started_at="2024-01-01T00:00:06Z",
     )
     processor.on_span_start(linger_span)

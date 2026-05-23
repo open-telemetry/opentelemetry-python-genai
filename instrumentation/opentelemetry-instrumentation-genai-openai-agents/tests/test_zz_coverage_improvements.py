@@ -361,7 +361,7 @@ class TestInferOutputType:
     def test_infer_output_type_function_span(self):
         _, FunctionSpanData, _, _ = _get_span_data_classes()
         processor = self._make_processor()
-        span_data = FunctionSpanData()
+        span_data = FunctionSpanData(name="", input=None, output=None)
         assert processor._infer_output_type(span_data) == "json"
 
     def test_infer_output_type_embeddings(self):
