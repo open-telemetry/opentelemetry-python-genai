@@ -38,6 +38,7 @@
 # the newest supported version of external dependencies.
 
 openai==2.38.0
+# older pydantic is required for PyPy < 3.11
 pydantic==2.12.5
 httpx==0.28.1
 # older jiter is required for PyPy < 3.11
