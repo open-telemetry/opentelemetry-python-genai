@@ -39,6 +39,14 @@
       "allowedVersions": "<0.12"
     },
     {
+      // pydantic 2.13 bumps PyO3 to 0.28 (via pydantic-core), which drops
+      // PyPy 3.10 support. Our openai-latest test matrix still includes
+      // PyPy 3.10, so pin pydantic to the 2.12.x line until PyPy 3.10 is
+      // removed from the matrix.
+      "matchPackageNames": ["pydantic"],
+      "allowedVersions": "<2.13"
+    },
+    {
       "matchUpdateTypes": ["minor", "major"],
       "schedule": ["before 8am on Monday"]
     },
