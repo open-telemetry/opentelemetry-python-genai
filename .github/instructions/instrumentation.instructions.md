@@ -72,7 +72,7 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - When recording VCR cassettes, scrub account-identifying values in the conftest's
   `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
   responses) before committing. Examples: `authorization`, `openai-organization`,
-  `openai-project`, `Set-Cookie` / `__cf_bm`, and any response-body field tied to a real
+  `openai-project`, `Set-Cookie`, and any response-body field tied to a real
   account.
 - Conformance: packages ship `tests/conformance/<scenario>.py` modules (each
   defining a subclass of
