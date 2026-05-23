@@ -69,10 +69,10 @@ class ExpectedViolation:
     message_substring: str
 
     def matches(self, violation: dict[str, Any]) -> bool:
-        return (
-            violation.get("id") == self.advice_id
-            and self.message_substring
-            in str(violation.get("message", ""))
+        return violation.get(
+            "id"
+        ) == self.advice_id and self.message_substring in str(
+            violation.get("message", "")
         )
 
 
@@ -219,17 +219,13 @@ def run_conformance(
         logger_provider.shutdown()
 
 
-def _check_violations(
-    scenario: Scenario, report: LiveCheckReport
-) -> None:
+def _check_violations(scenario: Scenario, report: LiveCheckReport) -> None:
     """Reconcile weaver violations against ``scenario.expected_violations``."""
     violations = report.violations
     expected = scenario.expected_violations
 
     unexpected = [
-        v
-        for v in violations
-        if not any(ev.matches(v) for ev in expected)
+        v for v in violations if not any(ev.matches(v) for ev in expected)
     ]
     if unexpected:
         raise LiveCheckError(
