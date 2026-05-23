@@ -49,7 +49,9 @@ def test_instrument_adds_processor_alongside_default() -> None:
     assert len(_our_processors()) == 0
 
 
-def test_instrument_with_disable_openai_trace_export_replaces_processors() -> None:
+def test_instrument_with_disable_openai_trace_export_replaces_processors() -> (
+    None
+):
     # Make sure the default processor is registered before we start,
     # so the "replace" behavior is observable.
     agents.tracing.set_trace_processors(

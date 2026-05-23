@@ -70,9 +70,9 @@ class GenAITracingProcessor(TracingProcessor):
     def __init__(self, handler: TelemetryHandler, provider: str) -> None:
         self._handler = handler
         self._provider = provider
-        self._invocations: weakref.WeakKeyDictionary[
-            Any, GenAIInvocation
-        ] = weakref.WeakKeyDictionary()
+        self._invocations: weakref.WeakKeyDictionary[Any, GenAIInvocation] = (
+            weakref.WeakKeyDictionary()
+        )
 
     def on_trace_start(self, trace: Trace) -> None:
         # ``trace.name`` comes from ``RunConfig.workflow_name`` (default

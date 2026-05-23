@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import gc
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -76,7 +76,9 @@ def test_agent_span_creates_invoke_local_agent() -> None:
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
 
 
-def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> None:
+def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
+    None
+):
     handler = _build_handler()
     handler.tool.return_value = MagicMock(
         spec=ToolInvocation, metric_attributes={}
@@ -98,8 +100,7 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> Non
     )
     tool_invocation = handler.tool.return_value
     assert (
-        tool_invocation.metric_attributes["gen_ai.provider.name"]
-        == "openai"
+        tool_invocation.metric_attributes["gen_ai.provider.name"] == "openai"
     )
 
     # Output gets populated on the agents library span_data after the
@@ -182,8 +183,6 @@ def test_shutdown_stops_open_invocations() -> None:
 
 
 def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
-    import gc
-
     handler = _build_handler()
     processor = GenAITracingProcessor(handler, provider="openai")
     span: _Span | None = _Span(AgentSpanData(name="triage"))
