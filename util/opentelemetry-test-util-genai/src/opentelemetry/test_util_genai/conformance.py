@@ -23,9 +23,12 @@ Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
   the report's span samples.
 - ``expected_metrics`` — metric names that must appear in
   ``statistics.seen_registry_metrics``.
-- ``expected_violations`` — :class:`ExpectedViolation` entries for known
-  gaps. ``run_conformance`` fails on undeclared violations and on declared
-  entries weaver no longer reports.
+- ``expected_violations`` — tuple of :class:`ExpectedViolation` entries
+  declaring semconv violations that are known and accepted for now (e.g.
+  blocked on an upstream library or semconv PR). Each entry should be documented
+  with the tracking issue. ``run_conformance`` fails on any *unexpected*
+  violation and also fails when an *expected* violation is no longer
+  reported (so suppressions can't rot silently).
 - ``run(*, tracer_provider, meter_provider, logger_provider, vcr)`` — wires
   the instrumentor against the providers and exercises one semconv operation
   type's happy path inside ``vcr.use_cassette(...)``.
@@ -58,11 +61,23 @@ from opentelemetry.test.weaver_live_check import (
 
 @dataclass(frozen=True)
 class ExpectedViolation:
-    """One known-and-accepted semconv violation.
+    """A single known-and-accepted semconv violation.
 
-    Matched by weaver advice ``id`` plus a substring of its ``message``.
-    Declared entries the report no longer contains are flagged so
-    suppressions don't rot.
+    Use sparingly to suppress one known gap (e.g. blocked on an upstream
+    library or semconv PR) without hiding all violations the way
+    ``pytest.mark.xfail`` would. Each entry should be commented with the
+    tracking issue so it's easy to retire when upstream lands a fix.
+
+    A :class:`Scenario` declaring an entry that weaver does NOT report —
+    because the upstream fix landed — is treated as a test failure, so
+    the suppression cannot rot silently.
+
+    Attributes:
+        advice_id: Weaver advice rule id, e.g.
+            ``"genai_expected_attribute_missing"``.
+        message_substring: Substring that must appear in the violation's
+            human-readable ``message`` — typically the attribute name or
+            span name pinpointing the gap.
     """
 
     advice_id: str
@@ -188,9 +203,11 @@ def run_conformance(
 ) -> LiveCheckReport:
     """Run one conformance scenario and return the weaver report.
 
-    Raises :class:`LiveCheckError` on undeclared violations and
-    :class:`AssertionError` on declared violations weaver no longer
-    reports.
+    Raises :class:`LiveCheckError` on any semconv violation that's not
+    declared in ``scenario.expected_violations``. If the scenario declares
+    expected violations that weaver did NOT report (likely because an
+    upstream fix has landed), raises :class:`AssertionError` so the
+    suppression list can be cleaned up.
     """
     tracer_provider, meter_provider, logger_provider = _build_providers(
         weaver.otlp_endpoint

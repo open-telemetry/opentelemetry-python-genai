@@ -96,6 +96,7 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
+  "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
 ]
@@ -108,6 +109,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-openai-agents/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-openai-agents/examples/**",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/examples/**/*.py",
   "util/opentelemetry-util-genai/tests/**/*.py",
