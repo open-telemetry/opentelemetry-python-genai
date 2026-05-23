@@ -117,7 +117,7 @@ interactions:
       openai-processing-ms:
       - '405'
       openai-project:
-      - proj_Pf1eM5R55Z35wBy4rt8PxAGq
+      - test_openai_project_id
       openai-version:
       - '2020-10-01'
       x-envoy-upstream-service-time:
