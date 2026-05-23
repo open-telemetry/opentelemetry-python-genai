@@ -129,7 +129,7 @@ _inference_expected := {
 	"gen_ai.response.finish_reasons",
 	"gen_ai.usage.input_tokens",
 	"gen_ai.usage.output_tokens",
-	# "server.address", sometimes not available
+	"server.address"
 }
 
 # Embeddings.
@@ -142,7 +142,7 @@ _embeddings_expected := {
 	"gen_ai.embeddings.dimension.count",
 	"gen_ai.response.model",
 	"gen_ai.usage.input_tokens",
-	# "server.address", sometimes not available
+	"server.address"
 }
 
 # Tool execution.
@@ -174,7 +174,7 @@ _create_agent_expected := {
 # Retrieval. Only gen_ai.operation.name is unconditionally required.
 _retrieval_expected := {
 	"gen_ai.operation.name",
-	# "server.address", sometimes not available
+	"server.address",
 }
 
 # Per expected attribute, one violation if missing.
