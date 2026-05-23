@@ -37,27 +37,6 @@ def get_weather(city: str) -> str:
     return f"The forecast for {city} is sunny with pleasant temperatures."
 
 
-def run_agent() -> None:
-    """Create a simple agent and execute a single run."""
-
-    assistant = Agent(
-        name="Travel Concierge",
-        instructions=(
-            "You are a concise travel concierge. Use the weather tool when the"
-            " traveler asks about local conditions."
-        ),
-        tools=[get_weather],
-    )
-
-    result = Runner.run_sync(
-        assistant,
-        "I'm visiting Barcelona this weekend. How should I pack?",
-    )
-
-    print("Agent response:")
-    print(result.final_output)
-
-
 def main() -> None:
     load_dotenv()
     configure_otel()
