@@ -37,6 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
+boto3
 botocore
 wrapt==2.2.1
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation

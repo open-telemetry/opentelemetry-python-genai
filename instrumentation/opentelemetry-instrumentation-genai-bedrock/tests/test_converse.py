@@ -59,43 +59,25 @@ class TestConverseNoContent:
             stubber.add_response("converse", _converse_response())
             bedrock_client.converse(
                 modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
-                messages=[
-                    {"role": "user", "content": [{"text": "Hello!"}]}
-                ],
+                messages=[{"role": "user", "content": [{"text": "Hello!"}]}],
             )
 
         span_list = span_exporter.get_finished_spans()
         assert len(span_list) == 1
         span = span_list[0]
 
-        assert (
-            span.name
-            == "chat anthropic.claude-3-5-sonnet-20241022-v2:0"
-        )
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
-            == "chat"
-        )
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_SYSTEM]
-            == "aws.bedrock"
-        )
+        assert span.name == "chat anthropic.claude-3-5-sonnet-20241022-v2:0"
+        assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+        assert span.attributes[GenAIAttributes.GEN_AI_SYSTEM] == "aws.bedrock"
         assert (
             span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
             == "anthropic.claude-3-5-sonnet-20241022-v2:0"
         )
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
-            == 10
-        )
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
-            == 5
-        )
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS]
-            == ("stop",)
-        )
+        assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
+        assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+        assert span.attributes[
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ] == ("stop",)
         assert ServerAttributes.SERVER_ADDRESS in span.attributes
 
     def test_error_records_exception(
@@ -115,9 +97,7 @@ class TestConverseNoContent:
             with pytest.raises(ClientError):
                 bedrock_client.converse(
                     modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
-                    messages=[
-                        {"role": "user", "content": [{"text": "Hi"}]}
-                    ],
+                    messages=[{"role": "user", "content": [{"text": "Hi"}]}],
                 )
 
         span_list = span_exporter.get_finished_spans()
@@ -137,9 +117,7 @@ class TestConverseWithContent:
             stubber.add_response("converse", _converse_response())
             bedrock_client.converse(
                 modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
-                messages=[
-                    {"role": "user", "content": [{"text": "Say hi"}]}
-                ],
+                messages=[{"role": "user", "content": [{"text": "Say hi"}]}],
             )
 
         span_list = span_exporter.get_finished_spans()

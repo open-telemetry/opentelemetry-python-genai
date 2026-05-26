@@ -42,7 +42,10 @@ class ConverseStreamWrapper:
         original_stream = response.get("stream")
         if original_stream is not None:
             response["stream"] = _StreamEventIterator(
-                original_stream, self._on_complete, self._on_fail, capture_content
+                original_stream,
+                self._on_complete,
+                self._on_fail,
+                capture_content,
             )
 
     def __getitem__(self, key: str) -> Any:
@@ -173,9 +176,7 @@ class _StreamEventIterator:
             # Text block (default)
             self._current_text = ""
 
-    def _handle_content_block_delta(
-        self, block_delta: dict[str, Any]
-    ) -> None:
+    def _handle_content_block_delta(self, block_delta: dict[str, Any]) -> None:
         """Handle a content block delta."""
         delta = block_delta.get("delta") or {}
         if "text" in delta:
