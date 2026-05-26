@@ -1,5 +1,9 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
+#
+# Based on the Bedrock extension in opentelemetry-python-contrib by @xrmx:
+# https://github.com/open-telemetry/opentelemetry-python-contrib/pull/3161
+# https://github.com/open-telemetry/opentelemetry-python-contrib/pull/3258
 
 """Patching functions for AWS Bedrock instrumentation."""
 
