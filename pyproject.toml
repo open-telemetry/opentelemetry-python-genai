@@ -18,6 +18,7 @@ dependencies = [
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
+  "opentelemetry-instrumentation-genai-bedrock[instruments]",
 ]
 
 
@@ -37,6 +38,7 @@ opentelemetry-instrumentation-genai-langchain = { workspace = true }
 opentelemetry-instrumentation-genai-openai = { workspace = true }
 opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
 opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
+opentelemetry-instrumentation-genai-bedrock = { workspace = true }
 
 
 # https://docs.astral.sh/uv/reference/settings/#workspace

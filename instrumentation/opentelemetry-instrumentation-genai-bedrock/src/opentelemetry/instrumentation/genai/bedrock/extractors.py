@@ -10,9 +10,6 @@ from typing import Any
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
-from opentelemetry.semconv._incubating.attributes import (
-    server_attributes as ServerAttributes,
-)
 from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
