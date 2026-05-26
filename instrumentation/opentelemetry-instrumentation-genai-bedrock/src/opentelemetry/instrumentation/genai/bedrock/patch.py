@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAIAttributes,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
 
@@ -21,11 +23,9 @@ from .extractors import (
 )
 from .wrappers import ConverseStreamWrapper
 
-_logger = logging.getLogger(__name__)
-
 _SUPPORTED_OPERATIONS = frozenset({"Converse", "ConverseStream"})
 _BEDROCK_RUNTIME_SERVICE = "bedrock-runtime"
-_PROVIDER = "aws.bedrock"
+_PROVIDER = GenAIAttributes.GenAiSystemValues.AWS_BEDROCK.value
 
 
 def make_api_call_wrapper(

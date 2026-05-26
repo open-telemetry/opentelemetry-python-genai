@@ -44,7 +44,7 @@ def get_request_attributes(
 
     attributes: dict[str, AttributeValue | None] = {
         GenAIAttributes.GEN_AI_OPERATION_NAME: GenAIAttributes.GenAiOperationNameValues.CHAT.value,
-        GenAIAttributes.GEN_AI_SYSTEM: "aws.bedrock",
+        GenAIAttributes.GEN_AI_SYSTEM: GenAIAttributes.GenAiSystemValues.AWS_BEDROCK.value,
         GenAIAttributes.GEN_AI_REQUEST_MODEL: api_params.get("modelId"),
         GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS: inference_config.get(
             "maxTokens"
