@@ -130,9 +130,6 @@ interactions:
       - '1166'
       request-id:
       - req_011CagT1sFeNm1tViDNAWHeZ
-      set-cookie:
-      - _cfuvid=rj75w_GU5xV9cWP7nOfJwscHGqT_ppwRllzb6fSv0Fw-1777848446.5684419-1.0.1.1-f0Kmq9td0Tj1eY06Rwpq86V7Zainu268u8hWFi4QmtY;
-        HttpOnly; SameSite=None; Secure; Path=/; Domain=api.anthropic.com
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
