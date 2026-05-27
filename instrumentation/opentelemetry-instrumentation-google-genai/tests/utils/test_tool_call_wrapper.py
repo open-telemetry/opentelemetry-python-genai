@@ -136,6 +136,7 @@ class TestCase(unittest.TestCase):
             "An example tool call function.",
         )
 
+    # Capture content must be enabled to get arguments
     @patch.dict(
         "os.environ",
         {
@@ -165,6 +166,7 @@ class TestCase(unittest.TestCase):
         self.assertEqual(
             arguments["code.function.parameters.primitive_int.type"], "int"
         )
+        self.assertEqual(span.attributes["gen_ai.tool.name"], "somefunction")
         self.assertEqual(
             arguments["code.function.parameters.primitive_int.value"], 12345
         )
@@ -190,54 +192,32 @@ class TestCase(unittest.TestCase):
             [123, "abc"],
         )
 
-    def test_handle_with_different_capture_content_on_span_config(self):
+    @patch.dict(
+        "os.environ",
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false",
+            "OTEL_SEMCONV_STABILITY_OPT_IN": "default",
+        },
+    )
+    def test_with_capture_content_disabled(self):
+        _OpenTelemetrySemanticConventionStability._initialized = False
+        _OpenTelemetrySemanticConventionStability._initialize()
+
         def somefunction(arg=None):
             return arg
 
-        for capture_content_on_span in ["SPAN_AND_EVENT", "NO_CONTENT"]:
-            patched_environ = patch.dict(
-                "os.environ",
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": capture_content_on_span,
-                    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
-                },
-            )
-            with patched_environ:
-                _OpenTelemetrySemanticConventionStability._initialized = False
-                _OpenTelemetrySemanticConventionStability._initialize()
-                self.setUp()
-                wrapped_somefunction = self.wrap(somefunction)
-                wrapped_somefunction("a string value")
-                span = self.otel.get_span_named("execute_tool somefunction")
-                self.assertEqual(
-                    span.attributes["gen_ai.tool.name"], "somefunction"
-                )
+        wrapped_somefunction = self.wrap(somefunction)
+        wrapped_somefunction("a string value")
+        span = self.otel.get_span_named("execute_tool somefunction")
 
-                if capture_content_on_span == "NO_CONTENT":
-                    self.assertNotIn(
-                        "gen_ai.tool.call.arguments",
-                        span.attributes,
-                    )
-                    self.assertNotIn(
-                        "gen_ai.tool.call.result",
-                        span.attributes,
-                    )
-                else:
-                    self.assertEqual(
-                        span.attributes["gen_ai.tool.call.result"],
-                        '"a string value"',
-                    )
-                    arguments = json.loads(
-                        span.attributes["gen_ai.tool.call.arguments"]
-                    )
-                    self.assertEqual(
-                        arguments["code.function.parameters.arg.type"], "str"
-                    )
-                    self.assertEqual(
-                        arguments["code.function.parameters.arg.value"],
-                        "a string value",
-                    )
-                self.tearDown()
+        self.assertNotIn(
+            "gen_ai.tool.call.arguments",
+            span.attributes,
+        )
+        self.assertNotIn(
+            "gen_ai.tool.call.result",
+            span.attributes,
+        )
 
     def test_function_that_throws_exception(self):
         def somefunction(arg=None):

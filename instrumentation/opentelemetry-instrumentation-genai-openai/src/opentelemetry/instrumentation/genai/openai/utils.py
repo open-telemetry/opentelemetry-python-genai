@@ -352,7 +352,7 @@ def create_chat_invocation(
     # pylint: disable=too-many-branches
 
     address, port = get_server_address_and_port(client_instance)
-    invocation = handler.start_inference(
+    invocation = handler.inference(
         GenAIAttributes.GenAiProviderNameValues.OPENAI.value,
         request_model=kwargs.get("model", ""),
         server_address=address if address else None,

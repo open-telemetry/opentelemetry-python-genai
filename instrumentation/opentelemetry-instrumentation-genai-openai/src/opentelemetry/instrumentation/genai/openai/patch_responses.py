@@ -23,7 +23,7 @@ def responses_create(handler: TelemetryHandler):
 
     def traced_method(wrapped, instance, args, kwargs):
         params = extract_params(**kwargs)
-        invocation = handler.start_inference(
+        invocation = handler.inference(
             **get_inference_creation_kwargs(params, instance)
         )
         apply_request_attributes(invocation, params, capture_content)

@@ -1152,7 +1152,7 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
             )
         )
         if helper.experimental_sem_convs_enabled:
-            invocation = telemetry_handler.start_inference(
+            invocation = telemetry_handler.inference(
                 provider=helper._genai_system,
                 request_model=model,
                 operation_name="generate_content",
@@ -1161,13 +1161,14 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
             invocation.tool_definitions = (
                 await helper._maybe_get_tool_definitions_async(config)
             )
-            invocation.input_messages = to_input_messages(
-                contents=transformers.t_contents(contents)
-            )
-            if system_content := _config_to_system_instruction(config):
-                invocation.system_instruction = to_system_instructions(
-                    content=transformers.t_contents(system_content)[0]
+            if helper._content_recording_enabled:
+                invocation.input_messages = to_input_messages(
+                    contents=transformers.t_contents(contents)
                 )
+                if system_content := _config_to_system_instruction(config):
+                    invocation.system_instruction = to_system_instructions(
+                        content=transformers.t_contents(system_content)[0]
+                    )
 
             async def _response_async_generator_wrapper():
                 candidates = []
