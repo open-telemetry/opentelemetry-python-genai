@@ -113,7 +113,6 @@ jobs:
           gh release create --target $GITHUB_REF_NAME \
                             --title "${PACKAGE_NAME} ${VERSION}" \
                             --notes-file /tmp/release-notes.txt \
-                            --discussion-category announcements \
                             $RELEASE_TAG
 
       - uses: actions/checkout@v4
