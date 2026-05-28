@@ -294,3 +294,8 @@ def policies_dir() -> Path:
 def semconv_registry() -> Path:
     """Return the path to ``<semantic-conventions-genai>/model`` for the pinned ref."""
     return _provision_genai_root() / "model"
+
+
+def weaver_config_file() -> Path:
+    """Return the path to the workspace ``.weaver.toml``."""
+    return _workspace_root() / ".weaver.toml"

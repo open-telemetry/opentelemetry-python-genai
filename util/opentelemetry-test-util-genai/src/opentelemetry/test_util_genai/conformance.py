@@ -5,8 +5,6 @@
 
 Intended call shape from a per-package ``tests/test_conformance.py``::
 
-    pytestmark = pytest.mark.conformance
-
     @pytest.mark.parametrize(
         "scenario", [InferenceScenario(), ToolCallingScenario()]
     )
@@ -14,9 +12,10 @@ Intended call shape from a per-package ``tests/test_conformance.py``::
         report = run_conformance(scenario, vcr=vcr, weaver=weaver_live_check)
         # Optionally layer lib-specific assertions on `report` here.
 
-The module-level ``pytestmark = pytest.mark.conformance`` is required: the
-``*-conformance`` tox envs select these tests via ``-m conformance``, and the
-regular ``*-{oldest,latest}`` envs deselect them via ``-m "not conformance"``.
+The ``*-conformance`` tox envs point pytest directly at
+``tests/test_conformance.py``; the regular ``*-{oldest,latest}`` envs
+``--ignore`` it. The OTLP/gRPC exporter and ``weaver_live_check`` only need
+to be installed in the conformance envs.
 
 Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
 
@@ -40,15 +39,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
 
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
-    OTLPLogExporter,
-)
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-    OTLPMetricExporter,
-)
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter,
-)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
@@ -105,6 +95,19 @@ class Scenario(ABC):
 def _build_providers(
     endpoint: str,
 ) -> tuple[TracerProvider, MeterProvider, LoggerProvider]:
+    # OTLP/gRPC exporters are only installed in the *-conformance tox envs
+    # (see dev-requirements-conformance.txt). Import lazily so this module
+    # stays importable in regular test envs that exclude conformance tests.
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415
+        OTLPLogExporter,
+    )
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (  # noqa: PLC0415
+        OTLPMetricExporter,
+    )
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # noqa: PLC0415
+        OTLPSpanExporter,
+    )
+
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(
         SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))

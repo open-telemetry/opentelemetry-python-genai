@@ -1,7 +1,7 @@
 OpenTelemetry Python - OpenAI Instrumentation
 =============================================
 
-.. automodule:: opentelemetry.instrumentation.openai_v2
+.. automodule:: opentelemetry.instrumentation.genai.openai
     :members:
     :undoc-members:
     :show-inheritance:

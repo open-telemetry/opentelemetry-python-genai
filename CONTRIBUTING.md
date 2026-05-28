@@ -21,8 +21,8 @@ project.
 
 ```
 ├── instrumentation/
-│   └── opentelemetry-instrumentation-<name>/  # one package per GenAI library
-│       ├── src/opentelemetry/instrumentation/<name>/
+│   └── opentelemetry-instrumentation-genai-<name>/  # one package per GenAI library
+│       ├── src/opentelemetry/instrumentation/genai/<name>/
 │       ├── tests/
 │       └── pyproject.toml
 └── util/
@@ -34,6 +34,16 @@ project.
 
 The monorepo uses `uv` workspaces; each package owns its own `pyproject.toml`,
 version, and entry points. `tox.ini` defines the test matrix.
+
+## Package naming and versioning
+
+Instrumentation packages are named `opentelemetry-instrumentation-genai-<name>` and import as
+`opentelemetry.instrumentation.genai.<name>` — for example,
+`opentelemetry-instrumentation-genai-anthropic` imports
+`opentelemetry.instrumentation.genai.anthropic`. 
+
+Packages use the OpenTelemetry beta versioning format — `MAJOR.MINORbN` (e.g. `1.0b0`). `version.py` carries a `.dev`
+suffix during development (`1.0b0.dev`); the release workflow drops it.
 
 ## Making a change
 
@@ -57,7 +67,7 @@ Run the test environment for the package you changed (append `-oldest` or
 `-latest` for the version variants defined in `tests/requirements.{oldest,latest}.txt`):
 
 ```sh
-uv run tox -e py312-test-instrumentation-openai-v2-latest
+uv run tox -e py312-test-instrumentation-genai-openai-latest
 ```
 
 Run type checking across the workspace:
@@ -99,7 +109,7 @@ under the affected package's `.changelog/` directory rather than editing
 **Types:** `added`, `changed`, `deprecated`, `removed`, `fixed`.
 
 The file contains a one-line description. For example,
-`instrumentation/opentelemetry-instrumentation-anthropic/.changelog/123.fixed`:
+`instrumentation/opentelemetry-instrumentation-genai-anthropic/.changelog/123.fixed`:
 
 ```
 fix request hook not being called when stream=True

@@ -73,7 +73,6 @@ from opentelemetry.util.genai.utils import (
     is_experimental_mode,
 )
 from opentelemetry.util.genai.version import __version__
-from opentelemetry.util.types import AttributeValue
 
 
 class TelemetryHandler:
@@ -133,7 +132,6 @@ class TelemetryHandler:
         return self._capture_content
 
     # New-style factory methods: construct + start in one call, handler stored on invocation
-
     def start_inference(
         self,
         provider: str,
@@ -145,7 +143,7 @@ class TelemetryHandler:
     ) -> InferenceInvocation:
         """Create and start an LLM inference invocation.
 
-        .. deprecated:: 0.5b0
+        .. deprecated:: 1.0b0
             Use ``handler.inference()`` instead.
 
         Set remaining attributes (input_messages, temperature, etc.) on the
@@ -187,7 +185,7 @@ class TelemetryHandler:
     ) -> EmbeddingInvocation:
         """Create and start an Embedding invocation.
 
-        .. deprecated:: 0.5b0
+        .. deprecated:: 1.0b0
             Use ``handler.embedding()`` instead.
 
         Set remaining attributes (encoding_formats, etc.) on the returned
@@ -208,14 +206,13 @@ class TelemetryHandler:
         self,
         name: str,
         *,
-        arguments: AttributeValue | None = None,
         tool_call_id: str | None = None,
         tool_type: str | None = None,
         tool_description: str | None = None,
     ) -> ToolInvocation:
         """Create and start a tool invocation.
 
-        .. deprecated:: 0.5b0
+        .. deprecated:: 1.0b0
             Use ``handler.tool()`` instead.
 
         Set tool_result on the returned invocation when done, then call
@@ -227,7 +224,6 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            arguments=arguments,
             tool_call_id=tool_call_id,
             tool_type=tool_type,
             tool_description=tool_description,
@@ -240,7 +236,7 @@ class TelemetryHandler:
     ) -> WorkflowInvocation:
         """Create and start a workflow invocation.
 
-        .. deprecated:: 0.5b0
+        .. deprecated:: 1.0b0
             Use ``handler.workflow()`` instead.
 
         Set remaining attributes on the returned invocation, then call
@@ -279,6 +275,8 @@ class TelemetryHandler:
         if invocation._inference_invocation is not None:
             invocation._inference_invocation.fail(error)
         return invocation
+
+    # New-style factory methods: construct + start in one call, handler stored on invocation
 
     def inference(
         self,
@@ -340,7 +338,6 @@ class TelemetryHandler:
         self,
         name: str,
         *,
-        arguments: AttributeValue | None = None,
         tool_call_id: str | None = None,
         tool_type: str | None = None,
         tool_description: str | None = None,
@@ -352,6 +349,8 @@ class TelemetryHandler:
         responsible for calling `stop` or `fail` to finalize the span.
 
         Only set data attributes on the invocation object, do not modify the span or context.
+        Recommended to set ``invocation.arguments`` and ``invocation.tool_result`` on the
+        invocation object but only if `invocation.should_capture_content_on_span` is True.
         """
         return ToolInvocation(
             self._tracer,
@@ -359,7 +358,6 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            arguments=arguments,
             tool_call_id=tool_call_id,
             tool_type=tool_type,
             tool_description=tool_description,
@@ -374,7 +372,7 @@ class TelemetryHandler:
     ) -> AgentInvocation:
         """Create and start a local agent invocation (INTERNAL span kind).
 
-        .. deprecated:: 0.5b0
+        .. deprecated:: 1.0b0
             Use ``handler.invoke_local_agent()`` instead.
 
         Use for agents running within the same process (e.g. LangChain, CrewAI).
@@ -404,7 +402,7 @@ class TelemetryHandler:
     ) -> AgentInvocation:
         """Create and start a remote agent invocation (CLIENT span kind).
 
-        .. deprecated:: 0.5b0
+        .. deprecated:: 1.0b0
             Use ``handler.invoke_remote_agent()`` instead.
 
         Use for agents invoked over a remote service (e.g. OpenAI Assistants, AWS Bedrock).

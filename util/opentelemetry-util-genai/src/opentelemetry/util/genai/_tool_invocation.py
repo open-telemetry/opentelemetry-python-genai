@@ -24,7 +24,7 @@ class ToolInvocation(GenAIInvocation):
 
     Not used as a message part — use ToolCallRequest for that purpose.
 
-    Use handler.start_tool(name) rather than constructing this directly.
+    Use handler.tool(name) rather than constructing this directly.
 
     Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-spans.md#execute-tool-span
 
@@ -47,13 +47,11 @@ class ToolInvocation(GenAIInvocation):
         completion_hook: CompletionHook,
         name: str,
         *,
-        arguments: AttributeValue | None = None,
         tool_call_id: str | None = None,
         tool_type: str | None = None,
         tool_description: str | None = None,
-        tool_result: AttributeValue | None = None,
     ) -> None:
-        """Use handler.start_tool(name) or handler.tool(name) instead of calling this directly."""
+        """Use handler.tool(name) instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
         super().__init__(
             tracer,
@@ -65,8 +63,12 @@ class ToolInvocation(GenAIInvocation):
         )
         self.should_capture_content_on_span = should_capture_content_on_spans()
         self.name = name
-        self.tool_result = tool_result
-        self.arguments = arguments
+        self.tool_result: AttributeValue | None = None
+        # Since arguments and tool_result can be expensive to serialize,
+        # it's recommended to check the content capture flag in the
+        # instrumentation library before assigning these attributes
+        # to the invocation.
+        self.arguments: AttributeValue | None = None
         self.tool_call_id = tool_call_id
         self.tool_type = tool_type
         self.tool_description = tool_description
@@ -79,18 +81,6 @@ class ToolInvocation(GenAIInvocation):
             (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self.tool_type),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
-            (
-                GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
-                self.arguments
-                if self.should_capture_content_on_span
-                else None,
-            ),
-            (
-                GenAI.GEN_AI_TOOL_CALL_RESULT,
-                self.tool_result
-                if self.should_capture_content_on_span
-                else None,
-            ),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,

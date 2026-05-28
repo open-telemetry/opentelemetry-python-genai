@@ -1,9 +1,0 @@
-openai~=1.57.3
-
-opentelemetry-sdk~=1.41.1
-opentelemetry-exporter-otlp-proto-grpc~=1.41.1
-opentelemetry-instrumentation-openai-v2~=2.1b0
-
-# Uncomment to enable the upload completion hook (pulls in fsspec).
-# Required when OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload.
-# opentelemetry-util-genai[upload]

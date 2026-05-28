@@ -86,9 +86,9 @@ intersphinx_mapping = {
 # Sphinx will warn about all references where the target cannot be found.
 nitpicky = True
 nitpick_ignore = [
-    # sphinx-autodoc-typehints 1.25.2 emits :py:data: for typing.Union, but
-    # newer Python docs mark it as a class. Drop once we upgrade the extension.
-    ("py:data", "typing.Union"),
+    # Sphinx 9 parses the generated functools.partial signature for
+    # gen_ai_json_dump(s) as a class reference to the closing separator string.
+    ("py:class", "')"),
 ]
 
 # Add any paths that contain templates here, relative to this directory.

@@ -125,8 +125,9 @@ To uninstrument clients, call the uninstrument method:
 
 References
 ----------
-* `Google Gen AI SDK Documentation <https://ai.google.dev/gemini-api/docs/sdks>`_
-* `Google Gen AI SDK on GitHub <https://github.com/googleapis/python-genai>`_
-* `Using Vertex AI with Google Gen AI SDK <https://cloud.google.com/vertex-ai/generative-ai/docs/sdks/overview>`_
+
 * `OpenTelemetry Project <https://opentelemetry.io/>`_
-* `OpenTelemetry Python Examples <https://github.com/open-telemetry/opentelemetry-python/tree/main/docs/examples>`_
+* `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
+* `Google Gen AI SDK (Python) <https://github.com/googleapis/python-genai>`_
+* `Google Gen AI SDK Documentation <https://ai.google.dev/gemini-api/docs/sdks>`_
+* `Using Vertex AI with Google Gen AI SDK <https://cloud.google.com/vertex-ai/generative-ai/docs/sdks/overview>`_

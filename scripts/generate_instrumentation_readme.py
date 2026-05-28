@@ -30,6 +30,9 @@ def main(base_instrumentation_path):
         src_dir = os.path.join(
             instrumentation_path, "src", "opentelemetry", "instrumentation"
         )
+        genai_dir = os.path.join(src_dir, "genai")
+        if os.path.isdir(genai_dir):
+            src_dir = genai_dir
         src_pkgs = [
             f
             for f in os.listdir(src_dir)

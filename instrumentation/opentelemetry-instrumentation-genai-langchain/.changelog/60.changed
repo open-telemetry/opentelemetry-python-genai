@@ -1,0 +1,1 @@
+Renamed package to `opentelemetry-instrumentation-genai-langchain` (imports `opentelemetry.instrumentation.genai.langchain`).
