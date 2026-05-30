@@ -1,0 +1,1 @@
+Handle MCPListToolsSpanData so MCP list_tools spans get proper operation name and attributes instead of showing as "unknown"
