@@ -1,0 +1,1 @@
+Serialize ResponseFunctionToolCall output items as structured tool_call parts instead of stringified text
