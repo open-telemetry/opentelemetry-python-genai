@@ -39,7 +39,7 @@
 
 google-auth==2.53.0
 
-google-genai==2.6.0
+google-genai==2.7.0
 
 # Install locally from the folder. This path is relative to the
 # root directory, given invocation from "tox" at root level.
