@@ -53,6 +53,7 @@ from opentelemetry.trace import (
 from opentelemetry.util.genai._agent_invocation import AgentInvocation
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
 from opentelemetry.util.genai._invocation import Error
+from opentelemetry.util.genai._mcp_invocation import MCPInvocation
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
@@ -511,6 +512,51 @@ class TelemetryHandler:
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
+        )
+
+    def mcp(
+        self,
+        mcp_method_name: str,
+        *,
+        tool_name: str | None = None,
+        prompt_name: str | None = None,
+        is_client: bool = True,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        client_address: str | None = None,
+        client_port: int | None = None,
+    ) -> MCPInvocation:
+        """Returns an MCP invocation. Starts span when called.
+
+        Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
+        to finalize the span upon exiting. If not used as a ContextManager, the caller is
+        responsible for calling `stop` or `fail` to finalize the span.
+
+        Only set data attributes on the invocation object, do not modify the span or context.
+
+        Args:
+            mcp_method_name: The MCP method name (e.g. "tools/call", "tools/list").
+            tool_name: Tool name when operation is tool-related.
+            prompt_name: Prompt name when operation is prompt-related.
+            is_client: True for client spans (SpanKind.CLIENT), False for server spans (SpanKind.SERVER).
+            server_address: Server address (client spans only).
+            server_port: Server port (client spans only).
+            client_address: Client address (server spans only).
+            client_port: Client port (server spans only).
+        """
+        return MCPInvocation(
+            self._tracer,
+            self._metrics_recorder,
+            self._logger,
+            self._completion_hook,
+            mcp_method_name,
+            tool_name=tool_name,
+            prompt_name=prompt_name,
+            is_client=is_client,
+            server_address=server_address,
+            server_port=server_port,
+            client_address=client_address,
+            client_port=client_port,
         )
 
     def workflow(

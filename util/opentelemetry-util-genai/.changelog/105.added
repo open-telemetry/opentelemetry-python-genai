@@ -1,0 +1,1 @@
+Add MCPInvocation type and TelemetryHandler.mcp() factory for MCP span tracking
