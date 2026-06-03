@@ -62,13 +62,15 @@ def vcr_config():
 
 @pytest.fixture(
     scope="function",
-    params=[(True, "span_only"), (False, "True")],
+    params=[(True, "span_only")],
     name="content_mode",
 )
 def fixture_content_mode(request):
     # returns tuple: (latest_experimental_enabled: bool, content_mode: str)
     # we don't test (True, "event_only"), (True, "span_and_event") because it's util's
-    # responsibility
+    # responsibility.
+    # (False, "True") is not tested because the instrumentation always emits
+    # gen_ai.provider.name (latest semconv) on spans regardless of OTEL_SEMCONV_STABILITY_OPT_IN.
     return request.param
 
 
