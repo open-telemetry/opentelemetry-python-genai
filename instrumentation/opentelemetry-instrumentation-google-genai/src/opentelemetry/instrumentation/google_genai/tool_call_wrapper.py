@@ -38,9 +38,9 @@ def _to_otel_value(python_value):
     return repr(python_value)
 
 
-# There is non canonical way to serialize a Python object to a span attribute value.
-# Span attribute values currently most be one of the primitive types, or a homogeneous list of primitive types.
-# In the future the value will be expanded to include None, a heterogeneous lists of primitive types, and a Map of these types.
+# There is no canonical way to serialize a Python object to a span attribute value.
+# Span attribute values currently must be one of the primitive types, or a homogeneous list of primitive types.
+# In the future the value will be expanded to include None, heterogeneous lists of primitive types, and a Map of these types.
 # See https://github.com/open-telemetry/opentelemetry-specification/pull/4485
 def _get_function_args(wrapped_function, function_args, function_kwargs):
     """Records the details about a function invocation as span attributes."""
@@ -75,34 +75,42 @@ def _wrap_tool_function(
 
         @functools.wraps(tool_function)
         async def wrapped_function(*args, **kwargs):
+            # Always json.dumps. First we convert args / result to something that we can serialize, then we serialize.
+            # The return value of _to_otel_value could be a dict, which currently cannot be a span attribute..
+            # In the future that could change (see https://github.com/open-telemetry/opentelemetry-specification/pull/4485), and we could possibly stop using json.dumps here.
             with telemetry_handler.tool(
-                tool_function.__name__, tool_description=tool_function.__doc__
+                tool_function.__name__,
+                tool_description=tool_function.__doc__,
             ) as tool_invocation:
+                # Do this before calling the tool in case that crashes.
+                if tool_invocation.should_capture_content_on_span:
+                    tool_invocation.arguments = json.dumps(
+                        _get_function_args(tool_function, args, kwargs)
+                    )
                 result = await tool_function(*args, **kwargs)
-                # Always json.dumps. First we convert args / result to something that we can serialize, then we serialize.
-                # The return value of _to_otel_value could be a dict, which currently cannot be a span attribute..
-                # In the future that could change (see https://github.com/open-telemetry/opentelemetry-specification/pull/4485), and we could possibly stop using json.dumps here.
-                tool_invocation.arguments = json.dumps(
-                    _get_function_args(tool_function, args, kwargs)
-                )
-                tool_invocation.tool_result = json.dumps(
-                    _to_otel_value(result)
-                )
+                if tool_invocation.should_capture_content_on_span:
+                    tool_invocation.tool_result = json.dumps(
+                        _to_otel_value(result)
+                    )
             return result
     else:
 
         @functools.wraps(tool_function)
         def wrapped_function(*args, **kwargs):
             with telemetry_handler.tool(
-                tool_function.__name__, tool_description=tool_function.__doc__
+                tool_function.__name__,
+                tool_description=tool_function.__doc__,
             ) as tool_invocation:
+                # Do this before calling the tool in case that crashes.
+                if tool_invocation.should_capture_content_on_span:
+                    tool_invocation.arguments = json.dumps(
+                        _get_function_args(tool_function, args, kwargs)
+                    )
                 result = tool_function(*args, **kwargs)
-                tool_invocation.arguments = json.dumps(
-                    _get_function_args(tool_function, args, kwargs)
-                )
-                tool_invocation.tool_result = json.dumps(
-                    _to_otel_value(result)
-                )
+                if tool_invocation.should_capture_content_on_span:
+                    tool_invocation.tool_result = json.dumps(
+                        _to_otel_value(result)
+                    )
             return result
 
     return wrapped_function

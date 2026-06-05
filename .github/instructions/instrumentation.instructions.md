@@ -69,6 +69,11 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   (`from opentelemetry.test_util_genai.fixtures import *` and
   `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`). Do not
   re-implement in-memory provider/exporter setup or the VCR pretty-print serializer locally.
+- When recording VCR cassettes, scrub account-identifying values in the conftest's
+  `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
+  responses) before committing. Examples: `authorization`, `openai-organization`,
+  `openai-project`, `Set-Cookie`, and any response-body field tied to a real
+  account.
 - Conformance: packages ship `tests/conformance/<scenario>.py` modules (each
   defining a subclass of
   `opentelemetry.test_util_genai.conformance.Scenario` that sets

@@ -1,0 +1,185 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": [
+          {
+            "role": "user",
+            "content": "\nWrite a bash script that takes a matrix represented as a string with\nformat '[1,2],[3,4],[5,6]' and prints the transpose in the same format.\n"
+          }
+        ],
+        "max_output_tokens": 1000,
+        "model": "gpt-5.4",
+        "reasoning": {
+          "effort": "low"
+        }
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '257'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - AsyncOpenAI/Python 2.38.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.38.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.12
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-read-timeout:
+      - '30.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_0655465b1977354d006a1639fb536c8194851d7dc36703f9f4",
+          "object": "response",
+          "created_at": 1779841531,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1779841536,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": 1000,
+          "max_tool_calls": null,
+          "model": "gpt-5.4-2026-03-05",
+          "moderation": null,
+          "output": [
+            {
+              "id": "rs_0655465b1977354d006a1639fbd23c81948f8f77671473c809",
+              "type": "reasoning",
+              "summary": []
+            },
+            {
+              "id": "msg_0655465b1977354d006a1639fc5ff48194a04033981bb99785",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "```bash\n#!/usr/bin/env bash\n\n# Usage:\n#   ./transpose.sh '[1,2],[3,4],[5,6]'\n\ninput=\"$1\"\n\n# Remove all '[' and ']'\nclean=\"${input//[/}\"\nclean=\"${clean//]/}\"\n\n# Split into rows\nIFS=',' read -ra all <<< \"$clean\"\n\n# Determine number of columns from first row in original input\nfirst_row=\"${input%%],*}\"\nfirst_row=\"${first_row#[}\"\nfirst_row=\"${first_row%]}\"\nIFS=',' read -ra first_vals <<< \"$first_row\"\ncols=${#first_vals[@]}\n\n# Total elements / rows\ntotal=${#all[@]}\nrows=$(( total / cols ))\n\n# Print transpose\nout=\"\"\nfor ((c=0; c<cols; c++)); do\n    out+=\"[\"\n    for ((r=0; r<rows; r++)); do\n        idx=$(( r * cols + c ))\n        out+=\"${all[idx]}\"\n        if (( r < rows - 1 )); then\n            out+=\",\"\n        fi\n    done\n    out+=\"]\"\n    if (( c < cols - 1 )); then\n        out+=\",\"\n    fi\ndone\n\necho \"$out\"\n```\n\nExample:\n```bash\n$ ./transpose.sh '[1,2],[3,4],[5,6]'\n[1,3,5],[2,4,6]\n```\n\nIf you want, I can also give a version that reads from stdin instead of a command-line argument."
+                }
+              ],
+              "phase": "final_answer",
+              "role": "assistant"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": "current_turn",
+            "effort": "low",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 0.98,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 44,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 352,
+            "output_tokens_details": {
+              "reasoning_tokens": 28
+            },
+            "total_tokens": 396
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Access-Control-Expose-Headers:
+      - CF-Ray
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - a020e2024be85e86-EWR
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 27 May 2026 00:25:36 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      alt-svc:
+      - h3=":443"; ma=86400
+      content-length:
+      - '2820'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '5318'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      set-cookie: test_set_cookie
+      x-ratelimit-limit-requests:
+      - '500'
+      x-ratelimit-limit-tokens:
+      - '500000'
+      x-ratelimit-remaining-requests:
+      - '499'
+      x-ratelimit-remaining-tokens:
+      - '499811'
+      x-ratelimit-reset-requests:
+      - 120ms
+      x-ratelimit-reset-tokens:
+      - 22ms
+      x-request-id:
+      - req_5a1019db07b9492d99b501e92c779795
+    status:
+      code: 200
+      message: OK
+version: 1

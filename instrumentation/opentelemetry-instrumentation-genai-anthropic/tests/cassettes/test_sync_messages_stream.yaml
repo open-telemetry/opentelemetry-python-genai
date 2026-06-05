@@ -128,9 +128,6 @@ interactions:
       - DYNAMIC
       request-id:
       - req_011CaSta4VpT5jmAHFwkrWEx
-      set-cookie:
-      - _cfuvid=fBfT7HzkROiMbhYZZb.a20S2fBiaSuYdrEdkO.cQAAU-1777229654.7651122-1.0.1.1-MTBV4KVg94Wya_bPOQNKc7u6yC1bHmornZk3mDa_jpA;
-        HttpOnly; SameSite=None; Secure; Path=/; Domain=api.anthropic.com
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       x-envoy-upstream-service-time:

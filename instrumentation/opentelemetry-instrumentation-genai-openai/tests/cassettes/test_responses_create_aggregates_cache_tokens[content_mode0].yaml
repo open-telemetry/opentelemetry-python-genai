@@ -145,13 +145,11 @@ interactions:
       openai-processing-ms:
       - '917'
       openai-project:
-      - proj_s74VWObPgWXRchv2sHdrOTPY
+      - test_openai_project_id
       openai-version:
       - '2020-10-01'
       set-cookie:
-      - __cf_bm=nawHaNe2Gcjnf3PnJWOe7eCMcuL4GfmHJjNVPemFYOE-1776481264.1903315-1.0.1.1-cmimAw8su.1UpRhI8dWFr6DhgPw2Z2sJi8cKNV_tHFMFijmHK3ND45DjgKsf_ur_EZexZIAN.O__1bqzwnC_acPUsfxzivCaUIWeL1ThD2hWwU2mRBTfDdUDbR04KBsW;
-        HttpOnly; Secure; Path=/; Domain=api.openai.com; Expires=Sat, 18 Apr 2026
-        03:31:05 GMT
+      - test_set_cookie
       x-ratelimit-limit-requests:
       - '10000'
       x-ratelimit-limit-tokens:
