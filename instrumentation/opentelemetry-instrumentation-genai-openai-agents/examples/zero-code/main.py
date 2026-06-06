@@ -8,30 +8,6 @@ from __future__ import annotations
 from agents import Agent, Runner, function_tool
 from dotenv import load_dotenv
 
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter,
-)
-from opentelemetry.instrumentation.genai.openai_agents import (
-    OpenAIAgentsInstrumentor,
-)
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-
-def configure_tracing() -> None:
-    """Ensure tracing exports spans even without auto-instrumentation."""
-
-    current_provider = trace.get_tracer_provider()
-    if isinstance(current_provider, TracerProvider):
-        provider = current_provider
-    else:
-        provider = TracerProvider()
-        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-        trace.set_tracer_provider(provider)
-
-    OpenAIAgentsInstrumentor().instrument(tracer_provider=provider)
-
 
 @function_tool
 def get_weather(city: str) -> str:
@@ -40,29 +16,35 @@ def get_weather(city: str) -> str:
     return f"The forecast for {city} is sunny with pleasant temperatures."
 
 
-def run_agent() -> None:
-    assistant = Agent(
-        name="Travel Concierge",
+def main() -> None:
+    load_dotenv()
+    weather_specialist = Agent(
+        name="weather_specialist",
         instructions=(
-            "You are a concise travel concierge. Use the weather tool when the"
-            " traveler asks about local conditions."
+            "You answer weather questions. Always call the get_weather tool "
+            "for the requested city, then summarize the result in one short "
+            "sentence with a packing suggestion."
         ),
         tools=[get_weather],
+        model="gpt-4o-mini",
+    )
+    triage_agent = Agent(
+        name="triage",
+        instructions=(
+            "You are a triage agent. If the user asks about weather, "
+            "hand off to weather_specialist. Otherwise answer briefly yourself."
+        ),
+        handoffs=[weather_specialist],
+        model="gpt-4o-mini",
     )
 
     result = Runner.run_sync(
-        assistant,
+        triage_agent,
         "I'm visiting Barcelona this weekend. How should I pack?",
     )
 
     print("Agent response:")
     print(result.final_output)
-
-
-def main() -> None:
-    load_dotenv()
-    configure_tracing()
-    run_agent()
 
 
 if __name__ == "__main__":

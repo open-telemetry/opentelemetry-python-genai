@@ -1,30 +1,20 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# pylint: disable=wrong-import-position,wrong-import-order,import-error
-
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-TESTS_ROOT = Path(__file__).resolve().parent
-stub_path = TESTS_ROOT / "stubs"
-if str(stub_path) not in sys.path:
-    sys.path.insert(0, str(stub_path))
-
-from agents.tracing import (  # noqa: E402
+from agents.tracing import (
     get_trace_provider,
     set_trace_processors,
 )
 
-from opentelemetry.instrumentation.genai.openai_agents import (  # noqa: E402
+from opentelemetry.instrumentation.genai.openai_agents import (
     OpenAIAgentsInstrumentor,
 )
-from opentelemetry.instrumentation.genai.openai_agents.package import (  # noqa: E402
+from opentelemetry.instrumentation.genai.openai_agents.package import (
     _instruments,
 )
-from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider
 
 
 def test_double_instrument_is_noop():
