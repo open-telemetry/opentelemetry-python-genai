@@ -1,0 +1,32 @@
+[project]
+name = "test-google-genai-instrumentation-changes"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "opentelemetry-instrumentation-google-genai",
+    "google-genai",
+    "pyOpenSSL",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-util-genai",
+    "opentelemetry-semantic-conventions",
+    "opentelemetry-instrumentation",
+]
+
+[[tool.uv.index]]
+# Optional name for the index.
+name = "pypi"
+# Required URL for the index.
+url = "https://pypi.org/simple"
+
+[tool.uv]
+no-sources = false
+
+# NOT USED unless no-sources is false
+[tool.uv.sources]
+opentelemetry-util-genai = { git = "https://github.com/open-telemetry/opentelemetry-python-genai.git", branch = "main", subdirectory="util/opentelemetry-util-genai" }
+opentelemetry-instrumentation-google-genai = { git = "https://github.com/open-telemetry/opentelemetry-python-genai.git", branch = "main", subdirectory="instrumentation/opentelemetry-instrumentation-google-genai" }
+opentelemetry-sdk = { git = "https://github.com/open-telemetry/opentelemetry-python.git", branch = "main", subdirectory="opentelemetry-sdk" }
+opentelemetry-exporter-otlp-proto-grpc = { git = "https://github.com/open-telemetry/opentelemetry-python.git", branch = "main", subdirectory="exporter/opentelemetry-exporter-otlp-proto-grpc" }
+opentelemetry-semantic-conventions = { git = "https://github.com/open-telemetry/opentelemetry-python.git", branch = "main", subdirectory="opentelemetry-semantic-conventions" }
+opentelemetry-instrumentation = { git = "https://github.com/open-telemetry/opentelemetry-python-contrib.git", branch = "main", subdirectory="opentelemetry-instrumentation" }

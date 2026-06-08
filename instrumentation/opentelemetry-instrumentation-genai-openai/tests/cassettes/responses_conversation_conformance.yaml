@@ -1,0 +1,341 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": "Remember that my favorite color is blue.",
+        "model": "gpt-4o-mini"
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '74'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.38.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.38.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.12
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_0c7d79a23a2a4b0e006a1caca9489c819da3cea21468d58c7b",
+          "object": "response",
+          "created_at": 1780264105,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1780264106,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
+            {
+              "id": "msg_0c7d79a23a2a4b0e006a1cacaa9284819d8accd7ce03b8371e",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "Got it! Your favorite color is blue. If there's anything specific you'd like to chat about related to blue or anything else, feel free to let me know!"
+                }
+              ],
+              "role": "assistant"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 15,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 33,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 48
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Access-Control-Expose-Headers:
+      - CF-Ray
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - a0492ebc6df17ca5-EWR
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Sun, 31 May 2026 21:48:27 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      alt-svc:
+      - h3=":443"; ma=86400
+      content-length:
+      - '1728'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1873'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      set-cookie: test_set_cookie
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9999'
+      x-ratelimit-remaining-tokens:
+      - '199966'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 10ms
+      x-request-id:
+      - req_b12a778fabe449b8b559dfa47748750f
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "input": "What is my favorite color?",
+        "model": "gpt-4o-mini",
+        "previous_response_id": "resp_0c7d79a23a2a4b0e006a1caca9489c819da3cea21468d58c7b"
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '141'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.38.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.38.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.12
+      authorization:
+      - Bearer test_openai_api_key
+      cookie:
+      - test_cookie
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_0c7d79a23a2a4b0e006a1cacab6ca0819d9f845c02736a87ce",
+          "object": "response",
+          "created_at": 1780264107,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1780264109,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
+            {
+              "id": "msg_0c7d79a23a2a4b0e006a1cacacf238819db718021db4de8f55",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "Your favorite color is blue!"
+                }
+              ],
+              "role": "assistant"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": "resp_0c7d79a23a2a4b0e006a1caca9489c819da3cea21468d58c7b",
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 61,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 7,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 68
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Access-Control-Expose-Headers:
+      - CF-Ray
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - a0492ecef9dcf981-EWR
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Sun, 31 May 2026 21:48:29 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      alt-svc:
+      - h3=":443"; ma=86400
+      content-length:
+      - '1658'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1743'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9998'
+      x-ratelimit-remaining-tokens:
+      - '199920'
+      x-ratelimit-reset-requests:
+      - 15.13s
+      x-ratelimit-reset-tokens:
+      - 24ms
+      x-request-id:
+      - req_f16889a6dcce944e925610514a2e9ba3
+    status:
+      code: 200
+      message: OK
+version: 1

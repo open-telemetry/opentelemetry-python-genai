@@ -25,6 +25,7 @@ from opentelemetry.test_util_genai.conformance import (  # noqa: E402
 
 from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
+from .conformance.responses_conversation import ResponsesConversationScenario
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -39,6 +40,7 @@ from .conformance.tool_calling import ToolCallingScenario
             ),
         ),
         ToolCallingScenario(),
+        ResponsesConversationScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

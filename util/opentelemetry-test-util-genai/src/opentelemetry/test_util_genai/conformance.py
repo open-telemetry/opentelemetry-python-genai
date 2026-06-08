@@ -46,6 +46,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.test.weaver_live_check import (
+    LiveCheckError,
     LiveCheckReport,
     WeaverLiveCheck,
 )
@@ -179,8 +180,13 @@ def run_conformance(
         meter_provider.force_flush()
         logger_provider.force_flush()
 
-        report = weaver.end_and_check(timeout=120)
-        _dump_report(scenario, report)
+        try:
+            report = weaver.end_and_check(timeout=120)
+            _dump_report(scenario, report)
+        except LiveCheckError as exc:
+            _dump_report(scenario, exc.report)
+            raise
+
         scenario.validate(report)
         return report
     finally:
