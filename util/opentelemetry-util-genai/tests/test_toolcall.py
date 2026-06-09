@@ -40,7 +40,8 @@ def test_toolcallrequest_is_message_part():
 def test_toolcall_inherits_from_genaiinvocation():
     """ToolInvocation inherits from GenAIInvocation for lifecycle management"""
     handler = _make_handler()
-    tc = handler.tool("get_weather", arguments={"city": "Paris"})
+    tc = handler.tool("get_weather")
+    tc.arguments = {"city": "Paris"}
     assert isinstance(tc, GenAIInvocation)
     assert not isinstance(tc, ToolCallRequest)
     tc.stop()

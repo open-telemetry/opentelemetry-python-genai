@@ -11,13 +11,13 @@ dependencies = [
   "opentelemetry-test-utils",
   "opentelemetry-test-util-genai",
   "opentelemetry-util-genai",
-  "opentelemetry-instrumentation-anthropic[instruments]",
-  "opentelemetry-instrumentation-claude-agent-sdk[instruments]",
+  "opentelemetry-instrumentation-genai-anthropic[instruments]",
+  "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
-  "opentelemetry-instrumentation-langchain[instruments]",
-  "opentelemetry-instrumentation-openai-v2[instruments]",
-  "opentelemetry-instrumentation-openai-agents-v2[instruments]",
-  "opentelemetry-instrumentation-weaviate[instruments]",
+  "opentelemetry-instrumentation-genai-langchain[instruments]",
+  "opentelemetry-instrumentation-genai-openai[instruments]",
+  "opentelemetry-instrumentation-genai-openai-agents[instruments]",
+  "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
 ]
 
 
@@ -30,13 +30,13 @@ required-version = ">=0.6.0"
 [tool.uv.sources]
 opentelemetry-test-util-genai = { workspace = true }
 opentelemetry-util-genai = { workspace = true }
-opentelemetry-instrumentation-anthropic = { workspace = true }
-opentelemetry-instrumentation-claude-agent-sdk = { workspace = true }
+opentelemetry-instrumentation-genai-anthropic = { workspace = true }
+opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }
-opentelemetry-instrumentation-langchain = { workspace = true }
-opentelemetry-instrumentation-openai-v2 = { workspace = true }
-opentelemetry-instrumentation-openai-agents-v2 = { workspace = true }
-opentelemetry-instrumentation-weaviate = { workspace = true }
+opentelemetry-instrumentation-genai-langchain = { workspace = true }
+opentelemetry-instrumentation-genai-openai = { workspace = true }
+opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
+opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
 
 
 # https://docs.astral.sh/uv/reference/settings/#workspace
@@ -93,23 +93,23 @@ pythonVersion = "3.10"
 reportPrivateUsage = false  # Ignore private attributes added by instrumentation packages.
 # Add progressively instrumentation packages here.
 include = [
-  "instrumentation/opentelemetry-instrumentation-anthropic",
-  "instrumentation/opentelemetry-instrumentation-claude-agent-sdk",
-  "instrumentation/opentelemetry-instrumentation-langchain",
-  "instrumentation/opentelemetry-instrumentation-weaviate",
+  "instrumentation/opentelemetry-instrumentation-genai-anthropic",
+  "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
+  "instrumentation/opentelemetry-instrumentation-genai-langchain",
+  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
 ]
 # We should also add type hints to the test suite - It helps on finding bugs.
 # We are excluding for now because it's easier, and more important to add to the instrumentation packages.
 exclude = [
-  "instrumentation/opentelemetry-instrumentation-anthropic/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-anthropic/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-claude-agent-sdk/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-claude-agent-sdk/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-langchain/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-langchain/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-weaviate/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-weaviate/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-anthropic/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/examples/**/*.py",
   "util/opentelemetry-util-genai/tests/**/*.py",
 ]
 

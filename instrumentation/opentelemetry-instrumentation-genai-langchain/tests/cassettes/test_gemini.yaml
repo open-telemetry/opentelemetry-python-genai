@@ -1,0 +1,32 @@
+interactions:
+- request:
+    body: '{"contents": [{"parts": [{"text": "What is the capital of France?"}], "role":
+      "user"}], "systemInstruction": {"parts": [{"text": "You are a helpful assistant!"}]},
+      "safetySettings": [], "generationConfig": {"temperature": 0.7, "candidateCount":
+      1}}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent
+  response:
+    body:
+      string: '{"candidates": [{"content": {"parts": [{"text": "The capital of France
+        is **Paris**."}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 15, "candidatesTokenCount": 10, "totalTokenCount":
+        25}, "modelVersion": "gemini-2.5-pro"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+    status:
+      code: 200
+      message: OK
+version: 1

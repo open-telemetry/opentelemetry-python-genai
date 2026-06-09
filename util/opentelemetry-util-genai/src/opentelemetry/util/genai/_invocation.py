@@ -49,8 +49,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     Base class for all GenAI invocation types. Manages the lifecycle of a single
     GenAI operation (LLM call, embedding, tool execution, workflow, etc.).
 
-    Use the factory methods on TelemetryHandler (start_inference, start_embedding,
-    start_workflow, start_tool) rather than constructing invocations directly.
+    Use the factory methods on TelemetryHandler (inference, embedding,
+    workflow, tool) rather than constructing invocations directly.
     """
 
     def __init__(

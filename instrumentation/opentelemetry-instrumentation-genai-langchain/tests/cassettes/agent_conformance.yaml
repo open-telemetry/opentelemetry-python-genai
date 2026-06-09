@@ -1,0 +1,769 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "What is (3 * 4) + 7?",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 100,
+        "seed": 100,
+        "stream": false,
+        "temperature": 0.1,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "multiply",
+              "description": "Multiply two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "add",
+              "description": "Add two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "top_p": 0.9
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-agent001toolcall",
+          "object": "chat.completion",
+          "created": 1771535200,
+          "model": "gpt-3.5-turbo-0125",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "refusal": null,
+                "tool_calls": [
+                  {
+                    "id": "call_multiply001",
+                    "type": "function",
+                    "function": {
+                      "name": "multiply",
+                      "arguments": "{\"a\": 3, \"b\": 4}"
+                    }
+                  }
+                ]
+              },
+              "logprobs": null,
+              "finish_reason": "tool_calls"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": null
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 20 May 2026 00:07:10 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      content-length:
+      - '700'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '200'
+      openai-version:
+      - '2020-10-01'
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9999'
+      x-ratelimit-remaining-tokens:
+      - '199900'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 5ms
+      x-request-id:
+      - req_agent001toolcall
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "What is (3 * 4) + 7?",
+            "role": "user"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_multiply001",
+                "type": "function",
+                "function": {
+                  "name": "multiply",
+                  "arguments": "{\"a\": 3, \"b\": 4}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "12.0",
+            "tool_call_id": "call_multiply001"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 100,
+        "seed": 100,
+        "stream": false,
+        "temperature": 0.1,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "multiply",
+              "description": "Multiply two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "add",
+              "description": "Add two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "top_p": 0.9
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-agent001addcall",
+          "object": "chat.completion",
+          "created": 1771535201,
+          "model": "gpt-3.5-turbo-0125",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "refusal": null,
+                "tool_calls": [
+                  {
+                    "id": "call_add001",
+                    "type": "function",
+                    "function": {
+                      "name": "add",
+                      "arguments": "{\"a\": 12.0, \"b\": 7}"
+                    }
+                  }
+                ]
+              },
+              "logprobs": null,
+              "finish_reason": "tool_calls"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 110,
+            "completion_tokens": 20,
+            "total_tokens": 130,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": null
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 20 May 2026 00:07:11 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      content-length:
+      - '700'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '200'
+      openai-version:
+      - '2020-10-01'
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9998'
+      x-ratelimit-remaining-tokens:
+      - '199800'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 5ms
+      x-request-id:
+      - req_agent001addcall
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "What is (3 * 4) + 7?",
+            "role": "user"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_multiply001",
+                "type": "function",
+                "function": {
+                  "name": "multiply",
+                  "arguments": "{\"a\": 3, \"b\": 4}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "12.0",
+            "tool_call_id": "call_multiply001"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_add001",
+                "type": "function",
+                "function": {
+                  "name": "add",
+                  "arguments": "{\"a\": 12.0, \"b\": 7}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "19.0",
+            "tool_call_id": "call_add001"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 100,
+        "seed": 100,
+        "stream": false,
+        "temperature": 0.1,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "multiply",
+              "description": "Multiply two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "add",
+              "description": "Add two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "top_p": 0.9
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-agent001final",
+          "object": "chat.completion",
+          "created": 1771535202,
+          "model": "gpt-3.5-turbo-0125",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "The result of (3 * 4) + 7 is 19.",
+                "refusal": null
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 140,
+            "completion_tokens": 14,
+            "total_tokens": 154,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": null
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 20 May 2026 00:07:12 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      content-length:
+      - '600'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '150'
+      openai-version:
+      - '2020-10-01'
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9997'
+      x-ratelimit-remaining-tokens:
+      - '199700'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 5ms
+      x-request-id:
+      - req_agent001final
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "What is (3 * 4) + 7?",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 100,
+        "seed": 100,
+        "stream": false,
+        "temperature": 0.1,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "multiply",
+              "description": "Multiply two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "add",
+              "description": "Add two numbers together.",
+              "parameters": {
+                "properties": {
+                  "a": {
+                    "type": "number"
+                  },
+                  "b": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "top_p": 0.9
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '589'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Incorrect API key provided: test_ope*******_key. You can find your API key at https://platform.openai.com/account/api-keys.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_api_key"
+          }
+        }
+    headers:
+      Access-Control-Expose-Headers:
+      - CF-Ray
+      - CF-Ray
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - 9fe744ddbfdaefbe-PDX
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '269'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 20 May 2026 00:36:46 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Vary:
+      - Origin
+      Via:
+      - HTTP/1.1 m_proxy_prod_aws_us-west-2_1_1n
+      X-Content-Type-Options:
+      - nosniff
+      alt-svc:
+      - clear
+      openai-organization: test_openai_org_id
+      set-cookie: test_set_cookie
+      x-openai-proxy-wasm:
+      - v0.1
+      x-request-id:
+      - req_6939bc5c4a814ff18a6c231db4a2b339
+    status:
+      code: 401
+      message: Unauthorized
+version: 1

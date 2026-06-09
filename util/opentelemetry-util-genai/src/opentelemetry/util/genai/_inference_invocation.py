@@ -224,7 +224,7 @@ class InferenceInvocation(GenAIInvocation):
 class LLMInvocation:
     """Deprecated. Use InferenceInvocation instead.
 
-    Data container for an LLM invocation. Pass to handler.start_llm() to start
+    Data container for an LLM invocation. Pass to handler.llm() to start
     the span, then update fields and call handler.stop_llm() or handler.fail_llm().
     """
 

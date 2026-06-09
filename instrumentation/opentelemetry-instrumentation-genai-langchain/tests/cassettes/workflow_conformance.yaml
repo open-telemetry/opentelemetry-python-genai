@@ -1,0 +1,386 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "You are a research assistant. Provide 2-3 factual sentences.",
+            "role": "system"
+          },
+          {
+            "content": "What is the capital of France?",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 200,
+        "seed": 42,
+        "stream": false,
+        "temperature": 0.1
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-workflow001researcher",
+          "object": "chat.completion",
+          "created": 1771535300,
+          "model": "gpt-3.5-turbo-0125",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "The capital of France is Paris. Paris is one of the most populous cities in Europe and serves as the country's political, economic, and cultural center. The city has been the capital of France since the 10th century.",
+                "refusal": null,
+                "annotations": []
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 35,
+            "completion_tokens": 47,
+            "total_tokens": 82,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": null
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 20 May 2026 00:07:12 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      content-length:
+      - '750'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '180'
+      openai-version:
+      - '2020-10-01'
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9999'
+      x-ratelimit-remaining-tokens:
+      - '199918'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 5ms
+      x-request-id:
+      - req_workflow001researcher
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "You are an expert summariser. Condense the text below into one clear sentence.",
+            "role": "system"
+          },
+          {
+            "content": "The capital of France is Paris. Paris is one of the most populous cities in Europe and serves as the country's political, economic, and cultural center. The city has been the capital of France since the 10th century.",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 200,
+        "seed": 42,
+        "stream": false,
+        "temperature": 0.1
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-workflow001summariser",
+          "object": "chat.completion",
+          "created": 1771535301,
+          "model": "gpt-3.5-turbo-0125",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "Paris, France's capital since the 10th century, is a major European city and the country's political, economic, and cultural hub.",
+                "refusal": null,
+                "annotations": []
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 68,
+            "completion_tokens": 30,
+            "total_tokens": 98,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": null
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 20 May 2026 00:07:13 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      content-length:
+      - '680'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '160'
+      openai-version:
+      - '2020-10-01'
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9998'
+      x-ratelimit-remaining-tokens:
+      - '199820'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 5ms
+      x-request-id:
+      - req_workflow001summariser
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "You are a research assistant. Provide 2-3 factual sentences.",
+            "role": "system"
+          },
+          {
+            "content": "What is the capital of France?",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-3.5-turbo",
+        "max_completion_tokens": 200,
+        "seed": 42,
+        "stream": false,
+        "temperature": 0.1
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '259'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      User-Agent:
+      - OpenAI/Python 2.37.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.37.0
+      X-Stainless-Raw-Response:
+      - 'true'
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.11
+      authorization:
+      - Bearer test_openai_api_key
+      cookie:
+      - test_cookie
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Incorrect API key provided: test_ope*******_key. You can find your API key at https://platform.openai.com/account/api-keys.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_api_key"
+          }
+        }
+    headers:
+      Access-Control-Expose-Headers:
+      - CF-Ray
+      - CF-Ray
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - 9fe744ea6ac0a32d-PDX
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '269'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 20 May 2026 00:36:48 GMT
+      Server:
+      - cloudflare
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Vary:
+      - Origin
+      Via:
+      - HTTP/1.1 m_proxy_prod_aws_us-west-2_1_1n
+      X-Content-Type-Options:
+      - nosniff
+      alt-svc:
+      - clear
+      openai-organization: test_openai_org_id
+      x-openai-proxy-wasm:
+      - v0.1
+      x-request-id:
+      - req_d26d8ff9a16d4299acffccc168091030
+    status:
+      code: 401
+      message: Unauthorized
+version: 1

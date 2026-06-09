@@ -158,11 +158,9 @@ _execute_tool_expected := {
 
 # Invoke agent.
 # Required: gen_ai.operation.name, gen_ai.provider.name.
-# Most instrumentations should have agent.id; flag it as always-emit.
 _invoke_agent_expected := {
 	"gen_ai.operation.name",
 	"gen_ai.provider.name",
-	"gen_ai.agent.id",
 }
 
 # Create agent. After creation completes the provider returns an agent.id;

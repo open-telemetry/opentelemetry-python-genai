@@ -20,7 +20,7 @@ separately via pip:
 
 .. code-block:: sh
 
-    pip install opentelemetry-instrumentation-{instrumentation}
+    pip install opentelemetry-instrumentation-genai-{instrumentation}
 
 A complete list of packages can be found in the
 `opentelemetry-python-genai instrumentation <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/instrumentation>`_
@@ -40,8 +40,8 @@ install <https://pip.pypa.io/en/stable/reference/pip_install/#editable-installs>
     git clone https://github.com/open-telemetry/opentelemetry-python-genai.git
     cd opentelemetry-python-genai
     pip install -e ./util/opentelemetry-util-genai
-    pip install -e ./instrumentation/opentelemetry-instrumentation-openai-v2
-    pip install -e ./instrumentation/opentelemetry-instrumentation-anthropic
+    pip install -e ./instrumentation/opentelemetry-instrumentation-genai-openai
+    pip install -e ./instrumentation/opentelemetry-instrumentation-genai-anthropic
 
 
 .. toctree::

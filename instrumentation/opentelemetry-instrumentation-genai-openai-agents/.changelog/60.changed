@@ -1,0 +1,1 @@
+Renamed package from `opentelemetry-instrumentation-openai-agents-v2` to `opentelemetry-instrumentation-genai-openai-agents` (imports `opentelemetry.instrumentation.genai.openai_agents`); the version line restarts at `1.0b0`.

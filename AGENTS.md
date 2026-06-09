@@ -38,9 +38,17 @@ comment - not in the PR description.
 - `util/opentelemetry-test-util-genai/` - shared test fixtures and assertion helpers
   (workspace-internal, not published)
 
-Instrumentation packages live under `src/opentelemetry/instrumentation/{name}/` with their own
-`pyproject.toml` and `tests/`. The util package follows the equivalent layout under
+Instrumentation packages live under `src/opentelemetry/instrumentation/genai/{name}/` with their
+own `pyproject.toml` and `tests/`. The util package follows the equivalent layout under
 `src/opentelemetry/util/genai/`.
+
+## Package naming and versioning
+
+- Instrumentation packages are named `opentelemetry-instrumentation-genai-{lib}` and import as
+  `opentelemetry.instrumentation.genai.{lib}` — e.g. `opentelemetry-instrumentation-genai-anthropic`
+  imports `opentelemetry.instrumentation.genai.anthropic`. 
+- Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`). `version.py` carries a `.dev`
+  suffix during development (`1.0b0.dev`); the release workflow drops it.
 
 ## Commands
 
@@ -52,7 +60,7 @@ uv sync --frozen --all-packages
 uv run pre-commit run ruff --all-files
 
 # Test a specific package (append -oldest, -latest for version variants)
-uv run tox -e py312-test-instrumentation-openai-v2-oldest
+uv run tox -e py312-test-instrumentation-genai-openai-oldest
 
 # Type check
 uv run tox -e typecheck
@@ -108,6 +116,11 @@ Apply to packages under `instrumentation/`.
   `opentelemetry.test_util_genai` (`from opentelemetry.test_util_genai.fixtures import *` and
   `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`) rather
   than re-implementing provider/exporter/VCR plumbing.
+- When recording VCR cassettes, scrub account-identifying values in the conftest's
+  `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
+  responses) before committing. Examples: `authorization`, `openai-organization`,
+  `openai-project`, `Set-Cookie`, and any response-body field tied to a real
+  account.
 
 ### Conformance tests
 
@@ -119,10 +132,10 @@ via Weaver live-check. Each scenario module defines a subclass of
 `expected_spans`, `expected_metrics`, and implements
 `run(*, tracer_provider, meter_provider, logger_provider, vcr)`.
 
-`tests/test_conformance.py` must set `pytestmark = pytest.mark.conformance` at
-module level.
-
-Run via `tox -e py312-test-instrumentation-<pkg>-conformance`.
+Run via `tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
+`*-conformance` tox envs target `tests/test_conformance.py` directly; the
+regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
+OTLP/gRPC exporter or `weaver_live_check`.
 
 The parallel PR-review rules live in
 [`.github/instructions/instrumentation.instructions.md`](.github/instructions/instrumentation.instructions.md)
