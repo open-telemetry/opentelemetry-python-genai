@@ -319,11 +319,6 @@ def fixture_enable_completion_hook(request):
     return getattr(request, "param", "default")
 
 
-@pytest.fixture(name="semconv_version")
-def fixture_semconv_version(request):
-    return getattr(request, "param", "default")
-
-
 @pytest.fixture(name="internal_instrumentation_setup", autouse=True)
 def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
     if enable_completion_hook == "enable_completion_hook":
@@ -349,32 +344,18 @@ def fixture_otel_mocker():
 @pytest.fixture(
     name="setup_content_recording",
     autouse=True,
-    params=["logcontent", "excludecontent"],
+    params=["SPAN_AND_EVENT", "NO_CONTENT"],
 )
-def fixture_setup_content_recording(request, semconv_version):
-    enabled = request.param == "logcontent"
-    # due to some init weirdness, this needs to be updated manually to work, and later restored,
-    # otherwise, state of this dict leaks to other tests and breaks them.
-    orig_dict = _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING.copy()
-    if semconv_version == "experimental":
-        capture_content = "SPAN_AND_EVENT" if enabled else "NO_CONTENT"
-        os.environ.update(
-            {
-                OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental",
-                OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: capture_content,
-            }
-        )
-        _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING.update(
-            {
-                _OpenTelemetryStabilitySignalType.GEN_AI: _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
-            }
-        )
-    else:
-        os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = str(
-            enabled
-        )
-    yield
-    _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING = orig_dict
+def fixture_setup_content_recording(request):
+    os.environ.update(
+        {
+            OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental",
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: request.param,
+        }
+    )
+    _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING[
+        _OpenTelemetryStabilitySignalType.GEN_AI
+    ] = _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
 
 
 @pytest.fixture(name="vcr_record_mode")
@@ -531,34 +512,6 @@ def fixture_generate_content_stream(client, is_async):
     return _sync_impl
 
 
-@pytest.mark.parametrize("semconv_version", ["default"], indirect=True)
-@pytest.mark.vcr
-def test_non_streaming(generate_content, model, otel_mocker):
-    response = generate_content(
-        model=model, contents="Create a poem about Open Telemetry."
-    )
-    assert response is not None
-    assert response.text is not None
-    assert len(response.text) > 0
-    otel_mocker.assert_has_span_named(f"generate_content {model}")
-
-
-@pytest.mark.parametrize("semconv_version", ["default"], indirect=True)
-@pytest.mark.vcr
-def test_streaming(generate_content_stream, model, otel_mocker):
-    count = 0
-    for response in generate_content_stream(
-        model=model, contents="Create a poem about Open Telemetry."
-    ):
-        assert response is not None
-        assert response.text is not None
-        assert len(response.text) > 0
-        count += 1
-    assert count > 0
-    otel_mocker.assert_has_span_named(f"generate_content {model}")
-
-
-@pytest.mark.parametrize("semconv_version", ["experimental"], indirect=True)
 @pytest.mark.parametrize(
     "enable_completion_hook", ["enable_completion_hook"], indirect=True
 )

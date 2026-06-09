@@ -41,18 +41,19 @@ Factory methods on `TelemetryHandler` (`handler.py`):
 
 - `inference(provider, request_model, *, server_address, server_port)` → `InferenceInvocation`
 - `embedding(provider, request_model, *, server_address, server_port)` → `EmbeddingInvocation`
+- `retrieval(*, data_source_id, provider, request_model, server_address, server_port)` → `RetrievalInvocation`
 - `tool(name, *, arguments, tool_call_id, tool_type, tool_description)` → `ToolInvocation`
 - `workflow(name)` → `WorkflowInvocation`
 
 The returned object can also be used as a context manager (`with ... as invocation:`) when the span lifetime maps cleanly to a `with` block.
 
 The above factories must map 1:1 to distinct semconv operation types (inference, embeddings,
-tool execution, agent invocation, workflow invocation). Names must match the operation
+retrieval, tool execution, agent invocation, workflow invocation). Names must match the operation
 unambiguously — for example, `create_agent` and `invoke_agent` are different operations, so a
 single `agent()` would be ambiguous and is not acceptable. Add a new factory per operation
 instead.
 
-Factory names are Python-style singular verbs (`inference`, `embedding`, `tool`, `workflow`); the op names
+Factory names are Python-style singular verbs (`inference`, `embedding`, `retrieval`, `tool`, `workflow`); the op names
 they map to follow semconv operations.
 
 Factory methods must accept all attributes that semconv marks as important for sampling

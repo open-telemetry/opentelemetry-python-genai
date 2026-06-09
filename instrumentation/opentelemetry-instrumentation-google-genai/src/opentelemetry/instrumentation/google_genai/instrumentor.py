@@ -15,7 +15,6 @@ from .generate_content import (
     instrument_generate_content,
     uninstrument_generate_content,
 )
-from .otel_wrapper import OTelWrapper
 
 
 class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
@@ -44,11 +43,6 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             kwargs.get("logger_provider") or get_logger_provider()
         )
         meter_provider = kwargs.get("meter_provider") or get_meter_provider()
-        otel_wrapper = OTelWrapper.from_providers(
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-        )
         completion_hook = (
             kwargs.get("completion_hook") or load_completion_hook()
         )
@@ -59,7 +53,6 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             completion_hook=completion_hook,
         )
         self._generate_content_snapshot = instrument_generate_content(
-            otel_wrapper,
             telemetry_handler,
             generate_content_config_key_allowlist=self._generate_content_config_key_allowlist,
         )

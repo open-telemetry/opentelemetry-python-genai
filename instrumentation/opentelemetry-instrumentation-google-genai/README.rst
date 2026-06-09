@@ -75,11 +75,17 @@ within the SDK internals and are not traced as separate spans.
 
 
 Enabling message content
-*************************
+************************
 
-Message content such as the contents of the prompt and response
-are not captured by default. To capture message content as log events, set the environment variable
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to ``true``.
+Message content is not captured by default. To capture message content set the environment variable
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of ``NO_CONTENT``, ``SPAN_AND_EVENT``, ``SPAN_ONLY``, ``EVENT_ONLY``.
+This controls whether the following content is captured on spans and/or events:
+
+- Input messages to the LLM.
+- Output messages from the LLM.
+- System Instructions
+- The result of tool calls and the tool call parameters (other tool call details and tool definitions are always captured).
+
 
 Configuration recording
 ***********************

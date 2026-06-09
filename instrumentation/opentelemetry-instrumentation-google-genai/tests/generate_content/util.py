@@ -13,9 +13,9 @@ def create_response(
     candidate: Optional[genai_types.Candidate] = None,
     candidates: Optional[list[genai_types.Candidate]] = None,
     text: Optional[str] = None,
-    input_tokens: Optional[int] = None,
+    input_tokens: Optional[int] = 0,
     thinking_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = 0,
     cached_tokens: Optional[int] = None,
     model_version: Optional[str] = None,
     usage_metadata: Optional[

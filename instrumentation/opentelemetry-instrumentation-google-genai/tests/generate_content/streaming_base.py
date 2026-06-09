@@ -2,14 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
-from unittest.mock import patch
 
 from opentelemetry import context as context_api
-from opentelemetry.instrumentation._semconv import (
-    _OpenTelemetrySemanticConventionStability,
-    _OpenTelemetryStabilitySignalType,
-    _StabilityMode,
-)
 from opentelemetry.instrumentation.google_genai import (
     GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
 )
@@ -66,7 +60,7 @@ class StreamingTestCase(TestCase):
         finally:
             context_api.detach(tok)
 
-    def test_handles_multiple_ressponses(self):
+    def test_handles_multiple_responses(self):
         self.configure_valid_response(text="First response")
         self.configure_valid_response(text="Second response")
         responses = self.generate_content(
@@ -75,8 +69,9 @@ class StreamingTestCase(TestCase):
         self.assertEqual(len(responses), 2)
         self.assertEqual(responses[0].text, "First response")
         self.assertEqual(responses[1].text, "Second response")
-        choice_events = self.otel.get_events_named("gen_ai.choice")
-        self.assertEqual(len(choice_events), 2)
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):
         # Tokens should not be aggregated in streaming. Cumulative counts are returned on each response.
@@ -91,42 +86,28 @@ class StreamingTestCase(TestCase):
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 3)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
 
-    def test_new_semconv_log_has_extra_genai_attributes(self):
-        patched_environ = patch.dict(
-            "os.environ",
-            {
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
-            },
-        )
-        patched_otel_mapping = patch.dict(
-            _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING,
-            {
-                _OpenTelemetryStabilitySignalType.GEN_AI: _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
-            },
-        )
-        with patched_environ, patched_otel_mapping:
-            self.configure_valid_response(text="Yep, it works!")
-            tok = context_api.attach(
-                context_api.set_value(
-                    GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
-                    {"extra_attribute_key": "extra_attribute_value"},
-                )
+    def test_log_has_extra_genai_attributes(self):
+        self.configure_valid_response(text="Yep, it works!")
+        tok = context_api.attach(
+            context_api.set_value(
+                GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+                {"extra_attribute_key": "extra_attribute_value"},
             )
-            try:
-                self.generate_content(
-                    model="gemini-2.0-flash",
-                    contents="Does this work?",
-                )
-                self.otel.assert_has_event_named(
-                    "gen_ai.client.inference.operation.details"
-                )
-                event = self.otel.get_event_named(
-                    "gen_ai.client.inference.operation.details"
-                )
-                assert (
-                    event.attributes["extra_attribute_key"]
-                    == "extra_attribute_value"
-                )
-            finally:
-                context_api.detach(tok)
+        )
+        try:
+            self.generate_content(
+                model="gemini-2.0-flash",
+                contents="Does this work?",
+            )
+            self.otel.assert_has_event_named(
+                "gen_ai.client.inference.operation.details"
+            )
+            event = self.otel.get_event_named(
+                "gen_ai.client.inference.operation.details"
+            )
+            assert (
+                event.attributes["extra_attribute_key"]
+                == "extra_attribute_value"
+            )
+        finally:
+            context_api.detach(tok)

@@ -1,0 +1,1 @@
+Add `RetrievalInvocation` type with `start_retrieval` / `retrieval` span lifecycle, supporting `gen_ai.operation.name=retrieval` spans per the GenAI semantic conventions.

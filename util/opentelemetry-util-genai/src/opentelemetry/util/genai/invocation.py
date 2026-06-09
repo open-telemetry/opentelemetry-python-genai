@@ -10,6 +10,7 @@ Users can import everything from this single module:
         GenAIInvocation,
         InferenceInvocation,
         EmbeddingInvocation,
+        RetrievalInvocation,
         ToolInvocation,
         WorkflowInvocation,
     )
@@ -23,6 +24,7 @@ from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
 )
+from opentelemetry.util.genai._retrieval_invocation import RetrievalInvocation
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
 from opentelemetry.util.genai._workflow_invocation import WorkflowInvocation
 
@@ -33,6 +35,7 @@ __all__ = [
     "GenAIInvocation",
     "InferenceInvocation",
     "EmbeddingInvocation",
+    "RetrievalInvocation",
     "ToolInvocation",
     "WorkflowInvocation",
 ]

@@ -37,31 +37,36 @@ def get_weather(city: str) -> str:
     return f"The forecast for {city} is sunny with pleasant temperatures."
 
 
-def run_agent() -> None:
-    """Create a simple agent and execute a single run."""
-
-    assistant = Agent(
-        name="Travel Concierge",
+def main() -> None:
+    load_dotenv()
+    configure_otel()
+    weather_specialist = Agent(
+        name="weather_specialist",
         instructions=(
-            "You are a concise travel concierge. Use the weather tool when the"
-            " traveler asks about local conditions."
+            "You answer weather questions. Always call the get_weather tool "
+            "for the requested city, then summarize the result in one short "
+            "sentence with a packing suggestion."
         ),
         tools=[get_weather],
+        model="gpt-4o-mini",
+    )
+    triage_agent = Agent(
+        name="triage",
+        instructions=(
+            "You are a triage agent. If the user asks about weather, "
+            "hand off to weather_specialist. Otherwise answer briefly yourself."
+        ),
+        handoffs=[weather_specialist],
+        model="gpt-4o-mini",
     )
 
     result = Runner.run_sync(
-        assistant,
+        triage_agent,
         "I'm visiting Barcelona this weekend. How should I pack?",
     )
 
     print("Agent response:")
     print(result.final_output)
-
-
-def main() -> None:
-    load_dotenv()
-    configure_otel()
-    run_agent()
 
 
 if __name__ == "__main__":
