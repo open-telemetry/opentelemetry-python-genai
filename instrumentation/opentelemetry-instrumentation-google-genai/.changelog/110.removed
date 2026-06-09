@@ -1,0 +1,1 @@
+Remove the code supporting the old semantic conventions, and the `OTEL_SEMCONV_STABILITY_OPT_IN` flag that was gating the new conventions. The newest conventions will be used by default.

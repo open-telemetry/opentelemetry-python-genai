@@ -5,9 +5,6 @@ import os
 import re
 from typing import Iterable, Optional, Set
 
-ALLOWED = True
-DENIED = False
-
 
 def _parse_env_list(s: str) -> Set[str]:
     result = set()
