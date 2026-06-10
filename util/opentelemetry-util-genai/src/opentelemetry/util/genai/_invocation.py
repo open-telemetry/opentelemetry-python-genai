@@ -9,9 +9,7 @@ from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Sequence
-
-from typing_extensions import TypeAlias
+from typing import TYPE_CHECKING, Any, Sequence, TypeAlias
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach
