@@ -101,9 +101,12 @@ class GenAITracingProcessor(TracingProcessor):
         if isinstance(span_data, FunctionSpanData):
             invocation = self._handler.tool(
                 name=span_data.name,
-                arguments=span_data.input,
                 tool_type="function",
             )
+
+            if invocation.span.is_recording():
+                invocation.arguments = span_data.input
+
             # ToolInvocation does not include provider in metric attributes
             # by default; set it so gen_ai.client.operation.duration carries
             # the required gen_ai.provider.name attribute.
