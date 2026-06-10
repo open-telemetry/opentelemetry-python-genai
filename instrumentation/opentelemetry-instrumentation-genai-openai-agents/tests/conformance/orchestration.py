@@ -71,6 +71,7 @@ def _build_triage_agent() -> Agent:
 
 class OrchestrationScenario(Scenario):
     expected_spans = (
+        "invoke_workflow",
         "invoke_agent",
         "execute_tool",
     )

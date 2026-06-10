@@ -95,10 +95,11 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
     processor.on_span_start(span)
     handler.tool.assert_called_once_with(
         name="get_weather",
-        arguments='{"city":"BCN"}',
         tool_type="function",
     )
     tool_invocation = handler.tool.return_value
+
+    assert tool_invocation.arguments == '{"city":"BCN"}'
     assert (
         tool_invocation.metric_attributes["gen_ai.provider.name"] == "openai"
     )
