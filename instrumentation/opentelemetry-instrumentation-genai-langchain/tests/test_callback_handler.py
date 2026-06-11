@@ -22,6 +22,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     make_last_output_message,
     make_output_message,
     serialize,
+    to_output_messages,
 )
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
@@ -723,7 +724,7 @@ class TestMakeOutputMessage:
         assert len(result) == 1
         assert isinstance(result[0], OutputMessage)
         assert result[0].role == "assistant"
-        assert result[0].finish_reason == "stop"
+        assert result[0].finish_reason == ""
         assert result[0].parts[0].content == "The answer is 42"
 
     def test_non_ai_message_skipped(self):
@@ -757,6 +758,40 @@ class TestMakeOutputMessage:
 
         assert len(result) == 1
         assert result[0].parts[0].content == "answer"
+
+    def test_finish_reason_default_is_empty_string(self):
+        # Workflow/agent output spans must not fabricate a finish reason:
+        # util-genai filters empty strings out of
+        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
+        # while the per-call inference spans report the real values.
+        result = make_output_message({"messages": [AIMessage(content="hi")]})
+        assert result[0].finish_reason == ""
+
+    def test_to_output_messages_propagates_explicit_finish_reason(self):
+        # The inference path passes the provider's finish_reason through
+        # ``to_output_messages``; the converter must forward it onto every
+        # ``OutputMessage`` so util-genai can aggregate it into
+        # ``gen_ai.response.finish_reasons``.
+        msgs = [
+            AIMessage(content="first"),
+            AIMessage(content="second"),
+        ]
+        result = to_output_messages(msgs, finish_reason="tool_calls")
+        assert [m.finish_reason for m in result] == [
+            "tool_calls",
+            "tool_calls",
+        ]
+
+    def test_to_output_messages_skips_non_ai_when_finish_reason_set(self):
+        # finish_reason should never bleed onto non-AI messages: those are
+        # filtered out entirely on the output side.
+        result = to_output_messages(
+            [HumanMessage(content="q"), AIMessage(content="a")],
+            finish_reason="length",
+        )
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].finish_reason == "length"
 
 
 class TestMakeLastOutputMessage:

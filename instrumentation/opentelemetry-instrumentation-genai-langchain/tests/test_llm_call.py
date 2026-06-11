@@ -4,9 +4,12 @@
 from typing import Optional
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import FunctionMessage, HumanMessage, SystemMessage
 from openai import AuthenticationError
 
+from opentelemetry.instrumentation.genai.langchain.utils import (
+    to_input_messages,
+)
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
     event_attributes as EventAttributes,
@@ -195,7 +198,20 @@ def test_gemini(span_exporter, start_instrumentation, gemini):
 
     # verify spans
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 0  # No spans should be created for gemini as of now
+    assert len(spans) == 1
+    assert_gemini_completion_attributes(spans[0], result)
+
+
+def test_function_message_role_maps_to_tool():
+    # Legacy LangChain ``FunctionMessage`` predates ``tool_calls`` and reports
+    # ``message.type == 'function'``. The GenAI semantic conventions enum has
+    # no ``function`` role, so the converter must remap it to ``tool`` before
+    # the message lands in ``gen_ai.input.messages``.
+    result = to_input_messages(
+        [FunctionMessage(name="get_weather", content="sunny")]
+    )
+    assert len(result) == 1
+    assert result[0].role == "tool"
 
 
 def assert_openai_completion_attributes(
@@ -254,13 +270,13 @@ def assert_openai_completion_attributes(
         assert input_message is not None
         assert '"role":"system"' in input_message
         assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"human"' in input_message
+        assert '"role":"user"' in input_message
         assert '"content":"What is the capital of France?"' in input_message
 
         # Assert output message
         output_message = attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
         assert output_message is not None
-        assert '"role":"ai"' in output_message
+        assert '"role":"assistant"' in output_message
         assert '"content":"The capital of France is Paris."' in output_message
         assert '"finish_reason":"stop"' in output_message
     else:
@@ -304,7 +320,7 @@ def assert_openai_completion_attributes_with_error(
         assert input_message is not None
         assert '"role":"system"' in input_message
         assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"human"' in input_message
+        assert '"role":"user"' in input_message
         assert '"content":"What is the capital of France?"' in input_message
 
         # Assert output message
@@ -324,9 +340,44 @@ def assert_bedrock_completion_attributes(
         == "us.amazon.nova-lite-v1:0"
     )
 
-    assert span.attributes["gen_ai.provider.name"] == "amazon_bedrock"
+    assert span.attributes["gen_ai.provider.name"] == "aws.bedrock"
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE] == 0.1
+
+    input_tokens = response.usage_metadata.get("input_tokens")
+    if input_tokens:
+        assert (
+            input_tokens
+            == span.attributes[gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS]
+        )
+    else:
+        assert (
+            gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+        )
+
+    output_tokens = response.usage_metadata.get("output_tokens")
+    if output_tokens:
+        assert (
+            output_tokens
+            == span.attributes[gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        )
+    else:
+        assert (
+            gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+        )
+
+
+def assert_gemini_completion_attributes(
+    span: ReadableSpan, response: Optional
+):
+    assert span is not None
+    assert span.name == "chat gemini-2.5-pro"
+    assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert (
+        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
+        == "gemini-2.5-pro"
+    )
+    assert span.attributes["gen_ai.provider.name"] == "gcp.gen_ai"
 
     input_tokens = response.usage_metadata.get("input_tokens")
     if input_tokens:
@@ -509,7 +560,7 @@ def assert_log_record(log_record, parent_span):
             "parts": [
                 {"content": "What is the capital of France?", "type": "text"}
             ],
-            "role": "human",
+            "role": "user",
         },
     ]
     assert len(input_msgs) == 2
@@ -523,7 +574,7 @@ def assert_log_record(log_record, parent_span):
     )
     assert len(output_msgs) == 1
     out = _normalize_to_dict(output_msgs[0])
-    assert out["role"] == "ai"
+    assert out["role"] == "assistant"
     assert out["finish_reason"] == "stop"
     assert _normalize_to_list(out["parts"]) == [
         {"content": "The capital of France is Paris.", "type": "text"}
@@ -573,7 +624,7 @@ def assert_log_record_when_error(log_record, parent_span):
             "parts": [
                 {"content": "What is the capital of France?", "type": "text"}
             ],
-            "role": "human",
+            "role": "user",
         },
     ]
     assert len(input_msgs) == 2
