@@ -380,7 +380,7 @@ def assert_gemini_completion_attributes(
     assert span.attributes["gen_ai.provider.name"] == "gcp.gen_ai"
 
     input_tokens = response.usage_metadata.get("input_tokens")
-    if input_tokens:
+    if input_tokens is not None:
         assert (
             input_tokens
             == span.attributes[gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS]
@@ -391,7 +391,7 @@ def assert_gemini_completion_attributes(
         )
 
     output_tokens = response.usage_metadata.get("output_tokens")
-    if output_tokens:
+    if output_tokens is not None:
         assert (
             output_tokens
             == span.attributes[gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS]

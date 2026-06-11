@@ -333,17 +333,19 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                 # Token usage (extracted regardless of whether the message
                 # produced output parts — some tool-call-only responses can
-                # still report token counts).
+                # still report token counts). Only set the counts when the
+                # provider actually reported them; defaulting to 0 would
+                # fabricate telemetry when the keys are absent.
                 if message.usage_metadata:
-                    input_tokens = message.usage_metadata.get(
-                        "input_tokens", 0
-                    )
-                    llm_invocation.input_tokens = input_tokens
+                    input_tokens = message.usage_metadata.get("input_tokens")
+                    if input_tokens is not None:
+                        llm_invocation.input_tokens = input_tokens
 
                     output_tokens = message.usage_metadata.get(
-                        "output_tokens", 0
+                        "output_tokens"
                     )
-                    llm_invocation.output_tokens = output_tokens
+                    if output_tokens is not None:
+                        llm_invocation.output_tokens = output_tokens
 
         llm_invocation.output_messages = output_messages
 

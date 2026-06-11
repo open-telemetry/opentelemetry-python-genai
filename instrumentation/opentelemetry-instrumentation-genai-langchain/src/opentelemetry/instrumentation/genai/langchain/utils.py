@@ -53,7 +53,7 @@ def normalize_provider(metadata: Optional[dict[str, Any]]) -> Optional[str]:
     if not metadata:
         return None
     raw = metadata.get("ls_provider")
-    if not raw:
+    if not isinstance(raw, str) or not raw:
         return None
     return _PROVIDER_NAME_OVERRIDES.get(raw, raw)
 
@@ -248,7 +248,9 @@ def make_input_message(data: Any) -> list[InputMessage]:
     data_dict = cast(dict[str, Any], data)
     messages: Any = data_dict.get("messages")
     if messages is not None:
-        if not isinstance(messages, list):
+        if isinstance(messages, (str, bytes)) or not isinstance(
+            messages, Iterable
+        ):
             return []
         return to_input_messages(messages)
     # Fallback: serialize non-message state fields as input.
@@ -279,7 +281,11 @@ def make_output_message(data: Any) -> list[OutputMessage]:
         return []
     data_dict = cast(dict[str, Any], data)
     messages: Any = data_dict.get("messages")
-    if not isinstance(messages, list):
+    if (
+        messages is None
+        or isinstance(messages, (str, bytes))
+        or not isinstance(messages, Iterable)
+    ):
         return []
     return to_output_messages(messages)
 
