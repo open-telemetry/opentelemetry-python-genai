@@ -25,6 +25,7 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.types import AttributeValue
 
 
+
 class AgentInvocation(GenAIInvocation):
     """Represents a single agent invocation (invoke_agent span).
 

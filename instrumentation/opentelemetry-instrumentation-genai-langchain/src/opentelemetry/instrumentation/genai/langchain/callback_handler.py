@@ -315,36 +315,65 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     chat_generation, "generation_info", None
                 )
                 if generation_info is not None:
-                    finish_reason = generation_info.get("finish_reason", "")
-                if not finish_reason and message.response_metadata:
-                    response_metadata = message.response_metadata
-                    finish_reason = (
-                        response_metadata.get("stop_reason")
-                        or response_metadata.get("stopReason")
-                        or ""
+                    finish_reason = generation_info.get(
+                        "finish_reason", "unknown"
                     )
 
-                # Convert via message_conversion so AIMessage tool calls,
-                # reasoning blocks, and structured content are preserved.
-                converted = to_output_messages(
-                    [message], finish_reason=finish_reason
-                )
-                output_messages.extend(converted)
+                if chat_generation.message:
+                    # Get finish reason if generation_info is None above
+                    if (
+                        generation_info is None
+                        and chat_generation.message.response_metadata
+                    ):
+                        finish_reason = (
+                            chat_generation.message.response_metadata.get(
+                                "stopReason", "unknown"
+                            )
+                        )
 
-                # Token usage (extracted regardless of whether the message
-                # produced output parts — some tool-call-only responses can
-                # still report token counts). Only set the counts when the
-                # provider actually reported them; defaulting to 0 would
-                # fabricate telemetry when the keys are absent.
-                if message.usage_metadata:
-                    input_tokens = message.usage_metadata.get("input_tokens")
-                    if input_tokens is not None:
+                    if finish_reason in ("tool_calls", "tool_use"):
+                        tool_calls: list[ToolCallRequest] = []
+                        for tool_call in chat_generation.message.tool_calls:
+                            tool_call_request = ToolCallRequest(
+                                name=tool_call["name"],
+                                id=tool_call["id"],
+                                arguments=tool_call["args"],
+                            )
+                            tool_calls.append(tool_call_request)
+                        output_message = OutputMessage(
+                            role=chat_generation.message.type,
+                            parts=cast(list[MessagePart], tool_calls),
+                            finish_reason=finish_reason,
+                        )
+                    else:
+                        parts = [
+                            Text(
+                                content=chat_generation.message.content,
+                                type="text",
+                            )
+                        ]
+                        role = chat_generation.message.type
+                        output_message = OutputMessage(
+                            role=role,
+                            parts=cast(list[MessagePart], parts),
+                            finish_reason=finish_reason,
+                        )
+                    output_messages.append(output_message)
+
+                    # Get token usage if available
+                    if chat_generation.message.usage_metadata:
+                        input_tokens = (
+                            chat_generation.message.usage_metadata.get(
+                                "input_tokens", 0
+                            )
+                        )
                         llm_invocation.input_tokens = input_tokens
 
-                    output_tokens = message.usage_metadata.get(
-                        "output_tokens"
-                    )
-                    if output_tokens is not None:
+                        output_tokens = (
+                            chat_generation.message.usage_metadata.get(
+                                "output_tokens", 0
+                            )
+                        )
                         llm_invocation.output_tokens = output_tokens
 
         llm_invocation.output_messages = output_messages
