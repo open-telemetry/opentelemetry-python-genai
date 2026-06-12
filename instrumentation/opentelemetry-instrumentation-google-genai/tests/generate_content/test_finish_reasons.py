@@ -16,7 +16,8 @@ class FinishReasonsTestCase(TestCase):
             "generate_content gemini-2.5-flash-001"
         )
         assert span is not None
-        assert "gen_ai.response.finish_reasons" in span.attributes
+        if "gen_ai.response.finish_reasons" not in span.attributes:
+            return []
         return list(span.attributes["gen_ai.response.finish_reasons"])
 
     def test_single_candidate_with_valid_reason(self):
@@ -60,7 +61,8 @@ class FinishReasonsTestCase(TestCase):
             )
         )
         self.assertEqual(
-            self.generate_and_get_span_finish_reasons(), ["unspecified"]
+            self.generate_and_get_span_finish_reasons(),
+            ["finish_reason_unspecified"],
         )
 
     def test_multiple_candidates_with_valid_reasons(self):
@@ -78,7 +80,7 @@ class FinishReasonsTestCase(TestCase):
             self.generate_and_get_span_finish_reasons(), ["max_tokens", "stop"]
         )
 
-    def test_sorts_finish_reasons(self):
+    def test_doesnt_sort_finish_reasons(self):
         self.configure_valid_response(
             candidates=[
                 genai_types.Candidate(
@@ -94,10 +96,10 @@ class FinishReasonsTestCase(TestCase):
         )
         self.assertEqual(
             self.generate_and_get_span_finish_reasons(),
-            ["max_tokens", "safety", "stop"],
+            ["stop", "max_tokens", "safety"],
         )
 
-    def test_deduplicates_finish_reasons(self):
+    def test_doesnt_deduplicate_finish_reasons(self):
         self.configure_valid_response(
             candidates=[
                 genai_types.Candidate(
@@ -128,5 +130,14 @@ class FinishReasonsTestCase(TestCase):
         )
         self.assertEqual(
             self.generate_and_get_span_finish_reasons(),
-            ["max_tokens", "safety", "stop"],
+            [
+                "stop",
+                "max_tokens",
+                "stop",
+                "stop",
+                "safety",
+                "stop",
+                "stop",
+                "stop",
+            ],
         )

@@ -9,9 +9,6 @@ from unittest.mock import patch
 from google.genai import types as genai_types
 
 from opentelemetry._logs import get_logger_provider
-from opentelemetry.instrumentation._semconv import (
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.instrumentation.google_genai import tool_call_wrapper
 from opentelemetry.metrics import get_meter_provider
 from opentelemetry.trace import get_tracer_provider
@@ -140,8 +137,7 @@ class TestCase(unittest.TestCase):
     @patch.dict(
         "os.environ",
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
-            "OTEL_SEMCONV_STABILITY_OPT_IN": "default",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
         },
     )
     def test_handles_various_arg_types(self):
@@ -153,8 +149,6 @@ class TestCase(unittest.TestCase):
         ):
             pass
 
-        _OpenTelemetrySemanticConventionStability._initialized = False
-        _OpenTelemetrySemanticConventionStability._initialize()
         wrapped_somefunction = self.wrap(somefunction)
         self.otel.assert_does_not_have_span_named("execute_tool somefunction")
         somefunction(12345)
@@ -195,14 +189,10 @@ class TestCase(unittest.TestCase):
     @patch.dict(
         "os.environ",
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false",
-            "OTEL_SEMCONV_STABILITY_OPT_IN": "default",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
         },
     )
     def test_with_capture_content_disabled(self):
-        _OpenTelemetrySemanticConventionStability._initialized = False
-        _OpenTelemetrySemanticConventionStability._initialize()
-
         def somefunction(arg=None):
             return arg
 

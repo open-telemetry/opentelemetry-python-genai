@@ -22,8 +22,8 @@ class TestCase(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
-                "OTEL_SEMCONV_STABILITY_OPT_IN": "default",
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
             },
         ):
             _OpenTelemetrySemanticConventionStability._initialized = False
@@ -85,4 +85,5 @@ class TestCase(unittest.TestCase):
     def tearDown(self):
         if self._instrumentation_context is not None:
             self._instrumentation_context.uninstall()
+            self._instrumentation_context = None
         self._otel.uninstall()

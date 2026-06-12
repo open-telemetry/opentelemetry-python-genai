@@ -6,21 +6,11 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-TESTS_ROOT = Path(__file__).resolve().parent
-stub_path = TESTS_ROOT / "stubs"
-if str(stub_path) not in sys.path:
-    sys.path.insert(0, str(stub_path))
-
-sys.modules.pop("agents", None)
-sys.modules.pop("agents.tracing", None)
-
-import agents.tracing as agents_tracing  # noqa: E402
-from agents.tracing import (  # noqa: E402
+import agents.tracing as agents_tracing
+from agents.tracing import (
     agent_span,
     function_span,
     generation_span,

@@ -63,6 +63,7 @@ from opentelemetry.util.genai.environment_variables import (
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     InferenceInvocation,
+    RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
@@ -197,6 +198,35 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+        )
+
+    def retrieval(
+        self,
+        *,
+        data_source_id: str | None = None,
+        provider: str | None = None,
+        request_model: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+    ) -> RetrievalInvocation:
+        """Returns a Retrieval invocation. Starts span when called.
+
+        Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
+        to finalize the span upon exiting. If not used as a ContextManager, the caller is
+        responsible for calling `stop` or `fail` to finalize the span.
+
+        Only set data attributes on the invocation object, do not modify the span or context.
+        """
+        return RetrievalInvocation(
+            self._tracer,
+            self._metrics_recorder,
+            self._logger,
+            self._completion_hook,
+            data_source_id=data_source_id,
+            provider=provider,
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
