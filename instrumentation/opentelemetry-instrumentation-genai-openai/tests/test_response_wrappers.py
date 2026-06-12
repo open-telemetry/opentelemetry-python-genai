@@ -143,6 +143,20 @@ class _FakeSyncResponse:
         self.close_calls += 1
 
 
+class _FakeSyncStream:
+    def __init__(self, *, response=None):
+        self.response = response
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise StopIteration
+
+    def close(self):
+        pass
+
+
 class _FakeAsyncStream:
     def __init__(
         self,
@@ -158,6 +172,9 @@ class _FakeAsyncStream:
         self._response = response
         self.close_calls = 0
         self.get_final_response_calls = 0
+
+    def __aiter__(self):
+        return self
 
     async def __anext__(self):
         if self._events:
@@ -224,7 +241,7 @@ def test_manager_exit_still_finalizes_stream_wrapper_when_manager_raises():
 
 def test_stream_wrapper_response_falls_back_to_public_response_attr():
     response = _FakeSyncResponse()
-    stream = SimpleNamespace(response=response)
+    stream = _FakeSyncStream(response=response)
     wrapper = _make_stream_wrapper(stream)
     stopped = []
 
@@ -332,7 +349,7 @@ async def test_async_stream_wrapper_exit_fails_and_closes_on_exception():
 
     assert result is False
     assert stream.close_calls == 1
-    assert stopped == [None]
+    assert not stopped
     assert failures == [("boom", ValueError)]
 
 
@@ -428,7 +445,7 @@ async def test_async_stream_response_aclose_finalizes_wrapper():
 
 @pytest.mark.asyncio
 async def test_async_stream_response_is_none_when_stream_has_no_response():
-    wrapper = _make_async_stream_wrapper(SimpleNamespace())
+    wrapper = _make_async_stream_wrapper(_FakeAsyncStream())
 
     assert wrapper.response is None
 

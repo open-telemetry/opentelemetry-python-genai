@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
     import httpx
-    from anthropic.resources.messages import Messages
+    from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import (
         Message,
         MessageParam,
@@ -210,7 +210,7 @@ def extract_params(  # pylint: disable=too-many-locals
 
 
 def get_server_address_and_port(
-    client_instance: "Messages",
+    client_instance: "Messages | AsyncMessages",
 ) -> tuple[str | None, int | None]:
     base_url = client_instance._client.base_url
     port = base_url.port
@@ -221,7 +221,7 @@ def get_server_address_and_port(
 
 
 def get_llm_request_attributes(
-    params: MessageRequestParams, client_instance: "Messages"
+    params: MessageRequestParams, client_instance: "Messages | AsyncMessages"
 ) -> dict[str, AttributeValue]:
     attributes: dict[str, AttributeValue | None] = {
         GenAIAttributes.GEN_AI_OPERATION_NAME: GenAIAttributes.GenAiOperationNameValues.CHAT.value,
