@@ -292,6 +292,19 @@ def parse_args(args=None):
         required=True,
         help="Name of the package to find",
     )
+
+    listreleaseparser = subparsers.add_parser(
+        "list-release-packages",
+        help="List publishable package names from eachdist.ini.",
+    )
+    listreleaseparser.set_defaults(func=list_release_packages_args)
+
+    fragmentsparser = subparsers.add_parser(
+        "packages-with-changelog-fragments",
+        help="List publishable packages with towncrier changelog fragments.",
+    )
+    fragmentsparser.set_defaults(func=packages_with_changelog_fragments_args)
+
     return parser.parse_args(args)
 
 
@@ -844,6 +857,42 @@ def find_package_args(args):
 
     print("package not found")
     sys.exit(1)
+
+
+def list_release_package_names() -> list[str]:
+    cfg = ConfigParser()
+    cfg.read(str(find_projectroot() / "eachdist.ini"))
+    return cfg["exclude_release"]["packages"].split()
+
+
+def list_release_packages_args(args):
+    for package in list_release_package_names():
+        print(package)
+
+
+def packages_with_changelog_fragments_args(args):
+    root = find_projectroot()
+    packages: list[str] = []
+    for package_name in list_release_package_names():
+        for package in find_targets_unordered(root):
+            if package_name != package.name:
+                continue
+            changelog_dir = package / ".changelog"
+            if not changelog_dir.is_dir():
+                continue
+            fragments = [
+                fragment
+                for fragment in changelog_dir.iterdir()
+                if fragment.is_file()
+                and fragment.name not in {".gitignore", ".gitkeep"}
+            ]
+            if fragments:
+                packages.append(package_name)
+            break
+    if not packages:
+        sys.exit(1)
+    for package in packages:
+        print(package)
 
 
 def main():

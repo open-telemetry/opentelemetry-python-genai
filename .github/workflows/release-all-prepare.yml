@@ -1,0 +1,92 @@
+name: "[All] Prepare release"
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        type: choice
+        options:
+        - minor
+        - none
+        description: >
+          Reserved for future per-package bump granularity. Prepare always strips
+          .dev and builds changelogs for packages with towncrier fragments.
+        default: minor
+
+permissions:
+  contents: read
+
+run-name: "[All] Prepare release"
+
+jobs:
+  prepare:
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify branch
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "This workflow should only be run against main"
+            exit 1
+          fi
+
+      - name: Find packages with changelog fragments
+        id: packages
+        run: |
+          set -e
+          mapfile -t packages < <(./scripts/eachdist.py packages-with-changelog-fragments)
+          if [[ ${#packages[@]} -eq 0 ]]; then
+            echo "No packages with changelog fragments found"
+            exit 1
+          fi
+          printf '%s\n' "${packages[@]}"
+          {
+            echo "packages<<EOF"
+            printf '%s\n' "${packages[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install tox and towncrier
+        run: pip install tox towncrier==25.8.0
+
+      - name: Prepare packages for release
+        run: |
+          while IFS= read -r package; do
+            [[ -z "$package" ]] && continue
+            echo "Preparing ${package}"
+            ./scripts/prepare_package_for_release.sh "$package"
+          done <<< "${{ steps.packages.outputs.packages }}"
+
+      - name: Use CLA approved github bot
+        run: .github/scripts/use-cla-approved-github-bot.sh
+
+      - uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        id: otelbot-token
+        with:
+          app-id: ${{ vars.OTELBOT_APP_ID }}
+          private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+
+      - name: Create combined prepare pull request
+        env:
+          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+        run: |
+          message="Prepare release for all packages with changelog fragments"
+          body="Prepare all packages that have towncrier changelog fragments for release."
+          branch="otelbot/prepare-release-all-$(date +%Y%m%d)"
+
+          git commit -a -m "$message"
+          git push origin HEAD:"$branch"
+          pr_url=$(gh pr create --title "$message" \
+                                --body "$body" \
+                                --head "$branch" \
+                                --base main \
+                                --json url --jq .url)
+          gh pr edit "$pr_url" --add-label release

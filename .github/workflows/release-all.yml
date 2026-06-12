@@ -1,0 +1,142 @@
+name: "[All] Release"
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+run-name: "[All] Release"
+
+jobs:
+  enumerate:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'release'))
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.enumerate.outputs.packages }}
+      ref: ${{ steps.release_ref.outputs.ref }}
+    steps:
+      - name: Set release ref
+        id: release_ref
+        run: echo "ref=${{ github.event.pull_request.merge_commit_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release_ref.outputs.ref }}
+
+      - name: Verify manual dispatch runs on main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "This workflow should only be run against main"
+            exit 1
+          fi
+
+      - name: Enumerate packages ready for release
+        id: enumerate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          packages=()
+          while IFS= read -r package; do
+            [[ -z "$package" ]] && continue
+            version=$(./scripts/eachdist.py version --package "$package")
+            if [[ "$version" == *.dev ]]; then
+              echo "Skipping ${package}: version still has .dev suffix (${version})"
+              continue
+            fi
+            tag="${package}==${version}"
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Skipping ${package}: tag ${tag} already exists"
+              continue
+            fi
+            echo "Ready: ${package} v${version}"
+            packages+=("$package")
+          done < <(./scripts/eachdist.py list-release-packages)
+
+          if [[ ${#packages[@]} -eq 0 ]]; then
+            echo "No packages ready for release"
+            exit 1
+          fi
+
+          json=$(printf '%s\n' "${packages[@]}" | jq -R . | jq -s -c .)
+          echo "packages=${json}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: enumerate
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.enumerate.outputs.packages) }}
+    uses: ./.github/workflows/_release-package.yml
+    with:
+      package: ${{ matrix.package }}
+      bump_after_release: false
+      ref: ${{ needs.enumerate.outputs.ref }}
+      on_main: true
+    secrets: inherit
+
+  bump-main:
+    needs: [enumerate, publish]
+    if: always() && needs.enumerate.result == 'success'
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Use CLA approved github bot
+        run: .github/scripts/use-cla-approved-github-bot.sh
+
+      - uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        id: otelbot-token
+        with:
+          app-id: ${{ vars.OTELBOT_APP_ID }}
+          private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+
+      - name: Bump released packages to next dev versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+          PACKAGES_JSON: ${{ needs.enumerate.outputs.packages }}
+        run: |
+          bumped=()
+          while IFS= read -r package; do
+            [[ -z "$package" ]] && continue
+            version=$(./scripts/eachdist.py version --package "$package")
+            tag="${package}==${version}"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              echo "Skipping ${package}: release tag ${tag} not found"
+              continue
+            fi
+            if [[ "$version" == *.dev ]]; then
+              echo "Skipping ${package}: already bumped to ${version}"
+              continue
+            fi
+            ./scripts/bump_package_dev_version.sh "$package"
+            bumped+=("$package")
+          done < <(echo "$PACKAGES_JSON" | jq -r '.[]')
+
+          if [[ ${#bumped[@]} -eq 0 ]]; then
+            echo "No packages to bump"
+            exit 0
+          fi
+
+          message="Bump packages to next dev versions after release"
+          body="Bump packages to the next \`.dev\` version after release:\n\n$(printf '%s\n' "${bumped[@]}")"
+          branch="otelbot/bump-after-release-all-$(date +%Y%m%d)"
+
+          git commit -a -m "$message"
+          git push origin HEAD:"$branch"
+          gh pr create --title "$message" \
+                       --body "$body" \
+                       --head "$branch" \
+                       --base main
