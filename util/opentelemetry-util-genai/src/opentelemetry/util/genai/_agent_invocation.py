@@ -43,7 +43,6 @@ class AgentInvocation(GenAIInvocation):
         metrics_recorder: InvocationMetricsRecorder,
         logger: Logger,
         completion_hook: CompletionHook,
-        provider: str,
         *,
         span_kind: SpanKind = SpanKind.INTERNAL,
         request_model: str | None = None,
@@ -64,7 +63,6 @@ class AgentInvocation(GenAIInvocation):
             else _operation_name,
             span_kind=span_kind,
         )
-        self.provider = provider
         self.request_model = request_model
         self.server_address = server_address
         self.server_port = server_port
@@ -111,7 +109,6 @@ class AgentInvocation(GenAIInvocation):
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self.provider,
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
@@ -127,7 +124,6 @@ class AgentInvocation(GenAIInvocation):
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self.provider,
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
@@ -178,7 +174,6 @@ class AgentInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, Any]:
         optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (server_attributes.SERVER_ADDRESS, self.server_address),
             (server_attributes.SERVER_PORT, self.server_port),

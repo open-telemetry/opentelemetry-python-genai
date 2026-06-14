@@ -231,9 +231,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             )
         ]
 
-        invocation = handler.invoke_local_agent(
-            "openai", request_model="gpt-4"
-        )
+        invocation = handler.invoke_local_agent(request_model="gpt-4")
         invocation.agent_name = "Math Tutor"
         invocation.input_messages = input_messages
         invocation.output_messages = output_messages
@@ -254,9 +252,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         hook = MagicMock()
         handler = self._make_handler(hook)
 
-        invocation = handler.invoke_local_agent(
-            "openai", request_model="gpt-4"
-        )
+        invocation = handler.invoke_local_agent(request_model="gpt-4")
         invocation.input_messages = [
             InputMessage(role="user", parts=[Text(content="hello")])
         ]
@@ -290,7 +286,6 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         ]
 
         invocation = handler.invoke_remote_agent(
-            "openai",
             request_model="gpt-4",
             server_address="api.openai.com",
             server_port=443,
@@ -312,7 +307,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         hook = MagicMock()
         handler = self._make_handler(hook)
 
-        invocation = handler.invoke_remote_agent("openai")
+        invocation = handler.invoke_remote_agent()
         invocation.fail(RuntimeError("remote agent crashed"))
 
         hook.on_completion.assert_called_once()
@@ -323,8 +318,8 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         hook = MagicMock()
         handler = self._make_handler(hook)
 
-        handler.invoke_local_agent("openai").stop()
-        handler.invoke_remote_agent("openai").stop()
+        handler.invoke_local_agent().stop()
+        handler.invoke_remote_agent().stop()
 
         for call in hook.on_completion.call_args_list:
             self.assertEqual(call.kwargs["inputs"], [])
@@ -335,8 +330,8 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
     def test_agent_hook_not_called_when_not_set(self):
         # No hook — stop should not raise
         handler = self._make_handler()
-        handler.invoke_local_agent("openai").stop()
-        handler.invoke_remote_agent("openai").stop()
+        handler.invoke_local_agent().stop()
+        handler.invoke_remote_agent().stop()
 
     def test_should_capture_content_false_by_default(self):
         for env_var, expected_content_capture in [

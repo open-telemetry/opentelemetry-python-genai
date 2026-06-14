@@ -389,7 +389,6 @@ class TelemetryHandler:
 
     def start_invoke_local_agent(
         self,
-        provider: str,
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
@@ -409,7 +408,6 @@ class TelemetryHandler:
             self._metrics_recorder,
             self._logger,
             self._completion_hook,
-            provider,
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
@@ -417,7 +415,6 @@ class TelemetryHandler:
 
     def start_invoke_remote_agent(
         self,
-        provider: str,
         *,
         request_model: str | None = None,
         server_address: str | None = None,
@@ -439,7 +436,6 @@ class TelemetryHandler:
             self._metrics_recorder,
             self._logger,
             self._completion_hook,
-            provider,
             span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
@@ -449,7 +445,6 @@ class TelemetryHandler:
 
     def invoke_local_agent(
         self,
-        provider: str,
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
@@ -469,7 +464,6 @@ class TelemetryHandler:
             self._metrics_recorder,
             self._logger,
             self._completion_hook,
-            provider,
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
@@ -477,7 +471,6 @@ class TelemetryHandler:
 
     def invoke_remote_agent(
         self,
-        provider: str,
         *,
         request_model: str | None = None,
         server_address: str | None = None,
@@ -499,7 +492,6 @@ class TelemetryHandler:
             self._metrics_recorder,
             self._logger,
             self._completion_hook,
-            provider,
             span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
