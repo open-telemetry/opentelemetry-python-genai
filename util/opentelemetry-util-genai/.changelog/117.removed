@@ -1,0 +1,1 @@
+Removes all code referencing the "OTEL_SEMCONV_STABILITY_OPT_IN" flag, as we are removing all code that sits behind the "default" value of that flag, and having the code that sits behind "experimental" be the default. 

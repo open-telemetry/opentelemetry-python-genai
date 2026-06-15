@@ -344,11 +344,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
-    @patch(
-        "opentelemetry.util.genai._invocation.is_experimental_mode",
-        return_value=True,
-    )
-    def test_system_instruction_on_span(self, _mock_exp, _mock_cap):
+    def test_system_instruction_on_span(self, _mock_cap):
         invocation = self.handler.invoke_local_agent("openai")
         invocation.system_instruction = [
             Text(content="You are a helpful assistant."),
@@ -362,11 +358,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
-    @patch(
-        "opentelemetry.util.genai._invocation.is_experimental_mode",
-        return_value=True,
-    )
-    def test_tool_definitions_on_span(self, _mock_exp, _mock_cap):
+    def test_tool_definitions_on_span(self, _mock_cap):
         tool = FunctionToolDefinition(
             name="get_weather",
             description="Get the weather",
@@ -383,11 +375,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
-    @patch(
-        "opentelemetry.util.genai._invocation.is_experimental_mode",
-        return_value=True,
-    )
-    def test_messages_on_span(self, _mock_exp, _mock_cap):
+    def test_messages_on_span(self, _mock_cap):
         invocation = self.handler.invoke_local_agent("openai")
         invocation.input_messages = [
             InputMessage(role="user", parts=[Text(content="Hello")])

@@ -8,11 +8,6 @@ from base64 import b64encode
 from functools import partial
 from typing import Any
 
-from opentelemetry.instrumentation._semconv import (
-    _OpenTelemetrySemanticConventionStability,
-    _OpenTelemetryStabilitySignalType,
-    _StabilityMode,
-)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
@@ -22,24 +17,11 @@ from opentelemetry.util.genai.types import ContentCapturingMode
 logger = logging.getLogger(__name__)
 
 
-def is_experimental_mode() -> bool:
-    return (
-        _OpenTelemetrySemanticConventionStability._get_opentelemetry_stability_opt_in_mode(
-            _OpenTelemetryStabilitySignalType.GEN_AI,
-        )
-        is _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
-    )
-
-
 def get_content_capturing_mode() -> ContentCapturingMode:
-    """This function should not be called when GEN_AI stability mode is set to DEFAULT.
-
-    When the GEN_AI stability mode is DEFAULT this function will raise a ValueError -- see the code below."""
-    envvar = os.environ.get(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT)
-    if not is_experimental_mode():
-        raise ValueError(
-            "This function should never be called when StabilityMode is not experimental."
-        )
+    """Gets ContentCapturingMode from associated envvar, defaulting to NO_CONTENT if unset."""
+    envvar = os.environ.get(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, ""
+    ).strip()
     if not envvar:
         return ContentCapturingMode.NO_CONTENT
     try:
@@ -54,6 +36,14 @@ def get_content_capturing_mode() -> ContentCapturingMode:
         return ContentCapturingMode.NO_CONTENT
 
 
+def is_experimental_mode() -> bool:
+    """
+    Kept for backwards compatibility. The utils in this library only support the experimental mode sem convs now.
+    Don't use this function always returns True.
+    """
+    return True
+
+
 def should_emit_event() -> bool:
     """Check if event emission is enabled.
 
@@ -65,62 +55,34 @@ def should_emit_event() -> bool:
     - NO_CONTENT or SPAN_ONLY: defaults to False
     - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
     """
-    envvar = os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT)
     # If explicitly set (and not empty), use the user's value (highest priority)
-    if envvar and envvar.strip():
-        envvar_lower = envvar.lower().strip()
-        if envvar_lower == "true":
+    if (
+        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
+        .lower()
+        .strip()
+    ):
+        if envvar == "true":
             return True
-        if envvar_lower == "false":
+        if envvar == "false":
             return False
         logger.warning(
             "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
             envvar,
             OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
         )
-        # Invalid value falls through to default logic below
-
-    # If not explicitly set (or invalid), determine default based on content capturing mode
-    try:
-        if not is_experimental_mode():
-            # Not in experimental mode, default to False
-            return False
-        content_mode = get_content_capturing_mode()
-        # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
-        if content_mode in (
-            ContentCapturingMode.EVENT_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        ):
-            return True
-        # NO_CONTENT and SPAN_ONLY don't require events, so default to False
-        return False
-    except ValueError:
-        # If get_content_capturing_mode raises ValueError (not in experimental mode),
-        # default to False
-        return False
-
-
-def should_capture_content_on_spans_in_experimental_mode() -> bool:
-    """Return True when content conversion should be performed."""
-    if not is_experimental_mode():
-        return False
-    mode = get_content_capturing_mode()
-    if mode == ContentCapturingMode.NO_CONTENT:
-        return False
-    if mode == ContentCapturingMode.EVENT_ONLY and not should_emit_event():
-        return False
-    return True
+    # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
+    return get_content_capturing_mode() in (
+        ContentCapturingMode.EVENT_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
 
 
 def should_capture_content_on_spans() -> bool:
-    "Returns whether capture content is enabled regardless of which mode."
-    if is_experimental_mode():
-        return get_content_capturing_mode() in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
-    envvar = os.environ.get(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT)
-    return bool(envvar) and envvar.lower().strip() == "true"
+    """Returns whether capture content is enabled on spans."""
+    return get_content_capturing_mode() in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
 
 
 class _GenAiJsonEncoder(json.JSONEncoder):

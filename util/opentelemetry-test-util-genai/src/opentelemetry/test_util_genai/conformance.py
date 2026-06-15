@@ -23,6 +23,9 @@ Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
   the report's span samples.
 - ``expected_metrics`` — metric names that must appear in
   ``statistics.seen_registry_metrics``.
+- ``expected_violations`` — :class:`ExpectedViolation` entries for known
+  gaps. ``run_conformance`` fails on undeclared violations and on declared
+  entries weaver no longer reports.
 - ``run(*, tracer_provider, meter_provider, logger_provider, vcr)`` — wires
   the instrumentor against the providers and exercises one semconv operation
   type's happy path inside ``vcr.use_cassette(...)``.
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -52,11 +56,32 @@ from opentelemetry.test.weaver_live_check import (
 )
 
 
+@dataclass(frozen=True)
+class ExpectedViolation:
+    """One known-and-accepted semconv violation.
+
+    Matched by weaver advice ``id`` plus a substring of its ``message``.
+    Declared entries the report no longer contains are flagged so
+    suppressions don't rot.
+    """
+
+    advice_id: str
+    message_substring: str
+
+    def matches(self, violation: dict[str, Any]) -> bool:
+        return violation.get(
+            "id"
+        ) == self.advice_id and self.message_substring in str(
+            violation.get("message", "")
+        )
+
+
 class Scenario(ABC):
     """Base class every ``tests/conformance/<op>.py`` scenario must subclass."""
 
     expected_spans: ClassVar[tuple[str, ...]] = ()
     expected_metrics: ClassVar[tuple[str, ...]] = ()
+    expected_violations: ClassVar[tuple[ExpectedViolation, ...]] = ()
 
     @abstractmethod
     def run(
@@ -163,7 +188,9 @@ def run_conformance(
 ) -> LiveCheckReport:
     """Run one conformance scenario and return the weaver report.
 
-    Raises :class:`LiveCheckError` on semconv violations.
+    Raises :class:`LiveCheckError` on undeclared violations and
+    :class:`AssertionError` on declared violations weaver no longer
+    reports.
     """
     tracer_provider, meter_provider, logger_provider = _build_providers(
         weaver.otlp_endpoint
@@ -180,16 +207,40 @@ def run_conformance(
         meter_provider.force_flush()
         logger_provider.force_flush()
 
-        try:
-            report = weaver.end_and_check(timeout=120)
-            _dump_report(scenario, report)
-        except LiveCheckError as exc:
-            _dump_report(scenario, exc.report)
-            raise
+        report = weaver.end(timeout=120)
+        _dump_report(scenario, report)
 
+        _check_violations(scenario, report)
         scenario.validate(report)
         return report
     finally:
         tracer_provider.shutdown()
         meter_provider.shutdown()
         logger_provider.shutdown()
+
+
+def _check_violations(scenario: Scenario, report: LiveCheckReport) -> None:
+    """Reconcile weaver violations against ``scenario.expected_violations``."""
+    violations = report.violations
+    expected = scenario.expected_violations
+
+    unexpected = [
+        v for v in violations if not any(ev.matches(v) for ev in expected)
+    ]
+    if unexpected:
+        raise LiveCheckError(
+            "Unexpected semconv violations (not declared in "
+            "scenario.expected_violations):\n"
+            + "\n".join(f"- {v}" for v in unexpected),
+            report,
+        )
+
+    unmet = [
+        ev for ev in expected if not any(ev.matches(v) for v in violations)
+    ]
+    if unmet:
+        raise AssertionError(
+            "Scenario declares expected_violations that weaver did not "
+            "report — likely fixed upstream. Remove these entries:\n"
+            + "\n".join(f"- {ev}" for ev in unmet)
+        )

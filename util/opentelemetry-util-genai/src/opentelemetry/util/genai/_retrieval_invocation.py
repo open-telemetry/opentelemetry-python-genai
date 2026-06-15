@@ -16,10 +16,8 @@ from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
     gen_ai_json_dumps,
-    get_content_capturing_mode,
-    is_experimental_mode,
+    should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -111,11 +109,9 @@ class RetrievalInvocation(GenAIInvocation):
         return attrs
 
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
-        if not self.span.is_recording():
-            return {}
-        if not is_experimental_mode() or get_content_capturing_mode() not in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
+        if (
+            not self.span.is_recording()
+            or not should_capture_content_on_spans()
         ):
             return {}
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (

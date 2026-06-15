@@ -466,7 +466,9 @@ def test_sync_messages_create_streaming_captures_content(
     )
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
-    assert output_messages[0]["parts"]
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello!"}
+    ]
 
 
 @pytest.mark.vcr()
@@ -552,7 +554,9 @@ def test_sync_messages_stream_captures_content(
     assert input_messages[0]["role"] == "user"
     assert input_messages[0]["parts"][0]["type"] == "text"
     assert output_messages[0]["role"] == "assistant"
-    assert output_messages[0]["parts"]
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello!"}
+    ]
 
 
 @pytest.mark.vcr()
