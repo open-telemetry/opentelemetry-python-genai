@@ -733,10 +733,11 @@ def release_args(args):
     versions = args.versions
     updated_versions = []
 
-    # remove excluded packages
-    excluded = cfg["exclude_release"]["packages"].split()
+    release_packages = list_release_package_names()
     targets = [
-        target for target in targets if basename(target) not in excluded
+        target
+        for target in targets
+        if basename(target) not in release_packages
     ]
 
     for group in versions.split(","):
@@ -746,7 +747,7 @@ def release_args(args):
         packages = None
         if "packages" in mcfg:
             packages = [
-                pkg for pkg in mcfg["packages"].split() if pkg not in excluded
+                pkg for pkg in mcfg["packages"].split() if pkg not in release_packages
             ]
         print(f"update {group} packages to {version}")
         update_dependencies(targets, version, packages)
@@ -763,10 +764,11 @@ def patch_release_args(args):
     cfg = ConfigParser()
     cfg.read(str(find_projectroot() / "eachdist.ini"))
 
-    # remove excluded packages
-    excluded = cfg["exclude_release"]["packages"].split()
+    release_packages = list_release_package_names()
     targets = [
-        target for target in targets if basename(target) not in excluded
+        target
+        for target in targets
+        if basename(target) not in release_packages
     ]
 
     # stable
@@ -862,7 +864,7 @@ def find_package_args(args):
 def list_release_package_names() -> list[str]:
     cfg = ConfigParser()
     cfg.read(str(find_projectroot() / "eachdist.ini"))
-    return cfg["exclude_release"]["packages"].split()
+    return cfg["release_packages"]["packages"].split()
 
 
 def list_release_packages_args(args):

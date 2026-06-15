@@ -27,66 +27,6 @@ are created on demand from an existing tag when patching an older minor.
 | Backport to older minor | Same branch (already exists) | Branch from old tag (lazy) |
 | Branch sprawl | One branch per package per minor | Branches only for backports |
 
-## Prerequisites (one-time, repo-level)
-
-These must be configured by maintainers before the workflows can run:
-
-- **`OTELBOT_APP_ID`** (repo or org variable) and **`OTELBOT_PRIVATE_KEY`**
-  (repo or org secret) — credentials for the `otelbot` GitHub App. The
-  workflows commit and open PRs through this App so the resulting PRs
-  trigger CI (a plain `GITHUB_TOKEN` doesn't).
-- **PyPI Trusted Publishing** — each publishable package needs a trusted
-  publisher on PyPI (see [PyPI publishing setup](#pypi-publishing-setup)).
-  No long-lived PyPI API token is stored in GitHub secrets.
-- **`pypi` GitHub environment** — release jobs deploy through this
-  environment so publishing can be restricted (branch rules, required
-  reviewers). See [GitHub environment setup](#github-environment-setup).
-- **Branch protection** on `package-release/*/v*` branches so backport changes
-  only land via reviewed PRs.
-
-### PyPI publishing setup
-
-For each publishable package, add a trusted publisher on PyPI
-(*Manage* → *Publishing* → *Add a new pending publisher*):
-
-| Field | Value |
-|-------|-------|
-| PyPI project name | e.g. `opentelemetry-util-genai` |
-| Owner | `open-telemetry` |
-| Repository name | `opentelemetry-python-genai` |
-| Workflow name | `_release-package.yml` |
-| Environment name | `pypi` |
-
-All packages share the same workflow and environment. Register one publisher
-entry per PyPI project. The first upload from CI activates the publisher.
-
-Publishable packages (from `eachdist.ini`):
-
-- `opentelemetry-instrumentation-genai-anthropic`
-- `opentelemetry-instrumentation-genai-claude-agent-sdk`
-- `opentelemetry-instrumentation-google-genai`
-- `opentelemetry-instrumentation-genai-langchain`
-- `opentelemetry-instrumentation-genai-openai`
-- `opentelemetry-instrumentation-genai-openai-agents`
-- `opentelemetry-instrumentation-genai-weaviate-client`
-- `opentelemetry-util-genai`
-
-### GitHub environment setup
-
-Create a **`pypi`** environment under repository *Settings* → *Environments*.
-
-Recommended restrictions:
-
-- **Deployment branches**: limit to `main` and `package-release/**` (backport
-  releases run from backport branches).
-- **Required reviewers** (optional): gate PyPI uploads behind maintainer
-  approval. Bulk `[All] Release` runs one matrix job per package; each job
-  waits on the environment, so consider whether reviewers should approve once
-  per run or per matrix leg.
-
-Release jobs in `_release-package.yml` set `environment: pypi` and request
-`id-token: write` so GitHub can mint a short-lived OIDC token for PyPI.
-
 ## Bulk release (default)
 
 For releasing every package that has towncrier changelog fragments:
@@ -165,12 +105,32 @@ release section produced by `towncrier build` (or convert them into
 fragments first). The do-not-edit comment in each `CHANGELOG.md` flags
 this.
 
-## Claiming a PyPI namespace for a new package
+## Adding a new publishable package
 
-When a new package is introduced, create the PyPI project and register a
-trusted publisher (see above) before the first CI release. Optionally upload
-the current `.dev` version manually once to prevent name-squatting, shortly
-after the introductory PR lands on `main`.
+When a new package is ready to ship:
+
+1. Add its name to the `packages=` list under `[release_packages]` in
+   `eachdist.ini`. Packages not listed here are skipped by the release
+   workflows.
+2. Add the package to the dropdown options in the per-package workflow files
+   (`package-prepare-release.yml`, `package-release.yml`,
+   `package-prepare-patch-release.yml`).
+3. Create the PyPI project and register a trusted publisher (*Manage* →
+   *Publishing* → *Add a new pending publisher*):
+
+| Field | Value |
+|-------|-------|
+| PyPI project name | e.g. `opentelemetry-util-genai` |
+| Owner | `open-telemetry` |
+| Repository name | `opentelemetry-python-genai` |
+| Workflow name | `_release-package.yml` |
+| Environment name | `pypi` |
+
+4. Optionally upload the current `.dev` version manually once to prevent
+   name-squatting, shortly after the introductory PR lands on `main`.
+
+All packages share the same workflow and environment. The first upload from CI
+activates the publisher.
 
 ## Troubleshooting
 
