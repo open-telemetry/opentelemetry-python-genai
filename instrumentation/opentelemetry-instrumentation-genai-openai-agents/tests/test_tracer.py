@@ -67,6 +67,10 @@ def _instrument_with_provider(**instrument_kwargs):
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
+    # Most tests in this file inspect captured content, so default to
+    # ``span_and_event`` unless the caller overrides.
+    instrument_kwargs.setdefault("capture_message_content", "span_and_event")
+
     instrumentor = OpenAIAgentsInstrumentor()
     instrumentor.instrument(tracer_provider=provider, **instrument_kwargs)
 

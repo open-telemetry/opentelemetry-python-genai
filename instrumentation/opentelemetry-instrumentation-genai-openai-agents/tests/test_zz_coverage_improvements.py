@@ -8,7 +8,7 @@
 Tests for improving coverage of OpenAI Agents instrumentation.
 
 This file targets uncovered lines identified in the coverage report:
-- __init__.py: _resolve_system, _resolve_bool, _resolve_content_mode
+- __init__.py: _resolve_system, _resolve_bool
 - span_processor.py: normalization utilities, span data handlers, message normalization,
   output type inference, metrics recording, and various edge cases.
 
@@ -156,77 +156,6 @@ class TestResolveBool:
         _, init_module = _get_modules()
         assert init_module._resolve_bool("maybe", True) is True
         assert init_module._resolve_bool("maybe", False) is False
-
-
-class TestResolveContentMode:
-    """Tests for _resolve_content_mode function."""
-
-    def test_resolve_content_mode_returns_value_for_enum(self):
-        sp, init_module = _get_modules()
-        result = init_module._resolve_content_mode(
-            sp.ContentCaptureMode.SPAN_ONLY
-        )
-        assert result == sp.ContentCaptureMode.SPAN_ONLY
-
-    def test_resolve_content_mode_for_bool_true(self):
-        sp, init_module = _get_modules()
-        result = init_module._resolve_content_mode(True)
-        assert result == sp.ContentCaptureMode.SPAN_AND_EVENT
-
-    def test_resolve_content_mode_for_bool_false(self):
-        sp, init_module = _get_modules()
-        result = init_module._resolve_content_mode(False)
-        assert result == sp.ContentCaptureMode.NO_CONTENT
-
-    def test_resolve_content_mode_for_none(self):
-        sp, init_module = _get_modules()
-        result = init_module._resolve_content_mode(None)
-        assert result == sp.ContentCaptureMode.SPAN_AND_EVENT
-
-    def test_resolve_content_mode_for_empty_string(self):
-        sp, init_module = _get_modules()
-        result = init_module._resolve_content_mode("")
-        assert result == sp.ContentCaptureMode.SPAN_AND_EVENT
-
-    def test_resolve_content_mode_span_only_variants(self):
-        sp, init_module = _get_modules()
-        for value in ["span_only", "span-only", "span"]:
-            result = init_module._resolve_content_mode(value)
-            assert result == sp.ContentCaptureMode.SPAN_ONLY, (
-                f"Failed for {value}"
-            )
-
-    def test_resolve_content_mode_event_only_variants(self):
-        sp, init_module = _get_modules()
-        for value in ["event_only", "event-only", "event"]:
-            result = init_module._resolve_content_mode(value)
-            assert result == sp.ContentCaptureMode.EVENT_ONLY, (
-                f"Failed for {value}"
-            )
-
-    def test_resolve_content_mode_span_and_event_variants(self):
-        sp, init_module = _get_modules()
-        for value in [
-            "span_and_event",
-            "span-and-event",
-            "span_and_events",
-            "all",
-            "true",
-            "1",
-            "yes",
-        ]:
-            result = init_module._resolve_content_mode(value)
-            assert result == sp.ContentCaptureMode.SPAN_AND_EVENT, (
-                f"Failed for {value}"
-            )
-
-    def test_resolve_content_mode_no_content_variants(self):
-        sp, init_module = _get_modules()
-        for value in ["no_content", "false", "0", "no", "none"]:
-            result = init_module._resolve_content_mode(value)
-            assert result == sp.ContentCaptureMode.NO_CONTENT, (
-                f"Failed for {value}"
-            )
 
 
 # ============================================================================

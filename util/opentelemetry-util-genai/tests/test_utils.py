@@ -41,6 +41,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
+    resolve_capture_message_content,
     should_capture_content_on_spans,
     should_emit_event,
 )
@@ -260,6 +261,143 @@ class TestShouldCaptureContent(unittest.TestCase):
             )
         self.assertEqual(len(cm.output), 1)
         self.assertIn("INVALID_VALUE is not a valid option for ", cm.output[0])
+
+
+class TestResolveCaptureMessageContent(unittest.TestCase):
+    """Tests for the ``resolve_capture_message_content`` helper.
+
+    Falls back to ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` when
+    the kwarg is unset; never mutates environment variables.
+    """
+
+    def test_kwarg_none_uses_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            },
+            clear=False,
+        ):
+            assert (
+                resolve_capture_message_content(None)
+                == ContentCapturingMode.SPAN_ONLY
+            )
+
+    def test_kwarg_none_and_empty_env_defaults_to_no_content(self):
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""},
+            clear=False,
+        ):
+            assert (
+                resolve_capture_message_content(None)
+                == ContentCapturingMode.NO_CONTENT
+            )
+
+    def test_kwarg_string_resolves(self):
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""},
+            clear=False,
+        ):
+            assert (
+                resolve_capture_message_content("span_only")
+                == ContentCapturingMode.SPAN_ONLY
+            )
+
+    def test_kwarg_does_not_mutate_env(self):
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""},
+            clear=False,
+        ):
+            resolve_capture_message_content("span_only")
+            assert (
+                os.environ[
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+                ]
+                == ""
+            )
+
+    def test_kwarg_true_maps_to_span_and_event(self):
+        assert (
+            resolve_capture_message_content(True)
+            == ContentCapturingMode.SPAN_AND_EVENT
+        )
+
+    def test_kwarg_false_maps_to_no_content(self):
+        assert (
+            resolve_capture_message_content(False)
+            == ContentCapturingMode.NO_CONTENT
+        )
+
+    def test_kwarg_enum_passthrough(self):
+        assert (
+            resolve_capture_message_content(ContentCapturingMode.EVENT_ONLY)
+            == ContentCapturingMode.EVENT_ONLY
+        )
+
+    def test_kwarg_empty_string_uses_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            },
+            clear=False,
+        ):
+            assert (
+                resolve_capture_message_content("")
+                == ContentCapturingMode.EVENT_ONLY
+            )
+
+    def test_unknown_string_falls_back_to_no_content_with_warning(self):
+        with self.assertLogs(level="WARNING") as cm:
+            result = resolve_capture_message_content("bogus_value")
+        assert result == ContentCapturingMode.NO_CONTENT
+        assert any("Unrecognized" in line for line in cm.output)
+
+    def test_aliases_match_legacy_resolver(self):
+        cases = {
+            "span_only": ContentCapturingMode.SPAN_ONLY,
+            "span-only": ContentCapturingMode.SPAN_ONLY,
+            "span": ContentCapturingMode.SPAN_ONLY,
+            "event_only": ContentCapturingMode.EVENT_ONLY,
+            "event-only": ContentCapturingMode.EVENT_ONLY,
+            "event": ContentCapturingMode.EVENT_ONLY,
+            "span_and_event": ContentCapturingMode.SPAN_AND_EVENT,
+            "span-and-event": ContentCapturingMode.SPAN_AND_EVENT,
+            "all": ContentCapturingMode.SPAN_AND_EVENT,
+            "true": ContentCapturingMode.SPAN_AND_EVENT,
+            "1": ContentCapturingMode.SPAN_AND_EVENT,
+            "yes": ContentCapturingMode.SPAN_AND_EVENT,
+            "false": ContentCapturingMode.NO_CONTENT,
+            "0": ContentCapturingMode.NO_CONTENT,
+            "no": ContentCapturingMode.NO_CONTENT,
+            "none": ContentCapturingMode.NO_CONTENT,
+            "no_content": ContentCapturingMode.NO_CONTENT,
+        }
+        for value, expected in cases.items():
+            assert (
+                resolve_capture_message_content(value) == expected
+            ), f"value={value!r}"
+
+
+class TestContentCapturingModeProperties(unittest.TestCase):
+    """Tests for the ``capture_in_span`` / ``capture_in_event`` properties on
+    :class:`opentelemetry.util.genai.types.ContentCapturingMode`.
+    """
+
+    def test_capture_in_span(self):
+        assert ContentCapturingMode.SPAN_ONLY.capture_in_span is True
+        assert ContentCapturingMode.SPAN_AND_EVENT.capture_in_span is True
+        assert ContentCapturingMode.EVENT_ONLY.capture_in_span is False
+        assert ContentCapturingMode.NO_CONTENT.capture_in_span is False
+
+    def test_capture_in_event(self):
+        assert ContentCapturingMode.EVENT_ONLY.capture_in_event is True
+        assert ContentCapturingMode.SPAN_AND_EVENT.capture_in_event is True
+        assert ContentCapturingMode.SPAN_ONLY.capture_in_event is False
+        assert ContentCapturingMode.NO_CONTENT.capture_in_event is False
 
 
 class TestTelemetryHandler(unittest.TestCase):

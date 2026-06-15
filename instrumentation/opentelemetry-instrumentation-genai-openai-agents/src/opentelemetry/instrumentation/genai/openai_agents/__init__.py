@@ -18,6 +18,8 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import get_tracer
+from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.utils import resolve_capture_message_content
 
 from .package import _instruments
 from .span_processor import (
@@ -41,9 +43,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_CONTENT_CAPTURE_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 _SYSTEM_OVERRIDE_ENV = "OTEL_INSTRUMENTATION_OPENAI_AGENTS_SYSTEM"
-_CAPTURE_CONTENT_ENV = "OTEL_INSTRUMENTATION_OPENAI_AGENTS_CAPTURE_CONTENT"
 _CAPTURE_METRICS_ENV = "OTEL_INSTRUMENTATION_OPENAI_AGENTS_CAPTURE_METRICS"
 
 
@@ -68,47 +68,6 @@ def _resolve_system(value: str | None) -> str:
         if normalized == member.name.lower():
             return member.value
     return value
-
-
-def _resolve_content_mode(value: Any) -> ContentCaptureMode:
-    if isinstance(value, ContentCaptureMode):
-        return value
-    if isinstance(value, bool):
-        return (
-            ContentCaptureMode.SPAN_AND_EVENT
-            if value
-            else ContentCaptureMode.NO_CONTENT
-        )
-
-    if value is None:
-        return ContentCaptureMode.SPAN_AND_EVENT
-
-    text = str(value).strip().lower()
-    if not text:
-        return ContentCaptureMode.SPAN_AND_EVENT
-
-    mapping = {
-        "span_only": ContentCaptureMode.SPAN_ONLY,
-        "span-only": ContentCaptureMode.SPAN_ONLY,
-        "span": ContentCaptureMode.SPAN_ONLY,
-        "event_only": ContentCaptureMode.EVENT_ONLY,
-        "event-only": ContentCaptureMode.EVENT_ONLY,
-        "event": ContentCaptureMode.EVENT_ONLY,
-        "span_and_event": ContentCaptureMode.SPAN_AND_EVENT,
-        "span-and-event": ContentCaptureMode.SPAN_AND_EVENT,
-        "span_and_events": ContentCaptureMode.SPAN_AND_EVENT,
-        "all": ContentCaptureMode.SPAN_AND_EVENT,
-        "true": ContentCaptureMode.SPAN_AND_EVENT,
-        "1": ContentCaptureMode.SPAN_AND_EVENT,
-        "yes": ContentCaptureMode.SPAN_AND_EVENT,
-        "no_content": ContentCaptureMode.NO_CONTENT,
-        "false": ContentCaptureMode.NO_CONTENT,
-        "0": ContentCaptureMode.NO_CONTENT,
-        "no": ContentCaptureMode.NO_CONTENT,
-        "none": ContentCaptureMode.NO_CONTENT,
-    }
-
-    return mapping.get(text, ContentCaptureMode.SPAN_AND_EVENT)
 
 
 def _resolve_bool(value: Any, default: bool) -> bool:
@@ -148,12 +107,9 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         )
         system = _resolve_system(system_override)
 
-        content_override = kwargs.get("capture_message_content")
-        if content_override is None:
-            content_override = os.getenv(_CONTENT_CAPTURE_ENV) or os.getenv(
-                _CAPTURE_CONTENT_ENV
-            )
-        content_mode = _resolve_content_mode(content_override)
+        content_mode = resolve_capture_message_content(
+            kwargs.get("capture_message_content")
+        )
 
         metrics_override = kwargs.get("capture_metrics")
         if metrics_override is None:
@@ -171,7 +127,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
             tracer=tracer,
             system_name=system,
             include_sensitive_data=content_mode
-            != ContentCaptureMode.NO_CONTENT,
+            != ContentCapturingMode.NO_CONTENT,
             content_mode=content_mode,
             metrics_enabled=metrics_enabled,
             agent_name=agent_name,

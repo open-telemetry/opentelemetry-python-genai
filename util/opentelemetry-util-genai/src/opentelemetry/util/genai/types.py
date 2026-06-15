@@ -26,6 +26,20 @@ class ContentCapturingMode(Enum):
     # Capture content in both spans and events.
     SPAN_AND_EVENT = 3
 
+    @property
+    def capture_in_span(self) -> bool:
+        return self in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+
+    @property
+    def capture_in_event(self) -> bool:
+        return self in (
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+
 
 @dataclass()
 class GenericPart:

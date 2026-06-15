@@ -23,7 +23,6 @@ import importlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Sequence
 from urllib.parse import urlparse
 
@@ -73,7 +72,12 @@ from opentelemetry.trace import (
     Tracer,
     set_span_in_context,
 )
+from opentelemetry.util.genai.types import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
+
+# Backwards-compatible alias for the canonical ``ContentCapturingMode`` enum
+# now defined in ``opentelemetry.util.genai.types``.
+ContentCaptureMode = ContentCapturingMode
 
 # Import all semantic convention constants
 # ---- GenAI semantic convention helpers (embedded from constants.py) ----
@@ -305,29 +309,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 GEN_AI_SYSTEM_KEY = getattr(GenAIAttributes, "GEN_AI_SYSTEM", "gen_ai.system")
-
-
-class ContentCaptureMode(Enum):
-    """Controls whether sensitive content is recorded on spans, events, or both."""
-
-    NO_CONTENT = "no_content"
-    SPAN_ONLY = "span_only"
-    EVENT_ONLY = "event_only"
-    SPAN_AND_EVENT = "span_and_event"
-
-    @property
-    def capture_in_span(self) -> bool:
-        return self in (
-            ContentCaptureMode.SPAN_ONLY,
-            ContentCaptureMode.SPAN_AND_EVENT,
-        )
-
-    @property
-    def capture_in_event(self) -> bool:
-        return self in (
-            ContentCaptureMode.EVENT_ONLY,
-            ContentCaptureMode.SPAN_AND_EVENT,
-        )
 
 
 @dataclass

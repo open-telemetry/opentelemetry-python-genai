@@ -17,6 +17,31 @@ from opentelemetry.util.genai.types import ContentCapturingMode
 logger = logging.getLogger(__name__)
 
 
+# Map of accepted kwarg string aliases to ContentCapturingMode. Kept lenient
+# for backwards compatibility with existing instrumentations that historically
+# accepted boolean-ish strings or hyphenated forms.
+_CAPTURE_MODE_ALIASES: dict[str, ContentCapturingMode] = {
+    "span_only": ContentCapturingMode.SPAN_ONLY,
+    "span-only": ContentCapturingMode.SPAN_ONLY,
+    "span": ContentCapturingMode.SPAN_ONLY,
+    "event_only": ContentCapturingMode.EVENT_ONLY,
+    "event-only": ContentCapturingMode.EVENT_ONLY,
+    "event": ContentCapturingMode.EVENT_ONLY,
+    "span_and_event": ContentCapturingMode.SPAN_AND_EVENT,
+    "span-and-event": ContentCapturingMode.SPAN_AND_EVENT,
+    "span_and_events": ContentCapturingMode.SPAN_AND_EVENT,
+    "all": ContentCapturingMode.SPAN_AND_EVENT,
+    "true": ContentCapturingMode.SPAN_AND_EVENT,
+    "1": ContentCapturingMode.SPAN_AND_EVENT,
+    "yes": ContentCapturingMode.SPAN_AND_EVENT,
+    "no_content": ContentCapturingMode.NO_CONTENT,
+    "false": ContentCapturingMode.NO_CONTENT,
+    "0": ContentCapturingMode.NO_CONTENT,
+    "no": ContentCapturingMode.NO_CONTENT,
+    "none": ContentCapturingMode.NO_CONTENT,
+}
+
+
 def get_content_capturing_mode() -> ContentCapturingMode:
     """Gets ContentCapturingMode from associated envvar, defaulting to NO_CONTENT if unset."""
     envvar = os.environ.get(
@@ -103,3 +128,30 @@ gen_ai_json_dumps = partial(
 )
 """Should be used by GenAI instrumentations when serializing objects that may contain
 bytes, datetimes, etc. for GenAI observability."""
+
+
+def resolve_capture_message_content(
+    capture_message_content: Any = None,
+) -> ContentCapturingMode:
+    """Resolve the effective content-capture mode for a GenAI instrumentation."""
+    if isinstance(capture_message_content, ContentCapturingMode):
+        return capture_message_content
+    if isinstance(capture_message_content, bool):
+        return (
+            ContentCapturingMode.SPAN_AND_EVENT
+            if capture_message_content
+            else ContentCapturingMode.NO_CONTENT
+        )
+    if capture_message_content is None:
+        return get_content_capturing_mode()
+    text = str(capture_message_content).strip().lower()
+    if not text:
+        return get_content_capturing_mode()
+    mode = _CAPTURE_MODE_ALIASES.get(text)
+    if mode is not None:
+        return mode
+    logger.warning(
+        "Unrecognized capture_message_content value %r; falling back to NO_CONTENT.",
+        capture_message_content,
+    )
+    return ContentCapturingMode.NO_CONTENT
