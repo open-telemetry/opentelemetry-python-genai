@@ -6,14 +6,13 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated, Any
+from typing import Annotated, Any, TypedDict
 from unittest import mock
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from typing_extensions import TypedDict
 
 from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider

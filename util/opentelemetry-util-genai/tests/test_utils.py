@@ -8,10 +8,6 @@ from typing import Any, Mapping, Optional
 from unittest.mock import patch
 
 from opentelemetry import trace
-from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -32,10 +28,6 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-)
 from opentelemetry.util.genai.handler import (
     TelemetryHandler,
     get_telemetry_handler,
@@ -49,28 +41,9 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
+    should_capture_content_on_spans,
+    should_emit_event,
 )
-
-
-def patch_env_vars(stability_mode, content_capturing, emit_event):
-    def decorator(test_case):
-        @patch.dict(
-            os.environ,
-            {
-                OTEL_SEMCONV_STABILITY_OPT_IN: stability_mode,
-                OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: content_capturing,
-                OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT: emit_event,
-            },
-        )
-        def wrapper(*args, **kwargs):
-            # Reset state.
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
-            return test_case(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
 
 
 def _create_input_message(
@@ -162,40 +135,123 @@ def _normalize_to_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, tuple) else value
 
 
-class TestVersion(unittest.TestCase):
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
-    )
-    def test_get_content_capturing_mode_parses_valid_envvar(self):  # pylint: disable=no-self-use
-        assert get_content_capturing_mode() == ContentCapturingMode.SPAN_ONLY
-
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="",
-        emit_event="",
-    )
-    def test_empty_content_capturing_envvar(self):  # pylint: disable=no-self-use
-        assert get_content_capturing_mode() == ContentCapturingMode.NO_CONTENT
-
-    @patch_env_vars(
-        stability_mode="default",
-        content_capturing="True",
-        emit_event="",
-    )
-    def test_get_content_capturing_mode_raises_exception_when_semconv_stability_default(
+class TestShouldEmitEvent(unittest.TestCase):
+    def test_should_emit_event_against_various_env_var_combinations(
         self,
     ):  # pylint: disable=no-self-use
-        with self.assertRaises(ValueError):
-            get_content_capturing_mode()
+        expected_results = {
+            ("EVENT_ONLY", "true"): True,
+            ("EVENT_ONLY", "True"): True,
+            ("EVENT_ONLY", "false"): False,
+            ("EVENT_ONLY", "False"): False,
+            ("EVENT_ONLY", ""): True,
+            ("SPAN_AND_EVENT", ""): True,
+            ("NO_CONTENT", ""): False,
+            ("SPAN_ONLY", ""): False,
+            ("", ""): False,
+        }
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="INVALID_VALUE",
-        emit_event="",
+        for (
+            content_capturing,
+            emit_event,
+        ), expected in expected_results.items():
+            with patch.dict(
+                os.environ,
+                {
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capturing,
+                    "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": emit_event,
+                },
+            ):
+                assert should_emit_event() is expected
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "INVALID_VALUE",
+        },
     )
-    def test_get_content_capturing_mode_raises_exception_on_invalid_envvar(
+    def test_should_emit_event_with_invalid_value_falls_back_to_default(
+        self,
+    ):  # pylint: disable=no-self-use
+        # When invalid value is set, should fall back to default based on content_capturing_mode
+        # EVENT_ONLY should default to True
+        with self.assertLogs(level="WARNING") as cm:
+            result = should_emit_event()
+            assert result is True, (
+                f"Expected True but got {result} (EVENT_ONLY should default to True)"
+            )
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("invalid_value is not a valid option for", cm.output[0])
+        self.assertIn(
+            "Must be one of true or false (case-insensitive)", cm.output[0]
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "INVALID_VALUE",
+        },
+    )
+    def test_should_emit_event_with_invalid_value_falls_back_to_false_for_span_only(
+        self,
+    ):  # pylint: disable=no-self-use
+        # When invalid value is set with SPAN_ONLY, should default to False
+        with self.assertLogs(level="WARNING") as cm:
+            result = should_emit_event()
+            assert result is False, (
+                f"Expected False but got {result} (SPAN_ONLY should default to False)"
+            )
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("invalid_value is not a valid option for", cm.output[0])
+
+
+class TestShouldCaptureContent(unittest.TestCase):
+    def test_should_capture_content_on_spans_against_various_env_var_combinations(
+        self,
+    ):  # pylint: disable=no-self-use
+        for content_capture, span_content_enabled in [
+            ("NO_CONTENT", False),
+            ("EVENT_ONLY", False),
+            ("SPAN_ONLY", True),
+            ("SPAN_AND_EVENT", True),
+        ]:
+            with patch.dict(
+                os.environ,
+                {
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
+                },
+            ):
+                assert (
+                    should_capture_content_on_spans() is span_content_enabled
+                )
+
+    def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
+        for content_capture, expected_content_capturing in [
+            ("NO_CONTENT", ContentCapturingMode.NO_CONTENT),
+            ("EVENT_ONLY", ContentCapturingMode.EVENT_ONLY),
+            ("SPAN_ONLY", ContentCapturingMode.SPAN_ONLY),
+            ("SPAN_AND_EVENT", ContentCapturingMode.SPAN_AND_EVENT),
+            ("", ContentCapturingMode.NO_CONTENT),
+        ]:
+            with patch.dict(
+                os.environ,
+                {
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
+                },
+            ):
+                assert (
+                    get_content_capturing_mode() == expected_content_capturing
+                )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "INVALID_VALUE",
+        },
+    )
+    def test_get_content_capturing_mode_with_invalid_envvar_value(
         self,
     ):  # pylint: disable=no-self-use
         with self.assertLogs(level="WARNING") as cm:
@@ -229,10 +285,12 @@ class TestTelemetryHandler(unittest.TestCase):
         if hasattr(get_telemetry_handler, "_default_handler"):
             delattr(get_telemetry_handler, "_default_handler")
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
     )
     def test_llm_start_and_stop_creates_span(self):  # pylint: disable=no-self-use
         message = _create_input_message("hello world")
@@ -311,10 +369,12 @@ class TestTelemetryHandler(unittest.TestCase):
         )
         self.assertEqual(span_system[0]["type"], "text")
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
     )
     def test_llm_manual_start_and_stop_creates_span(self):
         message = _create_input_message("hi")
@@ -578,10 +638,12 @@ class TestTelemetryHandler(unittest.TestCase):
             == Schemas.V1_37_0.value
         )
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="EVENT_ONLY",
-        emit_event="true",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
     )
     def test_llm_log_uses_expected_schema_url(self):
         invocation = self.telemetry_handler.inference(
@@ -596,10 +658,12 @@ class TestTelemetryHandler(unittest.TestCase):
             logs[0].instrumentation_scope.schema_url, Schemas.V1_37_0.value
         )
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
     )
     def test_parent_child_span_relationship(self):
         message = _create_input_message("hi")
@@ -633,10 +697,12 @@ class TestTelemetryHandler(unittest.TestCase):
         # Parent should not have a parent (root)
         assert parent_span.parent is None
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
     )
     def test_embedding_parent_child_span_relationship(self):
         parent_invocation = self.telemetry_handler.embedding(
@@ -666,10 +732,12 @@ class TestTelemetryHandler(unittest.TestCase):
         assert child_span.parent.span_id == parent_span.context.span_id
         assert parent_span.parent is None
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
     )
     def test_llm_parent_embedding_child_span_relationship(self):
         message = _create_input_message("hi")
@@ -784,10 +852,12 @@ class TestTelemetryHandler(unittest.TestCase):
             },
         )
 
-    @patch_env_vars(
-        stability_mode="gen_ai_latest_experimental",
-        content_capturing="SPAN_ONLY",
-        emit_event="",
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
     )
     def test_embedding_manual_start_and_stop_creates_span(self):
         invocation = self.telemetry_handler.embedding(
