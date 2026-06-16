@@ -1,0 +1,1 @@
+Fix VCR cassette lookup for Google GenAI upload hook tests under newer pytest versions.

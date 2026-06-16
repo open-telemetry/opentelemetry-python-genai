@@ -344,6 +344,7 @@ def fixture_setup_content_recording(request):
     os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
         request.param
     )
+    return request.param
 
 
 @pytest.fixture(name="vcr_record_mode")
@@ -459,6 +460,27 @@ def fixture_is_async(request):
 @pytest.fixture(name="model", params=["gemini-2.5-flash"])
 def fixture_model(request):
     return request.param
+
+
+@pytest.fixture(name="vcr_cassette_name")
+def fixture_vcr_cassette_name(
+    request,
+    setup_content_recording,
+    model,
+    genai_sdk_backend,
+    is_async,
+    enable_completion_hook,
+):
+    node_name = getattr(request.node, "originalname", request.node.name)
+    if node_name != "test_upload_hook_non_streaming":
+        return request.node.name
+
+    async_label = "async" if is_async else "sync"
+    return (
+        "test_upload_hook_non_streaming"
+        f"[{setup_content_recording}-{model}-{genai_sdk_backend}-"
+        f"{async_label}-{enable_completion_hook}]"
+    )
 
 
 @pytest.fixture(name="generate_content")
