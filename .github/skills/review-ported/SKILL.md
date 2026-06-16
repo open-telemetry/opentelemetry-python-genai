@@ -1,6 +1,6 @@
 ---
 name: review-ported
-description: Review a ported instrumentation-genai package by comparing it against any known external upstream implementations of the same instrumentation (OpenInference, vendor-specific). Writes MIGRATION_REPORT.md in the migrated package root.
+description: Review a ported or augmented instrumentation-genai package by comparing it against any known external upstream implementations of the same instrumentation (OpenInference, vendor-specific). Handles both greenfield ports and augment-mode PRs that add coverage to a pre-existing package (checking the added parts, their consistency with existing code, and old-vs-new coexistence). Writes MIGRATION_REPORT.md in the migrated package root.
 ---
 
 # Review a ported instrumentation-genai package
@@ -38,6 +38,25 @@ upstream lookup.
 If there are no upstreams to compare against (no user-named upstream resolves and no
 OpenInference match), this isn't a port — bail with a one-line note.
 
+## Greenfield vs augment mode
+
+Detect the mode before reviewing — it changes what counts as a problem:
+
+- **Greenfield port** — the migration *created* the package; everything in
+  `instrumentation/<target>/` is the port.
+- **Augment mode** — the package **already existed** and the migration only
+  *adds* coverage mined from the upstream. The diff modifies a pre-existing
+  package.
+
+Tell them apart from the PR diff / git history / unstaged changes: if the
+package's `src/` and tests predate the migration commits, it's augment mode.
+
+In augment mode the deliverable shifts to: the **added** coverage's
+completeness vs the upstream, its **consistency** with the pre-existing code,
+and **old-vs-new coexistence** concerns. Do **not** flag pre-existing
+coverage the upstream also has as missing. Per-section adjustments are inline
+below.
+
 ## Rules
 
 - **Deliverable is `instrumentation/<target>/MIGRATION_REPORT.md`.** Write
@@ -62,11 +81,16 @@ First line:
 ```markdown
 # Migration review: <target-package>
 
+Mode: greenfield port | augment existing package
+
 Compared against:
 - OpenInference: `openinference-instrumentation-<lib>` (add link)
 - <other upstream>: `<path>`, `<link>` (omit the line if no other upstream
   is in scope)
 ```
+
+State the mode on the second line. In augment mode, one sentence after it
+naming what the PR adds (the gaps it closes) orients the reviewer.
 
 Sections render in order. Each is bounded to its problems.
 
@@ -112,6 +136,17 @@ One column per upstream that exists, plus `This port`:
 Do not render a separate `**Gaps:**` bullet list below the table — the
 table itself is the gap list.
 
+**Augment mode.** Split `This port` into `Existed` and `Added this PR`:
+
+| API method | OpenInference | Existed | Added this PR | Notes |
+|---|---|---|---|---|
+| `…chat.completions.Completions.create` | ✅ | ✅ | — | already covered |
+| `…responses.Responses.create` | ✅ | ❌ | ✅ | added by this PR |
+| `…batches.Batches.create` | ✅ | ❌ | ❌ | still missing — `chat` |
+
+`❌` in both columns (upstream patches it, the package still doesn't) is the
+gap; sort it to the top.
+
 ### 2. Gaps and open issues
 
 Genuine **tooling/util gaps** — things the port couldn't do because
@@ -139,6 +174,30 @@ upstream that this port deliberately drops without a one-line rationale.
 | Aspect | Upstream | This port | Notes |
 |---|---|---|---|
 
+### 3b. Consistency and old-vs-new coexistence (augment mode only)
+
+**Greenfield port: skip.** Here the risk isn't "is it conformant" but "do
+the additions fit the package they landed in." Compare the **added** code
+against the **pre-existing** code (not the upstream); flag only real
+problems:
+
+- **Divergent patterns** — added wrappers/helpers/fixtures re-implementing
+  something the package already has a convention for.
+- **Duplicated scaffolding** — added tests not reusing the package's
+  `tests/test_utils.py` helpers or conformance runner.
+- **Telemetry contradictions** — an added method emitting an operation name,
+  attribute shape, span-kind, or content-capture gating that disagrees with
+  what pre-existing methods emit for the analogous case.
+- **Coexistence hazards** — added code that alters pre-existing paths (shared
+  module-level state, `_instrument()` ordering, a dependency range the old
+  code wasn't tested against), or a `pyproject`/`tox` edit affecting existing
+  tests.
+
+| Concern | Pre-existing | Added | Notes |
+|---|---|---|---|
+
+`_none_` if the additions are consistent and isolated.
+
 ### 4. Test coverage
 
 Three checklists. Render only **missing** cells; if every checklist is
@@ -147,6 +206,10 @@ clean, render `_Test coverage complete._` and skip the subsections.
 Gaps in this section are **blockers for the migration PR**, not
 follow-up work — address them before merge. Do not list §4 items as
 follow-up issues in §5.
+
+**Augment mode.** The matrix applies to methods **added this PR** (§1
+`Added this PR` = ✅) — those block merge. A pre-existing method missing a
+variant is a §5 follow-up, not a §4 blocker.
 
 Also flag here: **🟡 missing-cassette** — any scenario or unit test that
 references a cassette not committed under `tests/cassettes/`. And:
@@ -228,10 +291,12 @@ on `span.attributes[GenAIAttributes.GEN_AI_…]` using the semconv constants.
 
 What goes in this PR vs. a follow-up:
 
-- **In this PR**: §4 test coverage gaps. These block merge.
+- **In this PR**: §4 test coverage gaps. These block merge. In augment mode,
+  scoped to the methods added this PR, plus any §3b consistency problem in the
+  added code (it ships here).
 - **Follow-up**: §1 ❌ rows (new instrumented methods), §2 util-genai /
-  semconv gaps, §3 behavioral parity items — each a **separate** PR, one
-  logical change apiece.
+  semconv gaps, §3 behavioral parity items, and — augment mode — pre-existing
+  coverage gaps from §4 — each a **separate** PR, one logical change apiece.
 
 Suggest an issue title per follow-up item, grouped by type (API surface /
 util-genai gaps / behavioral parity); name the upstream that covers it and

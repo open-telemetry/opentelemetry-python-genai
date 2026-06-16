@@ -1,20 +1,29 @@
 ---
 name: port-from-openinference
-description: Port an openinference-instrumentation-* package from https://github.com/open-telemetry/donation-openinference into this repo as a new package. Use when a user asks to migrate a package from OpenInference.
+description: Port an openinference-instrumentation-* package from https://github.com/open-telemetry/donation-openinference into this repo. Creates a new package, or — when a package for the library already exists in the repo — augments it with the coverage OpenInference adds on top. Use when a user asks to migrate or port a package from OpenInference.
 ---
 
 # Port an OpenInference `instrumentation-*` package
 
 Migrate an `openinference-instrumentation-<source>` package from
 https://github.com/open-telemetry/donation-openinference into this
-repo as a new package under `instrumentation/`. This is a **new implementation** 
-that emits OTel GenAI semantic conventions through `opentelemetry-util-genai`.
+repo. The result emits OTel GenAI semantic conventions through
+`opentelemetry-util-genai`.
 
-The major
-work items are: rewriting the patcher to method-level (step 5), mapping every
-request/response shape into OTel `InputMessage`/`OutputMessage` parts
-(step 6), and migrating the unit-test corpus while filtering openinference-framework
-plumbing tests out (step 7).
+Two modes, decided by the "Before you start" gate below:
+
+- **Greenfield port** — no package for the library exists yet. Create a
+  **new implementation** under `instrumentation/`. The default, and what the
+  bulk of this skill describes.
+- **Augment an existing package** — the repo already ships
+  `opentelemetry-instrumentation-genai-<lib>`. Don't re-create it; inventory
+  what it covers, diff against OpenInference, and add **only the missing
+  parts**. See [Augment mode](#augment-mode-the-package-already-exists).
+
+For a greenfield port the major work items are: rewriting the patcher to
+method-level (step 5), mapping every request/response shape into OTel
+`InputMessage`/`OutputMessage` parts (step 6), and migrating the unit-test
+corpus while filtering openinference-framework plumbing tests out (step 7).
 
 ## Inputs
 
@@ -35,9 +44,75 @@ User may also provide ***target package name**. If not provided: derive it from 
   - `openinference-instrumentation-anthropic` → `opentelemetry-instrumentation-genai-anthropic`
   Confirm the chosen name with the user.
 
+## Before you start: is there already a package for this library?
+
+Once the target name is settled, check whether the repo already ships it:
+
+```sh
+ls instrumentation/opentelemetry-instrumentation-genai-<lib> 2>/dev/null
+```
+
+- **Exists →** **augment mode**: don't scaffold a new package. OpenInference
+  is now a *second* reference to mine for coverage the existing package
+  lacks. Jump to [Augment mode](#augment-mode-the-package-already-exists).
+- **Doesn't exist →** greenfield port; continue below.
+
+If a near-name sibling (a `-agents` / `-client` suffix) might instrument a
+*different* surface of the same vendor, confirm the target name with the user
+before deciding.
+
+## Before you start: check for native OTel instrumentation
+
+AI SDKs increasingly ship their **own** OpenTelemetry GenAI instrumentation.
+When they do, porting the OpenInference package is redundant. So
+before writing any code, determine whether the instrumented library is
+self-instrumenting.
+
+```sh
+# 1. Does the SDK depend on the OTel API / semconv?
+pip show <lib> | grep -i requires        # or read its pyproject / METADATA
+#    a dependency on opentelemetry-api or opentelemetry-semantic-conventions
+#    is the tell.
+# 2. Does its source actually emit GenAI spans?
+python -c "import <lib>, os; print(os.path.dirname(<lib>.__file__))"
+rg -l "opentelemetry|semconv\._incubating\.attributes\.gen_ai" <site-packages>/<lib>
+```
+
+A dependency on `opentelemetry-api` (or `-semantic-conventions`) **plus**
+`gen_ai_attributes` usage in the SDK source means the library is
+self-instrumented. Confirm empirically: set a **global** `TracerProvider`
+(native hooks often activate only when a real, non-proxy provider is
+configured), make one call, and inspect the emitted spans' instrumentation
+scope.
+
+**If the library is self-instrumented, do NOT port the OpenInference
+package.** Pivot the work:
+
+1. **Ignore the OpenInference instrumentation entirely** — the vendor owns
+   the spans; there is nothing to re-implement, and no `src/` instrumentor /
+   patcher to write.
+2. **Write conformance tests against the native instrumentation.** Follow
+   step 8 / the `write-conformance-tests` skill, but each scenario's `run()`
+   configures providers and enables the **native** tracer (e.g. sets a global
+   `TracerProvider`) instead of calling a `*Instrumentor` — then runs the
+   emitted telemetry through weaver live-check.
+3. **Identify gaps / inconsistencies** between the native output and the
+   GenAI semconv: missing operations, wrong operation name, legacy/duplicate
+   attributes, no metrics, no content-capture controls, no util-genai
+   content modes / completion-hook / upload support, etc. Record each as an
+   `expected_violation` or a documented skip, same as a normal port.
+4. **Write `MIGRATION_REPORT.md`** stating the library is self-instrumented,
+   the conformance results, and the gap list — that report is the
+   deliverable. **Stop and surface the finding to the user.** Do not build a
+   competing package unless they explicitly decide to (e.g. to suppress
+   native instrumentation and layer util-genai features on top).
+
+Only when the library has **no** native OTel instrumentation do you continue
+with the migration flow below.
+
 ## Reference material
 
-- **OTel GenAI spans**: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-spans.md> — authoritative attribute names and operation enum.
+- **OTel GenAI spans**: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai> — authoritative attribute names, spans, logs, and metrics definitions.
 - **OpenInference → OTel attribute mapping** (Arize-maintained): <https://github.com/Arize-ai/openinference/blob/main/spec/genai/README.md>. Use as a quick lookup for what an OpenInference attribute *roughly* corresponds to in OTel; when the mapping disagrees with the official semconv, **the official semconv wins**.
 - **Message JSON schemas**:
   - input messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-input-messages.json>
@@ -91,23 +166,96 @@ violate:
 
 8. **Do not modify weaver policies.**
 
+## Augment mode: the package already exists
+
+The package already has a working, conformant implementation; OpenInference
+is just another reference to mine for missing coverage. The job is a tight,
+delta-only PR that closes specific gaps — **not** a rewrite.
+
+All [Non-negotiable rules](#non-negotiable-rules) apply to every line you
+add, plus two specific to this mode:
+
+- **Don't rewrite or "improve" existing code.** Leave the existing patcher,
+  wrappers, and tests alone unless OpenInference reveals a concrete bug — and
+  then it's a *separate* PR. No opportunistic refactors.
+- **Match the existing package's conventions.** New wrappers, helpers, and
+  scenarios follow the patterns already there (helper names, wrapper
+  structure, conftest/fixture wiring, scenario shape). Don't add a second way
+  to do something the package already does.
+
+### A. Inventory what's already there
+
+Map the existing package before reading OpenInference (read, don't guess):
+patched methods (`wrap_function_wrapper` / `unwrap` in `_instrument`),
+request/response shapes its wrappers map, the unit-test matrix per method
+(`rg -c '^\s*(async )?def test_' instrumentation/<target>/tests/`),
+conformance scenarios under `tests/conformance/`, and cassettes.
+
+### B. Diff against OpenInference
+
+Run the OpenInference analysis as a greenfield port would (the reading behind
+steps 5–6): every method it patches, every shape it parses. Subtract
+inventory A. The remainder is the work-list:
+
+- Methods OpenInference patches that the package doesn't → new wrappers (step 5).
+- Shape branches OpenInference handles that the wrappers drop → extend the
+  mapping (step 6).
+- Scenarios OpenInference covers that the package lacks → new tests /
+  conformance (steps 7–8).
+
+Coverage both already have → skip. Coverage the package has but OpenInference
+lacks → leave it; not a regression.
+
+### C. Add the delta
+
+Apply steps **5–10 to the new parts only**:
+
+- **Steps 1–3 (scaffold/rename/pyproject) skipped** — touch `pyproject.toml`
+  only for a genuinely new entry point or dependency range, `README.rst` only
+  for a new user-visible capability.
+- **Step 4** applies to anything you copy in; nothing to excise from existing
+  code.
+- **Steps 5–9** extend the existing wrappers / test utils / conformance
+  runner in place, not parallel ones.
+- **Step 10** is done; revisit `tox.ini` / pyright only for a new test factor
+  or requirements file.
+
+### D. Report and review
+
+Write `MIGRATION_REPORT.md` via the `review-ported` skill as usual — it
+detects augment mode.
+
 ## Migration flow
+
+> The numbered steps below are written for a **greenfield port**. In
+> [augment mode](#augment-mode-the-package-already-exists) skip steps 1–3,
+> and scope steps 5–10 to the delta from the inventory/diff (sections A–C
+> above).
 
 ### 1. Create the target package
 
+Because the patcher, wrappers, and tests are all rewritten (steps 5–7), a
+`cp -R` of the OpenInference tree mostly creates files you immediately
+delete or overwrite. **Prefer scaffolding fresh** from the nearest existing
+package (e.g. `opentelemetry-instrumentation-genai-anthropic`) and copy over from
+OpenInference **only** what you actually reuse:
+
+- `LICENSE` (Apache-2.0).
+- Reusable cassettes (step 9), if any.
+
 ```sh
-cp -R <source-path>/ instrumentation/<target>/
-cd instrumentation/<target>
-rm -rf .pytest_cache .tox .venv venv .vscode .DS_Store .claude .ruff_cache
-find . -name __pycache__ -type d -exec rm -rf {} +
-rm -f CHANGELOG.md  # OpenInference's per-package history doesn't apply here
+mkdir -p instrumentation/<target>/src/opentelemetry/instrumentation/genai/<lib>
+mkdir -p instrumentation/<target>/tests/conformance instrumentation/<target>/tests/cassettes
+cp <source-path>/LICENSE instrumentation/<target>/LICENSE
 ```
 
-Keep `LICENSE` (Apache-2.0). Don't carry over `examples/` directories or
-OpenInference's `README.md` — both are rewritten below. Per-package
-`CHANGELOG.md` is towncrier-generated at release time; don't carry one over,
-and add a fragment for the new package per the **Changelog** section of
-[AGENTS.md](../../../AGENTS.md).
+Do **not** carry over `examples/`, OpenInference's `README.md`, or its
+`CHANGELOG.md` (per-package changelogs are towncrier-generated at release
+time).
+
+(If you do `cp -R` instead, clean it up afterwards:
+`rm -rf .pytest_cache .tox .venv venv .vscode .DS_Store .claude .ruff_cache CHANGELOG.md`
+and `find . -name __pycache__ -type d -exec rm -rf {} +`.)
 
 ### 2. Rename the Python module
 
@@ -372,10 +520,8 @@ is ERROR.
 
 **`tests/requirements.{latest,oldest}.txt`** — OpenInference typically has its own
 pin file; keep only the third-party version pins (`openai==`,
-`anthropic==`, `pydantic==`, `pytest==`, …). Drop every `-e <path>` line
-— this repo's uv workspace already installs all members editable via
-`uv sync --all-packages`. Drop `requirements.pydantic1.txt`-style
-side-channel files entirely.
+`anthropic==`, …). 
+Add current `util/opentelemetry-util-genai` and `instrumentation/opentelemetry-instrumentation-genai-<lib>` to the latest; for the oldest, use the oldest version of `opentelemetry-util-genai` that works (there is none released yet, but check).
 
 ### 8. Conformance scenarios
 
@@ -390,12 +536,36 @@ to any instrumentation. Port-specific notes on top of that skill:
   `expected_violations` / `xfail` `reason=` at the gap row in
   `MIGRATION_REPORT.md`.
 
-### 9. Cassettes
+### 9. Cassettes (or a transport proxy)
 
 - Copy cassettes from OpenInference's `tests/cassettes/` (or wherever the OpenInference package
   parks them) into the port's `tests/cassettes/`. Reuse names so existing
   unit tests keep loading them.
 - Reuse existing cassettes for conformance scenarios when they are applicable.
+- **AI-generated cassettes.** For a cassette OpenInference lacks and you
+  can't record (no provider access), you may synthesize one from the
+  provider's API reference via AI. Start it with a
+  `# TODO: this is generated by AI, re-record` comment, mention it in the PR,
+  and open a follow-up issue to re-record it against the real provider in CI.
+
+**Transport proxy instead of cassettes.** If the OpenInference unit tests mock
+HTTP (e.g. `respx`, `httpx.MockTransport`) rather than replay recorded
+cassettes, you may do the same in the port's **unit** tests — build the SDK
+client with an `httpx.MockTransport` (or equivalent) returning canned
+responses instead of `@pytest.mark.vcr`. When you go this route:
+
+- Reuse the OpenInference cassettes' recorded **response bodies** (incl. the
+  streaming SSE payloads) as the canned responses, so fidelity is preserved.
+- Still register the shared VCR plugins in `conftest.py` (the shared
+  `fixture_vcr` is autouse) and keep `vcr_config`.
+- **Use the same mechanism in conformance scenarios.** Conformance does not
+  require VCR — a scenario can build its client with the same transport mock
+  and ignore the injected `vcr` (see the `write-conformance-tests` skill).
+  Pick one mechanism (cassettes *or* transport mock) and use it consistently
+  across the whole package.
+- **Mention the choice in `MIGRATION_REPORT.md`** (the `review-ported` skill
+  flags missing cassettes; note that the package mocks the transport by
+  design so the absence is not a gap).
 
 ### 10. Workspace integration
 

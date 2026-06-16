@@ -35,6 +35,8 @@ client has no `embeddings` scenario).
 |---|---|---|
 | Inference | `inference.py` | A `chat` operation. |
 | Tool calling | `tool_calling.py` | A `chat` turn where the model returns tool calls and a follow-up turn feeds tool results back. Asserts tool calls and tool results are present on input/output **messages**. weaver will validate the format. Do **not** expect `execute_tool` spans unless the client library itself instruments tool execution — most don't; tool execution is the caller's code. |
+| Multimodal content | `multimodal.py` | A `chat` turn carrying the **non-text parts** the client accepts (inline image/audio bytes, media URLs, file refs, …), asserting each round-trips onto the messages. Cover only the part types the library emits — see [Message-part coverage](#message-part-coverage). |
+| Reasoning | `reasoning.py` | A `chat` turn against a reasoning model where the response carries reasoning/thinking content, asserting a `reasoning` part lands on an output message (and `gen_ai.usage.output_tokens` / reasoning-token attributes if the library records them). Only when the client surfaces reasoning content — see [Message-part coverage](#message-part-coverage). |
 | Embeddings | `embedding.py` | An `embeddings` operation. |
 
 **Agent / orchestration instrumentations:**
@@ -45,6 +47,56 @@ client has no `embeddings` scenario).
 | Multi-agent orchestration | `multi_agent.py` | One agent handing off to / invoking another — expects nested `invoke_agent` spans under the orchestrator. |
 | Workflows | `invoke_workflow.py` | An `invoke_workflow` run wrapping the agent/tool spans it drives. |
 
+## Message-part coverage
+
+Weaver validates a part's *shape*, not *which* part types a scenario
+exercised — a text-only scenario leaves the package's image/audio/file/tool
+mapping unverified. So exercise **every non-text part type the library can
+emit** and assert it landed on a message. Cover only what the package
+instruments: walk its wrappers (the step-6 mapping for a port) for which
+`opentelemetry.util.genai.types` parts they produce.
+
+| Part `type` | util-genai type | Emitted when the library accepts… |
+|---|---|---|
+| `text` | `Text` | plain text (always) |
+| `tool_call` / `tool_call_response` | `ToolCallRequest` / `ToolCallResponse` | function/tool calling — covered by `tool_calling.py` |
+| `server_tool_call` / `server_tool_call_response` | `ServerToolCall` / `ServerToolCallResponse` | vendor server-side tools (web_search, code_interpreter, …) |
+| `reasoning` | `Reasoning` | reasoning / thinking items |
+| `blob` | `Blob` | inline image/audio/video **bytes** (`modality` distinguishes them) |
+| `uri` | `Uri` | an external media **URL** (`modality`) |
+| `file` | `File` | a **file reference** / id (`modality`) |
+| `generic` | `GenericPart` | a provider item with no semconv mapping — flag, don't drop |
+
+Group by shared turn/cassette — typically one `multimodal.py` for the
+image/audio/file/url inputs the client accepts, `tool_calling.py` for tool
+parts, and `reasoning.py` for `reasoning` parts (a reasoning model emits
+those on output messages, not input). `type` alone gives `blob` / `uri` /
+`file`; to tell image from
+audio from video, read the part's `modality` with a `_part_fields` helper
+returning `(type, modality)` tuples (defined alongside `_part_types` in
+[Lib-specific assertions](#lib-specific-assertions)):
+
+```python
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        chat_spans = [
+            entry["span"] for entry in report["samples"]
+            if "span" in entry
+            and _attr(entry["span"], "gen_ai.operation.name") == "chat"
+        ]
+        input_parts = {
+            (t, m) for span in chat_spans
+            for t, m in _part_fields(_attr(span, "gen_ai.input.messages"))
+        }
+        # e.g. an inline image + an audio URL were sent
+        assert ("blob", "image") in input_parts, f"no image blob, saw {input_parts}"
+        assert ("uri", "audio") in input_parts, f"no audio uri, saw {input_parts}"
+```
+
+If a part type the library accepts can't round-trip yet (a util-genai/semconv
+gap), still write the scenario and record it as a
+[declared gap](#declared-gaps) — never silently omit the part.
+
 ## Scenario modules
 
 Each scenario module defines a subclass of `Scenario` from
@@ -52,8 +104,9 @@ Each scenario module defines a subclass of `Scenario` from
 `expected_metrics` ClassVars and implements
 `run(self, *, tracer_provider, meter_provider, logger_provider, vcr)`.
 Drive instrumentation through the shared `instrument` context manager (not
-`instr.instrument()` / `trace.set_tracer_provider`); the runner injects the
-already-configured `vcr`, so scenarios just call `vcr.use_cassette(...)`:
+`instr.instrument()` / `trace.set_tracer_provider`). The runner injects an
+already-configured `vcr`, so a cassette-based scenario just calls
+`vcr.use_cassette(...)`:
 
 ```python
 # tests/conformance/inference.py
@@ -94,6 +147,28 @@ class InferenceScenario(Scenario):
 ```
 
 One operation per scenario. No env vars, no logging config.
+
+**VCR cassettes are not required — a transport mock works too.** Mock HTTP
+however the package's **unit** tests already do, and use the **same pattern
+across every scenario in that package** (don't mix cassettes and transport
+mocks within one lib). If the package mocks the transport (e.g.
+`httpx.MockTransport`, `respx`) instead of replaying cassettes, build the
+client with that transport inside `run()` and ignore the injected `vcr`:
+
+```python
+    def run(self, *, tracer_provider, meter_provider, logger_provider, vcr) -> None:
+        with instrument(
+            <Lib>Instrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            client = <Lib>(transport=httpx.MockTransport(_handler))  # canned response
+            client.<method>(...)  # call the patched API
+```
+
+`vcr` stays in the signature either way (the runner always passes it).
 
 ## Declared gaps
 
@@ -193,6 +268,17 @@ def _part_types(messages_json: str | None) -> list[str]:
     # [{"role": ..., "parts": [{"type": ..., ...}]}].
     messages = json.loads(messages_json) if messages_json else []
     return [part["type"] for message in messages for part in message["parts"]]
+
+
+def _part_fields(messages_json: str | None) -> list[tuple[str, str | None]]:
+    # Like _part_types, but keeps modality so image/audio/video are
+    # distinguishable on blob/uri/file parts (None for parts without one).
+    messages = json.loads(messages_json) if messages_json else []
+    return [
+        (part["type"], part.get("modality"))
+        for message in messages
+        for part in message["parts"]
+    ]
 ```
 
 ## The test_conformance.py runner
@@ -245,10 +331,24 @@ when authoring scenarios; they're authoritative.
 `weaver_live_check` downloads the pinned weaver binary on first use (cached
 under `~/.cache/otel-conformance/weaver/`).
 
-## Cassettes
+## Recorded HTTP (cassettes or transport mock)
 
-A scenario loads one cassette per operation via
-`vcr.use_cassette("<scenario>.yaml")`. 
+A scenario replays one HTTP interaction per operation. Use whichever
+mechanism the package's unit tests use, consistently across all of its
+scenarios:
+
+- **VCR cassette** — `vcr.use_cassette("<scenario>.yaml")`, one committed
+  cassette per operation under `tests/cassettes/`.
+- **Transport mock** — build the SDK client with an `httpx.MockTransport`
+  (or `respx`) returning a canned response; no cassette file needed.
+
+Pick the one the lib already follows and don't mix the
+two within a package.
+
+**AI-generated cassettes.** Lacking provider access, you may synthesize a
+cassette from the provider's API reference via AI. Start the cassette with a
+`# TODO: this is generated by AI, re-record` comment, mention it in the PR,
+and open a follow-up issue to re-record it against the real provider in CI.
 
 ## Running
 
