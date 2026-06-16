@@ -32,7 +32,6 @@ from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     gen_ai_json_dumps,
     get_content_capturing_mode,
-    is_experimental_mode,
 )
 
 if TYPE_CHECKING:
@@ -198,9 +197,6 @@ def get_content_attributes(
         for_span: If True, serialize for span attributes (JSON string);
                   if False, serialize for event attributes (list of dicts).
     """
-    if not is_experimental_mode():
-        return {}
-
     mode = get_content_capturing_mode()
     allowed_modes = (
         (

@@ -27,7 +27,6 @@ Environment Variables
 
 This package relies on environment variables to configure capturing of message content.
 By default, message content will not be captured.
-Set the environment variable ``OTEL_SEMCONV_STABILITY_OPT_IN`` to ``gen_ai_latest_experimental`` to enable experimental features.
 Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of:
 
 - ``NO_CONTENT``: Do not capture message content (default).

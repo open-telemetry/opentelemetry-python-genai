@@ -25,13 +25,6 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 
-# TODO: Migrate to GenAI constants once available in semconv package
-_GEN_AI_AGENT_VERSION = "gen_ai.agent.version"
-_GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
-    "gen_ai.usage.cache_creation.input_tokens"
-)
-_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
-
 
 class AgentInvocation(GenAIInvocation):
     """Represents a single agent invocation (invoke_agent span).
@@ -130,7 +123,7 @@ class AgentInvocation(GenAIInvocation):
             (GenAI.GEN_AI_AGENT_NAME, self.agent_name),
             (GenAI.GEN_AI_AGENT_ID, self.agent_id),
             (GenAI.GEN_AI_AGENT_DESCRIPTION, self.agent_description),
-            (_GEN_AI_AGENT_VERSION, self.agent_version),
+            (GenAI.GEN_AI_AGENT_VERSION, self.agent_version),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -164,11 +157,11 @@ class AgentInvocation(GenAIInvocation):
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
             (
-                _GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
                 self.cache_creation_input_tokens,
             ),
             (
-                _GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
                 self.cache_read_input_tokens,
             ),
         )

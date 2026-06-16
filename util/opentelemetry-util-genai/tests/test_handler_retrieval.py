@@ -10,10 +10,6 @@ from unittest.mock import patch
 
 import pytest
 
-from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -43,9 +39,6 @@ class _RetrievalTestBase(TestCase):
         self.handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
         )
-
-    def tearDown(self) -> None:
-        _OpenTelemetrySemanticConventionStability._initialized = False
 
     def _get_finished_spans(self):
         return self.span_exporter.get_finished_spans()
@@ -161,14 +154,10 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
     @patch.dict(
         os.environ,
         {
-            OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental",
             OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
         },
     )
     def test_stop_sets_query_text_when_content_capture_enabled(self) -> None:
-        _OpenTelemetrySemanticConventionStability._initialized = False
-        _OpenTelemetrySemanticConventionStability._initialize()
-
         invocation = self.handler.retrieval()
         invocation.query_text = "What is the capital of France?"
         invocation.stop()
@@ -193,14 +182,10 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
     @patch.dict(
         os.environ,
         {
-            OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental",
             OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
         },
     )
     def test_stop_sets_documents_when_content_capture_enabled(self) -> None:
-        _OpenTelemetrySemanticConventionStability._initialized = False
-        _OpenTelemetrySemanticConventionStability._initialize()
-
         docs = [{"id": "doc_1", "score": 0.95}, {"id": "doc_2", "score": 0.87}]
         invocation = self.handler.retrieval()
         invocation.documents = docs

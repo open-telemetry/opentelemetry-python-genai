@@ -7,10 +7,6 @@ from unittest.mock import patch
 
 import google.genai
 
-from opentelemetry.instrumentation._semconv import (
-    _OpenTelemetrySemanticConventionStability,
-)
-
 from .auth import FakeCredentials
 from .instrumentation_context import InstrumentationContext
 from .otel_mocker import OTelMocker
@@ -18,16 +14,13 @@ from .otel_mocker import OTelMocker
 
 class TestCase(unittest.TestCase):
     def setUp(self):
-        # Most tests want this environment variable setup. Need to figure out a less hacky way of doing this.
-        with patch.dict(
-            "os.environ",
+        self.env_patcher = patch.dict(
+            os.environ,
             {
                 "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
-                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
             },
-        ):
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
+        )
+        self.env_patcher.start()
         self._otel = OTelMocker()
         self._otel.install()
         self._instrumentation_context = None
@@ -38,6 +31,13 @@ class TestCase(unittest.TestCase):
         self._uses_vertex = False
         self._credentials = FakeCredentials()
         self._instrumentor_args = {}
+
+    def tearDown(self):
+        if self._instrumentation_context is not None:
+            self._instrumentation_context.uninstall()
+            self._instrumentation_context = None
+        self._otel.uninstall()
+        self.env_patcher.stop()
 
     def _lazy_init(self):
         self._instrumentation_context = InstrumentationContext(
@@ -81,9 +81,3 @@ class TestCase(unittest.TestCase):
                 credentials=self._credentials,
             )
         return google.genai.Client(vertexai=False, api_key=self._api_key)
-
-    def tearDown(self):
-        if self._instrumentation_context is not None:
-            self._instrumentation_context.uninstall()
-            self._instrumentation_context = None
-        self._otel.uninstall()

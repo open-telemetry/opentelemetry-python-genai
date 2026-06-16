@@ -26,7 +26,6 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
-    is_experimental_mode,
     should_emit_event,
 )
 
@@ -207,7 +206,7 @@ class InferenceInvocation(GenAIInvocation):
         For more details, see the semantic convention documentation:
         https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-events.md#event-eventgen_aiclientinferenceoperationdetails
         """
-        if not is_experimental_mode() or not should_emit_event():
+        if not should_emit_event():
             return None
 
         attributes = self._get_attributes()
