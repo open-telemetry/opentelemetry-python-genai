@@ -68,10 +68,12 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
-  by registering them as plugins —
-  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]`,
-  importing scrub helpers from `opentelemetry.test_util_genai.vcr` as needed. Do not
-  re-implement in-memory provider/exporter setup or the VCR pretty-print serializer locally.
+  by registering them as plugins. Always register the fixtures plugin; register the VCR plugin
+  too when the package's tests use VCR cassettes —
+  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]`
+  (drop the `vcr` entry for packages with no cassette-backed tests), importing scrub helpers from
+  `opentelemetry.test_util_genai.vcr` as needed. Do not re-implement in-memory provider/exporter
+  setup or the VCR pretty-print serializer locally.
 - When recording VCR cassettes, scrub account-identifying values in the conftest's
   `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
   responses) before committing. Examples: `authorization`, `openai-organization`,

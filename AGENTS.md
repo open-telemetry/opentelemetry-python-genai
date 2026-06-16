@@ -95,7 +95,7 @@ uv run tox -e py312-test-instrumentation-genai-openai-conformance
 uv run tox -e typecheck
 ```
 
-Before opening a PR, run `tox -e precommit`, `tox -e typecheck`, and the changed package's
+Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, and the changed package's
 test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
 the CI gates.
 
@@ -189,9 +189,11 @@ isn't enough, add the capability here rather than working around it.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
-  by registering them as plugins —
-  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]` —
-  rather than re-implementing provider/exporter/VCR plumbing. Import scrub helpers
+  by registering them as plugins. Always register the fixtures plugin; register the VCR plugin
+  too when the package's tests use VCR cassettes —
+  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]`
+  (drop the `vcr` entry for packages with no cassette-backed tests) — rather than
+  re-implementing provider/exporter/VCR plumbing. Import scrub helpers
   (`scrub_response_headers` / `scrub_response_headers_overwrite`) from
   `opentelemetry.test_util_genai.vcr` where a `vcr_config` needs them.
 - Drive instrumentation in tests through the shared `instrument` context manager from
