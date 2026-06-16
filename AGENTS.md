@@ -50,21 +50,54 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`). `version.py` carries a `.dev`
   suffix during development (`1.0b0.dev`); the release workflow drops it.
 
+## Adding a package to the workspace
+
+A new package under `instrumentation/<pkg>/` (where `<pkg>` is the full
+`opentelemetry-instrumentation-genai-<lib>` directory name) wires in as follows.
+Copy the shape from an existing package — paths in `tox.ini` are repo-root-relative.
+
+- **uv workspace**: auto-included via the `instrumentation/*` glob in root
+  `pyproject.toml [tool.uv.workspace] members` — no edit needed.
+- **`tox.ini`**:
+  - `envlist`: add `py3{…}-test-instrumentation-genai-<lib>-{oldest,latest}`, the
+    `py3{…}-…-<lib>-conformance` entry, and `lint-instrumentation-genai-<lib>`.
+  - `[testenv] deps`: add the factor-conditional test-requirements lines
+    (`<lib>-{oldest,latest,conformance}: -r …/tests/requirements.<factor>.txt` plus
+    `{[testenv]test_deps}` / `{[testenv]pytest_deps}`). Requirements install here — **not**
+    in `commands_pre`.
+  - `[testenv] commands`: add the pytest line (it `--ignore`s `tests/test_conformance.py`),
+    the separate `…-conformance` pytest line, and
+    `lint-…: sh -c "cd instrumentation && ruff check <pkg>"`.
+  - `[testenv:typecheck] deps`: add `{toxinidir}/instrumentation/<pkg>[instruments]`.
+- **`[tool.pyright]`** (in root `pyproject.toml`): `include` is opt-in and added to
+  *progressively* as a package gets fully typed. When a package is in `include`, also add its
+  `<pkg>/tests/**/*.py` and `<pkg>/examples/**/*.py` to `exclude` — tests and examples stay
+  untyped; `src/**` is never excluded.
+
 ## Commands
 
 ```sh
 # Install all packages and dev tools
 uv sync --frozen --all-packages
 
-# Lint (runs ruff via pre-commit)
+# All pre-commit hooks (ruff, ruff-format, uv-lock, rstcheck) — the CI lint gate
+uv run tox -e precommit
+# …or just the ruff hook while iterating
 uv run pre-commit run ruff --all-files
 
-# Test a specific package (append -oldest, -latest for version variants)
-uv run tox -e py312-test-instrumentation-genai-openai-oldest
+# Test one package (append -oldest / -latest for the version-matrix variants)
+uv run tox -e py312-test-instrumentation-genai-openai-latest
 
-# Type check
+# Run a package's conformance scenarios (only *-conformance envs collect test_conformance.py)
+uv run tox -e py312-test-instrumentation-genai-openai-conformance
+
+# Type check (pyright)
 uv run tox -e typecheck
 ```
+
+Before opening a PR, run `tox -e precommit`, `tox -e typecheck`, and the changed package's
+test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
+the CI gates.
 
 ## Guidelines
 
@@ -92,6 +125,49 @@ This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage changelo
 
 Apply to packages under `instrumentation/`.
 
+### Telemetry via `opentelemetry-util-genai`
+
+- Spans, logs, metrics, and events should go through `opentelemetry-util-genai`. Do not call OTel
+  `Tracer`/`Meter`/`Logger` directly, and import only its public surface — never an
+  `opentelemetry.util.genai._*` module.
+- Content capture, hooks, and configuration are owned by the util. Don't add instrumentation-local
+  env vars or settings.
+
+#### Streaming responses
+
+A streamed response only finishes once the caller has drained the stream, so the invocation must
+stay open until then. Do **not** call `invocation.stop()` when the SDK returns the stream — the
+span would close before any chunks arrive.
+
+Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
+`opentelemetry.util.genai.stream` (the public, supported helpers). The base class proxies the
+underlying SDK stream, drives iteration, and finalizes telemetry exactly once on success, error,
+or `close()`. Subclasses pass the SDK stream to `super().__init__(stream)` and implement three
+hooks:
+
+- `_process_chunk(chunk)` — accumulate per-chunk state (e.g. response model, finish reasons,
+  token usage, streamed content) onto the invocation.
+- `_on_stream_end()` — finalize on success; set the accumulated response attributes and call
+  `invocation.stop()`.
+- `_on_stream_error(error)` — finalize on failure; call `invocation.fail(error)`.
+
+```python
+class MyStreamWrapper(SyncStreamWrapper[Chunk]):
+    def __init__(self, stream, invocation, capture_content):
+        super().__init__(stream)
+        self._self_invocation = invocation
+        ...
+
+    def _process_chunk(self, chunk): ...      # accumulate state
+    def _on_stream_end(self): self._self_invocation.stop()
+    def _on_stream_error(self, error): self._self_invocation.fail(error)
+```
+
+The hooks are called internally by the wrapper lifecycle.
+Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (e.g.
+`self._self_invocation`) so it isn't forwarded to the wrapped stream. Don't reimplement iteration,
+finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
+isn't enough, add the capability here rather than working around it.
 ### Exception handling
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the
@@ -112,10 +188,20 @@ Apply to packages under `instrumentation/`.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
-- `tests/conftest.py` must consume the shared fixtures from
-  `opentelemetry.test_util_genai` (`from opentelemetry.test_util_genai.fixtures import *` and
-  `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`) rather
-  than re-implementing provider/exporter/VCR plumbing.
+- `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
+  by registering them as plugins —
+  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]` —
+  rather than re-implementing provider/exporter/VCR plumbing. Import scrub helpers
+  (`scrub_response_headers` / `scrub_response_headers_overwrite`) from
+  `opentelemetry.test_util_genai.vcr` where a `vcr_config` needs them.
+- Drive instrumentation in tests through the shared `instrument` context manager from
+  `opentelemetry.test_util_genai.instrumentor` — `instrument(SomeInstrumentor(),
+  tracer_provider=…, logger_provider=…, meter_provider=…, semconv=…, content_capture=…)`. It sets
+  the semconv (`OTEL_SEMCONV_STABILITY_OPT_IN`) and content-capture
+  (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`) env vars *before* instrumenting and
+  restores them after, so a package's `instrument_*` fixtures don't manage that env themselves
+  (`TelemetryHandler` snapshots content-capture at construction, so the env must be set before it
+  is built).
 - When recording VCR cassettes, scrub account-identifying values in the conftest's
   `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
   responses) before committing. Examples: `authorization`, `openai-organization`,
@@ -131,6 +217,12 @@ via Weaver live-check. Each scenario module defines a subclass of
 `opentelemetry.test_util_genai.conformance.Scenario` that sets
 `expected_spans`, `expected_metrics`, and implements
 `run(*, tracer_provider, meter_provider, logger_provider, vcr)`.
+
+Ship a scenario for **every** semconv operation the library emits, even an
+operation currently blocked by a util-genai or semconv gap. Skipping the
+scenario hides the gap; writing it records the gap (as a declared violation
+or a skip reason) so it fails loudly once the gap is fixed. **Never** drop a
+scenario file because it would fail today.
 
 Run via `tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
 `*-conformance` tox envs target `tests/test_conformance.py` directly; the
