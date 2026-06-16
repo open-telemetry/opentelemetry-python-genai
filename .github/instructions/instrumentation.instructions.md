@@ -83,15 +83,18 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   `expected_spans`, `expected_metrics`, and implements `run(...)`) and a
   `tests/test_conformance.py` that runs them via
   `opentelemetry.test_util_genai.conformance.run_conformance`.
-- Flag any skipped or `xfail`-ed test (conformance scenario or otherwise)
-  whose `reason=` does not reference a tracking issue.
 
-## 6. PR description
+## 6. Examples
+
+New instrumentations must ship a minimal example under the package's `examples/`, with both a
+`manual/` and a `zero-code/` (auto-instrumentation) variant.
+
+## 7. PR description
 
 - Cover which part of the GenAI semconv the change implements or follows (when applicable) and
   how instrumentations should consume it.
 
-## 7. Package naming and versioning
+## 8. Package naming and versioning
 
 - Instrumentation packages must be named `opentelemetry-instrumentation-genai-{lib}` and import
   as `opentelemetry.instrumentation.genai.{lib}` (`opentelemetry-instrumentation-google-genai`
