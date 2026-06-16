@@ -197,8 +197,7 @@ isn't enough, add the capability here rather than working around it.
 - Drive instrumentation in tests through the shared `instrument` context manager from
   `opentelemetry.test_util_genai.instrumentor` — `instrument(SomeInstrumentor(),
   tracer_provider=…, logger_provider=…, meter_provider=…, semconv=…, content_capture=…)`. It sets
-  the semconv (`OTEL_SEMCONV_STABILITY_OPT_IN`) and content-capture
-  (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`) env vars *before* instrumenting and
+  the content-capture (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`) env var *before* instrumenting and
   restores them after, so a package's `instrument_*` fixtures don't manage that env themselves
   (`TelemetryHandler` snapshots content-capture at construction, so the env must be set before it
   is built).

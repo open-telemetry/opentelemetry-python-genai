@@ -34,6 +34,8 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Message content, prompts, and tool call arguments must only be set through the util's content
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.
+- Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
+  `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions
@@ -66,8 +68,9 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
-  (`from opentelemetry.test_util_genai.fixtures import *` and
-  `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`). Do not
+  by registering them as plugins —
+  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]`,
+  importing scrub helpers from `opentelemetry.test_util_genai.vcr` as needed. Do not
   re-implement in-memory provider/exporter setup or the VCR pretty-print serializer locally.
 - When recording VCR cassettes, scrub account-identifying values in the conftest's
   `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
@@ -80,18 +83,15 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   `expected_spans`, `expected_metrics`, and implements `run(...)`) and a
   `tests/test_conformance.py` that runs them via
   `opentelemetry.test_util_genai.conformance.run_conformance`.
+- Flag any skipped or `xfail`-ed test (conformance scenario or otherwise)
+  whose `reason=` does not reference a tracking issue.
 
-## 6. Examples
-
-New instrumentations must ship a minimal example under the package's `examples/`, with both a
-`manual/` and a `zero-code/` (auto-instrumentation) variant.
-
-## 7. PR description
+## 6. PR description
 
 - Cover which part of the GenAI semconv the change implements or follows (when applicable) and
   how instrumentations should consume it.
 
-## 8. Package naming and versioning
+## 7. Package naming and versioning
 
 - Instrumentation packages must be named `opentelemetry-instrumentation-genai-{lib}` and import
   as `opentelemetry.instrumentation.genai.{lib}` (`opentelemetry-instrumentation-google-genai`
