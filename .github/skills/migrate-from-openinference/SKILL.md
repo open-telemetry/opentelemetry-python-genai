@@ -1,9 +1,9 @@
 ---
-name: port-from-openinference
-description: Port an openinference-instrumentation-* package from https://github.com/open-telemetry/donation-openinference into this repo. Creates a new package, or — when a package for the library already exists in the repo — augments it with the coverage OpenInference adds on top. Use when a user asks to migrate or port a package from OpenInference.
+name: migrate-from-openinference
+description: Migrate an openinference-instrumentation-* package from https://github.com/open-telemetry/donation-openinference into this repo. Creates a new package, or — when a package for the library already exists in the repo — augments it with the coverage OpenInference adds on top. Use when a user asks to migrate or port a package from OpenInference.
 ---
 
-# Port an OpenInference `instrumentation-*` package
+# Migrate an OpenInference `instrumentation-*` package
 
 Migrate an `openinference-instrumentation-<source>` package from
 https://github.com/open-telemetry/donation-openinference into this
@@ -12,7 +12,7 @@ repo. The result emits OTel GenAI semantic conventions through
 
 Two modes, decided by the "Before you start" gate below:
 
-- **Greenfield port** — no package for the library exists yet. Create a
+- **Greenfield migration** — no package for the library exists yet. Create a
   **new implementation** under `instrumentation/`. The default, and what the
   bulk of this skill describes.
 - **Augment an existing package** — the repo already ships
@@ -20,7 +20,7 @@ Two modes, decided by the "Before you start" gate below:
   what it covers, diff against OpenInference, and add **only the missing
   parts**. See [Augment mode](#augment-mode-the-package-already-exists).
 
-For a greenfield port the major work items are: rewriting the patcher to
+For a greenfield migration the major work items are: rewriting the patcher to
 method-level (step 5), mapping every request/response shape into OTel
 `InputMessage`/`OutputMessage` parts (step 6), and migrating the unit-test
 corpus while filtering openinference-framework plumbing tests out (step 7).
@@ -55,7 +55,7 @@ ls instrumentation/opentelemetry-instrumentation-genai-<lib> 2>/dev/null
 - **Exists →** **augment mode**: don't scaffold a new package. OpenInference
   is now a *second* reference to mine for coverage the existing package
   lacks. Jump to [Augment mode](#augment-mode-the-package-already-exists).
-- **Doesn't exist →** greenfield port; continue below.
+- **Doesn't exist →** greenfield migration; continue below.
 
 If a near-name sibling (a `-agents` / `-client` suffix) might instrument a
 *different* surface of the same vendor, confirm the target name with the user
@@ -64,7 +64,7 @@ before deciding.
 ## Before you start: check for native OTel instrumentation
 
 AI SDKs increasingly ship their **own** OpenTelemetry GenAI instrumentation.
-When they do, porting the OpenInference package is redundant. So
+When they do, migrating the OpenInference package is redundant. So
 before writing any code, determine whether the instrumented library is
 self-instrumenting.
 
@@ -85,7 +85,7 @@ self-instrumented. Confirm empirically: set a **global** `TracerProvider`
 configured), make one call, and inspect the emitted spans' instrumentation
 scope.
 
-**If the library is self-instrumented, do NOT port the OpenInference
+**If the library is self-instrumented, do NOT migrate the OpenInference
 package.** Pivot the work:
 
 1. **Ignore the OpenInference instrumentation entirely** — the vendor owns
@@ -100,7 +100,7 @@ package.** Pivot the work:
    GenAI semconv: missing operations, wrong operation name, legacy/duplicate
    attributes, no metrics, no content-capture controls, no util-genai
    content modes / completion-hook / upload support, etc. Record each as an
-   `expected_violation` or a documented skip, same as a normal port.
+   `expected_violation` or a documented skip, same as a normal migration.
 4. **Write `MIGRATION_REPORT.md`** stating the library is self-instrumented,
    the conformance results, and the gap list — that report is the
    deliverable. **Stop and surface the finding to the user.** Do not build a
@@ -128,17 +128,17 @@ with the migration flow below.
 The repo-wide rules in [AGENTS.md](../../../AGENTS.md) already apply
 (telemetry through `opentelemetry-util-genai` public surface only, no
 `type: ignore`, semconv enums over string literals, re-raise caught
-exceptions). The rules below are the ones the port is most likely to
+exceptions). The rules below are the ones the migration is most likely to
 violate:
 
 1. **Zero OpenInference dependencies.** No `openinference-instrumentation`,
    no `openinference-semantic-conventions`, no `openinference-*` anywhere
-   in the port's `src/` or `tests/`. Verify with
+   in the migrated package's `src/` or `tests/`. Verify with
    `rg openinference instrumentation/<target>` — output must be empty.
-2. **Public util-genai surface only.** Beyond the AGENTS.md rule, the port
+2. **Public util-genai surface only.** Beyond the AGENTS.md rule, the migrated package
    must not import any `opentelemetry.util.genai._*` module — the allowed
    modules are enumerated in step 4.
-3. **Ignore all other OpenInference instrumentations during the port.** The only
+3. **Ignore all other OpenInference instrumentations during the migration.** The only
    instrumentation code to read is the OpenInference package being migrated
    plus `opentelemetry-util-genai`. Build
    from first principles: original OpenInference code + util-genai public API +
@@ -193,7 +193,7 @@ conformance scenarios under `tests/conformance/`, and cassettes.
 
 ### B. Diff against OpenInference
 
-Run the OpenInference analysis as a greenfield port would (the reading behind
+Run the OpenInference analysis as a greenfield migration would (the reading behind
 steps 5–6): every method it patches, every shape it parses. Subtract
 inventory A. The remainder is the work-list:
 
@@ -222,12 +222,12 @@ Apply steps **5–10 to the new parts only**:
 
 ### D. Report and review
 
-Write `MIGRATION_REPORT.md` via the `review-ported` skill as usual — it
+Write `MIGRATION_REPORT.md` via the `review-migration` skill as usual — it
 detects augment mode.
 
 ## Migration flow
 
-> The numbered steps below are written for a **greenfield port**. In
+> The numbered steps below are written for a **greenfield migration**. In
 > [augment mode](#augment-mode-the-package-already-exists) skip steps 1–3,
 > and scope steps 5–10 to the delta from the inventory/diff (sections A–C
 > above).
@@ -353,7 +353,7 @@ Output must be empty.
 This is the largest behavioral change. OpenInference typically patches at
 the HTTP-transport layer (`OpenAI.request`, `AsyncOpenAI.request`,
 `HTTPClient._send_request`, etc.) and dispatches by `cast_to` response type.
-**That pattern does not survive the port.** util-genai's
+**That pattern does not survive the migration.** util-genai's
 `InferenceInvocation` model needs the request kwargs (`model`, `messages`,
 `tools`, `stream`, …) at call time, which only the API methods see.
 
@@ -465,14 +465,14 @@ response shape — migrate it. A test that checks
 `using_attributes(session_id=…)` propagates into span attributes covers OpenInference
 framework behavior — skip it.
 
-**Sanity check before committing step 7.** Count source vs ported tests:
+**Sanity check before committing step 7.** Count source vs migrated tests:
 
 ```sh
 rg -c '^\s*(async )?def test_' <source-path>/tests/
 rg -c '^\s*(async )?def test_' instrumentation/<target>/tests/
 ```
 
-A port that drops from 80 tests to 5 is a regression — go back to the
+A migration that drops from 80 tests to 5 is a regression — go back to the
 "migrate" and "migrate (rewrite)" buckets and finish them.
 
 **Replace conftest boilerplate.** OpenInference conftests duplicate the
@@ -513,7 +513,7 @@ tiny constants (`DEFAULT_MODEL`, sample prompts) inline or in
 **Required unit-test coverage per wrapped method.** Apply the repo test
 matrix (sync/async × happy/error, plus streaming × happy/error where the
 method streams — see [AGENTS.md](../../../AGENTS.md) Tests section)
-to **every** method patched in step 5. For the port these are blockers for
+to **every** method patched in step 5. For the migration these are blockers for
 the migration PR, not follow-up. The error variants must verify the
 original exception is re-raised, `error.type` is recorded, and span status
 is ERROR.
@@ -528,10 +528,10 @@ Add current `util/opentelemetry-util-genai` and `instrumentation/opentelemetry-i
 Author conformance scenarios using the **`write-conformance-tests`** skill —
 it's the generic procedure (scenario modules, the `test_conformance.py`
 runner, declared gaps, lib-specific assertions, weaver policies) and applies
-to any instrumentation. Port-specific notes on top of that skill:
+to any instrumentation. Migration-specific notes on top of that skill:
 
 - Drop OpenInference's `examples/` tree — its end-to-end demos are replaced
-  by conformance scenarios, not ported.
+  by conformance scenarios, not migrated.
 - For an operation blocked by a util-genai/semconv gap, point the
   `expected_violations` / `xfail` `reason=` at the gap row in
   `MIGRATION_REPORT.md`.
@@ -539,7 +539,7 @@ to any instrumentation. Port-specific notes on top of that skill:
 ### 9. Cassettes (or a transport proxy)
 
 - Copy cassettes from OpenInference's `tests/cassettes/` (or wherever the OpenInference package
-  parks them) into the port's `tests/cassettes/`. Reuse names so existing
+  parks them) into the migrated package's `tests/cassettes/`. Reuse names so existing
   unit tests keep loading them.
 - Reuse existing cassettes for conformance scenarios when they are applicable.
 - **AI-generated cassettes.** For a cassette OpenInference lacks and you
@@ -550,7 +550,7 @@ to any instrumentation. Port-specific notes on top of that skill:
 
 **Transport proxy instead of cassettes.** If the OpenInference unit tests mock
 HTTP (e.g. `respx`, `httpx.MockTransport`) rather than replay recorded
-cassettes, you may do the same in the port's **unit** tests — build the SDK
+cassettes, you may do the same in the migrated package's **unit** tests — build the SDK
 client with an `httpx.MockTransport` (or equivalent) returning canned
 responses instead of `@pytest.mark.vcr`. When you go this route:
 
@@ -563,7 +563,7 @@ responses instead of `@pytest.mark.vcr`. When you go this route:
   and ignore the injected `vcr` (see the `write-conformance-tests` skill).
   Pick one mechanism (cassettes *or* transport mock) and use it consistently
   across the whole package.
-- **Mention the choice in `MIGRATION_REPORT.md`** (the `review-ported` skill
+- **Mention the choice in `MIGRATION_REPORT.md`** (the `review-migration` skill
   flags missing cassettes; note that the package mocks the transport by
   design so the absence is not a gap).
 
@@ -571,9 +571,9 @@ responses instead of `@pytest.mark.vcr`. When you go this route:
 
 Wire the new package into the workspace, `tox.ini`, and pyright per the
 **Adding a package to the workspace** section of [AGENTS.md](../../../AGENTS.md)
-— it applies to any new package, not just ports. Port-specific note on top:
+— it applies to any new package, not just migrations. Migration-specific note on top:
 
-- **Leave the package out of `[tool.pyright] include`.** A port over untyped
+- **Leave the package out of `[tool.pyright] include`.** A migration over untyped
   `wrapt` boundaries (`wrapped, instance, args, kwargs`) and vendor SDK members
   produces hundreds of strict-mode errors, so don't add it to `include` until
   typing lands — track that as a follow-up.
@@ -585,14 +585,14 @@ Run the pre-PR checks from the **Commands** section of
 the package's `-{oldest,latest}` (and `-conformance`) test envs.
 
 Open the PR with the `migration:openinference` label. Run the
-`review-ported` skill locally to generate `MIGRATION_REPORT.md`; iterate
-until §4 (test coverage) is clean. The review skill compares the port
+`review-migration` skill locally to generate `MIGRATION_REPORT.md`; iterate
+until §4 (test coverage) is clean. The review skill compares the migrated package
 against OpenInference (or any upstreams you name), so coverage gaps
 surface in one report.
 
 ## See also
 
-- [AGENTS.md](../../../AGENTS.md) — general repo rules that already apply to the port.
+- [AGENTS.md](../../../AGENTS.md) — general repo rules that already apply to the migration.
 - `util/opentelemetry-util-genai/AGENTS.md` — util-genai usage rules.
 - `.github/skills/write-conformance-tests/SKILL.md` — generic conformance-scenario authoring (step 8).
-- `.github/skills/review-ported/SKILL.md` — sister review skill (writes `MIGRATION_REPORT.md`).
+- `.github/skills/review-migration/SKILL.md` — sister review skill (writes `MIGRATION_REPORT.md`).

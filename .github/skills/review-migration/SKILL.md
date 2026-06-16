@@ -1,9 +1,9 @@
 ---
-name: review-ported
-description: Review a ported or augmented instrumentation-genai package by comparing it against any known external upstream implementations of the same instrumentation (OpenInference, vendor-specific). Handles both greenfield ports and augment-mode PRs that add coverage to a pre-existing package (checking the added parts, their consistency with existing code, and old-vs-new coexistence). Writes MIGRATION_REPORT.md in the migrated package root.
+name: review-migration
+description: Review a migrated or augmented instrumentation-genai package by comparing it against any known external upstream implementations of the same instrumentation (OpenInference, vendor-specific). Handles both greenfield migrations and augment-mode PRs that add coverage to a pre-existing package (checking the added parts, their consistency with existing code, and old-vs-new coexistence). Writes MIGRATION_REPORT.md in the migrated package root.
 ---
 
-# Review a ported instrumentation-genai package
+# Review a migrated instrumentation-genai package
 
 Compare the migrated package in `instrumentation/<target>/` against
 every known upstream implementation of the same instrumentation, and
@@ -36,14 +36,14 @@ upstream lookup.
   ```
 
 If there are no upstreams to compare against (no user-named upstream resolves and no
-OpenInference match), this isn't a port — bail with a one-line note.
+OpenInference match), this isn't a migration — bail with a one-line note.
 
 ## Greenfield vs augment mode
 
 Detect the mode before reviewing — it changes what counts as a problem:
 
-- **Greenfield port** — the migration *created* the package; everything in
-  `instrumentation/<target>/` is the port.
+- **Greenfield migration** — the migration *created* the package; everything in
+  `instrumentation/<target>/` is the migrated package.
 - **Augment mode** — the package **already existed** and the migration only
   *adds* coverage mined from the upstream. The diff modifies a pre-existing
   package.
@@ -71,7 +71,7 @@ below.
 - **Tables only when there are ≥1 problem rows.** Empty section: `_none_`.
 - **Read, don't guess.** Every claim from actual code or command output.
   Don't infer from package names or READMEs. Before listing something as
-  missing, grep for it in the port's `src/` and `tests/`.
+  missing, grep for it in the migrated package's `src/` and `tests/`.
 - **Snapshot of the PR head**, not aspirational state.
 
 ## Report structure
@@ -81,7 +81,7 @@ First line:
 ```markdown
 # Migration review: <target-package>
 
-Mode: greenfield port | augment existing package
+Mode: greenfield migration | augment existing package
 
 Compared against:
 - OpenInference: `openinference-instrumentation-<lib>` (add link)
@@ -103,7 +103,7 @@ is generic. Do not collapse rows.
 
 For each upstream, walk the actual instrumentation code, not docs:
 
-- **Method-level patching** (the shape of this port, and of any
+- **Method-level patching** (the shape of this migration, and of any
   method-level upstream): read every `wrap_function_wrapper(...)` call in
   `_instrument()`. Each call = one row.
 - **Transport-level patching** (typical of OpenInference, e.g.
@@ -117,15 +117,15 @@ For each upstream, walk the actual instrumentation code, not docs:
   decorator-based instrumentation): walk the actual entry points the
   upstream registers and list one row per emitted span site.
 
-One column per upstream that exists, plus `This port`:
+One column per upstream that exists, plus `This package`:
 
-| API method | OpenInference | This port | Notes |
+| API method | OpenInference | This package | Notes |
 |---|---|---|---|
 | `openai.resources.chat.completions.Completions.create` | ✅ | ✅ | |
 | `openai.resources.responses.Responses.create` | ✅ | ❌ | |
 | `openai.resources.beta.assistants.Assistants.create` | ✅ (generic span only) | ❌ | |
 
-- ✅ = patched. ❌ = at least one upstream patches it, this port doesn't.
+- ✅ = patched. ❌ = at least one upstream patches it, this migration doesn't.
   — = not patched (and that's expected — upstream doesn't patch it either).
 - Sort `❌` rows to the top.
 - For `❌` rows, the **Notes** cell must name the GenAI semconv operation
@@ -136,7 +136,7 @@ One column per upstream that exists, plus `This port`:
 Do not render a separate `**Gaps:**` bullet list below the table — the
 table itself is the gap list.
 
-**Augment mode.** Split `This port` into `Existed` and `Added this PR`:
+**Augment mode.** Split `This package` into `Existed` and `Added this PR`:
 
 | API method | OpenInference | Existed | Added this PR | Notes |
 |---|---|---|---|---|
@@ -149,7 +149,7 @@ gap; sort it to the top.
 
 ### 2. Gaps and open issues
 
-Genuine **tooling/util gaps** — things the port couldn't do because
+Genuine **tooling/util gaps** — things the migration couldn't do because
 `opentelemetry-util-genai` and/or the GenAI semconv doesn't yet support them
 (missing util-genai factory, attribute not in the registry yet). 
 Reference failing/skipped tests if any.
@@ -169,14 +169,14 @@ same emitted telemetry) are not listed. Look for: patching strategy
 separate); message format (flat OpenInference attributes vs JSON `parts` array);
 streaming wrapper shape; attributes set unconditionally vs gated on
 `is_recording()` / `should_capture_content()`; anything emitted by
-upstream that this port deliberately drops without a one-line rationale.
+upstream that this migration deliberately drops without a one-line rationale.
 
-| Aspect | Upstream | This port | Notes |
+| Aspect | Upstream | This package | Notes |
 |---|---|---|---|
 
 ### 3b. Consistency and old-vs-new coexistence (augment mode only)
 
-**Greenfield port: skip.** Here the risk isn't "is it conformant" but "do
+**Greenfield migration: skip.** Here the risk isn't "is it conformant" but "do
 the additions fit the package they landed in." Compare the **added** code
 against the **pre-existing** code (not the upstream); flag only real
 problems:
@@ -221,12 +221,12 @@ For each unreferenced cassette, walk git history before naming a cause:
 1. Check whether the same cassette is also unreferenced in the upstream
    it came from (for each unreferenced file, search the upstream's
    `tests/` for any reference). If yes, it's an **inherited upstream
-   orphan** — say so plainly; the port is not responsible.
-2. If the cassette IS referenced upstream but not in the port, the port
+   orphan** — say so plainly; the migration is not responsible.
+2. If the cassette IS referenced upstream but not in the migrated package, the migration
    dropped a test. That is **not** a §4b cosmetic note — it's a §4a
    missing variant (or a missing scenario, depending on what the test
    covered). Add it to §4a's table with the upstream test name in Notes,
-   and do not rationalize ("tests were renamed/removed during the port"
+   and do not rationalize ("tests were renamed/removed during the migration"
    without naming the commit is speculation, not analysis).
 
 Never write "appear to be" / "likely" / "safe to delete" without
@@ -235,7 +235,7 @@ which case say "history not checked" so the reviewer does it.
 
 #### 4a. Unit-test matrix per wrapped method
 
-For each method in §1 row where `This port` = ✅:
+For each method in §1 row where `This package` = ✅:
 
 | Variant | Required when |
 |---|---|
@@ -248,7 +248,7 @@ For each method in §1 row where `This port` = ✅:
 | **async streaming × happy** | the method accepts `stream=True` or returns an async stream wrapper |
 | **async streaming × error** | flag if streaming is supported but no error path is exercised at all or error is not recorded on telemetry |
 
-Identify variants by reading the port's `src/` (`is_streaming(kwargs)`,
+Identify variants by reading the migrated package's `src/` (`is_streaming(kwargs)`,
 async `def`, `Stream` / `AsyncStream` wrappers).
 
 | Wrapped method | Missing variants | Notes |
@@ -256,7 +256,7 @@ async `def`, `Stream` / `AsyncStream` wrappers).
 
 #### 4b. Conformance scenarios
 
-For each distinct GenAI semconv operation the port emits (`chat`,
+For each distinct GenAI semconv operation the migrated package emits (`chat`,
 `embeddings`, `execute_tool`, `invoke_agent`, `invoke_workflow`,
 `create_agent`, …) there should be at least one happy-path scenario file under
 `tests/conformance/<op>.py` driven by `run_conformance(...)`. More
@@ -281,7 +281,7 @@ at the `openinference-instrumentation-<lib>` package name, links to an
 OpenInference URL).
 
 **Refactor misses.** One bullet *only if* unit tests re-implement generic
-semconv shape checks inline instead of factoring them into the port's
+semconv shape checks inline instead of factoring them into the migrated package's
 `tests/test_utils.py` helpers (e.g. `assert_all_attributes`,
 `assert_completion_attributes`, `assert_messages_attribute`). There is no
 shared `opentelemetry.test_util_genai.assertions` module — assert directly
@@ -307,7 +307,7 @@ are none, render `_No follow-up issues recommended._`
 
 ## See also
 
-- `.github/skills/port-from-openinference/SKILL.md` — the port skill; it
+- `.github/skills/migrate-from-openinference/SKILL.md` — the migration skill; it
   runs this review at its final step to produce `MIGRATION_REPORT.md`.
 - `.github/skills/write-conformance-tests/SKILL.md` — authoring the
   conformance scenarios this report checks in §4b.
