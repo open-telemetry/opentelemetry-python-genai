@@ -747,7 +747,9 @@ def release_args(args):
         packages = None
         if "packages" in mcfg:
             packages = [
-                pkg for pkg in mcfg["packages"].split() if pkg not in release_packages
+                pkg
+                for pkg in mcfg["packages"].split()
+                if pkg not in release_packages
             ]
         print(f"update {group} packages to {version}")
         update_dependencies(targets, version, packages)
