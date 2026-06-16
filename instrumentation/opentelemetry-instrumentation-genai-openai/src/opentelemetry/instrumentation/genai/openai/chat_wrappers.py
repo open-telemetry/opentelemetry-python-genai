@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from openai import AsyncStream, Stream
 from openai.types.chat import ChatCompletionChunk
@@ -25,6 +25,9 @@ from opentelemetry.util.genai.types import (
 
 from .chat_buffers import ChoiceBuffer
 
+if TYPE_CHECKING:
+    import httpx
+
 
 class _ChatStreamMixin:
     """Chat-specific hooks shared by sync and async stream wrappers."""
@@ -37,6 +40,17 @@ class _ChatStreamMixin:
     _self_service_tier: Optional[str]
     _self_prompt_tokens: Optional[int]
     _self_completion_tokens: Optional[int]
+    _self_headers: Optional[httpx.Headers]
+
+    @property
+    def headers(self) -> Optional[httpx.Headers]:
+        """Headers from the original raw API response, if available.
+
+        Lets callers using ``with_raw_response`` with ``stream=True`` read
+        ``raw_response.headers`` even though the wrapper replaces the
+        underlying stream, whose ``.headers`` was discarded by ``parse()``.
+        """
+        return self._self_headers
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
         if self._self_response_model:
@@ -181,6 +195,7 @@ class ChatStreamWrapper(
         stream: Stream[ChatCompletionChunk],
         invocation: InferenceInvocation,
         capture_content: bool,
+        headers: Optional[httpx.Headers] = None,
     ) -> None:
         super().__init__(stream)
         self._self_invocation = invocation
@@ -191,6 +206,7 @@ class ChatStreamWrapper(
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
+        self._self_headers = headers
 
 
 class AsyncChatStreamWrapper(
@@ -202,6 +218,7 @@ class AsyncChatStreamWrapper(
         stream: AsyncStream[ChatCompletionChunk],
         invocation: InferenceInvocation,
         capture_content: bool,
+        headers: Optional[httpx.Headers] = None,
     ) -> None:
         super().__init__(stream)
         self._self_invocation = invocation
@@ -212,6 +229,7 @@ class AsyncChatStreamWrapper(
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
+        self._self_headers = headers
 
 
 __all__ = [

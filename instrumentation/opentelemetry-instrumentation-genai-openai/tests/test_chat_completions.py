@@ -619,6 +619,38 @@ def test_chat_completion_with_raw_response_streaming(
         )
 
 
+def test_chat_completion_with_raw_response_streaming_exposes_headers(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """Regression test for #46.
+
+    Accessing ``.headers`` on the streaming ``with_raw_response`` wrapper
+    used to raise ``AttributeError``: the headers lived on the
+    ``LegacyAPIResponse`` that was discarded when it was parsed into the
+    underlying stream, and the wrapper exposed no headers of its own.
+    """
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+    # The wrapper now carries the original response headers.
+    assert raw_response.headers is not None
+    assert "text/event-stream" in raw_response.headers.get("content-type", "")
+
+    # Streaming still works through the same wrapper.
+    response = raw_response.parse()
+    assert list(response)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+
 def test_chat_completion_tool_calls_with_content(
     span_exporter, log_exporter, openai_client, instrument_with_content, vcr
 ):

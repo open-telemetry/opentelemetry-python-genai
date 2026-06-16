@@ -46,6 +46,9 @@ def chat_completions_create_v_new(
 
         try:
             result = wrapped(*args, **kwargs)
+            # Capture the raw response headers before parse() discards the
+            # LegacyAPIResponse they live on (with_raw_response + stream=True).
+            raw_response_headers = getattr(result, "headers", None)
             if hasattr(result, "parse"):
                 # result is of type LegacyAPIResponse, call parse to get the actual response
                 parsed_result = result.parse()
@@ -53,7 +56,10 @@ def chat_completions_create_v_new(
                 parsed_result = result
             if is_streaming(kwargs):
                 return ChatStreamWrapper(
-                    parsed_result, chat_invocation, capture_content
+                    parsed_result,
+                    chat_invocation,
+                    capture_content,
+                    headers=raw_response_headers,
                 )
 
             _set_response_properties(
@@ -81,6 +87,9 @@ def async_chat_completions_create_v_new(
 
         try:
             result = await wrapped(*args, **kwargs)
+            # Capture the raw response headers before parse() discards the
+            # LegacyAPIResponse they live on (with_raw_response + stream=True).
+            raw_response_headers = getattr(result, "headers", None)
             if hasattr(result, "parse"):
                 # result is of type LegacyAPIResponse, calling parse to get the actual response
                 parsed_result = result.parse()
@@ -88,7 +97,10 @@ def async_chat_completions_create_v_new(
                 parsed_result = result
             if is_streaming(kwargs):
                 return AsyncChatStreamWrapper(
-                    parsed_result, chat_invocation, capture_content
+                    parsed_result,
+                    chat_invocation,
+                    capture_content,
+                    headers=raw_response_headers,
                 )
 
             _set_response_properties(

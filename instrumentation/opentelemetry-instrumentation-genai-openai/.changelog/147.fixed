@@ -1,0 +1,1 @@
+expose response headers on the streaming with_raw_response chat wrapper
