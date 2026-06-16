@@ -88,7 +88,11 @@ class ConfigSpanAttributesTestCase(TestCase):
         self.assertEqual(span.attributes["gen_ai.request.top_p"], 10)
 
     @mock.patch.dict(
-        os.environ, {"OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "*"}
+        os.environ,
+        {
+            "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "*",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+        },
     )
     def test_option_not_reflected_to_span_attribute_system_instruction(self):
         span = self.generate_and_get_span(

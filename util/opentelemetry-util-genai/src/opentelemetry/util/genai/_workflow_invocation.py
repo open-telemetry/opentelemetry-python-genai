@@ -19,10 +19,8 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
 )
 from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
     gen_ai_json_dumps,
-    get_content_capturing_mode,
-    is_experimental_mode,
+    should_capture_content_on_spans,
 )
 
 
@@ -67,10 +65,7 @@ class WorkflowInvocation(GenAIInvocation):
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, Any]:
-        if not is_experimental_mode() or get_content_capturing_mode() not in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        ):
+        if not should_capture_content_on_spans():
             return {}
         optional_attrs = (
             (
