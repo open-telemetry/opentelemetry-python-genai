@@ -141,6 +141,8 @@ you start one of these tasks:
 - **`write-conformance-tests`** — author conformance scenarios and the
   `test_conformance.py` runner for an instrumentation package.
 
+Please contribute back anything you learn while using the skills that could help improve them!
+
 ## Keep PRs small
 
 One logical change per PR. Don't bundle unrelated fixes, refactors, or

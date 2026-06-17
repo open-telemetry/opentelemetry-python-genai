@@ -265,7 +265,7 @@ scenarios per operation are fine but never required.
 | Operation | Scenario file | Status |
 |---|---|---|
 
-Mention if conformance scenatio is skipped, there are expected_violations, 
+Mention if conformance scenario is skipped, there are expected_violations,
 or `uv run tox -e py312-test-instrumentation-genai-<lib>` fails.
 
 #### 4c. Docstring / README coverage

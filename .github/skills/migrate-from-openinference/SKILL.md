@@ -37,7 +37,7 @@ User specifies the source, e.g. `openinference-instrumentation-crewai`.
   and use `/tmp/openinference/python/instrumentation/<source>/` as the
   source path in step 1.
 
-User may also provide ***target package name**. If not provided: derive it from the source name:  
+User may also provide the **target package name**. If not provided: derive it from the source name:
 - drop the leading `openinference-instrumentation-`. Remaining part should match the instrumented library name as it appears on PyPI. If it's not the case, flag it.
 - The target package name should be `opentelemetry-instrumentation-genai-<lib>` where `<lib>` is the instrumented library name (e.g. `openai`, `anthropic`, `bedrock`). For example:
   - `openinference-instrumentation-openai` → `opentelemetry-instrumentation-genai-openai`
@@ -286,12 +286,12 @@ Update every import. Verify zero `openinference` references remain in
   `BaseInstrumentor`) and the underlying SDK (`openai`, `anthropic`, …) at
   the same range OpenInference was using. 
 - `__version__` in `version.py` should equal the value in
-  `opentelemetry-util-genai/src/opentelemetry/util/genai/version.py` — all
+  `util/opentelemetry-util-genai/src/opentelemetry/util/genai/version.py` — all
   workspace packages share one version. Verify:
 
   ```sh
   diff <(grep ^__version__ instrumentation/<target>/src/opentelemetry/instrumentation/genai/<lib>/version.py) \
-       <(grep ^__version__ opentelemetry-util-genai/src/opentelemetry/util/genai/version.py)
+       <(grep ^__version__ util/opentelemetry-util-genai/src/opentelemetry/util/genai/version.py)
   ```
 
 - Hatchling builds **require a `README.md` or `README.rst`**. Rewrite it to
