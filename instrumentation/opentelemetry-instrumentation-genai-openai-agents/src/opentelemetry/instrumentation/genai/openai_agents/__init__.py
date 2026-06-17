@@ -72,14 +72,14 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
 
         When ``True``, the default exporter is removed via
         ``agents.tracing.set_trace_processors`` so traces flow only through
-        OpenTelemetry. Any other processors previously registered by the
-        user are also removed; if you have a custom processor list, manage
-        it yourself instead of using this flag.
+        OpenTelemetry while this instrumentor is active. Previously registered
+        processors are restored on ``uninstrument()``.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._processor: GenAITracingProcessor | None = None
+        self._previous_processors: tuple[Any, ...] | None = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -98,6 +98,13 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         self._processor = GenAITracingProcessor(handler, provider)
 
         if kwargs.get("disable_openai_trace_export"):
+            trace_provider = get_trace_provider()
+            current = getattr(
+                getattr(trace_provider, "_multi_processor", None),
+                "_processors",
+                (),
+            )
+            self._previous_processors = tuple(current)
             set_trace_processors([self._processor])
         else:
             add_trace_processor(self._processor)
@@ -106,13 +113,17 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         if self._processor is None:
             return
 
-        provider = get_trace_provider()
-        current = getattr(
-            getattr(provider, "_multi_processor", None), "_processors", ()
-        )
-        filtered = [p for p in current if p is not self._processor]
-        set_trace_processors(filtered)
+        if self._previous_processors is not None:
+            set_trace_processors(list(self._previous_processors))
+        else:
+            provider = get_trace_provider()
+            current = getattr(
+                getattr(provider, "_multi_processor", None), "_processors", ()
+            )
+            filtered = [p for p in current if p is not self._processor]
+            set_trace_processors(filtered)
         try:
             self._processor.shutdown()
         finally:
             self._processor = None
+            self._previous_processors = None

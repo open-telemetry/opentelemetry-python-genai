@@ -67,6 +67,26 @@ def test_instrument_with_disable_openai_trace_export_replaces_processors() -> (
         instrumentor.uninstrument()
 
 
+def test_uninstrument_restores_processors_in_replace_mode() -> None:
+    baseline = [
+        agents.tracing.processors.default_processor(),
+        agents.tracing.processors.default_processor(),
+    ]
+    agents.tracing.set_trace_processors(baseline)
+
+    instrumentor = OpenAIAgentsInstrumentor()
+    try:
+        instrumentor.instrument(disable_openai_trace_export=True)
+        replaced = _registered_processors()
+        assert len(replaced) == 1
+        assert isinstance(replaced[0], GenAITracingProcessor)
+    finally:
+        instrumentor.uninstrument()
+
+    restored = _registered_processors()
+    assert restored == tuple(baseline)
+
+
 def test_double_instrument_is_noop() -> None:
     instrumentor = OpenAIAgentsInstrumentor()
     try:
