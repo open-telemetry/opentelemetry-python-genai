@@ -15,13 +15,12 @@ Steps:
 OpenTelemetry LangChain instrumentation traces both LLM calls.
 """
 
-from typing import Annotated
+from typing import Annotated, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from typing_extensions import TypedDict
 
 from opentelemetry import _logs, metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (

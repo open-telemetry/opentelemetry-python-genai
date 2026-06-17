@@ -46,6 +46,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
 from .patch import (
+    async_messages_create,
     messages_create,
     messages_stream,
 )
@@ -96,6 +97,11 @@ class AnthropicInstrumentor(BaseInstrumentor):
         )
         wrap_function_wrapper(
             "anthropic.resources.messages",
+            "AsyncMessages.create",
+            async_messages_create(handler),
+        )
+        wrap_function_wrapper(
+            "anthropic.resources.messages",
             "Messages.stream",
             messages_stream(handler),
         )
@@ -109,6 +115,10 @@ class AnthropicInstrumentor(BaseInstrumentor):
 
         unwrap(
             anthropic.resources.messages.Messages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
+            "create",
+        )
+        unwrap(
+            anthropic.resources.messages.AsyncMessages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
             "create",
         )
         unwrap(

@@ -7,7 +7,8 @@
 import os
 
 import pytest
-from anthropic import Anthropic
+import pytest_asyncio
+from anthropic import Anthropic, AsyncAnthropic
 
 from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.test_util_genai.instrumentor import instrument
@@ -30,6 +31,16 @@ def environment():
 def anthropic_client():
     """Create and return an Anthropic client."""
     return Anthropic()
+
+
+@pytest_asyncio.fixture
+async def async_anthropic_client():
+    """Create and return an async Anthropic client."""
+    client = AsyncAnthropic()
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 @pytest.fixture(scope="module")
