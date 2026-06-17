@@ -168,6 +168,7 @@ Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (
 `self._self_invocation`) so it isn't forwarded to the wrapped stream. Don't reimplement iteration,
 finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
 isn't enough, add the capability here rather than working around it.
+
 ### Exception handling
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the
@@ -185,6 +186,10 @@ isn't enough, add the capability here rather than working around it.
 
 - For every public API instrumented, cover sync/async variants when both exist.
 - Cover happy path and error scenarios.
+- For streamed responses, cover two exception paths — a stream-side error raised by the SDK
+  mid-iteration (e.g. an injected `ConnectionError`) and a caller-side error raised inside the
+  `with …stream(…) as stream:` block before the stream is drained. Assert both re-raise unchanged
+  and still finalize the span with the matching `error.type`.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.

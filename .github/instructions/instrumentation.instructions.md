@@ -61,7 +61,8 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - For every public API instrumented, cover sync/async variants when both exist.
 - Cover streaming and non-streaming variants when both exist.
 - Cover happy path and error scenarios. For error scenarios, at minimum include: provider error /
-  endpoint unavailable, stream interrupted by network, stream closed early by the caller.
+  endpoint unavailable, stream interrupted by network, stream closed early by the caller, and a
+  caller-side exception raised inside the `with …stream(…) as stream:` block before the stream is drained.
 - Use recorded VCR cassettes for provider calls. No live-key-only tests; skipping on missing key
   is not acceptable.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
