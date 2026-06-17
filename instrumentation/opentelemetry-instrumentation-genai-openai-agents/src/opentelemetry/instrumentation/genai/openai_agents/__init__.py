@@ -6,12 +6,11 @@
 Registers a :class:`GenAITracingProcessor` with the agents library's
 public ``add_trace_processor`` extension API. The processor reacts
 synchronously to the agents library's own ``Trace`` / ``AgentSpan`` /
-``FunctionSpan`` / ``HandoffSpan`` start/end callbacks and turns them
+``FunctionSpan`` start/end callbacks and turns them
 into ``invoke_workflow`` / ``invoke_agent`` / ``execute_tool`` spans via
-``opentelemetry-util-genai`` (plus a raw ``handoff`` span until handoff
-semconv lands).
+``opentelemetry-util-genai``.
 
-LLM-level spans (``chat`` / ``responses`` / ``embeddings``) are produced
+LLM-level spans (``chat`` / ``embeddings``) are produced
 by ``opentelemetry-instrumentation-genai-openai`` when both packages are
 installed; this instrumentation does not emit them.
 
