@@ -1,0 +1,4 @@
+Switch instrumentation to use util-genai instead of hand-rolled signals.
+Stop capturing chat, embeddings, speech, and transcription spans — those are covered by the OpenAI instrumentation. 
+Remove handoff and guardrail spans (not yet defined in semantic convention and not implemented 
+by genai-util).
