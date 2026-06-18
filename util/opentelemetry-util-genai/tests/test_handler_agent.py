@@ -412,7 +412,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         self.handler = TelemetryHandler(tracer_provider=tracer_provider)
 
     def test_span_kind_client(self):
-        invocation = self.handler.invoke_remote_agent()
+        invocation = self.handler.invoke_remote_agent("openai")
         invocation.stop()
         assert (
             self.span_exporter.get_finished_spans()[0].kind == SpanKind.CLIENT
@@ -420,6 +420,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
 
     def test_server_attributes(self):
         invocation = self.handler.invoke_remote_agent(
+            "openai",
             server_address="api.openai.com",
             server_port=443,
         )
@@ -430,6 +431,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
 
     def test_all_attributes(self):
         invocation = self.handler.invoke_remote_agent(
+            "openai",
             request_model="gpt-4",
             server_address="api.openai.com",
             server_port=443,
@@ -452,7 +454,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert attrs[GenAI.GEN_AI_REQUEST_MODEL] == "gpt-4"
 
     def test_fail_sets_error_status(self):
-        invocation = self.handler.invoke_remote_agent()
+        invocation = self.handler.invoke_remote_agent("openai")
         invocation.fail(RuntimeError("remote agent crashed"))
 
         span = self.span_exporter.get_finished_spans()[0]
@@ -461,6 +463,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
 
     def test_context_manager_success(self):
         with self.handler.invoke_remote_agent(
+            "openai",
             request_model="gpt-4",
             server_address="api.openai.com",
             agent_name="CM Remote Agent",
@@ -473,7 +476,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
 
     def test_context_manager_error(self):
         with self.assertRaises(ValueError):
-            with self.handler.invoke_remote_agent():
+            with self.handler.invoke_remote_agent("openai"):
                 raise ValueError("remote error")
 
         assert (
@@ -512,6 +515,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
         invocation = handler.invoke_remote_agent(
+            "openai",
             request_model="agent-model",
             agent_name="Math Tutor",
             server_address="agent.example.com",
@@ -583,6 +587,7 @@ class TestAgentInvocationMetrics(TestBase):
             meter_provider=self.meter_provider,
         )
         invocation = handler.invoke_remote_agent(
+            "openai",
             request_model="model",
             server_address="agent.example.com",
             server_port=443,
