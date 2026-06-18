@@ -515,7 +515,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
         invocation = handler.invoke_remote_agent(
-            "openai",
+            "test-provider",
             request_model="agent-model",
             agent_name="Math Tutor",
             server_address="agent.example.com",
@@ -525,6 +525,9 @@ class TestRemoteAgentInvocation(unittest.TestCase):
 
         assert (
             captured_attributes[GenAI.GEN_AI_OPERATION_NAME] == "invoke_agent"
+        )
+        assert (
+            captured_attributes[GenAI.GEN_AI_PROVIDER_NAME] == "test-provider"
         )
         assert captured_attributes[GenAI.GEN_AI_REQUEST_MODEL] == "agent-model"
         assert captured_attributes[GenAI.GEN_AI_AGENT_NAME] == "Math Tutor"
@@ -587,7 +590,7 @@ class TestAgentInvocationMetrics(TestBase):
             meter_provider=self.meter_provider,
         )
         invocation = handler.invoke_remote_agent(
-            "openai",
+            "prov",
             request_model="model",
             server_address="agent.example.com",
             server_port=443,
