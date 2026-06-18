@@ -68,24 +68,24 @@ class RetrievalInvocation(GenAIInvocation):
             else _operation_name,
             span_kind=SpanKind.CLIENT,
         )
-        self.data_source_id = data_source_id
-        self.provider = provider
-        self.request_model = request_model
-        self.server_address = server_address
-        self.server_port = server_port
+        self._data_source_id: str | None = data_source_id
+        self._provider: str | None = provider
+        self._request_model: str | None = request_model
+        self._server_address: str | None = server_address
+        self._server_port: int | None = server_port
         self.top_k: float | None = None
         self.query_text: str | None = None
         self.documents: Sequence[Mapping[str, Any]] | None = None
-        self._start(self._get_base_attributes())
+        self._start(self._get_start_attributes())
 
-    def _get_base_attributes(self) -> dict[str, AttributeValue]:
+    def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_DATA_SOURCE_ID, self.data_source_id),
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data_source_id),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -95,10 +95,10 @@ class RetrievalInvocation(GenAIInvocation):
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         # data_source_id intentionally excluded — high cardinality
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,

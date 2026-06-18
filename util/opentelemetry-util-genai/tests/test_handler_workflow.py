@@ -178,7 +178,7 @@ class TelemetryHandlerWorkflowContextManagerTest(_WorkflowTestBase):
     def test_workflow_context_manager_default_invocation(self) -> None:
         with self.handler.workflow() as inv:
             self.assertIsInstance(inv, WorkflowInvocation)
-            self.assertIsNone(inv.name)
+            self.assertIsNone(inv._name)
             self.assertEqual(inv._operation_name, "invoke_workflow")
 
 
