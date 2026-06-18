@@ -1,0 +1,1 @@
+Emit gen_ai.provider.name instead of deprecated gen_ai.system for Anthropic spans
