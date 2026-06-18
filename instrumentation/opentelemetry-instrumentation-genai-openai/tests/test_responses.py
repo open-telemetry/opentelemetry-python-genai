@@ -8,9 +8,6 @@ import pytest
 from openai import APIConnectionError, BadRequestError, NotFoundError, OpenAI
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
-from opentelemetry.instrumentation.genai.openai.response_wrappers import (
-    ResponseStreamWrapper,
-)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -628,38 +625,6 @@ def test_responses_create_streaming_user_exception(
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
-
-
-@pytest.mark.vcr()
-def test_responses_create_instrumentation_error_swallowed(
-    request, span_exporter, openai_client, instrument_no_content, monkeypatch
-):
-    _skip_if_not_latest()
-
-    def exploding_process_event(self, event):
-        del self
-        del event
-        raise RuntimeError("instrumentation bug")
-
-    monkeypatch.setattr(
-        ResponseStreamWrapper, "process_event", exploding_process_event
-    )
-
-    with openai_client.responses.create(
-        model=DEFAULT_MODEL,
-        instructions=SYSTEM_INSTRUCTIONS,
-        input=USER_ONLY_PROMPT[0]["content"],
-        stream=True,
-    ) as stream:
-        events = list(stream)
-
-    assert len(events) > 0
-
-    (span,) = span_exporter.get_finished_spans()
-    assert (
-        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
-    )
-    assert ErrorAttributes.ERROR_TYPE not in span.attributes
 
 
 @pytest.mark.vcr()

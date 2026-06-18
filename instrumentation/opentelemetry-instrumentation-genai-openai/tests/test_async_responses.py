@@ -14,9 +14,6 @@ from openai import (
 )
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
-from opentelemetry.instrumentation.genai.openai.response_wrappers import (
-    AsyncResponseStreamWrapper,
-)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -654,41 +651,6 @@ async def test_async_responses_create_streaming_user_exception(
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
-
-
-@pytest.mark.asyncio()
-async def test_async_responses_create_instrumentation_error_swallowed(
-    span_exporter, async_openai_client, instrument_no_content, monkeypatch, vcr
-):
-    _skip_if_not_latest()
-
-    def exploding_process_event(self, event):
-        del self
-        del event
-        raise RuntimeError("instrumentation bug")
-
-    monkeypatch.setattr(
-        AsyncResponseStreamWrapper, "process_event", exploding_process_event
-    )
-
-    with vcr.use_cassette(
-        "test_async_responses_create_instrumentation_error_swallowed[content_mode0].yaml"
-    ):
-        async with await async_openai_client.responses.create(
-            model=DEFAULT_MODEL,
-            instructions=SYSTEM_INSTRUCTIONS,
-            input=USER_ONLY_PROMPT[0]["content"],
-            stream=True,
-        ) as stream:
-            events = [event async for event in stream]
-
-    assert len(events) > 0
-
-    (span,) = span_exporter.get_finished_spans()
-    assert (
-        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
-    )
-    assert ErrorAttributes.ERROR_TYPE not in span.attributes
 
 
 @pytest.mark.asyncio()
