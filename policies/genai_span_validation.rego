@@ -3,7 +3,7 @@
 # (name, type, presence) for spans matching its definitions; this file adds
 # cross-cutting span-level invariants the registry can't easily express.
 #
-# Two classes of rules, both keyed on `gen_ai.operation.name`:
+# Three classes of rules, all keyed on `gen_ai.operation.name`:
 #
 #   1. Span name format → `violation`
 #      (`{operation_name} {request_model}` for inference / embeddings,
@@ -17,6 +17,9 @@
 #      semantic-conventions/docs/gen-ai/gen-ai-spans.md and
 #      gen-ai-agent-spans.md (the MD flattens the YAML inheritance chain
 #      via `extends:`, so it's the right place to source from).
+#      `invoke_agent` is the one operation whose manifest also depends on
+#      span kind: semconv defines separate internal (same-process) and
+#      client (remote) spans, and only the client span carries server.*.
 #
 # The "set when known" Recommended subset (sampling parameters like
 # `frequency_penalty`, `max_tokens`; provider-side caches; conditionally-
@@ -99,21 +102,26 @@ deny contains _span_finding(
 
 # ─── Per-operation expected attributes (violation) ──────────────────────────
 
-_expected_for_op["chat"] := _inference_expected
+# `_expected_for_op(op, kind)` returns the expected-attribute manifest for a
+# span given its `gen_ai.operation.name` and span kind. Most operations ignore
+# kind (second arg is a wildcard); invoke_agent dispatches on it because
+# semconv splits it into separate internal and client spans. Undefined (→ no
+# violations) for an unmapped op or an unexpected agent span kind.
+_expected_for_op("chat", _) := _inference_expected
 
-_expected_for_op["generate_content"] := _inference_expected
+_expected_for_op("generate_content", _) := _inference_expected
 
-_expected_for_op["text_completion"] := _inference_expected
+_expected_for_op("text_completion", _) := _inference_expected
 
-_expected_for_op["embeddings"] := _embeddings_expected
+_expected_for_op("embeddings", _) := _embeddings_expected
 
-_expected_for_op["execute_tool"] := _execute_tool_expected
+_expected_for_op("execute_tool", _) := _execute_tool_expected
 
-_expected_for_op["invoke_agent"] := _invoke_agent_expected
+_expected_for_op("invoke_agent", kind) := _invoke_agent_expected[kind]
 
-_expected_for_op["create_agent"] := _create_agent_expected
+_expected_for_op("create_agent", _) := _create_agent_expected
 
-_expected_for_op["retrieval"] := _retrieval_expected
+_expected_for_op("retrieval", _) := _retrieval_expected
 
 # Inference (chat / generate_content / text_completion).
 # Required: gen_ai.operation.name, gen_ai.provider.name.
@@ -156,11 +164,17 @@ _execute_tool_expected := {
 	"gen_ai.tool.type",
 }
 
-# Invoke agent.
-# Required: gen_ai.operation.name, gen_ai.provider.name.
-_invoke_agent_expected := {
+# Invoke agent (internal)
+# Required: gen_ai.operation.name
+_invoke_agent_expected["internal"] := {
 	"gen_ai.operation.name",
-	"gen_ai.provider.name",
+}
+
+# Invoke agent (client)
+# Required: gen_ai.operation.name, server.address
+_invoke_agent_expected["client"] := {
+	"gen_ai.operation.name",
+	"server.address",
 }
 
 # Create agent. After creation completes the provider returns an agent.id;
@@ -193,7 +207,7 @@ deny contains _span_finding(
 ) if {
 	input.sample.span
 	op := _attr_value(input.sample.span, "gen_ai.operation.name")
-	expected := _expected_for_op[op]
+	expected := _expected_for_op(op, input.sample.span.kind)
 	some attr_name in expected
 	not _has_attr(input.sample.span, attr_name)
 }
