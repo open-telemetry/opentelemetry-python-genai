@@ -67,12 +67,12 @@ class AgentInvocation(GenAIInvocation):
         self.request_model = request_model
         self.server_address = server_address
         self.server_port = server_port
+        self.provider = provider
 
         self.agent_name: str | None = agent_name
         self.agent_id: str | None = None
         self.agent_description: str | None = None
         self.agent_version: str | None = None
-        self.provider: str | None = provider
 
         self.conversation_id: str | None = None
         self.data_source_id: str | None = None
