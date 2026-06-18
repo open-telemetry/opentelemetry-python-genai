@@ -10,12 +10,12 @@
 {% for text, values in sections[section][category].items() %}
 {% if "\n  - " in text or '\n  * ' in text %}
 {%- set main_text, sub_items = text.split('\n', 1) %}
-- {{ main_text }} ({{ values|join(', ') }})
+- {{ main_text }}{% if values %} ({{ values|join(', ') }}){% endif +%}
 {% if sub_items %}
   {{- sub_items }}
 {% endif %}
 {% else %}
-- {{ text }} ({{ values|join(', ') }})
+- {{ text }}{% if values %} ({{ values|join(', ') }}){% endif +%}
 {% endif %}
 {% endfor %}
 
