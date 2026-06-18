@@ -44,6 +44,7 @@ class AgentInvocation(GenAIInvocation):
         logger: Logger,
         completion_hook: CompletionHook,
         *,
+        provider: str | None = None,
         span_kind: SpanKind = SpanKind.INTERNAL,
         request_model: str | None = None,
         server_address: str | None = None,
@@ -71,6 +72,7 @@ class AgentInvocation(GenAIInvocation):
         self.agent_id: str | None = None
         self.agent_description: str | None = None
         self.agent_version: str | None = None
+        self.provider: str | None = provider
 
         self.conversation_id: str | None = None
         self.data_source_id: str | None = None
@@ -102,6 +104,7 @@ class AgentInvocation(GenAIInvocation):
     def _get_base_attributes(self) -> dict[str, Any]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
+            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (GenAI.GEN_AI_AGENT_NAME, self.agent_name),
             (server_attributes.SERVER_ADDRESS, self.server_address),
@@ -114,6 +117,7 @@ class AgentInvocation(GenAIInvocation):
 
     def _get_common_attributes(self) -> dict[str, Any]:
         optional_attrs = (
+            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (server_attributes.SERVER_ADDRESS, self.server_address),
             (server_attributes.SERVER_PORT, self.server_port),
@@ -174,6 +178,7 @@ class AgentInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, Any]:
         optional_attrs = (
+            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (server_attributes.SERVER_ADDRESS, self.server_address),
             (server_attributes.SERVER_PORT, self.server_port),
