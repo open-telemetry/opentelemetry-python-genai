@@ -1,0 +1,1 @@
+Added log and metrics provider to langchain genai utils handler ([#4214](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4214))
