@@ -92,6 +92,9 @@ class InferenceInvocation(GenAIInvocation):
         self.cache_creation_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
         self.tool_definitions: list[ToolDefinition] | None = None
+        self.top_k: float | None = None
+        self.request_choice_count: int | None = None
+        self.output_type: str | None = None
         self._start(self._get_base_attributes())
 
     def _get_message_attributes(self, *, for_span: bool) -> dict[str, Any]:
@@ -138,6 +141,7 @@ class InferenceInvocation(GenAIInvocation):
         optional_attrs = (
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
             (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
+            (GenAI.GEN_AI_REQUEST_TOP_K, self.top_k),
             (GenAI.GEN_AI_REQUEST_FREQUENCY_PENALTY, self.frequency_penalty),
             (GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY, self.presence_penalty),
             (GenAI.GEN_AI_REQUEST_MAX_TOKENS, self.max_tokens),
@@ -148,6 +152,8 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_ID, self.response_id),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens),
+            (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
+            (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
                 GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
                 self.cache_creation_input_tokens,
