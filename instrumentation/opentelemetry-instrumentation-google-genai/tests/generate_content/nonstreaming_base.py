@@ -342,6 +342,9 @@ class NonStreamingTestCase(TestCase):
             event.attributes["gen_ai.usage.cache_read.input_tokens"],
             50,
         )
+        self.assertNotIn(
+            gen_ai_attributes.GEN_AI_RESPONSE_ID, event.attributes
+        )
         self.assertEqual(
             event.attributes["gen_ai.usage.reasoning.output_tokens"],
             17,
@@ -392,6 +395,7 @@ class NonStreamingTestCase(TestCase):
             text="Some response content",
             cached_tokens=50,
             thinking_tokens=17,
+            response_id="qwerty17",
         )
         self.generate_content(
             model="gemini-2.0-flash",
@@ -407,6 +411,9 @@ class NonStreamingTestCase(TestCase):
         )
         event = self.otel.get_event_named(
             "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            event.attributes[gen_ai_attributes.GEN_AI_RESPONSE_ID], "qwerty17"
         )
         self.assertEqual(
             event.attributes["gen_ai.usage.cache_read.input_tokens"],
@@ -468,6 +475,7 @@ class NonStreamingTestCase(TestCase):
             text="Some response content",
             cached_tokens=50,
             thinking_tokens=19,
+            response_id="qwerty17",
         )
         self.generate_content(
             model="gemini-2.0-flash",
@@ -483,6 +491,9 @@ class NonStreamingTestCase(TestCase):
         self.assertEqual(
             span.attributes["gen_ai.usage.cache_read.input_tokens"],
             50,
+        )
+        self.assertEqual(
+            span.attributes[gen_ai_attributes.GEN_AI_RESPONSE_ID], "qwerty17"
         )
         self.assertEqual(
             span.attributes["gen_ai.usage.reasoning.output_tokens"],
