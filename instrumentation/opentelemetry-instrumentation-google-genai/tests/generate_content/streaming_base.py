@@ -75,14 +75,21 @@ class StreamingTestCase(TestCase):
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):
         # Tokens should not be aggregated in streaming. Cumulative counts are returned on each response.
-        self.configure_valid_response(input_tokens=3, output_tokens=5)
-        self.configure_valid_response(input_tokens=3, output_tokens=5)
-        self.configure_valid_response(input_tokens=3, output_tokens=5)
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=5, response_id="qwerty17"
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=5, response_id="qwerty18"
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=5, response_id="qwerty19"
+        )
 
         self.generate_content(model="gemini-2.0-flash", contents="Some input")
 
         self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.response.id"], "qwerty19")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 3)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
 
