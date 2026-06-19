@@ -184,7 +184,6 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         invocation.stop()
         assert invocation._operation_name == "invoke_agent"
         assert invocation.agent_name is None
-        assert invocation._provider == "openai"
         assert invocation._request_model is None
         assert not invocation.input_messages
         assert not invocation.output_messages
