@@ -64,7 +64,7 @@ class AgentInvocation(GenAIInvocation):
             else _operation_name,
             span_kind=span_kind,
         )
-        self._provider: str = provider
+        self._provider: str | None = provider
         self._request_model: str | None = request_model
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
