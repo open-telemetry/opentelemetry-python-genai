@@ -1,0 +1,2 @@
+Restricted start-time sampling attributes to invocation construction time; 
+they should not be settable after start.
