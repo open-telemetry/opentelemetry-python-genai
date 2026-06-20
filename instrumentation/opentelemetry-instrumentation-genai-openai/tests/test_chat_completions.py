@@ -1096,31 +1096,6 @@ def test_chat_completion_streaming_close_exception_propagates_when_first(
     assert "RuntimeError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
 
 
-def test_chat_completion_streaming_instrumentation_finalize_errors_swallowed(
-    span_exporter, openai_client, instrument_with_content, vcr, monkeypatch
-):
-    if not is_experimental_mode():
-        pytest.skip("new stream wrapper only")
-
-    kwargs = {
-        "model": DEFAULT_MODEL,
-        "messages": USER_ONLY_PROMPT,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
-
-    with vcr.use_cassette("test_chat_completion_streaming.yaml"):
-        response = openai_client.chat.completions.create(**kwargs)
-
-        def stop_raises():
-            raise RuntimeError("instrumentation failure")
-
-        monkeypatch.setattr(response, "_on_stream_end", stop_raises)
-        response.close()
-
-    assert span_exporter.get_finished_spans() == ()
-
-
 def test_chat_completion_streaming_not_complete(
     span_exporter, log_exporter, openai_client, instrument_with_content, vcr
 ):

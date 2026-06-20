@@ -80,7 +80,7 @@ class SyncStreamWrapper(
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
         if exc_val is not None:
-            self._safe_finalize_failure(exc_val)
+            self._finalize_failure(exc_val)
             try:
                 self._self_stream.close()
             except Exception:  # pylint: disable=broad-exception-caught
@@ -97,9 +97,9 @@ class SyncStreamWrapper(
         try:
             self._self_stream.close()
         except Exception as error:
-            self._safe_finalize_failure(error)
+            self._finalize_failure(error)
             raise
-        self._safe_finalize_success()
+        self._finalize_success()
 
     def __iter__(self):
         # Override ``ObjectProxy.__iter__`` so iteration drives ``__next__``
@@ -111,15 +111,12 @@ class SyncStreamWrapper(
         try:
             chunk = next(self._self_iterator)
         except StopIteration:
-            self._safe_finalize_success()
+            self._finalize_success()
             raise
         except Exception as error:
-            self._safe_finalize_failure(error)
+            self._finalize_failure(error)
             raise
-        try:
-            self._process_chunk(chunk)
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            self._handle_process_chunk_error(error)
+        self._process_chunk(chunk)
         return chunk
 
     def _finalize_success(self) -> None:
@@ -134,24 +131,6 @@ class SyncStreamWrapper(
         self._self_finalized = True
         self._on_stream_error(error)
 
-    def _safe_finalize_success(self) -> None:
-        try:
-            self._finalize_success()
-        except Exception:  # pylint: disable=broad-exception-caught
-            _logger.debug(
-                "GenAI stream instrumentation error during finalization",
-                exc_info=True,
-            )
-
-    def _safe_finalize_failure(self, error: BaseException) -> None:
-        try:
-            self._finalize_failure(error)
-        except Exception:  # pylint: disable=broad-exception-caught
-            _logger.debug(
-                "GenAI stream instrumentation error during failure finalization",
-                exc_info=True,
-            )
-
     @abstractmethod
     def _process_chunk(self, chunk: ChunkT) -> None:
         """Process one stream chunk for telemetry."""
@@ -163,13 +142,6 @@ class SyncStreamWrapper(
     @abstractmethod
     def _on_stream_error(self, error: BaseException) -> None:
         """Finalize the stream with failure."""
-
-    @staticmethod
-    def _handle_process_chunk_error(_error: Exception) -> None:
-        _logger.debug(
-            "GenAI stream instrumentation error during chunk processing",
-            exc_info=True,
-        )
 
 
 class AsyncStreamWrapper(
@@ -207,7 +179,7 @@ class AsyncStreamWrapper(
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
         if exc_val is not None:
-            self._safe_finalize_failure(exc_val)
+            self._finalize_failure(exc_val)
             try:
                 await self._self_stream.close()
             except Exception:  # pylint: disable=broad-exception-caught
@@ -226,9 +198,13 @@ class AsyncStreamWrapper(
         try:
             await self._self_stream.close()
         except Exception as error:
-            self._safe_finalize_failure(error)
+            self._finalize_failure(error)
+            _logger.debug(
+                "GenAI stream close error during close",
+                exc_info=True,
+            )
             raise
-        self._safe_finalize_success()
+        self._finalize_success()
 
     def __aiter__(self):
         # Override ``ObjectProxy.__aiter__`` so iteration drives ``__anext__``
@@ -240,15 +216,13 @@ class AsyncStreamWrapper(
         try:
             chunk = await anext(self._self_aiter)
         except StopAsyncIteration:
-            self._safe_finalize_success()
+            self._finalize_success()
             raise
         except Exception as error:
-            self._safe_finalize_failure(error)
+            self._finalize_failure(error)
             raise
-        try:
-            self._process_chunk(chunk)
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            self._handle_process_chunk_error(error)
+
+        self._process_chunk(chunk)
         return chunk
 
     def _finalize_success(self) -> None:
@@ -263,24 +237,6 @@ class AsyncStreamWrapper(
         self._self_finalized = True
         self._on_stream_error(error)
 
-    def _safe_finalize_success(self) -> None:
-        try:
-            self._finalize_success()
-        except Exception:  # pylint: disable=broad-exception-caught
-            _logger.debug(
-                "GenAI stream instrumentation error during finalization",
-                exc_info=True,
-            )
-
-    def _safe_finalize_failure(self, error: BaseException) -> None:
-        try:
-            self._finalize_failure(error)
-        except Exception:  # pylint: disable=broad-exception-caught
-            _logger.debug(
-                "GenAI stream instrumentation error during failure finalization",
-                exc_info=True,
-            )
-
     @abstractmethod
     def _process_chunk(self, chunk: ChunkT) -> None:
         """Process one stream chunk for telemetry."""
@@ -292,13 +248,6 @@ class AsyncStreamWrapper(
     @abstractmethod
     def _on_stream_error(self, error: BaseException) -> None:
         """Finalize the stream with failure."""
-
-    @staticmethod
-    def _handle_process_chunk_error(_error: Exception) -> None:
-        _logger.debug(
-            "GenAI stream instrumentation error during chunk processing",
-            exc_info=True,
-        )
 
 
 __all__ = [

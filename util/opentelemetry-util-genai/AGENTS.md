@@ -50,7 +50,7 @@ The returned object can also be used as a context manager (`with ... as invocati
 The above factories must map 1:1 to distinct semconv operation types (inference, embeddings,
 retrieval, tool execution, agent invocation, workflow invocation). Names must match the operation
 unambiguously — for example, `create_agent` and `invoke_agent` are different operations, so a
-single `agent()` would be ambiguous and is not acceptable. Add a new factory per operation
+single `agent()` would be ambiguous and is not acceptable. Add a new factory per operation type
 instead.
 
 Factory names are Python-style singular verbs (`inference`, `embedding`, `retrieval`, `tool`, `workflow`); the op names
@@ -60,6 +60,42 @@ Factory methods must accept all attributes that semconv marks as important for s
 decisions as parameters, so they are on the span at creation time. Attributes that are also
 marked required by semconv must be required parameters (no default value). Operation name
 is usually hardcoded in specific invocation and does not need to be passed.
+
+### Streaming responses
+
+A streamed response only finishes once the caller has drained the stream, so the invocation must
+stay open until then. Do **not** call `invocation.stop()` when the SDK returns the stream — the
+span would close before any chunks arrive.
+
+Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
+`opentelemetry.util.genai.stream` (the public, supported helpers). The base class proxies the
+underlying SDK stream, drives iteration, and finalizes telemetry exactly once on success, error,
+or `close()`. Subclasses pass the SDK stream to `super().__init__(stream)` and implement three
+hooks:
+
+- `_process_chunk(chunk)` — accumulate per-chunk state (e.g. response model, finish reasons,
+  token usage, streamed content) onto the invocation.
+- `_on_stream_end()` — finalize on success; set the accumulated response attributes and call
+  `invocation.stop()`.
+- `_on_stream_error(error)` — finalize on failure; call `invocation.fail(error)`.
+
+```python
+class MyStreamWrapper(SyncStreamWrapper[Chunk]):
+    def __init__(self, stream, invocation, capture_content):
+        super().__init__(stream)
+        self._self_invocation = invocation
+        ...
+
+    def _process_chunk(self, chunk): ...      # accumulate state
+    def _on_stream_end(self): self._self_invocation.stop()
+    def _on_stream_error(self, error): self._self_invocation.fail(error)
+```
+
+The hooks are called internally by the wrapper lifecycle.
+Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (e.g.
+`self._self_invocation`) so it isn't forwarded to the wrapped stream. Don't reimplement iteration,
+finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
+isn't enough, add the capability here rather than working around it.
 
 ### Anti-patterns
 

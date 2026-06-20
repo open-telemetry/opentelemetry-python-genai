@@ -1,25 +1,23 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
-import functools
 import json
 import os
-from typing import Any, AsyncIterator, Awaitable, Iterator, Optional, Union
+from collections.abc import Callable
+from typing import Any, Optional, Union
 
 from google.genai.models import AsyncModels, Models
 from google.genai.models import t as transformers
 from google.genai.types import (
     ContentListUnion,
     ContentListUnionDict,
-    ContentUnion,
     GenerateContentConfig,
     GenerateContentConfigOrDict,
     GenerateContentResponse,
     Tool,
-    ToolListUnionDict,
     ToolUnionDict,
 )
+from wrapt import wrap_function_wrapper
 
 from opentelemetry import context as context_api
 from opentelemetry.semconv._incubating.attributes import (
@@ -34,7 +32,6 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import get_content_capturing_mode
 from opentelemetry.util.types import AttributeValue
 
 from .allowlist_util import AllowList
@@ -129,18 +126,6 @@ def _determine_genai_system(models_object: Union[Models, AsyncModels]):
     if vertexai_attr:
         return gen_ai_attributes.GenAiSystemValues.VERTEX_AI.name.lower()
     return gen_ai_attributes.GenAiSystemValues.GEMINI.name.lower()
-
-
-def _to_dict(value: object):
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "model_dump"):
-        try:
-            return value.model_dump()
-        except TypeError:
-            return {"ModelName": str(value)}
-
-    return json.loads(json.dumps(value))
 
 
 def _model_dump_to_tool_definition(tool: Any) -> ToolDefinition:
@@ -279,57 +264,49 @@ async def _to_tool_definition_async(
     return _to_tool_definition_common(tool)
 
 
-def _create_request_attributes(
-    config: Optional[GenerateContentConfigOrDict],
+def _apply_request_attributes(
+    config: GenerateContentConfig,
     allow_list: AllowList,
-) -> dict[str, AttributeValue]:
-    if not config:
-        return {}
-    config = _to_dict(config)
+    invocation: InferenceInvocation,
+) -> None:
+    invocation.temperature = config.temperature
+    invocation.top_p = config.top_p
+    invocation.top_k = config.top_k
+    invocation.request_choice_count = config.candidate_count
+    invocation.max_tokens = config.max_output_tokens
+    invocation.stop_sequences = config.stop_sequences
+    invocation.frequency_penalty = config.frequency_penalty
+    invocation.presence_penalty = config.presence_penalty
+    invocation.seed = config.seed
+    if config.response_mime_type == "text/plain":
+        invocation.output_type = "text"
+    elif config.response_mime_type == "application/json":
+        invocation.output_type = "json"
+    else:
+        invocation.output_type = config.response_mime_type
     attributes = flatten_dict(
-        config,
+        config.model_dump(exclude_none=True),
         # A custom prefix is used, because the names/structure of the
         # configuration is likely to be specific to Google Gen AI SDK.
         key_prefix=GCP_GENAI_OPERATION_CONFIG,
-        exclude_keys=[
-            # System instruction can be overly long for a span attribute.
-            # Additionally, it is recorded as an event (log), instead.
-            "gcp.gen_ai.operation.config.system_instruction",
-        ],
-        # Although a custom prefix is used by default, some of the attributes
-        # are captured in common, standard, Semantic Conventions. For the
-        # well-known properties whose values align with Semantic Conventions,
-        # we ensure that the key name matches the standard SemConv name.
-        rename_keys={
-            # TODO: add more entries here as more semantic conventions are
-            # generalized to cover more of the available config options.
-            "gcp.gen_ai.operation.config.temperature": gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE,
-            "gcp.gen_ai.operation.config.top_k": gen_ai_attributes.GEN_AI_REQUEST_TOP_K,
-            "gcp.gen_ai.operation.config.top_p": gen_ai_attributes.GEN_AI_REQUEST_TOP_P,
-            "gcp.gen_ai.operation.config.candidate_count": gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT,
-            "gcp.gen_ai.operation.config.max_output_tokens": gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS,
-            "gcp.gen_ai.operation.config.stop_sequences": gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES,
-            "gcp.gen_ai.operation.config.frequency_penalty": gen_ai_attributes.GEN_AI_REQUEST_FREQUENCY_PENALTY,
-            "gcp.gen_ai.operation.config.presence_penalty": gen_ai_attributes.GEN_AI_REQUEST_PRESENCE_PENALTY,
-            "gcp.gen_ai.operation.config.seed": gen_ai_attributes.GEN_AI_REQUEST_SEED,
+        # These are all captured above as semantic conventions.
+        exclude_keys={
+            f"{GCP_GENAI_OPERATION_CONFIG}.system_instruction",
+            f"{GCP_GENAI_OPERATION_CONFIG}.temperature",
+            f"{GCP_GENAI_OPERATION_CONFIG}.top_k",
+            f"{GCP_GENAI_OPERATION_CONFIG}.top_p",
+            f"{GCP_GENAI_OPERATION_CONFIG}.candidate_count",
+            f"{GCP_GENAI_OPERATION_CONFIG}.max_output_tokens",
+            f"{GCP_GENAI_OPERATION_CONFIG}.stop_sequences",
+            f"{GCP_GENAI_OPERATION_CONFIG}.frequency_penalty",
+            f"{GCP_GENAI_OPERATION_CONFIG}.presence_penalty",
+            f"{GCP_GENAI_OPERATION_CONFIG}.seed",
+            f"{GCP_GENAI_OPERATION_CONFIG}.response_mime_type",
         },
     )
-    response_mime_type = config.get("response_mime_type")
-    if response_mime_type:
-        if response_mime_type == "text/plain":
-            attributes[gen_ai_attributes.GEN_AI_OUTPUT_TYPE] = "text"
-        elif response_mime_type == "application/json":
-            attributes[gen_ai_attributes.GEN_AI_OUTPUT_TYPE] = "json"
-        else:
-            attributes[gen_ai_attributes.GEN_AI_OUTPUT_TYPE] = (
-                response_mime_type
-            )
-    for key in list(attributes.keys()):
-        if key.startswith(
-            GCP_GENAI_OPERATION_CONFIG
-        ) and not allow_list.allowed(key):
-            del attributes[key]
-    return attributes
+    invocation.attributes.update(
+        {k: v for k, v in attributes.items() if allow_list.allowed(k)}
+    )
 
 
 def _get_response_property(response: GenerateContentResponse, path: str):
@@ -345,48 +322,23 @@ def _get_response_property(response: GenerateContentResponse, path: str):
     return current_context
 
 
-def _coerce_config_to_object(
-    config: GenerateContentConfigOrDict,
-) -> GenerateContentConfig:
-    if isinstance(config, GenerateContentConfig):
-        return config
-    # Input must be a dictionary; convert by invoking the constructor.
-    return GenerateContentConfig(**config)
-
-
 def _wrapped_config_with_tools(
     telemetry_handler: TelemetryHandler,
-    config: GenerateContentConfig,
-):
+    config: GenerateContentConfigOrDict | None,
+) -> tuple[GenerateContentConfig, bool]:
+    if config is None:
+        return GenerateContentConfig(), False
+    if isinstance(config, dict):
+        try:
+            config = GenerateContentConfig.model_validate(config)
+        except Exception:
+            return GenerateContentConfig(), True
     if not config.tools:
-        return config
-    result = copy.copy(config)
-    result.tools = [
+        return config, False
+    config.tools = [
         wrapped_tool(tool, telemetry_handler) for tool in config.tools
     ]
-    return result
-
-
-def _config_to_system_instruction(
-    config: Union[GenerateContentConfigOrDict, None],
-) -> Union[ContentUnion, None]:
-    if not config:
-        return None
-
-    if isinstance(config, dict):
-        return GenerateContentConfig.model_validate(config).system_instruction
-    return config.system_instruction
-
-
-def _config_to_tools(
-    config: Union[GenerateContentConfigOrDict, None],
-) -> Union[ToolListUnionDict, None]:
-    if not config:
-        return None
-
-    if isinstance(config, dict):
-        return GenerateContentConfig.model_validate(config).tools
-    return config.tools
+    return config, True
 
 
 def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
@@ -396,11 +348,12 @@ def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
     return dict(attrs or {})
 
 
-def _maybe_update_token_counts_and_finish_reasons(
+def _apply_response_attributes(
     response: GenerateContentResponse,
     finish_reasons: list[str],
     invocation: InferenceInvocation,
 ):
+    invocation.response_id = response.response_id
     for candidate in response.candidates or []:
         if candidate.finish_reason:
             finish_reasons.append(candidate.finish_reason.value.lower())
@@ -428,328 +381,362 @@ def _maybe_update_token_counts_and_finish_reasons(
         invocation.thinking_tokens = thinking_tokens
 
 
-def _maybe_get_tool_definitions(config) -> list[ToolDefinition]:
-    if tools := _config_to_tools(config):
-        return [de for tool in tools for de in _to_tool_definition(tool) if de]
-    return []
+def _maybe_get_tool_definitions(
+    config: GenerateContentConfig,
+) -> list[ToolDefinition]:
+    return [
+        de
+        for tool in config.tools or []
+        for de in _to_tool_definition(tool)
+        if de
+    ]
 
 
-async def _maybe_get_tool_definitions_async(config) -> list[ToolDefinition]:
-    tool_definitions = []
-    if tools := _config_to_tools(config):
-        for tool in tools:
-            definitions = await _to_tool_definition_async(tool)
-            for de in definitions:
-                if de:
-                    tool_definitions.append(de)
-
-    return tool_definitions
+async def _maybe_get_tool_definitions_async(
+    config: GenerateContentConfig,
+) -> list[ToolDefinition]:
+    return [
+        de
+        for tool in config.tools or []
+        for de in await _to_tool_definition_async(tool)
+        if de
+    ]
 
 
 def _create_instrumented_generate_content(
-    snapshot: _MethodsSnapshot,
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
-    content_recording_enabled: bool,
 ):
-    wrapped_func = snapshot.generate_content
-
-    @functools.wraps(wrapped_func)
     def instrumented_generate_content(
-        self: Models,
-        *,
-        model: str,
-        contents: Union[ContentListUnion, ContentListUnionDict],
-        config: Optional[GenerateContentConfigOrDict] = None,
-        **kwargs: Any,
-    ) -> GenerateContentResponse:
-        wrapped_config = (
-            _wrapped_config_with_tools(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ):
+        def _execute(
+            model: str,
+            contents: Union[ContentListUnion, ContentListUnionDict],
+            config: Optional[GenerateContentConfigOrDict] = None,
+            *_args,
+            **_kwargs,
+        ):
+            # If we are unable to parse the config, or don't modify it, we pass it through
+            # as is to the real GenerateContent. This way the real GenerateContent can deal
+            # with invalid or empty configs as it normally would.
+            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
                 telemetry_handler,
-                _coerce_config_to_object(config),
-            )
-            if config
-            else None
-        )
-        finish_reasons = []
-        extra_attributes = (
-            _get_extra_generate_content_attributes()
-            | _create_request_attributes(
                 config,
-                generate_content_config_key_allowlist,
             )
-        )
-        with telemetry_handler.inference(
-            provider=_determine_genai_system(self),
-            request_model=model,
-            operation_name="generate_content",
-        ) as invocation:
-            invocation.attributes.update(extra_attributes)
-            invocation.tool_definitions = _maybe_get_tool_definitions(config)
+            finish_reasons = []
+            with telemetry_handler.inference(
+                provider=_determine_genai_system(instance),
+                request_model=model,
+                operation_name="generate_content",
+            ) as invocation:
+                _apply_request_attributes(
+                    wrapped_config,
+                    generate_content_config_key_allowlist,
+                    invocation,
+                )
+                invocation.attributes.update(
+                    _get_extra_generate_content_attributes()
+                )
+                invocation.tool_definitions = _maybe_get_tool_definitions(
+                    wrapped_config
+                )
 
-            if content_recording_enabled:
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
-                )
-                if system_content := _config_to_system_instruction(config):
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(system_content)[0]
+                if telemetry_handler.should_capture_content():
+                    invocation.input_messages = to_input_messages(
+                        contents=transformers.t_contents(contents)
                     )
-            candidates = []
-            try:
-                response = wrapped_func(
-                    self,
-                    model=model,
-                    contents=contents,
-                    config=wrapped_config,
-                    **kwargs,
-                )
-                _maybe_update_token_counts_and_finish_reasons(
-                    response, finish_reasons, invocation
-                )
-                if response.candidates:
-                    candidates.extend(response.candidates)
-                return response
-            finally:
-                if content_recording_enabled and candidates:
-                    invocation.output_messages = to_output_messages(
-                        candidates=candidates
+                    if wrapped_config.system_instruction:
+                        invocation.system_instruction = to_system_instructions(
+                            content=transformers.t_contents(
+                                wrapped_config.system_instruction
+                            )[0]
+                        )
+                candidates = []
+                try:
+                    response = wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
                     )
+                    _apply_response_attributes(
+                        response, finish_reasons, invocation
+                    )
+                    if response.candidates:
+                        candidates.extend(response.candidates)
+                    return response
+                finally:
+                    if (
+                        telemetry_handler.should_capture_content()
+                        and candidates
+                    ):
+                        invocation.output_messages = to_output_messages(
+                            candidates=candidates
+                        )
+
+        return _execute(*args, **kwargs)
 
     return instrumented_generate_content
 
 
 def _create_instrumented_generate_content_stream(
-    snapshot: _MethodsSnapshot,
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
-    content_recording_enabled: bool,
 ):
-    wrapped_func = snapshot.generate_content_stream
-
-    @functools.wraps(wrapped_func)
     def instrumented_generate_content_stream(
-        self: Models,
-        *,
-        model: str,
-        contents: Union[ContentListUnion, ContentListUnionDict],
-        config: Optional[GenerateContentConfigOrDict] = None,
-        **kwargs: Any,
-    ) -> Iterator[GenerateContentResponse]:
-        wrapped_config = (
-            _wrapped_config_with_tools(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ):
+        def _execute(
+            model: str,
+            contents: Union[ContentListUnion, ContentListUnionDict],
+            config: Optional[GenerateContentConfigOrDict] = None,
+            *_args,
+            **_kwargs,
+        ):
+            # If we are unable to parse the config, or don't modify it, we pass it through
+            # as is to the real GenerateContent. This way the real GenerateContent can deal
+            # with invalid or empty configs as it normally would.
+            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
                 telemetry_handler,
-                _coerce_config_to_object(config),
-            )
-            if config
-            else None
-        )
-        finish_reasons = []
-        extra_attributes = (
-            _get_extra_generate_content_attributes()
-            | _create_request_attributes(
                 config,
-                generate_content_config_key_allowlist,
             )
-        )
-        with telemetry_handler.inference(
-            provider=_determine_genai_system(self),
-            request_model=model,
-            operation_name="generate_content",
-        ) as invocation:
-            invocation.attributes.update(extra_attributes)
-            invocation.tool_definitions = _maybe_get_tool_definitions(config)
-
-            if content_recording_enabled:
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
+            finish_reasons = []
+            with telemetry_handler.inference(
+                provider=_determine_genai_system(instance),
+                request_model=model,
+                operation_name="generate_content",
+            ) as invocation:
+                _apply_request_attributes(
+                    wrapped_config,
+                    generate_content_config_key_allowlist,
+                    invocation,
                 )
-                if system_content := _config_to_system_instruction(config):
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(system_content)[0]
+                invocation.attributes.update(
+                    _get_extra_generate_content_attributes()
+                )
+                invocation.tool_definitions = _maybe_get_tool_definitions(
+                    wrapped_config
+                )
+
+                if telemetry_handler.should_capture_content():
+                    invocation.input_messages = to_input_messages(
+                        contents=transformers.t_contents(contents)
                     )
-            candidates = []
-            try:
-                for resp in wrapped_func(
-                    self,
-                    model=model,
-                    contents=contents,
-                    config=wrapped_config,
-                    **kwargs,
-                ):
-                    _maybe_update_token_counts_and_finish_reasons(
-                        resp, finish_reasons, invocation
-                    )
-                    if resp.candidates:
-                        candidates += resp.candidates
-                    yield resp
-            finally:
-                if content_recording_enabled and candidates:
-                    invocation.output_messages = to_output_messages(
-                        candidates=candidates
-                    )
+                    if wrapped_config.system_instruction:
+                        invocation.system_instruction = to_system_instructions(
+                            content=transformers.t_contents(
+                                wrapped_config.system_instruction
+                            )[0]
+                        )
+                candidates = []
+                try:
+                    for resp in wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
+                    ):
+                        _apply_response_attributes(
+                            resp, finish_reasons, invocation
+                        )
+                        if resp.candidates:
+                            candidates.extend(resp.candidates)
+                        yield resp
+                finally:
+                    if (
+                        telemetry_handler.should_capture_content()
+                        and candidates
+                    ):
+                        invocation.output_messages = to_output_messages(
+                            candidates=candidates
+                        )
+
+        return _execute(*args, **kwargs)
 
     return instrumented_generate_content_stream
 
 
 def _create_instrumented_async_generate_content(
-    snapshot: _MethodsSnapshot,
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
-    content_recording_enabled: bool,
 ):
-    wrapped_func = snapshot.async_generate_content
-
-    @functools.wraps(wrapped_func)
     async def instrumented_generate_content(
-        self: AsyncModels,
-        *,
-        model: str,
-        contents: Union[ContentListUnion, ContentListUnionDict],
-        config: Optional[GenerateContentConfigOrDict] = None,
-        **kwargs: Any,
-    ) -> GenerateContentResponse:
-        wrapped_config = (
-            _wrapped_config_with_tools(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ):
+        async def _execute(
+            model: str,
+            contents: Union[ContentListUnion, ContentListUnionDict],
+            config: Optional[GenerateContentConfigOrDict] = None,
+            *_args,
+            **_kwargs,
+        ):
+            # If we are unable to parse the config, or don't modify it, we pass it through
+            # as is to the real GenerateContent. This way the real GenerateContent can deal
+            # with invalid or empty configs as it normally would.
+            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
                 telemetry_handler,
-                _coerce_config_to_object(config),
-            )
-            if config
-            else None
-        )
-        finish_reasons = []
-        extra_attributes = (
-            _get_extra_generate_content_attributes()
-            | _create_request_attributes(
                 config,
-                generate_content_config_key_allowlist,
             )
-        )
-        with telemetry_handler.inference(
-            provider=_determine_genai_system(self),
-            request_model=model,
-            operation_name="generate_content",
-        ) as invocation:
-            invocation.attributes.update(extra_attributes)
-            invocation.tool_definitions = (
-                await _maybe_get_tool_definitions_async(config)
-            )
+            finish_reasons = []
+            with telemetry_handler.inference(
+                provider=_determine_genai_system(instance),
+                request_model=model,
+                operation_name="generate_content",
+            ) as invocation:
+                invocation.attributes.update(
+                    _get_extra_generate_content_attributes()
+                )
+                _apply_request_attributes(
+                    wrapped_config,
+                    generate_content_config_key_allowlist,
+                    invocation,
+                )
+                invocation.tool_definitions = (
+                    await _maybe_get_tool_definitions_async(wrapped_config)
+                )
 
-            if content_recording_enabled:
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
-                )
-                if system_content := _config_to_system_instruction(config):
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(system_content)[0]
+                if telemetry_handler.should_capture_content():
+                    invocation.input_messages = to_input_messages(
+                        contents=transformers.t_contents(contents)
                     )
-            candidates = []
-            try:
-                response = await wrapped_func(
-                    self,
-                    model=model,
-                    contents=contents,
-                    config=wrapped_config,
-                    **kwargs,
-                )
-                _maybe_update_token_counts_and_finish_reasons(
-                    response, finish_reasons, invocation
-                )
-                if response.candidates:
-                    candidates += response.candidates
-                return response
-            finally:
-                if content_recording_enabled and candidates:
-                    invocation.output_messages = to_output_messages(
-                        candidates=candidates
+                    if wrapped_config.system_instruction:
+                        invocation.system_instruction = to_system_instructions(
+                            content=transformers.t_contents(
+                                wrapped_config.system_instruction
+                            )[0]
+                        )
+                candidates = []
+                try:
+                    response = await wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
                     )
+                    _apply_response_attributes(
+                        response, finish_reasons, invocation
+                    )
+                    if response.candidates:
+                        candidates.extend(response.candidates)
+                    return response
+                finally:
+                    if (
+                        telemetry_handler.should_capture_content()
+                        and candidates
+                    ):
+                        invocation.output_messages = to_output_messages(
+                            candidates=candidates
+                        )
+
+        return await _execute(*args, **kwargs)
 
     return instrumented_generate_content
 
 
-# Disabling type checking because this is not yet implemented and tested fully.
 def _create_instrumented_async_generate_content_stream(  # type: ignore
-    snapshot: _MethodsSnapshot,
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
-    content_recording_enabled: bool,
 ):
-    wrapped_func = snapshot.async_generate_content_stream
-
-    @functools.wraps(wrapped_func)
     async def instrumented_generate_content_stream(
-        self: AsyncModels,
-        *,
-        model: str,
-        contents: Union[ContentListUnion, ContentListUnionDict],
-        config: Optional[GenerateContentConfigOrDict] = None,
-        **kwargs: Any,
-    ) -> Awaitable[AsyncIterator[GenerateContentResponse]]:  # type: ignore
-        wrapped_config = (
-            _wrapped_config_with_tools(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ):
+        async def _execute(
+            model: str,
+            contents: Union[ContentListUnion, ContentListUnionDict],
+            config: Optional[GenerateContentConfigOrDict] = None,
+            *_args,
+            **_kwargs,
+        ):
+            # If we are unable to parse the config, or don't modify it, we pass it through
+            # as is to the real GenerateContent. This way the real GenerateContent can deal
+            # with invalid or empty configs as it normally would.
+            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
                 telemetry_handler,
-                _coerce_config_to_object(config),
-            )
-            if config
-            else None
-        )
-        finish_reasons = []
-        extra_attributes = (
-            _get_extra_generate_content_attributes()
-            | _create_request_attributes(
                 config,
+            )
+            finish_reasons = []
+            invocation = telemetry_handler.inference(
+                provider=_determine_genai_system(instance),
+                request_model=model,
+                operation_name="generate_content",
+            )
+            invocation.attributes.update(
+                _get_extra_generate_content_attributes()
+            )
+            _apply_request_attributes(
+                wrapped_config,
                 generate_content_config_key_allowlist,
+                invocation,
             )
-        )
-        invocation = telemetry_handler.inference(
-            provider=_determine_genai_system(self),
-            request_model=model,
-            operation_name="generate_content",
-        )
-        invocation.attributes.update(extra_attributes)
-        invocation.tool_definitions = await _maybe_get_tool_definitions_async(
-            config
-        )
+            invocation.tool_definitions = (
+                await _maybe_get_tool_definitions_async(wrapped_config)
+            )
 
-        if content_recording_enabled:
-            invocation.input_messages = to_input_messages(
-                contents=transformers.t_contents(contents)
-            )
-            if system_content := _config_to_system_instruction(config):
-                invocation.system_instruction = to_system_instructions(
-                    content=transformers.t_contents(system_content)[0]
+            if telemetry_handler.should_capture_content():
+                invocation.input_messages = to_input_messages(
+                    contents=transformers.t_contents(contents)
                 )
+                if wrapped_config.system_instruction:
+                    invocation.system_instruction = to_system_instructions(
+                        content=transformers.t_contents(
+                            wrapped_config.system_instruction
+                        )[0]
+                    )
 
-        async def _response_async_generator_wrapper():
-            candidates = []
-            try:
-                async for resp in await wrapped_func(
-                    self,
-                    model=model,
-                    contents=contents,
-                    config=wrapped_config,
-                    **kwargs,
-                ):
-                    _maybe_update_token_counts_and_finish_reasons(
-                        resp, finish_reasons, invocation
-                    )
-                    if resp.candidates:
-                        candidates += resp.candidates
-                    yield resp
-                if content_recording_enabled and candidates:
-                    invocation.output_messages = to_output_messages(
-                        candidates=candidates
-                    )
-                invocation.stop()
-            except Exception as exc:
-                if content_recording_enabled and candidates:
-                    invocation.output_messages = to_output_messages(
-                        candidates=candidates
-                    )
-                invocation.fail(exc)
-                raise
+            async def _response_async_generator_wrapper():
+                candidates = []
+                try:
+                    async for resp in await wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
+                    ):
+                        _apply_response_attributes(
+                            resp, finish_reasons, invocation
+                        )
+                        if resp.candidates:
+                            candidates.extend(resp.candidates)
+                        yield resp
+                    if (
+                        telemetry_handler.should_capture_content()
+                        and candidates
+                    ):
+                        invocation.output_messages = to_output_messages(
+                            candidates=candidates
+                        )
+                    invocation.stop()
+                except Exception as exc:
+                    if (
+                        telemetry_handler.should_capture_content()
+                        and candidates
+                    ):
+                        invocation.output_messages = to_output_messages(
+                            candidates=candidates
+                        )
+                    invocation.fail(exc)
+                    raise
 
-        return _response_async_generator_wrapper()
+            return _response_async_generator_wrapper()
+
+        return await _execute(*args, **kwargs)
 
     return instrumented_generate_content_stream
 
@@ -765,33 +752,36 @@ def instrument_generate_content(
 ) -> object:
     os.environ["OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"] = "true"
     snapshot = _MethodsSnapshot()
-    content_recording_enabled = get_content_capturing_mode()
-    Models.generate_content = _create_instrumented_generate_content(
-        snapshot,
-        telemetry_handler,
-        generate_content_config_key_allowlist,
-        content_recording_enabled,
+    wrap_function_wrapper(
+        "google.genai.models",
+        "Models.generate_content",
+        _create_instrumented_generate_content(
+            telemetry_handler,
+            generate_content_config_key_allowlist,
+        ),
     )
-    Models.generate_content_stream = (
+    wrap_function_wrapper(
+        "google.genai.models",
+        "Models.generate_content_stream",
         _create_instrumented_generate_content_stream(
-            snapshot,
             telemetry_handler,
             generate_content_config_key_allowlist,
-            content_recording_enabled,
-        )
+        ),
     )
-    AsyncModels.generate_content = _create_instrumented_async_generate_content(
-        snapshot,
-        telemetry_handler,
-        generate_content_config_key_allowlist,
-        content_recording_enabled,
+    wrap_function_wrapper(
+        "google.genai.models",
+        "AsyncModels.generate_content",
+        _create_instrumented_async_generate_content(
+            telemetry_handler,
+            generate_content_config_key_allowlist,
+        ),
     )
-    AsyncModels.generate_content_stream = (
+    wrap_function_wrapper(
+        "google.genai.models",
+        "AsyncModels.generate_content_stream",
         _create_instrumented_async_generate_content_stream(
-            snapshot,
             telemetry_handler,
             generate_content_config_key_allowlist,
-            content_recording_enabled,
-        )
+        ),
     )
     return snapshot

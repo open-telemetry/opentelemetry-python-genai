@@ -1,0 +1,1 @@
+Minor code cleanup and changes in preparation of moving google's GenAI instrumentation library to use this util library ([#4556](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4556))

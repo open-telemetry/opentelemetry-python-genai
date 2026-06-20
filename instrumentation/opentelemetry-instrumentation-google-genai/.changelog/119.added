@@ -1,0 +1,1 @@
+Added missing `gen_ai.response.id` attribute to span and event.
