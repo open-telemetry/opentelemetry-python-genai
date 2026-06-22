@@ -37,7 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-openai==2.41.1
+openai==2.43.0
 # older pydantic is required for PyPy < 3.11
 pydantic==2.12.5
 httpx==0.28.1
