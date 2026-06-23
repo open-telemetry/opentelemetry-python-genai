@@ -1,4 +1,4 @@
-openai~=2.41.0
+openai~=2.43.0
 
 opentelemetry-sdk~=1.42.0
 opentelemetry-exporter-otlp-proto-grpc~=1.42.0
