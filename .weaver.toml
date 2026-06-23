@@ -1,4 +1,4 @@
-#:schema https://raw.githubusercontent.com/open-telemetry/weaver/v0.24.1/schemas/weaver-config.json
+#:schema https://raw.githubusercontent.com/open-telemetry/weaver/v0.24.2/schemas/weaver-config.json
 
 # OTel SDK resource attributes that don't belong to the genai registry — see
 # https://github.com/open-telemetry/weaver/issues/1456.
