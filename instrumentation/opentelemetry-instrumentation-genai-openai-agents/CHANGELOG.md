@@ -10,22 +10,10 @@ Do *NOT* add changelog entries here!
 
 This changelog is managed by towncrier and is compiled at release time.
 
-The static "## Unreleased" section below pre-dates towncrier; its entries
-must be folded into the first towncrier-generated release manually.
-
 See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTRIBUTING.md#changelog for details.
 -->
 
 <!-- changelog start -->
-
-## Unreleased
-- Align AgentSpanData test stubs and span processor with real OpenAI Agents SDK;
-  remove non-existent `operation`, `description`, `agent_id`, and `model` fields.
-  ([#4229](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4229))
-- Document official package metadata and README for the OpenAI Agents instrumentation.
-  ([#3859](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/3859))
-- Populate instructions and tool definitions from Response obj.
-  ([#4196](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4196))
 
 ## Version 0.1.0 (2025-10-15)
 

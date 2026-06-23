@@ -1,0 +1,1 @@
+Added support to call genai utils handler for langchain LLM invocations. ([#3889](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/3889))

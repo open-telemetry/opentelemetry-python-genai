@@ -1,0 +1,1 @@
+Add instrumentation for Anthropic `Messages.stream()` helper method ([#4499](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4499))

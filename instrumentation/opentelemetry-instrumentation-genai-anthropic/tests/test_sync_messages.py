@@ -71,8 +71,8 @@ def assert_span_attributes(  # pylint: disable=too-many-arguments
         == span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
     )
     assert (
-        GenAIAttributes.GenAiSystemValues.ANTHROPIC.value
-        == span.attributes[GenAIAttributes.GEN_AI_SYSTEM]
+        GenAIAttributes.GenAiProviderNameValues.ANTHROPIC.value
+        == span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME]
     )
     assert (
         request_model == span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]

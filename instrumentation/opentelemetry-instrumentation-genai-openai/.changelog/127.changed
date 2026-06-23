@@ -1,0 +1,1 @@
+Migrate OpenAI embeddings instrumentation to the shared util-genai EmbeddingInvocation lifecycle and drop the legacy embeddings-specific span/metrics plumbing.

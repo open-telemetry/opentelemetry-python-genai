@@ -34,6 +34,8 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Message content, prompts, and tool call arguments must only be set through the util's content
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.
+- Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
+  `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions
@@ -59,16 +61,20 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - For every public API instrumented, cover sync/async variants when both exist.
 - Cover streaming and non-streaming variants when both exist.
 - Cover happy path and error scenarios. For error scenarios, at minimum include: provider error /
-  endpoint unavailable, stream interrupted by network, stream closed early by the caller.
+  endpoint unavailable, stream interrupted by network, stream closed early by the caller, and a
+  caller-side exception raised inside the `with …stream(…) as stream:` block before the stream is drained.
 - Use recorded VCR cassettes for provider calls. No live-key-only tests; skipping on missing key
   is not acceptable.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
-  (`from opentelemetry.test_util_genai.fixtures import *` and
-  `from opentelemetry.test_util_genai.vcr import fixture_vcr, scrub_response_headers`). Do not
-  re-implement in-memory provider/exporter setup or the VCR pretty-print serializer locally.
+  by registering them as plugins. Always register the fixtures plugin; register the VCR plugin
+  too when the package's tests use VCR cassettes —
+  `pytest_plugins = ["opentelemetry.test_util_genai.fixtures", "opentelemetry.test_util_genai.vcr"]`
+  (drop the `vcr` entry for packages with no cassette-backed tests), importing scrub helpers from
+  `opentelemetry.test_util_genai.vcr` as needed. Do not re-implement in-memory provider/exporter
+  setup or the VCR pretty-print serializer locally.
 - When recording VCR cassettes, scrub account-identifying values in the conftest's
   `vcr_config` (`filter_headers` for requests, `scrub_response_headers_overwrite` for
   responses) before committing. Examples: `authorization`, `openai-organization`,

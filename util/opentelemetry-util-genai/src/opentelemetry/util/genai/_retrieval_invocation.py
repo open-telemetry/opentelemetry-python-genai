@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import Any
 
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
@@ -104,8 +104,7 @@ class RetrievalInvocation(GenAIInvocation):
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
             **{k: v for k, v in optional_attrs if v is not None},
         }
-        # TODO: remove cast once base class metric_attributes is typed as dict[str, AttributeValue]
-        attrs.update(cast(dict[str, AttributeValue], self.metric_attributes))
+        attrs.update(self.metric_attributes)
         return attrs
 
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
@@ -132,7 +131,6 @@ class RetrievalInvocation(GenAIInvocation):
         if self.top_k is not None:
             attributes[GenAI.GEN_AI_REQUEST_TOP_K] = self.top_k
         attributes.update(self._get_content_attributes_for_span())
-        # TODO: remove cast once base class self.attributes is typed as dict[str, AttributeValue]
-        attributes.update(cast(dict[str, AttributeValue], self.attributes))
+        attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._metrics_recorder.record(self)
