@@ -1,8 +1,8 @@
-#:schema https://raw.githubusercontent.com/open-telemetry/weaver/v0.23.0/schemas/weaver-config.json
+#:schema https://raw.githubusercontent.com/open-telemetry/weaver/v0.24.1/schemas/weaver-config.json
 
 # OTel SDK resource attributes that don't belong to the genai registry — see
 # https://github.com/open-telemetry/weaver/issues/1456.
-[[live_check.finding_filters]]
+[[live-check.finding_filters]]
 signal_type = "resource"
 exclude_samples = [
   "service.name",
