@@ -113,10 +113,10 @@ class AgentInvocation(GenAIInvocation):
             (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (server_attributes.SERVER_ADDRESS, self._server_address),
             (server_attributes.SERVER_PORT, self._server_port),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self._provider,
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
