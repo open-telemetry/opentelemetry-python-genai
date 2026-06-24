@@ -359,8 +359,8 @@ the HTTP-transport layer (`OpenAI.request`, `AsyncOpenAI.request`,
 `tools`, `stream`, …) at call time, which only the API methods see.
 
 Replace every transport-level wrapper with method-level
-`wrap_function_wrapper` calls — one per public API endpoint — using
-**positional args only** (newer wrapt versions reject keyword args):
+`wrap_function_wrapper` calls — one per public API endpoint. Pass
+**positional args only** to `wrap_function_wrapper` (newer wrapt versions reject keyword args):
 
 ```python
 from wrapt import wrap_function_wrapper
