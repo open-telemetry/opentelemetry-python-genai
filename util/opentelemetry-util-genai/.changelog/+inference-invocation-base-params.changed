@@ -1,0 +1,1 @@
+Change `InferenceInvocation` init params to only accept base params

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.semconv._incubating.attributes import (
@@ -28,6 +27,7 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.genai.utils import (
     should_emit_event,
 )
+from opentelemetry.util.types import AttributeValue
 
 # TODO: Migrate to GenAI constants once available in semconv package
 _GEN_AI_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
@@ -97,7 +97,9 @@ class InferenceInvocation(GenAIInvocation):
         self.output_type: str | None = None
         self._start(self._get_base_attributes())
 
-    def _get_message_attributes(self, *, for_span: bool) -> dict[str, Any]:
+    def _get_message_attributes(
+        self, *, for_span: bool
+    ) -> dict[str, AttributeValue]:
         return get_content_attributes(
             input_messages=self.input_messages,
             output_messages=self.output_messages,
@@ -118,7 +120,7 @@ class InferenceInvocation(GenAIInvocation):
             return reasons or None
         return None
 
-    def _get_base_attributes(self) -> dict[str, Any]:
+    def _get_base_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
@@ -130,7 +132,7 @@ class InferenceInvocation(GenAIInvocation):
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
-    def _get_attributes(self) -> dict[str, Any]:
+    def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs = self._get_base_attributes()
         if self.output_tokens is None and self.thinking_tokens is None:
             output_tokens = None
@@ -170,7 +172,7 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
-    def _get_metric_attributes(self) -> dict[str, Any]:
+    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs = self._get_base_attributes()
         if self.response_model_name is not None:
             attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self.response_model_name
@@ -243,9 +245,9 @@ class LLMInvocation:
     finish_reasons: list[str] | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
-    attributes: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
+    attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Additional attributes to set on spans and/or events. Not set on metrics."""
-    metric_attributes: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
+    metric_attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Additional attributes to set on metrics. Must be low cardinality. Not set on spans or events."""
     temperature: float | None = None
     top_p: float | None = None

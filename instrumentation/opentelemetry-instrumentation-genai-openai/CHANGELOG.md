@@ -10,21 +10,10 @@ Do *NOT* add changelog entries here!
 
 This changelog is managed by towncrier and is compiled at release time.
 
-The static "## Unreleased" section below pre-dates towncrier; its entries
-must be folded into the first towncrier-generated release manually.
-
 See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTRIBUTING.md#changelog for details.
 -->
 
 <!-- changelog start -->
-
-## Unreleased
-
-- Refactor chat completion stream wrappers to use shared GenAI stream lifecycle helpers.
-  ([#4500](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4500))
-- Pass tool definitions from `tools` kwarg to `InferenceInvocation.tool_definitions`
-  so `gen_ai.tool.definitions` span attribute is populated on chat completion spans
-  ([#4554](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4554))
 
 ## Version 2.4b0 (2026-05-01)
 

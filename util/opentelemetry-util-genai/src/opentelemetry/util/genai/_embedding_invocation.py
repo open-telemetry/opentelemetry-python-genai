@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -60,7 +58,7 @@ class EmbeddingInvocation(GenAIInvocation):
         self.response_model_name: str | None = None
         self._start(self._get_base_attributes())
 
-    def _get_base_attributes(self) -> dict[str, Any]:
+    def _get_base_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
@@ -73,7 +71,7 @@ class EmbeddingInvocation(GenAIInvocation):
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
-    def _get_metric_attributes(self) -> dict[str, Any]:
+    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
@@ -104,7 +102,7 @@ class EmbeddingInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
         )
-        attributes: dict[str, Any] = {
+        attributes: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
             **{
                 key: value

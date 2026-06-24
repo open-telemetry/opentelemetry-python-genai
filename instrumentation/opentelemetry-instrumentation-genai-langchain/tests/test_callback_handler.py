@@ -165,7 +165,6 @@ class TestOnChainStartAgent:
         )
 
         telemetry.invoke_local_agent.assert_called_once_with(
-            provider="openai",
             agent_name="math_agent",
         )
         assert agent_inv.agent_name == "math_agent"

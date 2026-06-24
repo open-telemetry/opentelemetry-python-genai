@@ -10,7 +10,6 @@ Here are some TODO items required to achieve stability for this package:
    - Including tool invocation information
  - Emit events for safety ratings when they block responses
  - Additional cleanup/improvement tasks such as:
-   - Adoption of 'wrapt' instead of 'functools.wraps'
    - Bolstering test coverage
 
 ## Future

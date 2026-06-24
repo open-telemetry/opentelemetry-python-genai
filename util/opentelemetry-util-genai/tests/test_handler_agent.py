@@ -40,7 +40,6 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
     def test_start_stop_creates_span(self):
         invocation = self.handler.invoke_local_agent(
-            "openai",
             request_model="gpt-4",
             agent_name="Math Tutor",
         )
@@ -52,11 +51,10 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert span.name == "invoke_agent Math Tutor"
         assert span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "invoke_agent"
         assert span.attributes[GenAI.GEN_AI_AGENT_NAME] == "Math Tutor"
-        assert span.attributes[GenAI.GEN_AI_PROVIDER_NAME] == "openai"
         assert span.attributes[GenAI.GEN_AI_REQUEST_MODEL] == "gpt-4"
 
     def test_span_kind_internal(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.stop()
         assert (
             self.span_exporter.get_finished_spans()[0].kind
@@ -64,7 +62,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
 
     def test_no_server_attributes(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.stop()
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert server_attributes.SERVER_ADDRESS not in attrs
@@ -72,7 +70,6 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
     def test_all_attributes(self):
         invocation = self.handler.invoke_local_agent(
-            "openai",
             request_model="gpt-4",
         )
         invocation.agent_name = "Full Agent"
@@ -116,7 +113,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
 
     def test_finish_reasons_multiple(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.finish_reasons = ["stop", "length"]
         invocation.stop()
         attrs = self.span_exporter.get_finished_spans()[0].attributes
@@ -126,7 +123,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
 
     def test_finish_reasons_empty_list_omitted(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.finish_reasons = []
         invocation.stop()
         attrs = self.span_exporter.get_finished_spans()[0].attributes
@@ -134,7 +131,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert GenAI.GEN_AI_RESPONSE_FINISH_REASONS not in attrs
 
     def test_cache_token_attributes(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.input_tokens = 100
         invocation.cache_creation_input_tokens = 25
         invocation.cache_read_input_tokens = 50
@@ -146,7 +143,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 50
 
     def test_fail_sets_error_status(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.fail(RuntimeError("agent crashed"))
 
         span = self.span_exporter.get_finished_spans()[0]
@@ -155,7 +152,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
     def test_context_manager_success(self):
         with self.handler.invoke_local_agent(
-            "openai", request_model="gpt-4", agent_name="CM Agent"
+            request_model="gpt-4", agent_name="CM Agent"
         ) as inv:
             inv.input_tokens = 10
             inv.output_tokens = 20
@@ -167,7 +164,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
     def test_context_manager_error(self):
         with self.assertRaises(ValueError):
-            with self.handler.invoke_local_agent("openai"):
+            with self.handler.invoke_local_agent():
                 raise ValueError("test error")
 
         assert (
@@ -178,16 +175,15 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
 
     def test_context_manager_default_invocation(self):
-        with self.handler.invoke_local_agent("openai") as inv:
+        with self.handler.invoke_local_agent() as inv:
             inv.agent_name = "Dynamic Agent"
         assert len(self.span_exporter.get_finished_spans()) == 1
 
     def test_default_values(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.stop()
         assert invocation._operation_name == "invoke_agent"
         assert invocation.agent_name is None
-        assert invocation.provider == "openai"
         assert invocation.request_model is None
         assert not invocation.input_messages
         assert not invocation.output_messages
@@ -198,7 +194,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert not invocation.attributes
 
     def test_with_messages(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.input_messages = [
             InputMessage(role="user", parts=[Text(content="Hello")])
         ]
@@ -214,7 +210,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert invocation.input_messages[0].role == "user"
 
     def test_custom_attributes(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.attributes["custom.key"] = "custom_value"
         invocation.stop()
         spans = self.span_exporter.get_finished_spans()
@@ -226,7 +222,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
             description="Get the weather",
             parameters={"type": "object", "properties": {}},
         )
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.tool_definitions = [tool]
         invocation.stop()
         assert len(invocation.tool_definitions) == 1
@@ -234,23 +230,23 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert invocation.tool_definitions[0].type == "function"
 
     def test_default_lists_are_independent(self):
-        inv1 = self.handler.invoke_local_agent("openai")
-        inv2 = self.handler.invoke_local_agent("openai")
+        inv1 = self.handler.invoke_local_agent()
+        inv2 = self.handler.invoke_local_agent()
         inv1.input_messages.append(InputMessage(role="user", parts=[]))
         assert len(inv2.input_messages) == 0
         inv2.stop()
         inv1.stop()
 
     def test_default_attributes_are_independent(self):
-        inv1 = self.handler.invoke_local_agent("openai")
-        inv2 = self.handler.invoke_local_agent("openai")
+        inv1 = self.handler.invoke_local_agent()
+        inv2 = self.handler.invoke_local_agent()
         inv1.attributes["foo"] = "bar"
         assert "foo" not in inv2.attributes
         inv2.stop()
         inv1.stop()
 
     def test_agent_name_set_after_construction(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.agent_name = "Named Agent"
         invocation.stop()
         span = self.span_exporter.get_finished_spans()[0]
@@ -261,7 +257,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
     def test_agent_name_passed_at_construction(self):
         invocation = self.handler.invoke_local_agent(
-            "openai", agent_name="Constructor Agent"
+            agent_name="Constructor Agent"
         )
         invocation.stop()
         span = self.span_exporter.get_finished_spans()[0]
@@ -293,9 +289,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
-        invocation = handler.invoke_local_agent(
-            "openai", agent_name="Sampler Agent"
-        )
+        invocation = handler.invoke_local_agent(agent_name="Sampler Agent")
         invocation.stop()
 
         assert captured_attributes[GenAI.GEN_AI_AGENT_NAME] == "Sampler Agent"
@@ -325,7 +319,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
-        invocation = handler.invoke_local_agent("openai")
+        invocation = handler.invoke_local_agent()
         invocation.stop()
 
         assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
@@ -345,7 +339,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_system_instruction_on_span(self, _mock_cap):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.system_instruction = [
             Text(content="You are a helpful assistant."),
         ]
@@ -364,7 +358,7 @@ class TestAgentInvocationContent(unittest.TestCase):
             description="Get the weather",
             parameters={"type": "object", "properties": {}},
         )
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.tool_definitions = [tool]
         invocation.stop()
 
@@ -376,7 +370,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_messages_on_span(self, _mock_cap):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.input_messages = [
             InputMessage(role="user", parts=[Text(content="Hello")])
         ]
@@ -394,7 +388,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         assert GenAI.GEN_AI_OUTPUT_MESSAGES in attrs
 
     def test_content_not_on_span_by_default(self):
-        invocation = self.handler.invoke_local_agent("openai")
+        invocation = self.handler.invoke_local_agent()
         invocation.system_instruction = [
             Text(content="You are a helpful assistant."),
         ]
@@ -551,9 +545,7 @@ class TestAgentInvocationMetrics(TestBase):
             meter_provider=self.meter_provider,
         )
         with patch("timeit.default_timer", return_value=1000.0):
-            invocation = handler.invoke_local_agent(
-                "prov", request_model="model"
-            )
+            invocation = handler.invoke_local_agent(request_model="model")
         invocation.input_tokens = 5
         invocation.output_tokens = 7
 
@@ -571,9 +563,6 @@ class TestAgentInvocationMetrics(TestBase):
         )
         self.assertEqual(
             duration_point.attributes[GenAI.GEN_AI_REQUEST_MODEL], "model"
-        )
-        self.assertEqual(
-            duration_point.attributes[GenAI.GEN_AI_PROVIDER_NAME], "prov"
         )
         self.assertAlmostEqual(duration_point.sum, 2.0, places=3)
 
@@ -623,9 +612,7 @@ class TestAgentInvocationMetrics(TestBase):
             meter_provider=self.meter_provider,
         )
         with patch("timeit.default_timer", return_value=2000.0):
-            invocation = handler.invoke_local_agent(
-                "", request_model="err-model"
-            )
+            invocation = handler.invoke_local_agent(request_model="err-model")
         invocation.input_tokens = 11
 
         error = Error(message="boom", type=ValueError)

@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -74,7 +72,7 @@ class ToolInvocation(GenAIInvocation):
         self.tool_description = tool_description
         self._start(self._get_base_attributes())
 
-    def _get_base_attributes(self) -> dict[str, Any]:
+    def _get_base_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self.name),
@@ -87,8 +85,8 @@ class ToolInvocation(GenAIInvocation):
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
-    def _get_metric_attributes(self) -> dict[str, Any]:
-        attrs: dict[str, Any] = {
+    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
+        attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
         }
         attrs.update(self.metric_attributes)
@@ -115,7 +113,7 @@ class ToolInvocation(GenAIInvocation):
                 else None,
             ),
         )
-        attributes: dict[str, Any] = {
+        attributes: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
             **{k: v for k, v in optional_attrs if v is not None},
         }

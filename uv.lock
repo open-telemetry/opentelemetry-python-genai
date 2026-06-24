@@ -1287,6 +1287,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-semantic-conventions" },
     { name = "opentelemetry-util-genai" },
+    { name = "wrapt" },
 ]
 
 [package.optional-dependencies]
@@ -1301,6 +1302,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation", specifier = ">=0.61b0,<2" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.61b0,<2" },
     { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
+    { name = "wrapt", specifier = ">=1.0.0,<3.0.0" },
 ]
 provides-extras = ["instruments"]
 

@@ -1,0 +1,3 @@
+Add async Anthropic message stream wrappers and manager wrappers, with wrapper tests ([#4346](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4346))
+  - `AsyncMessagesStreamWrapper` for async message stream telemetry
+  - `AsyncMessagesStreamManagerWrapper` for async `Messages.stream()` telemetry

@@ -1,0 +1,1 @@
+Align AgentSpanData test stubs and span processor with real OpenAI Agents SDK; remove non-existent `operation`, `description`, `agent_id`, and `model` fields. ([#4229](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4229))
