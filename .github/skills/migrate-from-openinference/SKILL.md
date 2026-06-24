@@ -585,11 +585,13 @@ Run the pre-PR checks from the **Commands** section of
 [AGENTS.md](../../../AGENTS.md) — `tox -e precommit`, `tox -e typecheck`, and
 the package's `-{oldest,latest}` (and `-conformance`) test envs.
 
-Open the PR with the `migration:openinference` label. Run the
-`review-migration` skill locally to generate `MIGRATION_REPORT.md`; iterate
+Run the `review-migration` skill locally to generate `MIGRATION_REPORT.md`; iterate
 until §4 (test coverage) is clean. The review skill compares the migrated package
 against OpenInference (or any upstreams you name), so coverage gaps
 surface in one report.
+
+Finally ask human to create a PR with the `migration:openinference` label and
+post the contents of `MIGRATION_REPORT.md` as the PR comment.
 
 ## See also
 

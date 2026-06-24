@@ -182,11 +182,11 @@ When the gap is too big to capture as individual `expected_violations` — the
 whole operation can't run yet — skip the entire scenario instead, via
 `pytest.mark.xfail` / `skip` on the parametrize entry in
 `test_conformance.py`. Don't invent a one-off `reason=` string: **ask the
-user to file a tracking bug first**, then use that issue as the skip
-`reason=` (e.g. `reason="blocked by open-telemetry/...#1234"`) so the skip
-is traceable and gets revisited when the bug is fixed. **Never** drop the
-scenario file itself — a skipped scenario still records that the operation
-exists; a deleted one hides it.
+user to file a tracking bug** and update the skip `reason=` with that issue
+(e.g. `reason="blocked by open-telemetry/...#1234"`) so the skip is traceable
+and gets revisited when the bug is fixed. **Never** drop the scenario file
+itself — a skipped scenario still records that the operation exists; a
+deleted one hides it.
 
 ## Lib-specific assertions
 
