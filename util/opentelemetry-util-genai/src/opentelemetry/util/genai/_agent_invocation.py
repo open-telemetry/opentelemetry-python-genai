@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -24,6 +22,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     ToolDefinition,
 )
+from opentelemetry.util.types import AttributeValue
 
 
 class AgentInvocation(GenAIInvocation):
@@ -101,7 +100,7 @@ class AgentInvocation(GenAIInvocation):
 
         self._start(self._get_base_attributes())
 
-    def _get_base_attributes(self) -> dict[str, Any]:
+    def _get_base_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
@@ -115,7 +114,7 @@ class AgentInvocation(GenAIInvocation):
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
-    def _get_common_attributes(self) -> dict[str, Any]:
+    def _get_common_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
@@ -131,7 +130,7 @@ class AgentInvocation(GenAIInvocation):
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
-    def _get_request_attributes(self) -> dict[str, Any]:
+    def _get_request_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
             (GenAI.GEN_AI_DATA_SOURCE_ID, self.data_source_id),
@@ -147,12 +146,12 @@ class AgentInvocation(GenAIInvocation):
         )
         return {k: v for k, v in optional_attrs if v is not None}
 
-    def _get_response_attributes(self) -> dict[str, Any]:
+    def _get_response_attributes(self) -> dict[str, AttributeValue]:
         if self.finish_reasons:
             return {GenAI.GEN_AI_RESPONSE_FINISH_REASONS: self.finish_reasons}
         return {}
 
-    def _get_usage_attributes(self) -> dict[str, Any]:
+    def _get_usage_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
@@ -167,7 +166,7 @@ class AgentInvocation(GenAIInvocation):
         )
         return {k: v for k, v in optional_attrs if v is not None}
 
-    def _get_content_attributes_for_span(self) -> dict[str, Any]:
+    def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
         return get_content_attributes(
             input_messages=self.input_messages,
             output_messages=self.output_messages,
@@ -176,14 +175,14 @@ class AgentInvocation(GenAIInvocation):
             for_span=True,
         )
 
-    def _get_metric_attributes(self) -> dict[str, Any]:
+    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
             (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (server_attributes.SERVER_ADDRESS, self.server_address),
             (server_attributes.SERVER_PORT, self.server_port),
         )
-        attrs: dict[str, Any] = {
+        attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
             **{k: v for k, v in optional_attrs if v is not None},
         }
@@ -204,7 +203,7 @@ class AgentInvocation(GenAIInvocation):
         if error is not None:
             self._apply_error_attributes(error)
 
-        attributes: dict[str, Any] = {}
+        attributes: dict[str, AttributeValue] = {}
         attributes.update(self._get_common_attributes())
         attributes.update(self._get_request_attributes())
         attributes.update(self._get_response_attributes())

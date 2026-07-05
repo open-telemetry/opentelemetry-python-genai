@@ -1,0 +1,28 @@
+name: "[Package] Release"
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        type: choice
+        options:
+        - opentelemetry-instrumentation-genai-anthropic
+        - opentelemetry-instrumentation-google-genai
+        - opentelemetry-instrumentation-genai-langchain
+        - opentelemetry-instrumentation-genai-openai-agents
+        - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-util-genai
+        description: 'Package to be released'
+        required: true
+
+permissions:
+  contents: read
+
+run-name: "[Package][${{ inputs.package }}] Release"
+
+jobs:
+  release:
+    uses: ./.github/workflows/_release-package.yml
+    with:
+      package: ${{ inputs.package }}
+      bump_after_release: true
+    secrets: inherit

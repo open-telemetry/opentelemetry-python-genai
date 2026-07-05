@@ -3,6 +3,9 @@
 
 """Tests for ToolCallRequest and ToolInvocation inheritance structure"""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from opentelemetry.sdk.trace import TracerProvider
@@ -14,6 +17,9 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import GenAIInvocation
 from opentelemetry.util.genai.types import (
@@ -22,6 +28,7 @@ from opentelemetry.util.genai.types import (
     ServerToolCallResponse,
     ToolCallRequest,
 )
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 
 def _make_handler() -> TelemetryHandler:
@@ -177,3 +184,90 @@ def test_start_tool_passes_sampling_attributes_at_span_creation():
         captured_attributes[GenAI.GEN_AI_TOOL_DESCRIPTION]
         == "Gets weather for a location"
     )
+
+
+# ---------------------------------------------------------------------------
+# _any_value_to_attribute_value — tested via the public ToolInvocation API
+# ---------------------------------------------------------------------------
+
+
+def _make_span_exporter_and_handler():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    return span_exporter, handler
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_arguments_dict_serialized_to_json():
+    """dict arguments are JSON-serialized onto the span attribute."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("get_weather")
+    invocation.arguments = {"location": "Paris", "unit": "celsius"}
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == gen_ai_json_dumps(
+        {"location": "Paris", "unit": "celsius"}
+    )
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_arguments_str_passed_through():
+    """str arguments are stored as-is (no JSON wrapping)."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("echo")
+    invocation.arguments = "hello"
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == "hello"
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_arguments_int_passed_through():
+    """int arguments are stored as-is."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("counter")
+    invocation.arguments = 42
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == 42
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_arguments_none_omits_attribute():
+    """None arguments must not produce the attribute on the span."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("noop")
+    invocation.arguments = None
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+
+
+def test_arguments_omitted_when_content_capture_disabled():
+    """arguments must not appear on the span when content capture is off."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("get_weather")
+    invocation.arguments = {"location": "Paris"}
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs

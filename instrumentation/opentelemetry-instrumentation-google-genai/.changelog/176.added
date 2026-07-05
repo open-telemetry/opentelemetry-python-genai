@@ -1,0 +1,1 @@
+Add telemetry support for the Google GenAI SDK embedding API (embed_content and embed_content_async).

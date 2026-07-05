@@ -15,8 +15,8 @@
 # limitations under the License.
 
 # This script builds wheels for a single package when triggered from per-package release
-# GitHub workflow (see .github/package-release.yml).
-# The wheel is then published to PyPI by the workflow.
+# GitHub workflow (see .github/workflows/_release-package.yml).
+# The wheel is then published to PyPI via Trusted Publishing in that workflow.
 
 set -ev
 

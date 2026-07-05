@@ -62,6 +62,7 @@ def add(a: int, b: int) -> int:
 
 def main():
     GoogleGenAiSdkInstrumentor().instrument()
+    # False for the embedding call
     client = genai.Client(
         vertexai=True,
         project=os.environ["PROJECT_ID"],
@@ -72,6 +73,10 @@ def main():
         contents=os.environ["PROMPT"],
         config=types.GenerateContentConfig(tools=[add]),
     )
+    # embed_response = client.models.embed_content(
+    #     model=os.environ["MODEL"],
+    #     contents=os.environ["PROMPT"],
+    # )
     write_spans_to_file("test_span")
     write_logs_to_file("test_log")
     print(response.text)

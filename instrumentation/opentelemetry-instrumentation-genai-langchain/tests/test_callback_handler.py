@@ -12,6 +12,7 @@ import uuid
 from unittest import mock
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
@@ -24,9 +25,15 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 )
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
+    InferenceInvocation,
     WorkflowInvocation,
 )
-from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text
+from opentelemetry.util.genai.types import (
+    InputMessage,
+    OutputMessage,
+    Text,
+    ToolCallRequest,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1014,3 +1021,93 @@ class TestOutputMessagesOnInvocations:
         assigned = agent_inv.output_messages
         assert len(assigned) == 1
         assert assigned[0].parts[0].content == "the answer is 7"
+
+
+# ---------------------------------------------------------------------------
+# on_llm_end – tool call finish reasons
+# ---------------------------------------------------------------------------
+
+
+def _make_llm_invocation_mock() -> mock.MagicMock:
+    inv = mock.MagicMock(spec=InferenceInvocation)
+    inv.span = mock.MagicMock()
+    inv.span.is_recording.return_value = False
+    return inv
+
+
+def _make_handler_with_llm_invocation(
+    run_id: uuid.UUID,
+) -> tuple[
+    OpenTelemetryLangChainCallbackHandler, mock.MagicMock, mock.MagicMock
+]:
+    """Return a handler with an InferenceInvocation pre-registered for run_id."""
+    telemetry = mock.MagicMock()
+    llm_inv = _make_llm_invocation_mock()
+    telemetry.inference.return_value = llm_inv
+
+    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
+    handler._invocation_manager.add_invocation_state(run_id, None, llm_inv)
+    return handler, telemetry, llm_inv
+
+
+class TestOnLlmEndToolCalls:
+    def test_openai_tool_calls_finish_reason_produces_tool_call_request(self):
+        """finish_reason='tool_calls' (OpenAI) must produce ToolCallRequest parts."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_123",
+            "args": {"location": "Paris"},
+        }
+        ai_msg = AIMessage(
+            content="", tool_calls=[tool_call], response_metadata={}
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].finish_reason == "tool_calls"
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequest)
+        assert part.name == "get_weather"
+        assert part.id == "call_123"
+        assert part.arguments == {"location": "Paris"}
+
+    def test_bedrock_tool_use_finish_reason_produces_tool_call_request(self):
+        """finish_reason='tool_use' (Bedrock/Anthropic) must produce ToolCallRequest parts."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "tooluse_abc",
+            "args": {"location": "London"},
+        }
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[tool_call],
+            response_metadata={"stopReason": "tool_use"},
+        )
+        # Bedrock path: generation_info is None; stopReason comes from response_metadata
+        gen = ChatGeneration(message=ai_msg, generation_info=None)
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].finish_reason == "tool_use"
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequest)
+        assert part.name == "get_weather"
+        assert part.id == "tooluse_abc"
+        assert part.arguments == {"location": "London"}

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any
 
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
@@ -22,6 +21,7 @@ from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
     should_capture_content_on_spans,
 )
+from opentelemetry.util.types import AttributeValue
 
 
 class WorkflowInvocation(GenAIInvocation):
@@ -57,14 +57,14 @@ class WorkflowInvocation(GenAIInvocation):
         self.output_messages: list[OutputMessage] = []
         self._start(self._get_base_attributes())
 
-    def _get_base_attributes(self) -> dict[str, Any]:
+    def _get_base_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
-        attrs: dict[str, Any] = {
+        attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
         }
         return attrs
 
-    def _get_messages_for_span(self) -> dict[str, Any]:
+    def _get_messages_for_span(self) -> dict[str, AttributeValue]:
         if not should_capture_content_on_spans():
             return {}
         optional_attrs = (
@@ -86,8 +86,8 @@ class WorkflowInvocation(GenAIInvocation):
         }
 
     def _apply_finish(self, error: Error | None = None) -> None:
-        attributes: dict[str, Any] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name
+        attributes: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
         }
         attributes.update(self._get_messages_for_span())
         if error is not None:

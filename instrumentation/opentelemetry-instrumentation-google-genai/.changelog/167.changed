@@ -1,0 +1,2 @@
+Update the `generate_content` streaming method variants to return streaming wrapper classes to enable users to iterate over the stream of responses from the model.
+

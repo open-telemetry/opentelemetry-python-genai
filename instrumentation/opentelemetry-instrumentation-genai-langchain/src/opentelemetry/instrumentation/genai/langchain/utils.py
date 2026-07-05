@@ -7,10 +7,43 @@ from typing import Any, Optional, cast
 from langchain_core.messages import AIMessage
 
 from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
     InputMessage,
     OutputMessage,
     Text,
+    ToolDefinition,
 )
+
+
+def _get_property_value(obj: Any, property_name: str) -> Any:
+    if isinstance(obj, dict):
+        return cast(dict[str, Any], obj).get(property_name)
+
+    return getattr(obj, property_name, None)
+
+
+def prepare_tool_definitions(tools: list[Any]) -> list[ToolDefinition] | None:
+    if not tools:
+        return None
+
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        tool_type = _get_property_value(tool, "type")
+        if tool_type == "function":
+            func = _get_property_value(tool, "function")
+            if func:
+                func_name = _get_property_value(func, "name")
+                func_description = _get_property_value(func, "description")
+                definitions.append(
+                    FunctionToolDefinition(
+                        name=str(func_name) if func_name is not None else "",
+                        description=str(func_description)
+                        if func_description is not None
+                        else None,
+                        parameters=_get_property_value(func, "parameters"),
+                    )
+                )
+    return definitions or None
 
 
 def make_input_message(data: Any) -> list[InputMessage]:
