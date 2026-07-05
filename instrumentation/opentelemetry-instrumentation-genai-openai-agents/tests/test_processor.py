@@ -195,10 +195,6 @@ def test_no_content_captured_when_capture_env_unset(
     span_exporter: InMemorySpanExporter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` unset,
-    util-genai defaults to ``NO_CONTENT`` — the ``execute_tool`` span must
-    not carry the tool call arguments or result. Regression test for #186.
-    """
     monkeypatch.delenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, raising=False
     )
