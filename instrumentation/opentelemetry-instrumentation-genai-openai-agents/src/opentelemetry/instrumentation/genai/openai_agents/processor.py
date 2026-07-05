@@ -93,7 +93,6 @@ class GenAITracingProcessor(TracingProcessor):
         span_data = span.span_data
         if isinstance(span_data, AgentSpanData):
             invocation = self._handler.invoke_local_agent(
-                provider=self._provider,
                 agent_name=span_data.name,
             )
             self._invocations[span] = invocation

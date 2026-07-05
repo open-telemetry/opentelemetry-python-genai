@@ -7,6 +7,7 @@ import gc
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
@@ -18,6 +19,14 @@ from agents.tracing.span_data import (
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import ToolInvocation
 
 
@@ -68,9 +77,7 @@ def test_agent_span_creates_invoke_local_agent() -> None:
     span = _Span(AgentSpanData(name="triage"))
 
     processor.on_span_start(span)
-    handler.invoke_local_agent.assert_called_once_with(
-        provider="openai", agent_name="triage"
-    )
+    handler.invoke_local_agent.assert_called_once_with(agent_name="triage")
 
     processor.on_span_end(span)
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
@@ -181,6 +188,39 @@ def test_shutdown_stops_open_invocations() -> None:
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
     handler.tool.return_value.stop.assert_called_once_with()
     assert len(processor._invocations) == 0
+
+
+def test_no_content_captured_when_capture_env_unset(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` unset,
+    util-genai defaults to ``NO_CONTENT`` — the ``execute_tool`` span must
+    not carry the tool call arguments or result. Regression test for #186.
+    """
+    monkeypatch.delenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, raising=False
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(
+        FunctionSpanData(
+            name="get_weather",
+            input='{"city":"Barcelona"}',
+            output="sunny",
+        )
+    )
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (tool_span,) = span_exporter.get_finished_spans()
+    assert tool_span.attributes is not None
+    assert "gen_ai.tool.call.arguments" not in tool_span.attributes
+    assert "gen_ai.tool.call.result" not in tool_span.attributes
+    # The non-content tool attributes are still present.
+    assert tool_span.attributes["gen_ai.tool.name"] == "get_weather"
 
 
 def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
