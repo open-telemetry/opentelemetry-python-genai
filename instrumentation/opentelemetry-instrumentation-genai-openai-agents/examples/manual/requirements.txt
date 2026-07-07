@@ -1,5 +1,5 @@
 openai-agents~=0.17.3
-python-dotenv~=1.0
+python-dotenv>=1.2.2
 
 opentelemetry-sdk~=1.43.0
 opentelemetry-exporter-otlp-proto-grpc~=1.43.0
