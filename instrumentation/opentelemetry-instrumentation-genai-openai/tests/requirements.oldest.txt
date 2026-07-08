@@ -25,10 +25,10 @@ importlib-metadata==6.11.0
 packaging==24.0
 wrapt==1.16.0
 opentelemetry-exporter-otlp-proto-http~=1.30
-opentelemetry-api==1.40  # when updating, also update in pyproject.toml
-opentelemetry-sdk==1.40  # when updating, also update in pyproject.toml
-opentelemetry-semantic-conventions==0.61b0  # when updating, also update in pyproject.toml
-opentelemetry-instrumentation==0.61b0  # when updating, also update in pyproject.toml
+opentelemetry-api==1.43  # when updating, also update in pyproject.toml
+opentelemetry-sdk==1.43  # when updating, also update in pyproject.toml
+opentelemetry-semantic-conventions==0.64b0  # when updating, also update in pyproject.toml
+opentelemetry-instrumentation==0.64b0  # when updating, also update in pyproject.toml
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-openai
