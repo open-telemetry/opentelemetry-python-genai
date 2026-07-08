@@ -20,6 +20,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     resolve_agent_name,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _normalize_role,
     make_input_message,
     make_last_output_message,
     normalize_provider,
@@ -338,7 +339,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                             tool_calls.append(tool_call_request)
                         output_message = OutputMessage(
-                            role=chat_generation.message.type,
+                            role=_normalize_role(chat_generation.message),
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
                         )
@@ -349,7 +350,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 type="text",
                             )
                         ]
-                        role = chat_generation.message.type
+                        role = _normalize_role(chat_generation.message)
                         output_message = OutputMessage(
                             role=role,
                             parts=cast(list[MessagePart], parts),
