@@ -25,7 +25,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "opentelemetry-instrumentation >= 0.62b0",
+  "opentelemetry-instrumentation >= 0.64b0",
   "opentelemetry-util-genai >= 1.0b0.dev",
 ]
 
