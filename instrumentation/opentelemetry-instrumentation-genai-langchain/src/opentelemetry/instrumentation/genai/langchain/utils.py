@@ -74,7 +74,9 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
-def _content_to_parts(content: Any) -> list[MessagePart]:
+def _content_to_parts(
+    content: str | list[str | dict[str, Any]],
+) -> list[MessagePart]:
     """Convert a LangChain message ``content`` payload into ``MessagePart`` s.
 
     Content may be a plain string or a list of provider-specific block dicts
@@ -88,27 +90,24 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
         if content:
             parts.append(Text(content=content))
         return parts
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, str):
-                if item:
-                    parts.append(Text(content=item))
-                continue
-            if not isinstance(item, dict):
-                continue
-            block_type = item.get("type")
-            if block_type == "text":
-                text_value = item.get("text")
-                if isinstance(text_value, str) and text_value:
-                    parts.append(Text(content=text_value))
-            elif block_type in ("thinking", "reasoning"):
-                reasoning_value = (
-                    item.get("thinking")
-                    or item.get("reasoning")
-                    or item.get("text")
-                )
-                if isinstance(reasoning_value, str) and reasoning_value:
-                    parts.append(Reasoning(content=reasoning_value))
+    for item in content:
+        if isinstance(item, str):
+            if item:
+                parts.append(Text(content=item))
+            continue
+        block_type = item.get("type")
+        if block_type == "text":
+            text_value = item.get("text")
+            if isinstance(text_value, str) and text_value:
+                parts.append(Text(content=text_value))
+        elif block_type in ("thinking", "reasoning"):
+            reasoning_value = (
+                item.get("thinking")
+                or item.get("reasoning")
+                or item.get("text")
+            )
+            if isinstance(reasoning_value, str) and reasoning_value:
+                parts.append(Reasoning(content=reasoning_value))
     return parts
 
 
@@ -119,19 +118,15 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     :class:`ToolCallRequest` for each entry in ``message.tool_calls``.
     """
     parts: list[MessagePart] = _content_to_parts(message.content)
-    tool_calls = getattr(message, "tool_calls", None) or []
-    for call in tool_calls:
-        if not isinstance(call, dict):
+    for call in message.tool_calls:
+        name = call["name"]
+        if not name:
             continue
-        name = call.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        call_id = call.get("id")
         parts.append(
             ToolCallRequest(
-                arguments=call.get("args"),
+                arguments=call["args"],
                 name=name,
-                id=call_id if isinstance(call_id, str) else None,
+                id=call["id"],
             )
         )
     return parts
@@ -162,8 +157,6 @@ def to_input_messages(
     """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
     result: list[InputMessage] = []
     for message in messages:
-        if not isinstance(message, BaseMessage):
-            continue
         parts = _message_parts(message)
         if not parts:
             continue
@@ -253,7 +246,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
             messages, Iterable
         ):
             return []
-        return to_input_messages(messages)
+        return to_input_messages(cast(Iterable[BaseMessage], messages))
     # Fallback: serialize non-message state fields as input.
     # Common in LangGraph where nodes use structured state fields
     # (e.g., user_query) rather than a message list.
@@ -288,7 +281,7 @@ def make_output_message(data: Any) -> list[OutputMessage]:
         or not isinstance(messages, Iterable)
     ):
         return []
-    return to_output_messages(messages)
+    return to_output_messages(cast(Iterable[BaseMessage], messages))
 
 
 def make_last_output_message(data: Any) -> list[OutputMessage]:
