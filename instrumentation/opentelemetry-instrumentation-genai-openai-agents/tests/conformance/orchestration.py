@@ -91,7 +91,6 @@ class OrchestrationScenario(Scenario):
                 tracer_provider=tracer_provider,
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
-                semconv="gen_ai_latest_experimental",
                 content_capture="SPAN_ONLY",
             ):
                 with vcr.use_cassette("orchestration_conformance.yaml"):
