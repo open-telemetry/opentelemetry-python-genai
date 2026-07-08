@@ -98,7 +98,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 if suggested_agent_name_lower != agent_invocation_name_lower:
                     agent_provider = normalize_provider(metadata) or "unknown"
                     agent = self._telemetry_handler.invoke_local_agent(
-                        provider=agent_provider,
                         agent_name=suggested_agent_name,
                     )
                     agent.input_messages = make_input_message(inputs)
