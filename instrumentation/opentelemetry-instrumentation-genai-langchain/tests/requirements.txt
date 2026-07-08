@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Single pinned requirements for langchain unit tests.
+# Single minimum-version requirements for langchain unit tests.
 # TODO: split into oldest/latest once the version matrix is defined.
 
 langchain-openai>=1.3.3
