@@ -1,0 +1,1 @@
+Record OpenAI Agents tool calls as structured `tool_call` parts in `gen_ai.output.messages` instead of a stringified repr.
