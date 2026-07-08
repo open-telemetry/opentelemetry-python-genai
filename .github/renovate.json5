@@ -39,6 +39,13 @@
   ],
   "packageRules": [
     {
+      // requirements.oldest.txt is intentionally excluded via the
+      // top-level ignorePaths, and pyproject.toml floors (pep621 manager)
+      // stay on the default strategy so published packages keep wide ranges.
+      "matchManagers": ["pip_requirements"],
+      "rangeStrategy": "bump"
+    },
+    {
       "groupName": "all patch versions",
       "matchUpdateTypes": ["patch"],
       "schedule": ["before 8am every weekday"]
