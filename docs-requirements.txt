@@ -3,7 +3,7 @@ sphinx-rtd-theme==3.1.0
 sphinx-autodoc-typehints==3.12.1
 
 # Required by opentelemetry-util-genai
-fsspec>=2025.9.0
+fsspec>=2025.12.0
 wrapt>=1.0.0,<3.0.0
 
 # Required by instrumentation packages
