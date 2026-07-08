@@ -122,14 +122,10 @@ for additional options.
 Enabling the latest experimental features
 ***********************************************
 
-To enable the latest experimental features, set the environment variable
-``OTEL_SEMCONV_STABILITY_OPT_IN`` to ``gen_ai_latest_experimental``. Or, if you use
-``OTEL_SEMCONV_STABILITY_OPT_IN`` to enable other features, append ``,gen_ai_latest_experimental`` to its value.
+The latest experimental GenAI semantic conventions are used unconditionally; there is
+no environment variable to opt in or out.
 
-Without this setting, OpenAI instrumentation aligns with `Semantic Conventions v1.30.0 <https://github.com/open-telemetry/semantic-conventions/tree/v1.30.0/docs/gen-ai>`_
-and would not capture additional details introduced in later versions.
-
-.. note:: Generative AI semantic conventions are still evolving. The latest experimental features will introduce breaking changes in future releases.
+.. note:: Generative AI semantic conventions are still evolving. The latest experimental features may introduce breaking changes in future releases.
 
 Uninstrument
 ************

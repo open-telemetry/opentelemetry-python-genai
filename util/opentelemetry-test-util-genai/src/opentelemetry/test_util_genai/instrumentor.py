@@ -7,8 +7,7 @@ Every instrumentation's ``tests/conftest.py`` carries a handful of fixtures
 shaped like:
 
 - reset ``_OpenTelemetrySemanticConventionStability._initialized``
-- set ``OTEL_SEMCONV_STABILITY_OPT_IN`` and/or
-  ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` (and sometimes
+- set ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` (and sometimes
   ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT``)
 - ``instrumentor.instrument(tracer_provider=..., logger_provider=..., meter_provider=...)``
 - ``yield instrumentor``
@@ -18,11 +17,10 @@ The body is identical across packages — only the instrumentor class and the
 env values differ. This module hosts that body once so per-package
 conftests collapse to a thin wrapper.
 
-The stability-class reset is required because
-``_OpenTelemetrySemanticConventionStability`` caches the first read of
-``OTEL_SEMCONV_STABILITY_OPT_IN`` — without resetting ``_initialized``
-mid-test, a later env change would not take effect on the next
-``.instrument()`` call.
+The stability-class reset is kept as test-isolation hygiene:
+``_OpenTelemetrySemanticConventionStability`` caches state across
+``.instrument()`` calls, so resetting ``_initialized`` between tests avoids
+that cache leaking from one test into the next.
 """
 
 from __future__ import annotations

@@ -33,9 +33,6 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     vcr,
 ):
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
     )
 
@@ -103,9 +100,6 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     capture_content,
     vcr,
 ):
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
     )
