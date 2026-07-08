@@ -15,7 +15,7 @@
 # Single pinned requirements for langchain unit tests.
 # TODO: split into oldest/latest once the version matrix is defined.
 
-langchain-openai
+langchain-openai>=1.1.14
 langchain-aws
 langchain-google-genai
 boto3

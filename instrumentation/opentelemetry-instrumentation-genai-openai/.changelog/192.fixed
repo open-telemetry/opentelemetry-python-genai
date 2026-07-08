@@ -1,0 +1,2 @@
+Migrate OpenAI choice_count to use InferenceInvocation.request_choice_count field for
+consistency with other instrumentations.
