@@ -14,13 +14,18 @@ from opentelemetry.instrumentation.genai.openai.response_wrappers import (
 
 
 class _FakeManager:
-    def __init__(self, stream, suppressed=False, exit_error=None):
+    def __init__(
+        self, stream, suppressed=False, enter_error=None, exit_error=None
+    ):
         self._stream = stream
         self._suppressed = suppressed
+        self._enter_error = enter_error
         self._exit_error = exit_error
         self.exit_args = None
 
     def __enter__(self):
+        if self._enter_error is not None:
+            raise self._enter_error
         return self._stream
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -31,13 +36,18 @@ class _FakeManager:
 
 
 class _FakeAsyncManager:
-    def __init__(self, stream, suppressed=False, exit_error=None):
+    def __init__(
+        self, stream, suppressed=False, enter_error=None, exit_error=None
+    ):
         self._stream = stream
         self._suppressed = suppressed
+        self._enter_error = enter_error
         self._exit_error = exit_error
         self.exit_args = None
 
     async def __aenter__(self):
+        if self._enter_error is not None:
+            raise self._enter_error
         return self._stream
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -63,7 +73,7 @@ def _make_wrapper(manager):
     )
     return ResponseStreamManagerWrapper(
         manager=manager,
-        invocation=invocation,
+        invocation_factory=lambda: invocation,
         capture_content=False,
     )
 
@@ -90,7 +100,7 @@ def _make_async_manager_wrapper(manager):
     )
     return AsyncResponseStreamManagerWrapper(
         manager=manager,
-        invocation=invocation,
+        invocation_factory=lambda: invocation,
         capture_content=False,
     )
 
@@ -206,6 +216,27 @@ def test_manager_exit_forwards_exception_to_stream_wrapper():
     assert wrapper._stream_wrapper is None
 
 
+def test_manager_enter_failure_fails_invocation_and_reraises():
+    error = RuntimeError("enter failure")
+    manager = _FakeManager(stream=SimpleNamespace(), enter_error=error)
+    failures = []
+    invocation = SimpleNamespace(
+        request_model=None,
+        stop=_noop_stop,
+        fail=failures.append,
+    )
+    wrapper = ResponseStreamManagerWrapper(
+        manager=manager,
+        invocation_factory=lambda: invocation,
+        capture_content=False,
+    )
+
+    with pytest.raises(RuntimeError, match="enter failure"):
+        wrapper.__enter__()
+
+    assert failures == [error]
+
+
 def test_manager_exit_uses_none_exception_when_manager_suppresses():
     manager = _FakeManager(stream=SimpleNamespace(), suppressed=True)
     wrapper = _make_wrapper(manager)
@@ -235,7 +266,8 @@ def test_manager_exit_still_finalizes_stream_wrapper_when_manager_raises():
         wrapper.__exit__(ValueError, error, None)
 
     assert manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args == (ValueError, error, None)
+    assert stream_wrapper.exit_args[:2] == (RuntimeError, manager_error)
+    assert stream_wrapper.exit_args[2] is not None
     assert wrapper._stream_wrapper is None
 
 
@@ -282,6 +314,28 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
 
 
 @pytest.mark.asyncio
+async def test_async_manager_enter_failure_fails_invocation_and_reraises():
+    error = RuntimeError("enter failure")
+    manager = _FakeAsyncManager(stream=SimpleNamespace(), enter_error=error)
+    failures = []
+    invocation = SimpleNamespace(
+        request_model=None,
+        stop=_noop_stop,
+        fail=failures.append,
+    )
+    wrapper = AsyncResponseStreamManagerWrapper(
+        manager=manager,
+        invocation_factory=lambda: invocation,
+        capture_content=False,
+    )
+
+    with pytest.raises(RuntimeError, match="enter failure"):
+        await wrapper.__aenter__()
+
+    assert failures == [error]
+
+
+@pytest.mark.asyncio
 async def test_async_manager_exit_uses_none_exception_when_manager_suppresses():
     manager = _FakeAsyncManager(stream=SimpleNamespace(), suppressed=True)
     wrapper = _make_async_manager_wrapper(manager)
@@ -312,7 +366,8 @@ async def test_async_manager_exit_still_finalizes_stream_wrapper_when_manager_ra
         await wrapper.__aexit__(ValueError, error, None)
 
     assert manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args == (ValueError, error, None)
+    assert stream_wrapper.exit_args[:2] == (RuntimeError, manager_error)
+    assert stream_wrapper.exit_args[2] is not None
     assert wrapper._stream_wrapper is None
 
 

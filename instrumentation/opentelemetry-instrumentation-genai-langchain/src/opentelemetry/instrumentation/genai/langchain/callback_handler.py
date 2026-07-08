@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional, cast
 from uuid import UUID
 
@@ -21,11 +22,13 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 from opentelemetry.instrumentation.genai.langchain.utils import (
     make_input_message,
     make_last_output_message,
+    prepare_tool_definitions,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
     InferenceInvocation,
+    ToolInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
@@ -33,6 +36,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     Text,
+    ToolCallRequest,
 )
 
 
@@ -283,6 +287,11 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         llm_invocation.seed = seed
         llm_invocation.temperature = temperature
         llm_invocation.max_tokens = max_tokens
+        if params is not None:
+            tools = params.get("tools") or params.get("functions")
+            if tools:
+                tool_definitions = prepare_tool_definitions(tools)
+                llm_invocation.tool_definitions = tool_definitions
         self._invocation_manager.add_invocation_state(
             run_id=run_id,
             parent_run_id=parent_run_id,
@@ -330,19 +339,33 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                         )
 
-                    # Get message content
-                    parts = [
-                        Text(
-                            content=chat_generation.message.content,
-                            type="text",
+                    if finish_reason in ("tool_calls", "tool_use"):
+                        tool_calls: list[ToolCallRequest] = []
+                        for tool_call in chat_generation.message.tool_calls:
+                            tool_call_request = ToolCallRequest(
+                                name=tool_call["name"],
+                                id=tool_call["id"],
+                                arguments=tool_call["args"],
+                            )
+                            tool_calls.append(tool_call_request)
+                        output_message = OutputMessage(
+                            role=chat_generation.message.type,
+                            parts=cast(list[MessagePart], tool_calls),
+                            finish_reason=finish_reason,
                         )
-                    ]
-                    role = chat_generation.message.type
-                    output_message = OutputMessage(
-                        role=role,
-                        parts=cast(list[MessagePart], parts),
-                        finish_reason=finish_reason,
-                    )
+                    else:
+                        parts = [
+                            Text(
+                                content=chat_generation.message.content,
+                                type="text",
+                            )
+                        ]
+                        role = chat_generation.message.type
+                        output_message = OutputMessage(
+                            role=role,
+                            parts=cast(list[MessagePart], parts),
+                            finish_reason=finish_reason,
+                        )
                     output_messages.append(output_message)
 
                     # Get token usage if available
@@ -397,6 +420,72 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         llm_invocation.fail(error)
         if not llm_invocation.span.is_recording():
+            self._invocation_manager.delete_invocation_state(run_id=run_id)
+
+    def on_tool_start(
+        self,
+        serialized: Optional[dict[str, Any]],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        inputs: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        name = "unknown"
+        description = None
+        if serialized is not None:
+            name = serialized.get("name") or "unknown"
+            description = serialized.get("description")
+
+        arguments: Any
+        if inputs is not None:
+            arguments = inputs
+        else:
+            try:
+                arguments = json.loads(input_str)
+            except (json.JSONDecodeError, ValueError):
+                arguments = input_str
+        tool_invocation = self._telemetry_handler.tool(
+            name=name, tool_description=description, tool_type="function"
+        )
+        tool_invocation.arguments = arguments
+        self._invocation_manager.add_invocation_state(
+            run_id, parent_run_id, tool_invocation
+        )
+
+    def on_tool_end(
+        self,
+        output: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **_kwargs: Any,
+    ) -> None:
+        tool_invocation = self._invocation_manager.get_invocation(run_id)
+        if not isinstance(tool_invocation, ToolInvocation):
+            return
+        tool_invocation.tool_call_id = getattr(output, "tool_call_id", None)
+        tool_invocation.tool_result = getattr(output, "content", None)
+        tool_invocation.stop()
+        if not tool_invocation.span.is_recording():
+            self._invocation_manager.delete_invocation_state(run_id=run_id)
+
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **_: Any,
+    ) -> None:
+        tool_invocation = self._invocation_manager.get_invocation(run_id)
+        if not isinstance(tool_invocation, ToolInvocation):
+            return
+        tool_invocation.fail(error)
+        if not tool_invocation.span.is_recording():
             self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def _find_nearest_agent(

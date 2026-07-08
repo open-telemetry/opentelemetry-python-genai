@@ -3,11 +3,16 @@
 
 """Conformance scenario: triage agent hands off to a specialist that uses a tool.
 
-Exercises the three common agent shapes in a single ``Runner.run``:
+Exercises the agent-orchestration shapes this instrumentation owns in a
+single ``Runner.run``:
 
-- Basic agent invocation (``invoke_agent`` + ``chat`` from the Responses API).
+- Basic agent invocation (``invoke_agent``).
 - Multi-agent handoff (a second ``invoke_agent`` after the triage step).
 - Function tool execution (``execute_tool``) inside the specialist agent.
+
+The underlying ``chat`` / ``responses`` spans for the LLM calls are
+produced by ``opentelemetry-instrumentation-genai-openai`` when it is
+installed and is not exercised here.
 """
 
 from __future__ import annotations
@@ -26,7 +31,10 @@ from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    ExpectedViolation,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -63,13 +71,20 @@ def _build_triage_agent() -> Agent:
 
 class OrchestrationScenario(Scenario):
     expected_spans = (
+        "invoke_workflow",
         "invoke_agent",
-        "chat",
         "execute_tool",
     )
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
+    expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_violations = (
+        # `FunctionSpanData` in the openai-agents library doesn't expose
+        # `tool_call_id`, so our `execute_tool` spans can't set
+        # `gen_ai.tool.call.id`. Tracked in
+        # https://github.com/open-telemetry/opentelemetry-python-genai/issues/86
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.tool.call.id",
+        ),
     )
 
     def run(
@@ -91,7 +106,6 @@ class OrchestrationScenario(Scenario):
                 tracer_provider=tracer_provider,
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
-                semconv="gen_ai_latest_experimental",
                 content_capture="SPAN_ONLY",
             ):
                 with vcr.use_cassette("orchestration_conformance.yaml"):
@@ -123,10 +137,6 @@ class OrchestrationScenario(Scenario):
         assert operations.count("invoke_agent") >= 2, (
             "Orchestration involves a triage agent handing off to a specialist; "
             f"expected at least two invoke_agent spans, saw {operations}"
-        )
-        assert operations.count("chat") >= 2, (
-            "Each agent issues at least one Responses-API call; "
-            f"expected at least two chat spans, saw {operations}"
         )
         assert operations.count("execute_tool") >= 1, (
             "Specialist agent calls the get_weather function tool; "

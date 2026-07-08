@@ -51,9 +51,9 @@ class OTelProviderSnapshot:
 
     def restore(self):
         _bypass_otel_once()
-        set_tracer_provider(self._tracer_provider)
-        set_logger_provider(self._logger_provider)
-        set_meter_provider(self._meter_provider)
+        opentelemetry.trace._TRACER_PROVIDER = None
+        opentelemetry._logs._internal._LOGGER_PROVIDER = None
+        opentelemetry.metrics._internal._METER_PROVIDER = None
 
 
 class _LogWrapper:

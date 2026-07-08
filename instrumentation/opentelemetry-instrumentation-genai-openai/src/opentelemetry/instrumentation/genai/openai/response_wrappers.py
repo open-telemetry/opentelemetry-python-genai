@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from contextlib import AsyncExitStack, ExitStack
+from contextvars import ContextVar
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
@@ -41,6 +41,28 @@ if TYPE_CHECKING:
 
 TextFormatT = TypeVar("TextFormatT")
 ResponseT = TypeVar("ResponseT")
+ResponsesStreamContext = tuple["GenAIInvocation", bool]
+
+responses_stream_context: ContextVar[ResponsesStreamContext | None] = (
+    ContextVar("responses_stream_context", default=None)
+)
+
+
+def _set_responses_stream_context(
+    invocation: "GenAIInvocation", capture_content: bool
+):
+    """Mark the current ``Responses.stream`` manager entry.
+
+    OpenAI's ``Responses.stream`` manager enters by calling the patched
+    ``Responses.create(..., stream=True)`` method internally. This context
+    marker lets the inner ``create`` wrapper return the SDK stream without
+    creating a second telemetry invocation; the outer stream manager wrapper
+    owns the span lifecycle.
+
+    :returns: The ``ContextVar`` reset handle for restoring the previous
+        context after the SDK manager has entered.
+    """
+    return responses_stream_context.set((invocation, capture_content))
 
 
 def _set_response_attributes(
@@ -203,6 +225,9 @@ class ResponseStreamWrapper(
         capture_content: bool,
     ):
         SyncStreamWrapper.__init__(self, stream)
+        # Marks streams already wrapped by the inner Responses.create path so
+        # Responses.stream manager entry can return them without wrapping twice.
+        self._self_is_response_stream_wrapper = True
         _ResponseStreamMixin.__init__(self, invocation, capture_content)
 
     @property
@@ -226,19 +251,34 @@ class ResponseStreamManagerWrapper(Generic[TextFormatT]):
     def __init__(
         self,
         manager: "ResponseStreamManager[TextFormatT]",
-        invocation,
+        invocation_factory: Callable[[], "GenAIInvocation"],
         capture_content: bool,
     ):
         self._manager = manager
-        self._invocation = invocation
+        self._invocation_factory = invocation_factory
+        self._invocation: "GenAIInvocation | None" = None
         self._capture_content = capture_content
         self._stream_wrapper: ResponseStreamWrapper[TextFormatT] | None = None
 
     def __enter__(self) -> ResponseStreamWrapper[TextFormatT]:
-        stream = self._manager.__enter__()
+        invocation = self._invocation_factory()
+        self._invocation = invocation
+        stream_context_reset = _set_responses_stream_context(
+            invocation, self._capture_content
+        )
+        try:
+            stream = self._manager.__enter__()
+        except Exception as error:
+            invocation.fail(error)
+            raise
+        finally:
+            responses_stream_context.reset(stream_context_reset)
+        if getattr(stream, "_self_is_response_stream_wrapper", False):
+            self._stream_wrapper = stream
+            return stream
         self._stream_wrapper = ResponseStreamWrapper(
             stream,
-            self._invocation,
+            invocation,
             self._capture_content,
         )
         return self._stream_wrapper
@@ -248,22 +288,25 @@ class ResponseStreamManagerWrapper(Generic[TextFormatT]):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool:
-        suppressed = False
+    ) -> bool | None:
         stream_wrapper = self._stream_wrapper
         self._stream_wrapper = None
-        with ExitStack() as cleanup:
-            if stream_wrapper is not None:
-
-                def finalize_stream_wrapper() -> None:
-                    if suppressed:
-                        stream_wrapper.__exit__(None, None, None)
-                    else:
-                        stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
-
-                cleanup.callback(finalize_stream_wrapper)
+        try:
             suppressed = self._manager.__exit__(exc_type, exc_val, exc_tb)
-            return suppressed
+        except Exception as error:
+            if stream_wrapper is not None:
+                stream_wrapper.__exit__(
+                    type(error), error, error.__traceback__
+                )
+            elif self._invocation is not None:
+                self._invocation.fail(error)
+            raise
+        if stream_wrapper is not None:
+            if suppressed:
+                stream_wrapper.__exit__(None, None, None)
+            else:
+                stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+        return suppressed
 
     def parse(self) -> "ResponseStreamManagerWrapper[TextFormatT]":
         raise NotImplementedError(
@@ -292,6 +335,9 @@ class AsyncResponseStreamWrapper(
         capture_content: bool,
     ):
         AsyncStreamWrapper.__init__(self, stream)
+        # Marks streams already wrapped by the inner AsyncResponses.create path
+        # so AsyncResponses.stream manager entry avoids wrapping twice.
+        self._self_is_response_stream_wrapper = True
         _ResponseStreamMixin.__init__(self, invocation, capture_content)
 
     async def __aenter__(self) -> "AsyncResponseStreamWrapper[TextFormatT]":
@@ -344,21 +390,36 @@ class AsyncResponseStreamManagerWrapper(Generic[TextFormatT]):
     def __init__(
         self,
         manager: "AsyncResponseStreamManager[TextFormatT]",
-        invocation,
+        invocation_factory: Callable[[], "GenAIInvocation"],
         capture_content: bool,
     ):
         self._manager = manager
-        self._invocation = invocation
+        self._invocation_factory = invocation_factory
+        self._invocation: "GenAIInvocation | None" = None
         self._capture_content = capture_content
         self._stream_wrapper: (
             AsyncResponseStreamWrapper[TextFormatT] | None
         ) = None
 
     async def __aenter__(self) -> AsyncResponseStreamWrapper[TextFormatT]:
-        stream = await self._manager.__aenter__()
+        invocation = self._invocation_factory()
+        self._invocation = invocation
+        stream_context_reset = _set_responses_stream_context(
+            invocation, self._capture_content
+        )
+        try:
+            stream = await self._manager.__aenter__()
+        except Exception as error:
+            invocation.fail(error)
+            raise
+        finally:
+            responses_stream_context.reset(stream_context_reset)
+        if getattr(stream, "_self_is_response_stream_wrapper", False):
+            self._stream_wrapper = stream
+            return stream
         self._stream_wrapper = AsyncResponseStreamWrapper(
             stream,
-            self._invocation,
+            invocation,
             self._capture_content,
         )
         return self._stream_wrapper
@@ -368,26 +429,27 @@ class AsyncResponseStreamManagerWrapper(Generic[TextFormatT]):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool:
-        suppressed = False
+    ) -> bool | None:
         stream_wrapper = self._stream_wrapper
         self._stream_wrapper = None
-        async with AsyncExitStack() as cleanup:
-            if stream_wrapper is not None:
-
-                async def finalize_stream_wrapper() -> None:
-                    if suppressed:
-                        await stream_wrapper.__aexit__(None, None, None)
-                    else:
-                        await stream_wrapper.__aexit__(
-                            exc_type, exc_val, exc_tb
-                        )
-
-                cleanup.push_async_callback(finalize_stream_wrapper)
+        try:
             suppressed = await self._manager.__aexit__(
                 exc_type, exc_val, exc_tb
             )
-            return suppressed
+        except Exception as error:
+            if stream_wrapper is not None:
+                await stream_wrapper.__aexit__(
+                    type(error), error, error.__traceback__
+                )
+            elif self._invocation is not None:
+                self._invocation.fail(error)
+            raise
+        if stream_wrapper is not None:
+            if suppressed:
+                await stream_wrapper.__aexit__(None, None, None)
+            else:
+                await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+        return suppressed
 
     def parse(self) -> "AsyncResponseStreamManagerWrapper[TextFormatT]":
         raise NotImplementedError(

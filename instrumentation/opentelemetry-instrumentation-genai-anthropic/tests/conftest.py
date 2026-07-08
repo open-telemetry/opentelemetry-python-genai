@@ -60,13 +60,12 @@ def vcr_config():
 
 @pytest.fixture
 def instrument_no_content(tracer_provider, logger_provider, meter_provider):
-    """Instrument Anthropic without content capture (stable semconv mode)."""
+    """Instrument Anthropic without content capture."""
     with instrument(
         AnthropicInstrumentor(),
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv="stable",
         content_capture="NO_CONTENT",
     ) as instrumentor:
         yield instrumentor
@@ -80,7 +79,6 @@ def instrument_with_content(tracer_provider, logger_provider, meter_provider):
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv="gen_ai_latest_experimental",
         content_capture="SPAN_ONLY",
     ) as instrumentor:
         yield instrumentor
@@ -94,7 +92,6 @@ def instrument_event_only(tracer_provider, logger_provider, meter_provider):
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv="gen_ai_latest_experimental",
         content_capture="EVENT_ONLY",
         emit_event=True,
     ) as instrumentor:

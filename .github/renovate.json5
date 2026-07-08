@@ -23,6 +23,18 @@
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+WEAVER_VERSION=(?<currentValue>\\S+)",
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) packageName=(?<packageName>\\S+) versioning=(?<versioning>\\S+)\\s+SEMCONV_GENAI_REF=(?<currentValue>\\S+)"
       ]
+    },
+    {
+      // Keep .weaver.toml schema URL pinned to the latest Weaver tag.
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.weaver\\.toml$/"],
+      "matchStrings": [
+        "#:schema https://raw.githubusercontent.com/open-telemetry/weaver/v(?<currentValue>[^/]+)/schemas/weaver-config.json"
+      ],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "open-telemetry/weaver",
+      "versioningTemplate": "semver-coerced",
+      "extractVersionTemplate": "^v(?<version>.*)$"
     }
   ],
   "packageRules": [

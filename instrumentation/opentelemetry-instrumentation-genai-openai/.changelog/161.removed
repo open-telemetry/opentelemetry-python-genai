@@ -1,0 +1,1 @@
+Remove unused legacy event helpers that emitted the deprecated `gen_ai.system` attribute and `gen_ai.{role}.message` / `gen_ai.choice` events.

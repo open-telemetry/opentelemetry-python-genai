@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-google-genai ~=2.9.0
-opentelemetry-api ~=1.42.0
-opentelemetry-sdk ~=1.42.0
-opentelemetry-exporter-otlp-proto-grpc ~=1.42.0
+google-genai ~=2.10.0
+opentelemetry-api ~=1.43.0
+opentelemetry-sdk ~=1.43.0
+opentelemetry-exporter-otlp-proto-grpc ~=1.43.0
 opentelemetry-instrumentation ~= 0.51b0
 opentelemetry-instrumentation-requests ~= 0.51b0
 opentelemetry-instrumentation-google-genai

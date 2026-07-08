@@ -33,7 +33,6 @@ from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
     _OpenTelemetrySemanticConventionStability,
 )
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -50,7 +49,6 @@ def instrument(
     tracer_provider: Any,
     logger_provider: Any,
     meter_provider: Any,
-    semconv: str | None = None,
     content_capture: str | None = None,
     emit_event: bool = False,
     extra_env: Mapping[str, str] | None = None,
@@ -68,23 +66,19 @@ def instrument(
                 tracer_provider=tracer_provider,
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
-                semconv="gen_ai_latest_experimental",
                 content_capture="SPAN_ONLY",
             ) as instrumentor:
                 yield instrumentor
 
-    ``semconv`` is forwarded to ``OTEL_SEMCONV_STABILITY_OPT_IN``;
-    ``content_capture`` to ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``;
+    ``content_capture`` is forwarded to
+    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` and
     ``emit_event=True`` sets ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` to
-    ``"true"``. Pass ``extra_env`` for anything else. ``None`` leaves the
-    variable untouched; an empty string clears the value (matches the
-    ``""`` form some tests use to express "experimental opt-in disabled").
+    ``"true"``; both default to leaving their variable untouched. Pass
+    ``extra_env`` for anything else.
 
     Previous values are restored on exit so tests stay isolated.
     """
     overrides: dict[str, str] = {}
-    if semconv is not None:
-        overrides[OTEL_SEMCONV_STABILITY_OPT_IN] = semconv
     if content_capture is not None:
         overrides[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
             content_capture

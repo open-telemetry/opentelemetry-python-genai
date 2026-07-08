@@ -128,6 +128,22 @@ uv run tox -e changelog-preview
 If your change doesn't need an entry (pure docs/tooling), add the
 `Skip Changelog` label to the PR.
 
+## Skills
+
+This repo ships skills (under `.github/skills/`) that automate the heavy,
+repeatable contribution flows. Trigger them deliberately when
+you start one of these tasks:
+
+- **`migrate-from-openinference`** — migrate an `openinference-instrumentation-*`
+  package into this repo as an OTel GenAI package, or augment an existing
+  package with the coverage OpenInference adds on top.
+- **`review-migration`** — review a ported or augmented package against its
+  upstream implementation and write `MIGRATION_REPORT.md`.
+- **`write-conformance-tests`** — author conformance scenarios and the
+  `test_conformance.py` runner for an instrumentation package.
+
+Please contribute back anything you learn while using the skills that could help improve them!
+
 ## Keep PRs small
 
 One logical change per PR. Don't bundle unrelated fixes, refactors, or

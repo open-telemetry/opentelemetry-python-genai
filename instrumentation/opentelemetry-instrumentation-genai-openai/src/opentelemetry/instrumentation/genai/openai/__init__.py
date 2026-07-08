@@ -80,7 +80,9 @@ from .patch import (
 )
 from .patch_responses import (
     async_responses_create,
+    async_responses_stream,
     responses_create,
+    responses_stream,
 )
 
 
@@ -173,8 +175,18 @@ class OpenAIInstrumentor(BaseInstrumentor):
             )
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
+                "Responses.stream",
+                responses_stream(handler),
+            )
+            wrap_function_wrapper(
+                "openai.resources.responses.responses",
                 "AsyncResponses.create",
                 async_responses_create(handler),
+            )
+            wrap_function_wrapper(
+                "openai.resources.responses.responses",
+                "AsyncResponses.stream",
+                async_responses_stream(handler),
             )
 
     def _uninstrument(self, **kwargs):
@@ -190,8 +202,9 @@ class OpenAIInstrumentor(BaseInstrumentor):
         responses_module = _get_responses_module()
         if responses_module is not None:
             unwrap(responses_module.Responses, "create")
-            if hasattr(responses_module, "AsyncResponses"):
-                unwrap(responses_module.AsyncResponses, "create")
+            unwrap(responses_module.Responses, "stream")
+            unwrap(responses_module.AsyncResponses, "create")
+            unwrap(responses_module.AsyncResponses, "stream")
 
 
 def _get_responses_module():
