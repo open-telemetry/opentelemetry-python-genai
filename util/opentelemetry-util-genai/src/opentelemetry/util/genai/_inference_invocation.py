@@ -133,7 +133,7 @@ class InferenceInvocation(GenAIInvocation):
         }
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
-        attrs = self._get_start_attributes()
+        attrs: dict[str, AttributeValue] = {}
         if self.output_tokens is None and self.thinking_tokens is None:
             output_tokens = None
         else:
@@ -217,7 +217,8 @@ class InferenceInvocation(GenAIInvocation):
         if not should_emit_event():
             return None
 
-        attributes = self._get_attributes()
+        attributes = self._get_start_attributes()
+        attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
         return LogRecord(
