@@ -30,7 +30,6 @@ from opentelemetry.util.genai.utils import (
 from opentelemetry.util.types import AttributeValue
 
 
-
 class InferenceInvocation(GenAIInvocation):
     """Represents a single LLM chat/completion call.
 

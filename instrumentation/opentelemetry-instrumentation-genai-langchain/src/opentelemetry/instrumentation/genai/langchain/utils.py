@@ -24,9 +24,9 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
     Text,
-    ToolDefinition,
     ToolCallRequest,
     ToolCallResponse,
+    ToolDefinition,
 )
 
 # Mapping from LangChain ``ls_provider`` metadata values to the well-known
@@ -167,9 +167,7 @@ def to_input_messages(
         parts = _message_parts(message)
         if not parts:
             continue
-        result.append(
-            InputMessage(role=_normalize_role(message), parts=parts)
-        )
+        result.append(InputMessage(role=_normalize_role(message), parts=parts))
     return result
 
 
@@ -200,6 +198,7 @@ def to_output_messages(
             )
         )
     return result
+
 
 def _get_property_value(obj: Any, property_name: str) -> Any:
     if isinstance(obj, dict):

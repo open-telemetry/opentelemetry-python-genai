@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -22,10 +22,9 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 from opentelemetry.instrumentation.genai.langchain.utils import (
     make_input_message,
     make_last_output_message,
-    prepare_tool_definitions,
     normalize_provider,
+    prepare_tool_definitions,
     to_input_messages,
-    to_output_messages,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -35,6 +34,7 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
+    MessagePart,
     OutputMessage,
     Text,
     ToolCallRequest,
@@ -254,9 +254,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         # (one inner list per generation request). Flatten and let
         # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
         # with proper roles, tool-call requests, tool results, and reasoning.
-        flattened: list[BaseMessage] = [
-            msg for sub in messages for msg in sub
-        ]
+        flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
         input_messages = to_input_messages(flattened)
 
         llm_invocation = self._telemetry_handler.inference(

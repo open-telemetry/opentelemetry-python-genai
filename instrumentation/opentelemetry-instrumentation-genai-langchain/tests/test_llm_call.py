@@ -4,7 +4,11 @@
 from typing import Optional
 
 import pytest
-from langchain_core.messages import FunctionMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from openai import AuthenticationError
 
 from opentelemetry.instrumentation.genai.langchain.utils import (
