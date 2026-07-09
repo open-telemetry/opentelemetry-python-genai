@@ -59,19 +59,8 @@ runs:
         echo "on_main=${on_main}" >> "$GITHUB_OUTPUT"
         echo "on_backport=${on_backport}" >> "$GITHUB_OUTPUT"
 
-<<<<<<< HEAD
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-=======
-    - name: Set up Python 3.10
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.14'
-
-    - name: Install tox and towncrier
-      shell: bash
-      run: pip install tox towncrier==25.8.0
->>>>>>> main
 
     - name: Prepare package on main
       if: steps.verify.outputs.on_main == 'true'
