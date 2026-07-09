@@ -15,7 +15,7 @@
 # Single minimum-version requirements for langchain unit tests.
 # TODO: split into oldest/latest once the version matrix is defined.
 
-langchain-openai>=1.3.3
+langchain-openai>=1.3.4
 langchain-aws>=1.6.2
 langchain-google-genai>=4.2.7
 boto3>=1.43.43
