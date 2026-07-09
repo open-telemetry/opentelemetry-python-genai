@@ -1,0 +1,116 @@
+name: Prepare package for release
+description: >
+  Bump a package's version and build its changelog for release, then open a
+  pull request. Handles both minor and patch release types, and both main
+  and backport branches for patches.
+
+inputs:
+  package:
+    description: Package name (e.g. opentelemetry-instrumentation-genai-openai)
+    required: true
+  release_type:
+    description: Type of release to prepare - "minor" or "patch"
+    required: true
+  otelbot-app-id:
+    description: OTELBOT app id used to open the pull request
+    required: true
+  otelbot-private-key:
+    description: OTELBOT app private key used to open the pull request
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify inputs
+      shell: bash
+      run: |
+        case "${{ inputs.release_type }}" in
+          minor|patch) ;;
+          *)
+            echo "release_type must be 'minor' or 'patch', got '${{ inputs.release_type }}'"
+            exit 1
+            ;;
+        esac
+
+    - name: Verify branch and version state
+      id: verify
+      shell: bash
+      run: |
+        on_main=false
+        on_backport=false
+        case "$GITHUB_REF_NAME" in
+          main)
+            on_main=true
+            ;;
+          package-release/${{ inputs.package }}/v*)
+            on_backport=true
+            ;;
+          *)
+            echo "Run on main (current minor line) or package-release/${{ inputs.package }}/v* (backport)"
+            exit 1
+            ;;
+        esac
+
+        if [[ "${{ inputs.release_type }}" == "minor" && "$on_backport" == "true" ]]; then
+          echo "Minor release preparation must run on main, not on a backport branch"
+          exit 1
+        fi
+
+        echo "on_main=${on_main}" >> "$GITHUB_OUTPUT"
+        echo "on_backport=${on_backport}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: '3.10'
+
+    - name: Install tox and towncrier
+      shell: bash
+      run: pip install tox towncrier==25.8.0
+
+    - name: Prepare package on main
+      if: steps.verify.outputs.on_main == 'true'
+      shell: bash
+      run: ./scripts/prepare_package_for_release.sh "${{ inputs.package }}"
+
+    - name: Prepare patch on backport branch
+      if: steps.verify.outputs.on_backport == 'true'
+      shell: bash
+      run: ./scripts/prepare_package_for_patch_release.sh "${{ inputs.package }}"
+
+    - name: Compute prepared version
+      shell: bash
+      run: |
+        version=$(./scripts/eachdist.py version --package "${{ inputs.package }}")
+        echo "VERSION=${version}" >> "$GITHUB_ENV"
+        echo "PACKAGE_NAME=${{ inputs.package }}" >> "$GITHUB_ENV"
+
+    - name: Configure CLA-approved git bot
+      shell: bash
+      run: .github/scripts/use-cla-approved-github-bot.sh
+
+    - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      id: otelbot-token
+      with:
+        app-id: ${{ inputs.otelbot-app-id }}
+        private-key: ${{ inputs.otelbot-private-key }}
+
+    - name: Create pull request
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+      run: |
+        if [[ "${{ inputs.release_type }}" == "patch" ]]; then
+          title="Prepare patch release for ${PACKAGE_NAME} v${VERSION}"
+          branch="otelbot/patch-${PACKAGE_NAME}-v${VERSION}"
+        else
+          title="Prepare release for ${PACKAGE_NAME} v${VERSION}"
+          branch="otelbot/prepare-${PACKAGE_NAME}-v${VERSION}"
+        fi
+
+        git commit -a -m "$title"
+        git push origin HEAD:"$branch"
+        gh pr create --title "$title" \
+                     --body "$title." \
+                     --head "$branch" \
+                     --base "$GITHUB_REF_NAME"

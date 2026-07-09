@@ -15,6 +15,55 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.0b0 (2026-07-09)
+
+### Added
+
+- Add instrumentation for `chat.completions.parse()` structured outputs
+  ([#18](https://github.com/open-telemetry/opentelemetry-python-genai/pull/18))
+- Add instrumentation for OpenAI Responses API async `create`
+  ([#99](https://github.com/open-telemetry/opentelemetry-python-genai/pull/99))
+- Add OpenAI Responses API stream instrumentation for sync and async clients.
+  ([#131](https://github.com/open-telemetry/opentelemetry-python-genai/pull/131))
+- Pass tool definitions from `tools` kwarg to
+  `InferenceInvocation.tool_definitions` so `gen_ai.tool.definitions` span
+  attribute is populated on chat completion spans
+  ([#4554](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4554))
+
+### Changed
+
+- Renamed package from `opentelemetry-instrumentation-openai-v2` to
+  `opentelemetry-instrumentation-genai-openai` (imports
+  `opentelemetry.instrumentation.genai.openai`); the version line restarts at
+  `1.0b0`.
+  ([#60](https://github.com/open-telemetry/opentelemetry-python-genai/pull/60))
+- Use shared GenAI stream wrappers for Responses API streams.
+  ([#92](https://github.com/open-telemetry/opentelemetry-python-genai/pull/92))
+- Switch OpenAI instrumentation and tests to the latest GenAI semantic
+  convention mode.
+  ([#108](https://github.com/open-telemetry/opentelemetry-python-genai/pull/108))
+- Migrate OpenAI embeddings instrumentation to the shared util-genai
+  EmbeddingInvocation lifecycle and drop the legacy embeddings-specific
+  span/metrics plumbing.
+  ([#127](https://github.com/open-telemetry/opentelemetry-python-genai/pull/127))
+- Refactor chat completion stream wrappers to use shared GenAI stream lifecycle
+  helpers.
+  ([#4500](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4500))
+
+### Removed
+
+- Remove unused legacy event helpers that emitted the deprecated
+  `gen_ai.system` attribute and `gen_ai.{role}.message` / `gen_ai.choice`
+  events.
+  ([#161](https://github.com/open-telemetry/opentelemetry-python-genai/pull/161))
+
+### Fixed
+
+- Migrate OpenAI choice_count to use InferenceInvocation.request_choice_count
+  field for
+  consistency with other instrumentations.
+  ([#192](https://github.com/open-telemetry/opentelemetry-python-genai/pull/192))
+
 ## Version 2.4b0 (2026-05-01)
 
 

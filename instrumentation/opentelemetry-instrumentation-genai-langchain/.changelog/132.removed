@@ -1,1 +1,0 @@
-Stopped setting `gen_ai.provider.name` on internal agent spans.
