@@ -1,0 +1,13 @@
+# crewai hard-pins the OpenTelemetry stack to narrow windows (e.g.
+# opentelemetry-api >=1.42,<1.43) that can never match the git-pinned dev
+# builds from dev-requirements-conformance.txt. uv overrides (UV_OVERRIDE,
+# wired in tox.ini for the crewai-conformance factor) replace crewai's
+# declared pins so the conformance stack wins. Same commit as
+# dev-requirements-conformance.txt — keep in sync.
+opentelemetry-api @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-api
+opentelemetry-sdk @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-sdk
+opentelemetry-semantic-conventions @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-semantic-conventions
+opentelemetry-proto @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-proto
+opentelemetry-exporter-otlp-proto-common @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-common
+opentelemetry-exporter-otlp-proto-grpc @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-http @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-http
