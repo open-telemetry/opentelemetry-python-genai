@@ -182,6 +182,15 @@ isn't enough, add the capability here rather than working around it.
 - For attributes with a well-known value set, use the generated enum from the same module instead
   of string literals.
 
+### README
+
+- Each package's `README.rst` is published as its PyPI long description. When a change introduces
+  user-visible changes to the public API, configuration (env vars, `instrument()` keyword
+  arguments), supported operations/span types, or examples, update the package `README.rst` in the
+  same PR so its claims stay accurate.
+- `README.rst` must render on PyPI. Do not use Sphinx-only roles (e.g. `:class:`, `:mod:`); they
+  fail the PyPI renderer. Run `uv run tox -e readme` to validate.
+
 ### Tests
 
 - For every public API instrumented, cover sync/async variants when both exist.
@@ -233,7 +242,7 @@ scenario hides the gap; writing it records the gap (as a declared violation
 or a skip reason) so it fails loudly once the gap is fixed. **Never** drop a
 scenario file because it would fail today.
 
-Run via `tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
+Run via `uv run tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
 `*-conformance` tox envs target `tests/test_conformance.py` directly; the
 regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
 OTLP/gRPC exporter or `weaver_live_check`.

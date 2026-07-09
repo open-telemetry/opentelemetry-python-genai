@@ -1,1 +1,0 @@
-Use `AttributeValue` instead of `Any` for span and metric attribute types in `GenAIInvocation` and its subclasses.
