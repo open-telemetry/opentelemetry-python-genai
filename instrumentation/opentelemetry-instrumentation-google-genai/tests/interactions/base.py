@@ -150,6 +150,10 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(
             span.attributes["gen_ai.operation.name"], "interactions.create"
         )
+        self.assertEqual(
+            span.attributes["server.address"],
+            "generativelanguage.googleapis.com",
+        )
 
     def test_span_and_event_still_written_when_response_is_exception(
         self,

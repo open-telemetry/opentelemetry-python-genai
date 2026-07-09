@@ -39,6 +39,7 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.types import AttributeValue
 
 from .allowlist_util import AllowList
+from .client_info import get_client_info as _get_client_info
 from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
 from .dict_util import flatten_dict
 from .message import (
@@ -435,10 +436,12 @@ def _create_instrumented_generate_content(
                 config,
             )
             finish_reasons = []
+            _, server_address = _get_client_info(instance)
             with telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             ) as invocation:
                 _apply_request_attributes(
                     wrapped_config,
@@ -591,10 +594,12 @@ def _create_instrumented_generate_content_stream(
                 telemetry_handler,
                 config,
             )
+            _, server_address = _get_client_info(instance)
             invocation = telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             )
             _apply_request_attributes(
                 wrapped_config,
@@ -660,10 +665,12 @@ def _create_instrumented_async_generate_content(
                 config,
             )
             finish_reasons = []
+            _, server_address = _get_client_info(instance)
             with telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             ) as invocation:
                 invocation.attributes.update(
                     _get_extra_generate_content_attributes()
@@ -740,10 +747,12 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 telemetry_handler,
                 config,
             )
+            _, server_address = _get_client_info(instance)
             invocation = telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             )
             invocation.attributes.update(
                 _get_extra_generate_content_attributes()

@@ -13,6 +13,9 @@ from google.genai.models import AsyncModels, Models
 from google.genai.types import EmbedContentResponse
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.google_genai.client_info import (
+    get_client_info as _get_client_info,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -65,31 +68,6 @@ def _apply_embedding_response_attributes(
                 )
         except Exception:
             pass
-
-
-def _get_client_info(instance: Any) -> tuple[bool, str | None]:
-    is_vertex = False
-    server_address = None
-    if hasattr(instance, "_api_client"):
-        api_client = instance._api_client
-        is_vertex = getattr(api_client, "vertexai", False)
-        if hasattr(api_client, "_http_options"):
-            server_address = getattr(
-                api_client._http_options, "base_url", None
-            )
-    elif hasattr(instance, "_client"):
-        client = instance._client
-        is_vertex = getattr(client, "_is_vertex", False)
-        server_address = getattr(client, "server", None)
-    elif hasattr(instance, "sdk_configuration"):
-        config = instance.sdk_configuration
-        server_url = getattr(config, "server_url", "")
-        if server_url:
-            server_address = server_url
-            if "aiplatform.googleapis.com" in server_url:
-                is_vertex = True
-
-    return is_vertex, server_address
 
 
 def _create_instrumented_embed_content(

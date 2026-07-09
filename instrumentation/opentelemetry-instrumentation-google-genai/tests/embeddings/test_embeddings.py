@@ -80,6 +80,10 @@ class TestEmbeddings(TestCase):
         self.assertEqual(
             attrs[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT], 3
         )
+        self.assertEqual(
+            attrs["server.address"],
+            "generativelanguage.googleapis.com",
+        )
 
     def test_async_embed_content(self):
         async def run_test():
@@ -112,6 +116,10 @@ class TestEmbeddings(TestCase):
         )
         self.assertEqual(
             attrs[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT], 3
+        )
+        self.assertEqual(
+            attrs["server.address"],
+            "generativelanguage.googleapis.com",
         )
 
     def test_embed_content_multiple_inputs(self):

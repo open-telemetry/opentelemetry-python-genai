@@ -231,6 +231,10 @@ class NonStreamingTestCase(TestCase):
         self.assertEqual(
             span.attributes["gen_ai.operation.name"], "generate_content"
         )
+        self.assertEqual(
+            span.attributes["server.address"],
+            "generativelanguage.googleapis.com",
+        )
 
     def test_generated_span_has_extra_genai_attributes(self):
         self.configure_valid_response(text="Yep, it works!")
