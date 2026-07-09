@@ -5,7 +5,8 @@
 # It also stores them in a /tmp/CHANGELOG_SECTION.md which is used later to copy them over to the
 # CHANGELOG in main branch which is done by merge_changelog_to_main script.
 
-# This script is called from the release workflows (package-release.yml and release.yml).
+# This script is called from the finalize step of the release workflows
+# (see .github/workflows/_release-finalize.yml).
 
 set -ev
 
