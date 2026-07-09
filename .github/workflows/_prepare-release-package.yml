@@ -76,8 +76,7 @@ jobs:
           pr_url=$(gh pr create --title "$message" \
                                 --body "$body" \
                                 --head "$branch" \
-                                --base main \
-                                --json url --jq .url)
+                                --base main)
 
           if [[ "${{ inputs.add_release_label }}" == "true" ]]; then
             gh pr edit "$pr_url" --add-label release
