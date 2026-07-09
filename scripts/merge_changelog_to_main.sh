@@ -3,7 +3,8 @@
 # This script copies release notes for the current version from CHANGELOG.md file
 # and stores them in a temporary file for later use in the release workflow
 
-# This script is called from the release workflows (package-release.yml and release.yml).
+# This script is called from the finalize step of the release workflows
+# (see .github/workflows/_release-finalize.yml).
 
 set -ev
 

@@ -1,4 +1,4 @@
-name: "[All] Release"
+name: "Release all"
 on:
   workflow_dispatch:
   pull_request:
@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 
-run-name: "[All] Release"
+run-name: "Release all"
 
 jobs:
   enumerate:
@@ -67,21 +67,52 @@ jobs:
           json=$(printf '%s\n' "${packages[@]}" | jq -R . | jq -s -c .)
           echo "packages=${json}" >> "$GITHUB_OUTPUT"
 
-  publish:
+  build:
     needs: enumerate
-    permissions:
-      contents: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-package.yml
+    uses: ./.github/workflows/_release-build.yml
     with:
       package: ${{ matrix.package }}
-      bump_after_release: false
       ref: ${{ needs.enumerate.outputs.ref }}
       on_main: true
+
+  publish:
+    needs: [enumerate, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.enumerate.outputs.packages) }}
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+
+  finalize:
+    needs: [enumerate, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.enumerate.outputs.packages) }}
+    uses: ./.github/workflows/_release-finalize.yml
+    with:
+      package: ${{ matrix.package }}
+      ref: ${{ needs.enumerate.outputs.ref }}
+      on_main: true
+      bump_after_release: false
     secrets: inherit
 
   bump-main:
