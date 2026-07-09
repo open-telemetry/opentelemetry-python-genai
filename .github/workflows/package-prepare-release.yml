@@ -23,7 +23,6 @@ jobs:
   prepare:
     permissions:
       contents: write
-      pull-requests: write
     uses: ./.github/workflows/_prepare-release-package.yml
     with:
       package: ${{ inputs.package }}

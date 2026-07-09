@@ -23,7 +23,6 @@ jobs:
   release:
     permissions:
       contents: write
-      pull-requests: write
       id-token: write
     uses: ./.github/workflows/_release-package.yml
     with:
