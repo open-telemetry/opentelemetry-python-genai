@@ -69,6 +69,10 @@ jobs:
 
   publish:
     needs: enumerate
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
