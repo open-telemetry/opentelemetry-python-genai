@@ -1,0 +1,126 @@
+name: "Prepare minor release"
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        type: choice
+        options:
+        - ''
+        - opentelemetry-instrumentation-genai-anthropic
+        - opentelemetry-instrumentation-google-genai
+        - opentelemetry-instrumentation-genai-langchain
+        - opentelemetry-instrumentation-genai-openai-agents
+        - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-util-genai
+        description: >
+          Restrict to a single package. Leave empty to prepare every package
+          with pending changelog fragments.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+run-name: "Prepare minor release${{ inputs.package && format(': {0}', inputs.package) || ' (all)' }}"
+
+jobs:
+  prepare:
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Verify branch
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "This workflow should only be run against main"
+            exit 1
+          fi
+
+      - name: Select packages with changelog fragments
+        id: packages
+        run: |
+          set -e
+          mapfile -t candidates < <(./scripts/eachdist.py packages-with-changelog-fragments)
+          if [[ ${#candidates[@]} -eq 0 ]]; then
+            echo "No packages with changelog fragments found"
+            exit 1
+          fi
+
+          selected=()
+          filter='${{ inputs.package }}'
+          if [[ -n "$filter" ]]; then
+            for package in "${candidates[@]}"; do
+              if [[ "$package" == "$filter" ]]; then
+                selected+=("$package")
+              fi
+            done
+            if [[ ${#selected[@]} -eq 0 ]]; then
+              echo "Package '$filter' has no changelog fragments to release"
+              exit 1
+            fi
+          else
+            selected=("${candidates[@]}")
+          fi
+
+          printf 'Preparing: %s\n' "${selected[@]}"
+          {
+            echo "packages<<EOF"
+            printf '%s\n' "${selected[@]}"
+            echo "EOF"
+            echo "count=${#selected[@]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.10'
+
+      - name: Install tox and towncrier
+        run: pip install tox towncrier==25.8.0
+
+      - name: Prepare selected packages for release
+        run: |
+          while IFS= read -r package; do
+            [[ -z "$package" ]] && continue
+            echo "Preparing ${package}"
+            ./scripts/prepare_package_for_release.sh "$package"
+          done <<< "${{ steps.packages.outputs.packages }}"
+
+      - name: Configure CLA-approved git bot
+        run: .github/scripts/use-cla-approved-github-bot.sh
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: otelbot-token
+        with:
+          app-id: ${{ vars.OTELBOT_APP_ID }}
+          private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+
+      - name: Create pull request
+        env:
+          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+          PACKAGES: ${{ steps.packages.outputs.packages }}
+          COUNT: ${{ steps.packages.outputs.count }}
+        run: |
+          if [[ "$COUNT" -eq 1 ]]; then
+            package=$(echo "$PACKAGES" | head -n1)
+            version=$(./scripts/eachdist.py version --package "$package")
+            title="Prepare release for ${package} v${version}"
+            body="Prepare \`${package}\` v\`${version}\` for release."
+            branch="otelbot/prepare-${package}-v${version}"
+          else
+            title="Prepare release for all packages with changelog fragments"
+            body="Prepare all packages that have towncrier changelog fragments for release."
+            branch="otelbot/prepare-release-all-$(date +%Y%m%d)"
+          fi
+
+          git commit -a -m "$title"
+          git push origin HEAD:"$branch"
+          pr_url=$(gh pr create --title "$title" \
+                                --body "$body" \
+                                --head "$branch" \
+                                --base main \
+                                --json url --jq .url)
+          gh pr edit "$pr_url" --add-label release

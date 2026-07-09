@@ -32,17 +32,17 @@ are created on demand from an existing tag when patching an older minor.
 For releasing every package that has towncrier changelog fragments:
 
 1. Run the
-   [`[All] Prepare release`](./.github/workflows/release-all-prepare.yml)
-   workflow against `main`.
+   [`Prepare minor release`](./.github/workflows/prepare-minor.yml)
+   workflow against `main`. Leave the `package` input empty for the bulk case.
    - Finds packages with fragments under `.changelog/`.
    - Opens one combined PR on `main` that drops `.dev` suffixes and runs
      `towncrier build` for each eligible package.
    - Labels the PR `release`.
 2. Review and merge the prepare PR.
 3. The
-   [`[All] Release`](./.github/workflows/release-all.yml)
-   workflow runs automatically when a labelled prepare PR merges (or trigger it
-   manually against `main`).
+   [`Release all`](./.github/workflows/release-all.yml)
+   workflow runs automatically when a labelled prepare PR merges (or trigger
+   it manually against `main`).
    - Publishes each ready package to PyPI.
    - Creates a GitHub release tag (`<pkg>==<version>`) on `main` for each.
    - Opens a PR bumping released packages back to the next `.dev` version.
@@ -50,33 +50,30 @@ For releasing every package that has towncrier changelog fragments:
 Packages without changelog fragments are skipped during prepare and logged in
 the workflow output.
 
-## Per-package release
+## Single-package minor release
 
-Use when only one package needs to ship, or the rest of the workspace is not
-ready for a bulk release.
+Use when only one package needs to ship on the current minor line, or the
+rest of the workspace is not ready for a bulk release.
 
 1. Run
-   [`[Package] Prepare release`](./.github/workflows/package-prepare-release.yml)
-   against `main`. Select the package from the dropdown.
-   - Opens a PR on `main` that drops the `.dev` suffix and runs
-     `towncrier build`.
+   [`Prepare minor release`](./.github/workflows/prepare-minor.yml)
+   against `main` and set the `package` input to the target package. The
+   workflow opens a PR that drops the `.dev` suffix and runs
+   `towncrier build` for just that package (still labelled `release`).
 2. Review and merge the prepare PR.
-3. Run
-   [`[Package] Release`](./.github/workflows/package-release.yml)
-   against `main`.
-   - Builds the wheel, publishes to PyPI, creates the GitHub release tag, and
-     opens PRs for any changelog date updates and the next `.dev` bump.
+3. Either wait for `Release all` to fire on the merged prepare PR, or run
+   [`Release package`](./.github/workflows/release-package.yml)
+   against `main` for that one package.
 
 ## Patch release (current minor line)
 
 1. Land the fix on `main` as a normal PR (with a towncrier fragment).
 2. Run
-   [`[Package] Prepare patch release`](./.github/workflows/package-prepare-patch-release.yml)
-   against `main`.
-   - Same mechanics as prepare release: drops `.dev`, runs `towncrier build`.
+   [`Prepare package patch release`](./.github/workflows/prepare-package-patch.yml)
+   against `main`. Drops `.dev` and runs `towncrier build`.
 3. Review and merge the prepare PR.
 4. Run
-   [`[Package] Release`](./.github/workflows/package-release.yml)
+   [`Release package`](./.github/workflows/release-package.yml)
    against `main`.
 
 ## Backport patch (older minor line)
@@ -85,15 +82,25 @@ ready for a bulk release.
    tag if it does not exist yet.
 2. Cherry-pick or develop the fix on the branch.
 3. Run
-   [`[Package] Prepare patch release`](./.github/workflows/package-prepare-patch-release.yml)
-   against the backport branch.
-   - Bumps the patch version and runs `towncrier build`.
+   [`Prepare package patch release`](./.github/workflows/prepare-package-patch.yml)
+   against the backport branch. Bumps the patch version and runs
+   `towncrier build`.
 4. Review and merge the prepare PR into the backport branch.
 5. Run
-   [`[Package] Release`](./.github/workflows/package-release.yml)
+   [`Release package`](./.github/workflows/release-package.yml)
    against the backport branch.
    - Tags the backport branch and opens a PR copying changelog updates to
      `main`.
+
+## Major release
+
+Major bumps (e.g. `1.YbN` → `2.0b0`) are not automated. To release a major:
+
+1. Open a PR against `main` that manually edits the target package's
+   `version.py` from `X.YbN.dev` to `(X+1).0b0.dev`.
+2. Merge that PR, add a changelog fragment describing the major change, then
+   follow the standard bulk-release or single-package minor path above.
+   `Prepare minor release` picks up the new version verbatim.
 
 ## Pre-existing static `## Unreleased` entries
 
@@ -112,42 +119,43 @@ When a new package is ready to ship:
 1. Add its name to the `packages=` list under `[release_packages]` in
    `eachdist.ini`. Packages not listed here are skipped by the release
    workflows.
-2. Add the package to the dropdown options in the per-package workflow files
-   (`package-prepare-release.yml`, `package-release.yml`,
-   `package-prepare-patch-release.yml`).
-3. Create the PyPI project and register a trusted publisher (*Manage* →
-   *Publishing* → *Add a new pending publisher*). For detailed instructions, refer to PyPI's documentation on [Creating a PyPI project with a Trusted Publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) or [Adding a Trusted Publisher to an existing PyPI project](https://docs.pypi.org/trusted-publishers/adding-a-publisher/). Note that [creating a pending publisher does not reserve the project name on PyPI](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/):
+2. Add the package to the dropdown options in the workflow files that offer
+   a package selector: `release-package.yml`, `prepare-minor.yml`, and
+   `prepare-package-patch.yml`.
+3. Create the PyPI project and register **two** trusted publishers (*Manage*
+   → *Publishing* → *Add a new pending publisher*), one for each workflow
+   that publishes. For detailed instructions, refer to PyPI's documentation on
+   [Creating a PyPI project with a Trusted Publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+   or [Adding a Trusted Publisher to an existing PyPI project](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
+   Note that
+   [creating a pending publisher does not reserve the project name on PyPI](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/):
 
-| Field | Value |
-|-------|-------|
-| PyPI project name | e.g. `opentelemetry-util-genai` |
-| Owner | `open-telemetry` |
-| Repository name | `opentelemetry-python-genai` |
-| Workflow name | `release-all.yml` |
-| Environment name | `pypi` |
-
-Register a publisher entry for each release workflow (`release-all.yml` and
-`package-release.yml`).
+| Field             | Entry 1                         | Entry 2                      |
+|-------------------|---------------------------------|------------------------------|
+| PyPI project name | e.g. `opentelemetry-util-genai` | same                         |
+| Owner             | `open-telemetry`                | `open-telemetry`             |
+| Repository name   | `opentelemetry-python-genai`    | `opentelemetry-python-genai` |
+| Workflow name     | `release-package.yml`           | `release-all.yml`            |
+| Environment name  | `pypi`                          | `pypi`                       |
 
 4. Optionally reserve the package name to prevent name-squatting shortly after
    the introductory PR lands on `main` by navigating to
-   <https://pypi.org/manage/organization/opentelemetry/projects/>, scrolling to the
-   bottom (**Add project to organization**), and using the form.
+   <https://pypi.org/manage/organization/opentelemetry/projects/>, scrolling to
+   the bottom (**Add project to organization**), and using the form.
 
-All packages share the same release workflows (`release-all.yml` and
-`package-release.yml`) and `pypi` environment. The first upload from CI activates
-the publisher.
+All packages share the same environment. The first upload from CI activates
+each publisher.
 
 ## Troubleshooting
 
-### No packages found during `[All] Prepare release`
+### No packages found during `Prepare minor release`
 
 At least one publishable package needs a towncrier fragment under
 `.changelog/` (any file other than `.gitkeep` / `.gitignore`).
 
 ### PyPI publish failed mid-workflow
 
-Re-run the release workflow (`[Package] Release` or `[All] Release`). Trusted
+Re-run the release workflow (`Release package` or `Release all`). Trusted
 Publishing only works from GitHub Actions — there is no repo-stored PyPI token
 for manual `twine upload`.
 
@@ -168,3 +176,4 @@ Merge the prepare PR first. Release workflows require a non-`.dev` version in
 
 - A `backport` workflow (create backport branches manually from release tags
   when needed).
+- An automated major-bump workflow (see [Major release](#major-release)).

@@ -1,14 +1,10 @@
-name: _Release package
+name: _Release finalize
 on:
   workflow_call:
     inputs:
       package:
         required: true
         type: string
-      bump_after_release:
-        required: false
-        type: boolean
-        default: false
       ref:
         required: false
         type: string
@@ -17,16 +13,19 @@ on:
         required: false
         type: boolean
         default: false
+      bump_after_release:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
-  release:
-    environment: pypi
+  finalize:
     permissions:
       contents: write
-      id-token: write
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Resolve release target
@@ -67,11 +66,6 @@ jobs:
             exit 1
           fi
 
-          if [[ "${{ steps.target.outputs.on_main }}" == "true" && "$version" == *.dev ]]; then
-            echo "version on main still has a .dev suffix; merge the prepare PR first"
-            exit 1
-          fi
-
           path=$(./scripts/eachdist.py find-package --package ${{ inputs.package }})
           echo "CHANGELOG=./$path/CHANGELOG.md" >> $GITHUB_ENV
           echo "PACKAGE_NAME=${{ inputs.package }}" >> $GITHUB_ENV
@@ -83,52 +77,6 @@ jobs:
           else
             echo "RELEASE_TARGET=$GITHUB_REF_NAME" >> $GITHUB_ENV
           fi
-
-      - name: Check that changelog update was merged to main
-        if: steps.target.outputs.on_main == 'true'
-        run: |
-          if [[ -z $PRIOR_VERSION_WHEN_PATCH ]]; then
-            if ! grep --quiet "^## Version ${VERSION}" ${CHANGELOG}; then
-              echo "The prepare-release PR needs to be merged first"
-              exit 1
-            fi
-          fi
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: steps.target.outputs.on_main != 'true'
-        with:
-          ref: main
-
-      - name: Check that changelog update was merged to main (backport branch)
-        if: steps.target.outputs.on_main != 'true'
-        run: |
-          if [[ -z $PRIOR_VERSION_WHEN_PATCH ]]; then
-            if ! grep --quiet "^## Version ${VERSION}" ${CHANGELOG}; then
-              echo "The prepare-release PR needs to be merged first"
-              exit 1
-            fi
-          fi
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: steps.target.outputs.on_main != 'true'
-        with:
-          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: '3.14'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-
-      - name: Build wheels
-        run: ./scripts/build_a_package.sh
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
-        with:
-          packages-dir: dist/
-          skip-existing: true
 
       - name: Generate release notes
         env:

@@ -1,0 +1,52 @@
+name: "Release package"
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        type: choice
+        options:
+        - opentelemetry-instrumentation-genai-anthropic
+        - opentelemetry-instrumentation-google-genai
+        - opentelemetry-instrumentation-genai-langchain
+        - opentelemetry-instrumentation-genai-openai-agents
+        - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-util-genai
+        description: 'Package to release'
+        required: true
+
+permissions:
+  contents: read
+
+run-name: "Release: ${{ inputs.package }}"
+
+jobs:
+  build:
+    uses: ./.github/workflows/_release-build.yml
+    with:
+      package: ${{ inputs.package }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ inputs.package }}
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+
+  finalize:
+    needs: publish
+    uses: ./.github/workflows/_release-finalize.yml
+    with:
+      package: ${{ inputs.package }}
+      bump_after_release: true
+    secrets: inherit
