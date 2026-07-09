@@ -139,7 +139,6 @@ jobs:
 
       - name: Bump released packages to next dev versions
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
           PACKAGES_JSON: ${{ needs.enumerate.outputs.packages }}
         run: |
