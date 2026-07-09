@@ -21,6 +21,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_FROZEN: "true"
+
 run-name: "Prepare minor release${{ inputs.package && format(': {0}', inputs.package) || ' (all)' }}"
 
 jobs:

@@ -17,6 +17,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_FROZEN: "true"
+
 run-name: "Prepare patch release: ${{ inputs.package }}"
 
 jobs:

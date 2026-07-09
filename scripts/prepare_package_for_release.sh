@@ -35,7 +35,7 @@ fi
 
 sed -i -E "s/__version__\\s*=\\s*\"${version}\\.dev\"/__version__ = \"${version}\"/g" "$version_file"
 
-uv run --frozen tox -e generate
-uv run --frozen towncrier build --yes --version "$version" --dir "$(dirname "$changelog")"
+uv run tox -e generate
+uv run towncrier build --yes --version "$version" --dir "$(dirname "$changelog")"
 
 echo "Prepared ${package} for release v${version}"
