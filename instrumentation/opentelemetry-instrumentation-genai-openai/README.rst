@@ -90,17 +90,13 @@ Enabling message content
 *************************
 
 Message content such as the contents of the prompt, completion, function arguments and return values
-are not captured by default. To capture message content as log events, set the environment variable
+are not captured by default. To capture message content, set the environment variable
 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of the following values:
 
-- ``true`` - Legacy. Used to enable content capturing on ``gen_ai.{role}.message`` and ``gen_ai.choice`` events when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are *not* enabled.
-- ``span_only`` - Used to enable content capturing on *span* attributes when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are enabled.
-- ``event_only`` - Used to enable content capturing on *event* attributes when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are enabled.
-- ``span_and_event`` - Used to enable content capturing on both *span* and *event* attributes when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are enabled.
+- ``span_only`` - capture content on *span* attributes.
+- ``event_only`` - capture content on *event* attributes.
+- ``span_and_event`` - capture content on both *span* and *event* attributes.
+- ``no_content`` - do not capture content (the default).
 
 Uploading prompts and completions
 *********************************
