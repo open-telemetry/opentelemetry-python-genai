@@ -116,21 +116,27 @@ When a new package is ready to ship:
    (`package-prepare-release.yml`, `package-release.yml`,
    `package-prepare-patch-release.yml`).
 3. Create the PyPI project and register a trusted publisher (*Manage* →
-   *Publishing* → *Add a new pending publisher*):
+   *Publishing* → *Add a new pending publisher*). For detailed instructions, refer to PyPI's documentation on [Creating a PyPI project with a Trusted Publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) or [Adding a Trusted Publisher to an existing PyPI project](https://docs.pypi.org/trusted-publishers/adding-a-publisher/). Note that [creating a pending publisher does not reserve the project name on PyPI](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/):
 
 | Field | Value |
 |-------|-------|
 | PyPI project name | e.g. `opentelemetry-util-genai` |
 | Owner | `open-telemetry` |
 | Repository name | `opentelemetry-python-genai` |
-| Workflow name | `_release-package.yml` |
+| Workflow name | `release-all.yml` |
 | Environment name | `pypi` |
 
-4. Optionally upload the current `.dev` version manually once to prevent
-   name-squatting, shortly after the introductory PR lands on `main`.
+Register a publisher entry for each release workflow (`release-all.yml` and
+`package-release.yml`).
 
-All packages share the same workflow and environment. The first upload from CI
-activates the publisher.
+4. Optionally reserve the package name to prevent name-squatting shortly after
+   the introductory PR lands on `main` by navigating to
+   <https://pypi.org/manage/organization/opentelemetry/projects/>, scrolling to the
+   bottom (**Add project to organization**), and using the form.
+
+All packages share the same release workflows (`release-all.yml` and
+`package-release.yml`) and `pypi` environment. The first upload from CI activates
+the publisher.
 
 ## Troubleshooting
 
