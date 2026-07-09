@@ -69,9 +69,6 @@ jobs:
 
   build:
     needs: enumerate
-    permissions:
-      contents: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
