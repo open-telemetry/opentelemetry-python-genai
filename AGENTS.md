@@ -89,7 +89,7 @@ uv run pre-commit run ruff --all-files
 uv run tox -e py312-test-instrumentation-genai-openai-latest
 
 # Run a package's conformance scenarios (only *-conformance envs collect test_conformance.py)
-uv run tox -e py312-test-instrumentation-genai-openai-conformance
+uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
 uv run tox -e typecheck
@@ -242,7 +242,7 @@ scenario hides the gap; writing it records the gap (as a declared violation
 or a skip reason) so it fails loudly once the gap is fixed. **Never** drop a
 scenario file because it would fail today.
 
-Run via `uv run tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
+Run via `uv run tox -e py314-test-instrumentation-genai-<lib>-conformance`. The
 `*-conformance` tox envs target `tests/test_conformance.py` directly; the
 regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
 OTLP/gRPC exporter or `weaver_live_check`.

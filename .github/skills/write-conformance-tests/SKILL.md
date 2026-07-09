@@ -353,7 +353,7 @@ and open a follow-up issue to re-record it against the real provider in CI.
 ## Running
 
 ```sh
-uv run tox -e py312-test-instrumentation-genai-<lib>-conformance
+uv run tox -e py314-test-instrumentation-genai-<lib>-conformance
 ```
 
 The `*-conformance` tox envs target `tests/test_conformance.py` directly; the
