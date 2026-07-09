@@ -45,6 +45,8 @@ jobs:
 
   finalize:
     needs: publish
+    permissions:
+      contents: write
     uses: ./.github/workflows/_release-finalize.yml
     with:
       package: ${{ inputs.package }}
