@@ -43,7 +43,7 @@ fi
 
 sed -i -E "s/__version__\\s*=\\s*\"${version}\"/__version__ = \"${next_version}\"/g" "$version_file"
 
-uvx --with tox-uv tox -e generate
-uvx towncrier build --yes --version "$next_version" --dir "$(dirname "$changelog")"
+uv run --frozen tox -e generate
+uv run --frozen towncrier build --yes --version "$next_version" --dir "$(dirname "$changelog")"
 
 echo "Prepared ${package} for patch release v${next_version}"
