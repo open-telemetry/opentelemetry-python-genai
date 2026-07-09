@@ -1,0 +1,14 @@
+[project]
+name = "otel-genai-langchain-example-manual"
+version = "0.0.0"
+description = "Manual instrumentation example for the OpenTelemetry LangChain instrumentation."
+requires-python = ">=3.10"
+dependencies = [
+  "langchain==1.3.11",
+  "langchain-openai>=1.3.3",
+  "opentelemetry-sdk>=1.43.0",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.43.0",
+]
+
+[tool.uv]
+package = false
