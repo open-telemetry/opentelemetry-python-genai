@@ -8,9 +8,9 @@ wrapt>=2.2.2,<3.0.0
 
 # Required by instrumentation packages
 anthropic>=0.116.0
-claude-agent-sdk>=0.2.113
+claude-agent-sdk>=0.2.114
 google-genai>=2.10.0
-langchain>=1.3.11
+langchain>=1.3.12
 openai>=2.44.0
 openai-agents>=0.18.0
 weaviate-client>=4.22.0

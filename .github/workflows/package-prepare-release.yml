@@ -21,6 +21,8 @@ run-name: "[Package][${{ inputs.package }}] Prepare release"
 
 jobs:
   prepare:
+    permissions:
+      contents: write
     uses: ./.github/workflows/_prepare-release-package.yml
     with:
       package: ${{ inputs.package }}
