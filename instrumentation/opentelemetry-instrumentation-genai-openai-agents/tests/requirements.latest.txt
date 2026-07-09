@@ -38,6 +38,7 @@
 # the newest supported version of external dependencies.
 
 openai-agents==0.18.0
+openai~=2.44.0  # openai-agents 0.18.0 breaks with openai>=2.45.0 (openai/openai-agents-python#3772)
 pydantic>=2.12.5,<3
 httpx==0.28.1
 Deprecated==1.3.1
