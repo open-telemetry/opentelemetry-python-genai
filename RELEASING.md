@@ -124,18 +124,24 @@ When a new package is ready to ship:
    `prepare-package-patch.yml`.
 3. Create the PyPI project and register **two** trusted publishers (*Manage*
    → *Publishing* → *Add a new pending publisher*), one for each workflow
-   that publishes:
+   that publishes. For detailed instructions, refer to PyPI's documentation on
+   [Creating a PyPI project with a Trusted Publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+   or [Adding a Trusted Publisher to an existing PyPI project](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
+   Note that
+   [creating a pending publisher does not reserve the project name on PyPI](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/):
 
-| Field             | Entry 1                      | Entry 2                      |
-|-------------------|------------------------------|------------------------------|
-| PyPI project name | e.g. `opentelemetry-util-genai` | same                       |
-| Owner             | `open-telemetry`             | `open-telemetry`             |
-| Repository name   | `opentelemetry-python-genai` | `opentelemetry-python-genai` |
-| Workflow name     | `release-package.yml`        | `release-all.yml`            |
-| Environment name  | `pypi`                       | `pypi`                       |
+| Field             | Entry 1                         | Entry 2                      |
+|-------------------|---------------------------------|------------------------------|
+| PyPI project name | e.g. `opentelemetry-util-genai` | same                         |
+| Owner             | `open-telemetry`                | `open-telemetry`             |
+| Repository name   | `opentelemetry-python-genai`    | `opentelemetry-python-genai` |
+| Workflow name     | `release-package.yml`           | `release-all.yml`            |
+| Environment name  | `pypi`                          | `pypi`                       |
 
-4. Optionally upload the current `.dev` version manually once to prevent
-   name-squatting, shortly after the introductory PR lands on `main`.
+4. Optionally reserve the package name to prevent name-squatting shortly after
+   the introductory PR lands on `main` by navigating to
+   <https://pypi.org/manage/organization/opentelemetry/projects/>, scrolling to
+   the bottom (**Add project to organization**), and using the form.
 
 All packages share the same environment. The first upload from CI activates
 each publisher.
