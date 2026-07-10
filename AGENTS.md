@@ -50,6 +50,14 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`). `version.py` carries a `.dev`
   suffix during development (`1.0b0.dev`); the release workflow drops it.
 
+## Dependency versioning and compatibility
+
+- Use compatible release specifiers (e.g., `~= x.y` or `>= x.y.z, < (x+1)`) that pin the major version and allow minor/patch updates.
+- Avoid pinning versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`) in `pyproject.toml` unless strictly necessary.
+- Keep version requirements for shared OpenTelemetry packages (e.g., `opentelemetry-api`, `opentelemetry-instrumentation`, and `opentelemetry-semantic-conventions`) consistent across all packages.
+- For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), use `>=` specifiers and pin the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) rather than using `~=`.
+
+
 ## Adding a package to the workspace
 
 A new package under `instrumentation/<pkg>/` (where `<pkg>` is the full

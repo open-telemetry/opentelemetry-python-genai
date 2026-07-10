@@ -113,4 +113,11 @@ New instrumentations must ship a minimal example under the package's `examples/`
 - Versions use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`);
   `version.py` carries a `.dev` suffix during development.
 
+## 10. Dependency versioning and compatibility
+
+- Reject dependency changes in `pyproject.toml` that unnecessarily pin versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`).
+- Prefer ranges that allow minor updates (e.g., `~= x.y` or `>= x.y.z, < (x+1)`).`
+- For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), enforce the use of `>=` specifiers while pinning the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) instead of `~=`.`
+
+
 See also [AGENTS.md](../../AGENTS.md) for general repo rules.

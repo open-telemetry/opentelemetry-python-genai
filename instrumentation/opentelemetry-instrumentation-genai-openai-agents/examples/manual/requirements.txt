@@ -3,5 +3,5 @@ python-dotenv>=1.2.2
 
 opentelemetry-sdk~=1.43.0
 opentelemetry-exporter-otlp-proto-grpc~=1.43.0
--e ../../../opentelemetry-instrumentation-genai-openai
--e ../..
+opentelemetry-instrumentation-genai-openai~=1.0b0
+opentelemetry-instrumentation-genai-openai-agents~=1.0b0
