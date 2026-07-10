@@ -1,0 +1,1 @@
+Bump dependencies: opentelemetry-api from ~= 1.30 to ~= 1.43, and opentelemetry-instrumentation and opentelemetry-semantic-conventions from ~= 0.51b0 to >= 0.64b0.
