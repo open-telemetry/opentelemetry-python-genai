@@ -20,25 +20,59 @@ try:
     from google.genai._interactions.types.interaction_sse_event import (
         InteractionSSEEvent,
     )
+
+    _HAS_INTERACTIONS = True
 except ImportError:
-    # Google GenAI >= 2.9.0
-    from google.genai._gaos.interactions import (
-        AsyncInteractions as AsyncInteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Interactions as InteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Stream,
-    )
-    from google.genai._gaos.types.interactions import (
-        Interaction,
-        InteractionSSEEvent,
-        Usage,
-    )
-    from google.genai._gaos.types.interactions import (
-        InteractionsInput as Input,
-    )
+    try:
+        # Google GenAI >= 2.9.0
+        from google.genai._gaos.interactions import (
+            AsyncInteractions as AsyncInteractionsResource,
+        )
+        from google.genai._gaos.interactions import (
+            Interactions as InteractionsResource,
+        )
+        from google.genai._gaos.interactions import (
+            Stream,
+        )
+        from google.genai._gaos.types.interactions import (
+            Interaction,
+            InteractionSSEEvent,
+            Usage,
+        )
+        from google.genai._gaos.types.interactions import (
+            InteractionsInput as Input,
+        )
+
+        _HAS_INTERACTIONS = True
+    except ImportError:
+        _HAS_INTERACTIONS = False
+
+        # Placeholders for older versions where interactions are not supported
+        class InteractionsResource:
+            create = None
+
+        class AsyncInteractionsResource:
+            create = None
+
+        class Interaction:
+            model = None
+            usage = None
+
+        class Usage:
+            total_input_tokens = None
+            total_output_tokens = None
+            total_thought_tokens = None
+
+        class Input:
+            pass
+
+        class InteractionSSEEvent:
+            pass
+
+        class Stream:
+            pass
+
+
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.google_genai.client_info import (
@@ -371,13 +405,18 @@ def _create_instrumented_async_interactions_create(
 
 
 def uninstrument_interactions(snapshot: object) -> None:
+    if snapshot is None:
+        return
     assert isinstance(snapshot, _InteractionsMethodsSnapshot)
     snapshot.restore()
 
 
 def instrument_interactions(
     telemetry_handler: TelemetryHandler,
-) -> object:
+) -> object | None:
+    if not _HAS_INTERACTIONS:
+        return None
+
     snapshot = _InteractionsMethodsSnapshot()
 
     try:

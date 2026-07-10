@@ -9,18 +9,29 @@ from typing import Any
 from unittest.mock import patch
 
 try:
-    from google.genai._interactions.resources.interactions import (
-        AsyncInteractionsResource,
-        InteractionsResource,
-    )
+    try:
+        from google.genai._interactions.resources.interactions import (
+            AsyncInteractionsResource,
+            InteractionsResource,
+        )
+    except ImportError:
+        # In version 2.9 of google-genai these were moved.
+        from google.genai._gaos.interactions import (
+            AsyncInteractions as AsyncInteractionsResource,
+        )
+        from google.genai._gaos.interactions import (
+            Interactions as InteractionsResource,
+        )
+    _HAS_INTERACTIONS = True
 except ImportError:
-    # In version 2.9 of google-genai these were moved.
-    from google.genai._gaos.interactions import (
-        AsyncInteractions as AsyncInteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Interactions as InteractionsResource,
-    )
+    _HAS_INTERACTIONS = False
+
+    # Placeholders to prevent compilation errors
+    class AsyncInteractionsResource:
+        create = None
+
+    class InteractionsResource:
+        create = None
 
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -34,6 +45,10 @@ from .util import create_mock_completed_event, create_mock_interaction
 class TestCase(CommonTestCaseBase):
     def setUp(self) -> None:
         super().setUp()
+        if not _HAS_INTERACTIONS:
+            raise unittest.SkipTest(
+                "Interactions are not supported in this version of google-genai"
+            )
         if self.__class__ == TestCase:
             raise unittest.SkipTest("Skipping testcase base.")
         self._create_mock = None

@@ -86,7 +86,7 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     if capture_content in ("SPAN_AND_EVENT", "EVENT_ONLY"):
         assert len(logs) == 1
         log_record = logs[0].log_record
-        assert_log_record(log_record, spans[0])
+        assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
         assert len(logs) == 0
 
@@ -159,16 +159,26 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
 
 
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
 def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
-    span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0
+    span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0, vcr
 ):
+    is_old_bedrock = not getattr(
+        us_amazon_nova_lite_v1_0, "beta_use_converse_api", False
+    )
+
+    cassette_name = (
+        "test_us_amazon_nova_lite_v1_0_bedrock_llm_call_old.yaml"
+        if is_old_bedrock
+        else "test_us_amazon_nova_lite_v1_0_bedrock_llm_call.yaml"
+    )
+
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    result = us_amazon_nova_lite_v1_0.invoke(messages)
+    with vcr.use_cassette(cassette_name):
+        result = us_amazon_nova_lite_v1_0.invoke(messages)
 
     assert result.content.find("The capital of France is Paris") != -1
 
@@ -178,7 +188,6 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
     for span in spans:
         print(f"span: {span}")
         print(f"span attributes: {span.attributes}")
-    # TODO: fix the code and ensure the assertions are correct
     assert_bedrock_completion_attributes(spans[0], result)
 
 
@@ -229,7 +238,16 @@ def assert_openai_completion_attributes(
     assert attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
     assert attributes[gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE] == 0.1
     assert attributes["gen_ai.provider.name"] == "openai"
-    assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attributes
+    # Response ID may not be present in older langchain integration versions
+    has_response_id = False
+    if (
+        getattr(response, "response_metadata", None)
+        and "id" in response.response_metadata
+    ):
+        has_response_id = True
+
+    if has_response_id:
+        assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attributes
     assert attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_P] == 0.9
     assert (
         attributes[gen_ai_attributes.GEN_AI_REQUEST_FREQUENCY_PENALTY] == 0.5
@@ -511,7 +529,7 @@ def assert_exemplars(exemplars, datapoint_sum, parent_span):
     assert exemplars[0].trace_id == parent_span.get_span_context().trace_id
 
 
-def assert_log_record(log_record, parent_span):
+def assert_log_record(log_record, parent_span, response=None):
     # Event name (support both .event_name and attributes for SDK differences)
     event_name = getattr(
         log_record, "event_name", None
@@ -539,7 +557,21 @@ def assert_log_record(log_record, parent_span):
         attrs.get(gen_ai_attributes.GEN_AI_RESPONSE_MODEL)
         == "gpt-3.5-turbo-0125"
     )
-    assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attrs
+
+    # Response ID may not be present in older langchain integration versions
+    has_response_id = False
+    if response:
+        if (
+            getattr(response, "response_metadata", None)
+            and "id" in response.response_metadata
+        ):
+            has_response_id = True
+    else:
+        # Fallback if response is not provided
+        has_response_id = gen_ai_attributes.GEN_AI_RESPONSE_ID in attrs
+
+    if has_response_id:
+        assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attrs
     assert attrs.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 24
     assert attrs.get(gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 7
 

@@ -158,3 +158,23 @@ jobs:
 
       - name: Run typecheck
         run: uvx --with tox-uv tox -e typecheck
+
+  oldest-deps-check:
+    name: oldest-deps-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repo @ SHA - ${{ github.sha }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+      - name: Run oldest dependency check
+        run: uv run --with packaging scripts/check_oldest_deps.py
+

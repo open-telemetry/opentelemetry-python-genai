@@ -118,6 +118,63 @@ class PrettyPrintJSONBody:
         return yaml.load(cassette_string, Loader=yaml.Loader)
 
 
+def _normalize_dict(d: Any) -> Any:
+    if not isinstance(d, dict):
+        return d
+    d = dict(d)
+    if "max_completion_tokens" in d:
+        d["max_tokens"] = d.pop("max_completion_tokens")
+    d.pop("n", None)
+    if "safetySettings" in d and (
+        d["safetySettings"] == [] or d["safetySettings"] is None
+    ):
+        d.pop("safetySettings")
+
+    for k, v in list(d.items()):
+        if isinstance(v, dict):
+            d[k] = _normalize_dict(v)
+        elif isinstance(v, list):
+            d[k] = [
+                _normalize_dict(item) if isinstance(item, dict) else item
+                for item in v
+            ]
+    return d
+
+
+def _json_body_matcher(r1: Any, r2: Any) -> bool:
+    if r1.body is None and r2.body is None:
+        return True
+    if r1.body is None or r2.body is None:
+        return False
+    try:
+        j1 = json.loads(
+            r1.body.decode("utf-8") if isinstance(r1.body, bytes) else r1.body
+        )
+        j2 = json.loads(
+            r2.body.decode("utf-8") if isinstance(r2.body, bytes) else r2.body
+        )
+        j1 = _normalize_dict(j1)
+        j2 = _normalize_dict(j2)
+        match = j1 == j2
+        if not match:
+            diff = {
+                k: (j1.get(k), j2.get(k))
+                for k in set(j1) | set(j2)
+                if j1.get(k) != j2.get(k)
+            }
+            print(
+                f"\n[VCR MATCH FAIL] JSON body diff keys: {diff}\n  r1: {j1}\n  r2: {j2}\n"
+            )
+        return match
+    except Exception as e:
+        match = r1.body == r2.body
+        if not match:
+            print(
+                f"\n[VCR MATCH FAIL] raw body diff (error: {e}):\n  r1: {r1.body}\n  r2: {r2.body}\n"
+            )
+        return match
+
+
 @pytest.fixture(scope="module", autouse=True)
 def fixture_vcr(vcr: Any) -> Any:
     """Autouse fixture registering ``PrettyPrintJSONBody`` with ``pytest-vcr``.
@@ -127,6 +184,7 @@ def fixture_vcr(vcr: Any) -> Any:
     ``pytest-vcr``.
     """
     vcr.register_serializer("yaml", PrettyPrintJSONBody)
+    vcr.register_matcher("json_body", _json_body_matcher)
     return vcr
 
 
