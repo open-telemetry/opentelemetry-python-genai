@@ -15,6 +15,19 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.0b1 (2026-07-10)
+
+### Added
+
+- Add Weaver conformance test scenarios for ``generate_content``,
+  ``interactions.create``, and ``embed_content``.
+  ([#232](https://github.com/open-telemetry/opentelemetry-python-genai/pull/232))
+
+### Fixed
+
+- Fix minimum version of `opentelemetry-util-genai` dependency.
+  ([#248](https://github.com/open-telemetry/opentelemetry-python-genai/pull/248))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added
