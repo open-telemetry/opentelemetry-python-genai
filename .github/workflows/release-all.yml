@@ -118,7 +118,7 @@ jobs:
     secrets: inherit
 
   bump-main:
-    needs: [enumerate, publish]
+    needs: [enumerate, publish, finalize]
     if: always() && needs.enumerate.result == 'success'
     permissions:
       contents: write

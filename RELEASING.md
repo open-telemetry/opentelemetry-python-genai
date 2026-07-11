@@ -67,6 +67,9 @@ rest of the workspace is not ready for a bulk release.
 
 ## Patch release (current minor line)
 
+> [!NOTE]
+> This only works if the `major.minor` version on `main` is the same version you want to patch (i.e., before the post-release bump PR to the next minor version is merged). Once `main` is bumped to the next minor dev version, all patch releases for the older minor version must use the backport workflow instead.
+
 1. Land the fix on `main` as a normal PR (with a towncrier fragment).
 2. Run
    [`Prepare package patch release`](./.github/workflows/prepare-package-patch.yml)
