@@ -2,220 +2,104 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import re
+"""Guard the oldest-dependency testing invariant.
+
+The oldest tox envs install the lowest versions of each package's *declared* deps straight from
+pyproject.toml via ``UV_RESOLUTION=lowest-direct`` (see AGENTS.md). pyproject.toml is therefore the
+single source of truth for those floors and running the env is what validates them. This script
+covers the two gaps a passing oldest env can't see:
+
+1. Re-introduced drift — a pyproject-declared dep hand-pinned again in tests/requirements.oldest.txt.
+   Such a pin silently overrides the derived floor and can drift from the declared bound; remove it.
+2. Missing coverage — a package with an oldest tox factor (a tests/requirements.latest.txt) but no
+   tests/requirements.oldest.txt at all, so its declared floors are never exercised.
+"""
+
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
-# We can import packaging as it is guaranteed to be in the environment
 try:
     import tomllib
-except ImportError:
-    # Fallback to tomli if run on python < 3.11 outside tox (though tox-uv environment handles it)
-    try:
-        import tomli as tomllib
-    except ImportError:
-        print(
-            "Error: tomllib (Python 3.11+) or tomli is required to run this script."
-        )
-        sys.exit(1)
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
-from packaging.version import Version
 
 
-def get_package_version(pyproject_path):
-    with open(pyproject_path, "rb") as f:
-        data = tomllib.load(f)
-    project = data.get("project", {})
-    if "version" in project:
-        return project["version"]
-
-    # Dynamic version via hatch
-    tool = data.get("tool", {})
-    hatch = tool.get("hatch", {})
-    hatch_version = hatch.get("version", {})
-    version_path_relative = hatch_version.get("path")
-    if not version_path_relative:
-        raise ValueError(
-            f"Could not find static version or hatch version path in {pyproject_path}"
-        )
-
-    pyproject_dir = os.path.dirname(pyproject_path)
-    version_path = os.path.join(pyproject_dir, version_path_relative)
-    with open(version_path, "r", encoding="utf-8") as vf:
-        content = vf.read()
-    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
-    if match:
-        return match.group(1)
-    raise ValueError(f"Could not find __version__ in {version_path}")
+def declared_dep_names(pyproject: dict) -> set[str]:
+    """Canonical names of every dep declared in [project.dependencies] and optional-dependencies."""
+    project = pyproject.get("project", {})
+    names: set[str] = set()
+    for dep in project.get("dependencies", []):
+        names.add(canonicalize_name(Requirement(dep).name))
+    for deps in project.get("optional-dependencies", {}).values():
+        for dep in deps:
+            names.add(canonicalize_name(Requirement(dep).name))
+    return names
 
 
-def get_lower_bound(requirement):
-    lower_bound = None
-    for spec in requirement.specifier:
-        if spec.operator in (">=", "==", "~="):
-            try:
-                version = Version(spec.version)
-            except Exception:
-                try:
-                    version = Version(re.sub(r"\.dev$", ".dev0", spec.version))
-                except Exception:
-                    continue
-            if lower_bound is None or version > lower_bound:
-                lower_bound = version
-    return lower_bound
+def pinned_names(oldest_req_path: Path) -> set[str]:
+    """Canonical names of every pinned requirement in an oldest requirements file.
+
+    Skips option lines (-e/-r/-c/--flag) and anything that isn't a parseable requirement.
+    """
+    names: set[str] = set()
+    for raw in oldest_req_path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        try:
+            names.add(canonicalize_name(Requirement(line).name))
+        except Exception:
+            continue
+    return names
 
 
-def normalize_dev_version(version_str):
-    return re.sub(r"\.dev\d*$", "", version_str)
-
-
-def main():
+def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
-    errors = 0
+    errors: list[str] = []
 
-    # Find all pyproject.toml files under instrumentation/ and util/
-    pyprojects = []
-    for pattern in [
-        "instrumentation/*/pyproject.toml",
-        "util/*/pyproject.toml",
-    ]:
-        pyprojects.extend(repo_root.glob(pattern))
+    pyprojects = sorted(
+        repo_root.glob("instrumentation/*/pyproject.toml"),
+    ) + sorted(repo_root.glob("util/*/pyproject.toml"))
 
     for pyproject_path in pyprojects:
         pkg_dir = pyproject_path.parent
-        oldest_req_path = pkg_dir / "tests" / "requirements.oldest.txt"
+        oldest = pkg_dir / "tests" / "requirements.oldest.txt"
+        latest = pkg_dir / "tests" / "requirements.latest.txt"
 
-        # Only check packages that have tests/requirements.oldest.txt
-        if not oldest_req_path.exists():
+        if not oldest.exists():
+            # Only a gap if the package has an oldest tox factor, signalled by a latest file.
+            if latest.exists():
+                errors.append(
+                    f"{pkg_dir.name}: has tests/requirements.latest.txt but no "
+                    f"tests/requirements.oldest.txt — declared floors are never tested."
+                )
             continue
 
-        print(f"Checking consistency for: {pkg_dir.name}")
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        redundant = declared_dep_names(pyproject) & pinned_names(oldest)
+        for name in sorted(redundant):
+            errors.append(
+                f"{pkg_dir.name}: '{name}' is declared in pyproject.toml and also pinned in "
+                f"tests/requirements.oldest.txt. Remove the pin — the oldest env derives it from "
+                f"the pyproject.toml floor via UV_RESOLUTION=lowest-direct."
+            )
 
-        # 1. Parse dependencies from pyproject.toml
-        with open(pyproject_path, "rb") as f:
-            data = tomllib.load(f)
+    if errors:
+        print("Oldest dependency check failed:\n", file=sys.stderr)
+        for err in errors:
+            print(f"  [ERROR] {err}", file=sys.stderr)
+        return 1
 
-        project_data = data.get("project", {})
-        pyproject_deps = []
-
-        # Direct dependencies
-        if "dependencies" in project_data:
-            pyproject_deps.extend(project_data["dependencies"])
-
-        # Optional dependencies (e.g. instruments)
-        opt_deps = project_data.get("optional-dependencies", {})
-        for extra, deps in opt_deps.items():
-            pyproject_deps.extend(deps)
-
-        # Map canonicalized package name to its requirement object and lower bound
-        pyproject_bounds = {}
-        for dep_str in pyproject_deps:
-            req = Requirement(dep_str)
-            name = canonicalize_name(req.name)
-            lower_bound = get_lower_bound(req)
-            if lower_bound:
-                pyproject_bounds[name] = (req, lower_bound)
-
-        # 2. Parse requirements.oldest.txt
-        pinned_versions = {}
-        editable_installs = {}  # canonicalized name -> path string
-
-        with open(oldest_req_path, "r", encoding="utf-8") as f:
-            for line in f:
-                # Strip inline comments
-                line = line.split("#")[0].strip()
-                if not line:
-                    continue
-
-                # Check for editable install
-                if line.startswith("-e"):
-                    # e.g., "-e util/opentelemetry-util-genai" or "-e instrumentation/pkg[instruments]"
-                    path_str = line[2:].strip().split("[", 1)[0].strip()
-                    target_pyproject = repo_root / path_str / "pyproject.toml"
-                    if target_pyproject.exists():
-                        try:
-                            with open(target_pyproject, "rb") as pf:
-                                target_data = tomllib.load(pf)
-                            target_name = canonicalize_name(
-                                target_data.get("project", {}).get("name", "")
-                            )
-                            if target_name:
-                                editable_installs[target_name] = path_str
-                        except Exception as e:
-                            print(
-                                f"  Error parsing editable target {target_pyproject}: {e}"
-                            )
-                    continue
-
-                # Parse standard requirement pin
-                try:
-                    req = Requirement(line)
-                    name = canonicalize_name(req.name)
-                    # Extract the exact version pinned with '=='
-                    pin = None
-                    for spec in req.specifier:
-                        if spec.operator == "==":
-                            pin = Version(spec.version)
-                            break
-                    if pin:
-                        pinned_versions[name] = pin
-                except Exception:
-                    # Ignore lines we can't parse as standard requirements (like -r, -c, etc.)
-                    continue
-
-        # 3. Compare pyproject.toml lower bounds with requirements.oldest.txt
-        for name, (req, lower_bound) in pyproject_bounds.items():
-            # Skip self-references in requirements.oldest.txt (e.g. -e instrumentation/...)
-            if name == canonicalize_name(project_data.get("name", "")):
-                continue
-
-            if name in editable_installs:
-                # Local workspace dependency
-                target_path = editable_installs[name]
-                target_pyproject = repo_root / target_path / "pyproject.toml"
-                target_version_str = get_package_version(target_pyproject)
-
-                # Normalize dev versions
-                norm_lower_bound = normalize_dev_version(str(lower_bound))
-                norm_target_version = normalize_dev_version(target_version_str)
-
-                if norm_lower_bound != norm_target_version:
-                    print(
-                        f"  [ERROR] Workspace dependency '{name}' mismatch:\n"
-                        f"    - pyproject.toml declares: {req}\n"
-                        f"    - Workspace '{name}' version is: {target_version_str} (at {target_path})\n"
-                        f"    - Expected lower bound in pyproject.toml to match workspace version (ignoring .dev suffix)"
-                    )
-                    errors += 1
-            elif name in pinned_versions:
-                # PyPI dependency
-                pin = pinned_versions[name]
-                if pin != lower_bound:
-                    print(
-                        f"  [ERROR] Dependency '{name}' mismatch:\n"
-                        f"    - pyproject.toml declares lower bound: {lower_bound} ({req})\n"
-                        f"    - requirements.oldest.txt pins: {pin}\n"
-                        f"    - They must match exactly."
-                    )
-                    errors += 1
-            else:
-                # Warning: direct dependency exists in pyproject.toml but not pinned in requirements.oldest.txt
-                # This could be a gap in testing the oldest version
-                print(
-                    f"  [WARNING] Dependency '{name}' is declared in pyproject.toml but has no matching pin "
-                    f"or editable install in tests/requirements.oldest.txt"
-                )
-
-    if errors > 0:
-        print(f"\nFound {errors} inconsistency error(s).", file=sys.stderr)
-        sys.exit(1)
-
-    print("\nAll oldest dependency checks passed successfully!")
-    sys.exit(0)
+    print(
+        "Oldest dependency checks passed: no declared deps re-pinned, no missing coverage."
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

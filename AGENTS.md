@@ -210,6 +210,11 @@ isn't enough, add the capability here rather than working around it.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
+- The `oldest` env must install exactly the lower bounds declared in `pyproject.toml`
+  (`dependencies` and the `instruments` extra) — the declared and tested versions must not drift.
+  `UV_RESOLUTION=lowest-direct` (set on the `oldest` factor) derives them from `pyproject.toml`, so
+  it stays the single source of truth; only pin test-only deps with no `pyproject.toml` bound in
+  `tests/requirements.oldest.txt`.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
   by registering them as plugins. Always register the fixtures plugin; register the VCR plugin
   too when the package's tests use VCR cassettes —
