@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from importlib.metadata import version as _pkg_version
 from typing import Optional
 
 import pytest
@@ -23,8 +24,25 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.semconv.attributes import error_attributes
 
 
+def _openai_cassette_name(model, base: str) -> str:
+    # Newer langchain-openai renders ``max_completion_tokens`` on the request
+    # body while older versions send ``max_tokens`` (plus an explicit ``n``).
+    # The request bodies differ, so pick the cassette recorded for the
+    # installed version instead of fuzzy-matching one cassette across both.
+    payload = model._get_request_payload([], stop=None)
+    suffix = "" if "max_completion_tokens" in payload else "_old"
+    return f"{base}{suffix}.yaml"
+
+
+def _gemini_cassette_name(base: str) -> str:
+    # Newer langchain-google-genai serializes an empty ``safetySettings`` list
+    # onto the request body; older (2.x) versions omit it entirely.
+    major = int(_pkg_version("langchain-google-genai").split(".")[0])
+    suffix = "" if major >= 3 else "_old"
+    return f"{base}{suffix}.yaml"
+
+
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
 @pytest.mark.parametrize(
     "capture_content",
     ["SPAN_ONLY", "NO_CONTENT", "SPAN_AND_EVENT", "EVENT_ONLY"],
@@ -49,7 +67,10 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     ]
 
     with vcr.use_cassette(
-        "test_chat_openai_gpt_3_5_turbo_model_llm_call.yaml"
+        _openai_cassette_name(
+            chat_openai_gpt_3_5_turbo_model,
+            "test_chat_openai_gpt_3_5_turbo_model_llm_call",
+        )
     ):
         response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
     assert response.content == "The capital of France is Paris."
@@ -92,7 +113,6 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
 @pytest.mark.parametrize(
     "capture_content",
     ["SPAN_ONLY", "NO_CONTENT", "SPAN_AND_EVENT", "EVENT_ONLY"],
@@ -119,7 +139,10 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     response = None
     try:
         with vcr.use_cassette(
-            "test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error.yaml"
+            _openai_cassette_name(
+                chat_openai_gpt_3_5_turbo_model,
+                "test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error",
+            )
         ):
             response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
     except Exception as e:
@@ -192,14 +215,14 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
-def test_gemini(span_exporter, start_instrumentation, gemini):
+def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    result = gemini.invoke(messages)
+    with vcr.use_cassette(_gemini_cassette_name("test_gemini")):
+        result = gemini.invoke(messages)
 
     assert result.content.find("The capital of France is **Paris**") != -1
 

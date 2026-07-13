@@ -146,6 +146,6 @@ def vcr_config():
                 "Set-Cookie": "test_set_cookie",
             }
         ),
-        "match_on": ["method", "scheme", "host", "port", "path", "json_body"],
+        "match_on": ["method", "scheme", "host", "port", "path", "body"],
         "ignore_hosts": ["169.254.169.254"],
     }
