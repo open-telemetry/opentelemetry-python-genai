@@ -118,6 +118,5 @@ jobs:
           pr_url=$(gh pr create --title "$title" \
                                 --body "$body" \
                                 --head "$branch" \
-                                --base main \
-                                --json url --jq .url)
+                                --base main)
           gh pr edit "$pr_url" --add-label release

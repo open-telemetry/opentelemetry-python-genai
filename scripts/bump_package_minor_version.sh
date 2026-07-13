@@ -1,8 +1,12 @@
 #!/bin/bash
 
-# Bump a package to the next minor .dev version. Called by the bump-minor
-# workflow when a maintainer wants to move a package to the next minor line
+# Bump a package to the next minor .dev version
 # (e.g., 1.0b3.dev -> 1.1b0.dev, or 1.0.5 -> 1.1.0.dev).
+#
+# Called both as the automatic last step of a release (moving main to the next
+# unreleased minor) and by the bump-minor workflow when a maintainer wants to
+# move a package to the next minor line ahead of a release. Patches never land
+# on main; they are cut from a package-release/<pkg>/v* branch off the tag.
 #
 # Accepts the current version whether or not it carries a .dev suffix.
 

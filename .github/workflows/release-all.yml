@@ -155,7 +155,7 @@ jobs:
               echo "Skipping ${package}: already bumped to ${version}"
               continue
             fi
-            ./scripts/bump_package_dev_version.sh "$package"
+            ./scripts/bump_package_minor_version.sh "$package"
             bumped+=("$package")
           done < <(echo "$PACKAGES_JSON" | jq -r '.[]')
 

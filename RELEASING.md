@@ -5,9 +5,9 @@ Every package releases independently. The default path is a coordinated
 releases.
 
 Releases are **tag-from-`main`**: each publish creates a tag
-(`<pkg>==<version>`) pointing at the release commit on `main`. Backport
-branches (`package-release/<pkg>/v*`) are created lazily from an old tag only
-when patching an older minor line, not for every release.
+(`<pkg>==<version>`) pointing at the release commit on `main`. Patch
+branches (`package-release/<pkg>/v*`) are created lazily from a release tag
+only when patching an already-released version, not for every release.
 
 Releases are driven by GitHub Actions workflows. They handle version bumps,
 changelog generation (via [towncrier](https://towncrier.readthedocs.io/)),
@@ -21,29 +21,33 @@ Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN`
 
 Version cadence on `main`:
 
-- **Patch bumps happen automatically.** After each successful release of
-  `X.YbN`, the post-release workflow opens a PR bumping `main` to
-  `X.Yb(N+1).dev`. The next release from `main` is therefore a patch by
-  default.
-- **Minor and major bumps are maintainer-led.** Trigger the
-  `Bump package minor version` or `Bump package major version` workflow
-  (documented below) when you're ready to move a package to the next minor
-  or major line. Those bumps happen only when a maintainer explicitly asks
-  for them.
+- **The post-release bump advances the minor automatically.** After each
+  successful release of `X.YbN`, the release workflow opens a PR bumping `main`
+  to the next unreleased minor `X.(Y+1)b0.dev`. `main` therefore always sits on
+  an unreleased minor line, and the next release from `main` is that minor.
+- **Patches come from release branch.** To patch an already-released version you
+  cut a backport branch from its tag (see
+  [Backport patch](#backport-patch-older-line)) — this is the same procedure
+  whether the release is the latest or an older one.
+- **Major bumps are maintainer-led.** Trigger the `Bump package major version`
+  workflow (documented below) when you're ready to move a package to the next
+  major line. The `Bump package minor version` workflow exists to jump the
+  minor ahead of a release without shipping; it happens only when a maintainer
+  explicitly asks for it.
 
 ## Release model
 
 Unlike `opentelemetry-python-contrib`, we do not maintain a long-lived release
-branch for every minor. Normal releases tag `main` directly; backport branches
-are created on demand from an existing tag when patching an older minor.
+branch for every minor. Normal releases tag `main` directly; patch branches
+are created on demand from a release tag when patching an already-released
+version.
 
 | | opentelemetry-python-contrib | This repo |
 |---|---|---|
 | Normal release | Long-lived `package-release/<pkg>/v*` branch | Tag on `main` |
 | Tag target | Commit on the release branch | Commit on `main` |
-| Patch in current line | Commits + tags on the release branch | Tags on `main` |
-| Backport to older minor | Same branch (already exists) | Branch from old tag (lazy) |
-| Branch sprawl | One branch per package per minor | Branches only for backports |
+| Patch a released version | Commits + tags on the release branch | Branch from the tag (lazy) |
+| Branch sprawl | One branch per package per minor | Branches only for patches |
 
 ## Bulk release (default)
 
@@ -63,8 +67,7 @@ For releasing every package that has towncrier changelog fragments:
    it manually against `main`).
    - Publishes each ready package to PyPI.
    - Creates a GitHub release tag (`<pkg>==<version>`) on `main` for each.
-   - Opens a PR bumping released packages back to the next `.dev` version
-     (patch bump).
+   - Opens a PR bumping released packages to the next minor `.dev` version.
 
 Packages without changelog fragments are skipped during prepare and logged in
 the workflow output.
@@ -87,8 +90,9 @@ on what's currently in `version.py` on `main` — see [Version model](#version-m
 
 ## Bumping to the next minor or major
 
-Patch bumps are automatic (see [Version model](#version-model)). Bumping a
-package to the next minor or major line is a maintainer decision:
+The minor advances automatically as the last step of every release (see
+[Version model](#version-model)). Jumping the minor ahead of a release, or
+moving to the next major line, is a maintainer decision:
 
 - [`Bump package minor version`](./.github/workflows/bump-package-minor.yml)
   opens a PR that edits `version.py` from `X.YbN(.dev)` to `X.(Y+1)b0.dev`.
@@ -100,10 +104,10 @@ Merge the bump PR first, then follow the normal
 [single-package](#single-package-release) release flow. `Prepare release`
 picks up the new dev version verbatim.
 
-## Backport patch (older minor line)
+## Backport patch (older line)
 
-Once `main` has moved past the minor line you need to patch (i.e. after a
-minor bump), patches for the older line must come from a backport branch.
+Patching *any* already-released version — the latest or an older one — 
+comes from a branch cut from that version's tag.
 
 1. Create `package-release/<pkg>/v<X>.<Y>bx` from the `<pkg>==<X>.<Y>b<N>`
    tag if it does not exist yet.

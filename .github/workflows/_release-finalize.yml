@@ -146,7 +146,7 @@ jobs:
           git checkout main
           git pull origin main
 
-          ./scripts/bump_package_dev_version.sh "${PACKAGE_NAME}"
+          ./scripts/bump_package_minor_version.sh "${PACKAGE_NAME}"
 
           if git diff --quiet; then
             echo "No version bump needed"
