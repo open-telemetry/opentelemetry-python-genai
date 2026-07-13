@@ -1,0 +1,1 @@
+Support raw ("role", content) tuple messages in agent inputs, preventing duplicate `invoke_agent` spans.
