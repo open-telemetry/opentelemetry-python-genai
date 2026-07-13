@@ -1,4 +1,4 @@
-name: "Prepare minor release"
+name: "Prepare release"
 on:
   workflow_dispatch:
     inputs:
@@ -24,7 +24,7 @@ permissions:
 env:
   UV_FROZEN: "true"
 
-run-name: "Prepare minor release${{ inputs.package && format(': {0}', inputs.package) || ' (all)' }}"
+run-name: "Prepare release${{ inputs.package && format(': {0}', inputs.package) || ' (all)' }}"
 
 jobs:
   prepare:
