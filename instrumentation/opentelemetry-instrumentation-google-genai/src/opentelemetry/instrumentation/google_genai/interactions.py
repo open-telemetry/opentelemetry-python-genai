@@ -20,25 +20,59 @@ try:
     from google.genai._interactions.types.interaction_sse_event import (
         InteractionSSEEvent,
     )
+
+    _HAS_INTERACTIONS = True
 except ImportError:
-    # Google GenAI >= 2.9.0
-    from google.genai._gaos.interactions import (
-        AsyncInteractions as AsyncInteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Interactions as InteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Stream,
-    )
-    from google.genai._gaos.types.interactions import (
-        Interaction,
-        InteractionSSEEvent,
-        Usage,
-    )
-    from google.genai._gaos.types.interactions import (
-        InteractionsInput as Input,
-    )
+    try:
+        # Google GenAI >= 2.9.0
+        from google.genai._gaos.interactions import (
+            AsyncInteractions as AsyncInteractionsResource,
+        )
+        from google.genai._gaos.interactions import (
+            Interactions as InteractionsResource,
+        )
+        from google.genai._gaos.interactions import (
+            Stream,
+        )
+        from google.genai._gaos.types.interactions import (
+            Interaction,
+            InteractionSSEEvent,
+            Usage,
+        )
+        from google.genai._gaos.types.interactions import (
+            InteractionsInput as Input,
+        )
+
+        _HAS_INTERACTIONS = True
+    except ImportError:
+        _HAS_INTERACTIONS = False
+
+        # Placeholders for older versions where interactions are not supported
+        class InteractionsResource:
+            create = None
+
+        class AsyncInteractionsResource:
+            create = None
+
+        class Interaction:
+            model = None
+            usage = None
+
+        class Usage:
+            total_input_tokens = None
+            total_output_tokens = None
+            total_thought_tokens = None
+
+        class Input:
+            pass
+
+        class InteractionSSEEvent:
+            pass
+
+        class Stream:
+            pass
+
+
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.google_genai.client_info import (
@@ -69,11 +103,26 @@ from opentelemetry.util.genai.types import (
 class _InteractionsMethodsSnapshot:
     def __init__(self) -> None:
         self._original_create = InteractionsResource.create
+        self._original_create_code = InteractionsResource.create.__code__
         self._original_async_create = AsyncInteractionsResource.create
+        self._original_async_create_code = (
+            AsyncInteractionsResource.create.__code__
+        )
 
     def restore(self) -> None:
+        self._original_create.__code__ = self._original_create_code
+        self._original_async_create.__code__ = self._original_async_create_code
+
         InteractionsResource.create = self._original_create
         AsyncInteractionsResource.create = self._original_async_create
+
+
+# Magic incantation used by native Google ADK instrumentation to identify
+# instrumented functions and suppress its own internal tracing when OTel is active.
+def _set_co_filename(wrapped: object) -> None:
+    wrapped.__wrapped__.__code__ = wrapped.__wrapped__.__code__.replace(
+        co_filename=__file__.replace("\\", "/")
+    )
 
 
 def _apply_interaction_response_attributes(
@@ -82,6 +131,8 @@ def _apply_interaction_response_attributes(
     telemetry_handler: TelemetryHandler,
 ) -> None:
     invocation.response_model_name = response.model
+    if getattr(response, "id", None):
+        invocation.response_id = response.id
 
     usage = response.usage or Usage()
 
@@ -371,13 +422,18 @@ def _create_instrumented_async_interactions_create(
 
 
 def uninstrument_interactions(snapshot: object) -> None:
+    if snapshot is None:
+        return
     assert isinstance(snapshot, _InteractionsMethodsSnapshot)
     snapshot.restore()
 
 
 def instrument_interactions(
     telemetry_handler: TelemetryHandler,
-) -> object:
+) -> object | None:
+    if not _HAS_INTERACTIONS:
+        return None
+
     snapshot = _InteractionsMethodsSnapshot()
 
     try:
@@ -392,14 +448,16 @@ def instrument_interactions(
         sync_class = "Interactions"
         async_class = "AsyncInteractions"
 
-    wrap_function_wrapper(
+    wrapped = wrap_function_wrapper(
         module_path,
         f"{sync_class}.create",
         _create_instrumented_interactions_create(telemetry_handler),
     )
-    wrap_function_wrapper(
+    _set_co_filename(wrapped)
+    wrapped2 = wrap_function_wrapper(
         module_path,
         f"{async_class}.create",
         _create_instrumented_async_interactions_create(telemetry_handler),
     )
+    _set_co_filename(wrapped2)
     return snapshot

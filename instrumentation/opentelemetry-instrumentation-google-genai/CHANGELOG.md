@@ -15,6 +15,33 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.0b1 (2026-07-13)
+
+### Added
+
+- Add Weaver conformance test scenarios for ``generate_content``,
+  ``interactions.create``, and ``embed_content``.
+  ([#232](https://github.com/open-telemetry/opentelemetry-python-genai/pull/232))
+
+### Changed
+
+- Bump dependencies: opentelemetry-api from ~= 1.40 to ~= 1.43,
+  opentelemetry-instrumentation and opentelemetry-semantic-conventions from >=
+  0.61b0 to >= 0.64b0, and opentelemetry-util-genai from >= 0.4b0 to >= 1.0b0.
+  ([#244](https://github.com/open-telemetry/opentelemetry-python-genai/pull/244))
+- Bump minimum required version of ``opentelemetry-api`` to ``1.43.0``,
+  ``opentelemetry-instrumentation``/``opentelemetry-semantic-conventions`` to
+  ``0.64b0``, and ``wrapt`` to ``1.17.0``.
+  ([#254](https://github.com/open-telemetry/opentelemetry-python-genai/pull/254))
+
+### Fixed
+
+- Fix minimum version of `opentelemetry-util-genai` dependency.
+  ([#248](https://github.com/open-telemetry/opentelemetry-python-genai/pull/248))
+- Ensure ``__code__.co_filename`` on wrapped functions matches the
+  instrumentation file path.
+  ([#260](https://github.com/open-telemetry/opentelemetry-python-genai/pull/260))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added

@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This variant of the requirements aims to test the system using
-# the oldest supported version of external dependencies.
-
-claude-agent-sdk==0.1.14
-wrapt==1.16.0
-opentelemetry-api==1.43  # when updating, also update in pyproject.toml
-opentelemetry-sdk==1.43  # when updating, also update in pyproject.toml
-opentelemetry-semantic-conventions==0.64b0  # when updating, also update in pyproject.toml
-opentelemetry-instrumentation==0.64b0  # when updating, also update in pyproject.toml
-
--e util/opentelemetry-util-genai # TODO update to 1.0b0 when released
--e instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk
+# Oldest test-only dependency pins.
+#
+# The package's own declared deps (claude-agent-sdk via the instruments extra, opentelemetry-api,
+# opentelemetry-instrumentation, opentelemetry-semantic-conventions, opentelemetry-util-genai)
+# are resolved to their pyproject.toml floors by UV_RESOLUTION=lowest-direct on the oldest tox
+# factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
+# OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
+# every oldest env installs. Pin here only test-only deps that nothing else already provides.
+#
+# There is currently nothing to pin: claude-agent-sdk has no test-only dependency that isn't already
+# provided by a declared bound or by the shared test fixtures.

@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This variant of the requirements aims to test the system using
-# the oldest supported version of external dependencies.
+# Oldest test-only dependency pins.
+#
+# The package's own declared deps (openai via the instruments extra, opentelemetry-api,
+# opentelemetry-instrumentation, opentelemetry-semantic-conventions, opentelemetry-util-genai)
+# are resolved to their pyproject.toml floors by UV_RESOLUTION=lowest-direct on the oldest tox
+# factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
+# OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
+# every oldest env installs. Pin here only test-only deps that nothing else already provides.
 
-openai==1.26.0
 numpy==2.3.1 ; python_version >= "3.11"
 numpy==2.1.0 ; python_version == "3.10"
 pydantic==2.12.5
@@ -23,12 +28,3 @@ httpx==0.27.2
 Deprecated==1.2.14
 importlib-metadata==6.11.0
 packaging==24.0
-wrapt==1.16.0
-opentelemetry-exporter-otlp-proto-http~=1.30
-opentelemetry-api==1.43  # when updating, also update in pyproject.toml
-opentelemetry-sdk==1.43  # when updating, also update in pyproject.toml
-opentelemetry-semantic-conventions==0.64b0  # when updating, also update in pyproject.toml
-opentelemetry-instrumentation==0.64b0  # when updating, also update in pyproject.toml
-
--e util/opentelemetry-util-genai
--e instrumentation/opentelemetry-instrumentation-genai-openai

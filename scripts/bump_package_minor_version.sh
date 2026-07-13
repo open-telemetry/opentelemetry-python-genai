@@ -1,16 +1,14 @@
 #!/bin/bash
 
-# Bump a package from a released version (no .dev suffix) to the next .dev
-# version by incrementing the patch component. Called after a release
-# publishes to move version.py forward.
+# Bump a package to the next minor .dev version. Called by the bump-minor
+# workflow when a maintainer wants to move a package to the next minor line
+# (e.g., 1.0b3.dev -> 1.1b0.dev, or 1.0.5 -> 1.1.0.dev).
 #
-# Major and minor bumps are maintainer-led and go through the dedicated
-# bump_package_minor_version.sh / bump_package_major_version.sh scripts and
-# their corresponding workflows.
+# Accepts the current version whether or not it carries a .dev suffix.
 
 set -euo pipefail
 
-package="${1:?usage: bump_package_dev_version.sh PACKAGE}"
+package="${1:?usage: bump_package_minor_version.sh PACKAGE}"
 
 path="./$(./scripts/eachdist.py find-package --package "$package")"
 version="$(./scripts/eachdist.py version --package "$package")"
@@ -23,16 +21,16 @@ if [[ "$file_count" -ne 1 ]]; then
   exit 1
 fi
 
-if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+base_version="${version%.dev}"
+
+if [[ "$base_version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
   major="${BASH_REMATCH[1]}"
   minor="${BASH_REMATCH[2]}"
-  patch="${BASH_REMATCH[3]}"
-  next_version="${major}.${minor}.$((patch + 1)).dev"
-elif [[ "$version" =~ ^([0-9]+)\.([0-9]+)b([0-9]+)$ ]]; then
+  next_version="${major}.$((minor + 1)).0.dev"
+elif [[ "$base_version" =~ ^([0-9]+)\.([0-9]+)b[0-9]+$ ]]; then
   major="${BASH_REMATCH[1]}"
   minor="${BASH_REMATCH[2]}"
-  patch="${BASH_REMATCH[3]}"
-  next_version="${major}.${minor}b$((patch + 1)).dev"
+  next_version="${major}.$((minor + 1))b0.dev"
 else
   echo "unexpected version: ${version}"
   exit 1

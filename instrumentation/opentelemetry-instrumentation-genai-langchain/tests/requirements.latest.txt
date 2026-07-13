@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Single minimum-version requirements for langchain unit tests.
-# TODO: split into oldest/latest once the version matrix is defined.
+# Latest version requirements for langchain unit tests.
 
-langchain-openai>=1.3.5
-langchain-aws>=1.6.2
-langchain-google-genai>=4.2.7
-boto3>=1.43.46
+langchain==1.3.13
+langchain-openai==1.3.5
+langchain-aws==1.6.2
+langchain-google-genai==4.2.7
+boto3==1.43.46
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-langchain[instruments]

@@ -12,19 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This variant of the requirements aims to test the system using
-# the oldest supported version of external dependencies.
+# Oldest test-only dependency pins.
+#
+# The package's own declared deps (google-genai via the instruments extra, wrapt, opentelemetry-api,
+# opentelemetry-instrumentation, opentelemetry-semantic-conventions, opentelemetry-util-genai)
+# are resolved to their pyproject.toml floors by UV_RESOLUTION=lowest-direct on the oldest tox
+# factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
+# OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
+# every oldest env installs. Pin here only test-only deps that nothing else already provides.
 
 google-auth==2.50.0
-google-genai==2.0.0
-opentelemetry-api==1.43.0
-opentelemetry-sdk==1.43.0
-opentelemetry-semantic-conventions==0.64b0
-opentelemetry-instrumentation==0.64b0
-
 fsspec==2025.9.0
-
-# Install locally from the folder. This path is relative to the
-# root directory, given invocation from "tox" at root level.
--e instrumentation/opentelemetry-instrumentation-google-genai
--e util/opentelemetry-util-genai

@@ -43,7 +43,7 @@ dependencies = [
   "opentelemetry-instrumentation >= 0.64b0, <1",
   "opentelemetry-semantic-conventions >= 0.64b0, <1",
   "opentelemetry-util-genai >= 1.0b0, <2",
-  "wrapt >= 1.0.0, < 3.0.0",
+  "wrapt >= 1.17.0, < 3.0.0",
 ]
 
 [project.optional-dependencies]

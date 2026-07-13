@@ -1,0 +1,1 @@
+Strip ``models/`` prefix from the request model attribute name when populated by certain providers.

@@ -219,6 +219,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if request_model is None:
             return
 
+        if request_model.startswith("models/"):
+            request_model = request_model[7:]
+
         # Initialize variables with default values to avoid "possibly unbound" errors
         top_p = None
         frequency_penalty = None

@@ -453,7 +453,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1312,7 +1312,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
-    { name = "wrapt", specifier = ">=1.0.0,<3.0.0" },
+    { name = "wrapt", specifier = ">=1.17.0,<3.0.0" },
 ]
 provides-extras = ["instruments"]
 
@@ -1415,14 +1415,14 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-instrumentation" },
-    { name = "opentelemetry-sdk" },
-    { name = "opentelemetry-semantic-conventions" },
-    { name = "opentelemetry-test-utils" },
+    { name = "opentelemetry-api", specifier = "~=1.43" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-sdk", specifier = "~=1.43" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-test-utils", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
-    { name = "pytest" },
-    { name = "pyyaml" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
 ]
 
 [[package]]

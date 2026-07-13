@@ -9,18 +9,29 @@ from typing import Any
 from unittest.mock import patch
 
 try:
-    from google.genai._interactions.resources.interactions import (
-        AsyncInteractionsResource,
-        InteractionsResource,
-    )
+    try:
+        from google.genai._interactions.resources.interactions import (
+            AsyncInteractionsResource,
+            InteractionsResource,
+        )
+    except ImportError:
+        # In version 2.9 of google-genai these were moved.
+        from google.genai._gaos.interactions import (
+            AsyncInteractions as AsyncInteractionsResource,
+        )
+        from google.genai._gaos.interactions import (
+            Interactions as InteractionsResource,
+        )
+    _HAS_INTERACTIONS = True
 except ImportError:
-    # In version 2.9 of google-genai these were moved.
-    from google.genai._gaos.interactions import (
-        AsyncInteractions as AsyncInteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Interactions as InteractionsResource,
-    )
+    _HAS_INTERACTIONS = False
+
+    # Placeholders to prevent compilation errors
+    class AsyncInteractionsResource:
+        create = None
+
+    class InteractionsResource:
+        create = None
 
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -34,6 +45,10 @@ from .util import create_mock_completed_event, create_mock_interaction
 class TestCase(CommonTestCaseBase):
     def setUp(self) -> None:
         super().setUp()
+        if not _HAS_INTERACTIONS:
+            raise unittest.SkipTest(
+                "Interactions are not supported in this version of google-genai"
+            )
         if self.__class__ == TestCase:
             raise unittest.SkipTest("Skipping testcase base.")
         self._create_mock = None
@@ -153,6 +168,26 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(
             span.attributes["server.address"],
             "generativelanguage.googleapis.com",
+        )
+
+    def test_generated_span_has_response_id(self) -> None:
+        self.configure_valid_interaction(interaction_id="interaction-123")
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Follow-up question",
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.response.id"], "interaction-123"
+        )
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            event.attributes["gen_ai.response.id"], "interaction-123"
         )
 
     def test_span_and_event_still_written_when_response_is_exception(

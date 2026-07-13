@@ -15,6 +15,7 @@ from opentelemetry.instrumentation.google_genai import (
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     ExpectedViolation,
     Scenario,
@@ -58,3 +59,20 @@ class InferenceScenario(Scenario):
                     model="gemini-2.5-flash",
                     input="Hello, how can you help me today?",
                 )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        response_ids = [
+            attr["value"]
+            for entry in report["samples"]
+            if "span" in entry
+            for attr in entry["span"]["attributes"]
+            if attr["name"] == "gen_ai.response.id"
+        ]
+        assert response_ids == [
+            "v1_ChdMaWM4YXF2ekNMQ1k5TW9QLUpHZ3dBYxIXTGljOGFxdnpDTENZOU1vUC1KR2d3QWM"
+        ], (
+            "Expected gen_ai.response.id "
+            "['v1_ChdMaWM4YXF2ekNMQ1k5TW9QLUpHZ3dBYxIXTGljOGFxdnpDTENZOU1vUC1KR2d3QWM'] "
+            f"but saw {response_ids}"
+        )

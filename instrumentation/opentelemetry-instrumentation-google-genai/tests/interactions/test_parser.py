@@ -7,6 +7,7 @@ import unittest
 import unittest.mock
 
 from opentelemetry.instrumentation.google_genai.interactions import (
+    _HAS_INTERACTIONS,
     _interactions_input_to_messages,
     _interactions_response_to_messages,
 )
@@ -19,6 +20,10 @@ from opentelemetry.util.genai.types import (
 )
 
 
+@unittest.skipIf(
+    not _HAS_INTERACTIONS,
+    "Interactions are not supported in this version of google-genai",
+)
 class TestInteractionsParser(unittest.TestCase):
     def test_input_to_messages_none(self) -> None:
         self.assertEqual(_interactions_input_to_messages(None), [])

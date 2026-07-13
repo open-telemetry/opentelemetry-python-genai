@@ -12,11 +12,19 @@ from google.genai.types import HttpOptions
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
 )
+from opentelemetry.instrumentation.google_genai.interactions import (
+    _HAS_INTERACTIONS,
+)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 
 from ..common.otel_mocker import OTelMocker
+
+pytestmark = pytest.mark.skipif(
+    not _HAS_INTERACTIONS,
+    reason="Interactions are not supported in this version of google-genai",
+)
 
 # Switch to a real key when running the VCR tests against the real API.
 _FAKE_API_KEY = "GEMINI_API_KEY"
