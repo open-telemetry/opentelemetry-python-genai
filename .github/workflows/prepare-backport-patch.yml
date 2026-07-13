@@ -1,0 +1,38 @@
+name: "Prepare backport patch"
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        type: choice
+        options:
+        - opentelemetry-instrumentation-genai-anthropic
+        - opentelemetry-instrumentation-google-genai
+        - opentelemetry-instrumentation-genai-langchain
+        - opentelemetry-instrumentation-genai-openai-agents
+        - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-util-genai
+        description: 'Package to prepare for patch release'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "true"
+
+run-name: "Prepare backport patch: ${{ inputs.package }}"
+
+jobs:
+  prepare:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: ./.github/actions/bump-package
+        with:
+          package: ${{ inputs.package }}
+          operation: bump-patch
+          otelbot-client-id: ${{ vars.OTELBOT_CLIENT_ID }}
+          otelbot-private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}

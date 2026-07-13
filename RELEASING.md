@@ -7,11 +7,29 @@ releases.
 Releases are **tag-from-`main`**: each publish creates a tag
 (`<pkg>==<version>`) pointing at the release commit on `main`. Backport
 branches (`package-release/<pkg>/v*`) are created lazily from an old tag only
-when patching an older minor line — not for every release.
+when patching an older minor line, not for every release.
 
 Releases are driven by GitHub Actions workflows. They handle version bumps,
 changelog generation (via [towncrier](https://towncrier.readthedocs.io/)),
 tagging, PyPI publishing, GitHub releases, and changelog updates on `main`.
+
+## Version model
+
+Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN`
+(e.g. `1.0b0`). `version.py` carries a `.dev` suffix during development
+(e.g. `1.0b0.dev`); the prepare workflow drops it at release time.
+
+Version cadence on `main`:
+
+- **Patch bumps happen automatically.** After each successful release of
+  `X.YbN`, the post-release workflow opens a PR bumping `main` to
+  `X.Yb(N+1).dev`. The next release from `main` is therefore a patch by
+  default.
+- **Minor and major bumps are maintainer-led.** Trigger the
+  `Bump package minor version` or `Bump package major version` workflow
+  (documented below) when you're ready to move a package to the next minor
+  or major line. Those bumps happen only when a maintainer explicitly asks
+  for them.
 
 ## Release model
 
@@ -32,7 +50,7 @@ are created on demand from an existing tag when patching an older minor.
 For releasing every package that has towncrier changelog fragments:
 
 1. Run the
-   [`Prepare minor release`](./.github/workflows/prepare-minor.yml)
+   [`Prepare release`](./.github/workflows/prepare-release.yml)
    workflow against `main`. Leave the `package` input empty for the bulk case.
    - Finds packages with fragments under `.changelog/`.
    - Opens one combined PR on `main` that drops `.dev` suffixes and runs
@@ -45,18 +63,20 @@ For releasing every package that has towncrier changelog fragments:
    it manually against `main`).
    - Publishes each ready package to PyPI.
    - Creates a GitHub release tag (`<pkg>==<version>`) on `main` for each.
-   - Opens a PR bumping released packages back to the next `.dev` version.
+   - Opens a PR bumping released packages back to the next `.dev` version
+     (patch bump).
 
 Packages without changelog fragments are skipped during prepare and logged in
 the workflow output.
 
-## Single-package minor release
+## Single-package release
 
-Use when only one package needs to ship on the current minor line, or the
-rest of the workspace is not ready for a bulk release.
+Use when only one package needs to ship, or the rest of the workspace is not
+ready for a bulk release. The version type (patch vs minor vs major) depends
+on what's currently in `version.py` on `main` — see [Version model](#version-model).
 
 1. Run
-   [`Prepare minor release`](./.github/workflows/prepare-minor.yml)
+   [`Prepare release`](./.github/workflows/prepare-release.yml)
    against `main` and set the `package` input to the target package. The
    workflow opens a PR that drops the `.dev` suffix and runs
    `towncrier build` for just that package (still labelled `release`).
@@ -65,27 +85,31 @@ rest of the workspace is not ready for a bulk release.
    [`Release package`](./.github/workflows/release-package.yml)
    against `main` for that one package.
 
-## Patch release (current minor line)
+## Bumping to the next minor or major
 
-> [!NOTE]
-> This only works if the `major.minor` version on `main` is the same version you want to patch (i.e., before the post-release bump PR to the next minor version is merged). Once `main` is bumped to the next minor dev version, all patch releases for the older minor version must use the backport workflow instead.
+Patch bumps are automatic (see [Version model](#version-model)). Bumping a
+package to the next minor or major line is a maintainer decision:
 
-1. Land the fix on `main` as a normal PR (with a towncrier fragment).
-2. Run
-   [`Prepare package patch release`](./.github/workflows/prepare-package-patch.yml)
-   against `main`. Drops `.dev` and runs `towncrier build`.
-3. Review and merge the prepare PR.
-4. Run
-   [`Release package`](./.github/workflows/release-package.yml)
-   against `main`.
+- [`Bump package minor version`](./.github/workflows/bump-package-minor.yml)
+  opens a PR that edits `version.py` from `X.YbN(.dev)` to `X.(Y+1)b0.dev`.
+- [`Bump package major version`](./.github/workflows/bump-package-major.yml)
+  opens a PR that edits `version.py` from `X.YbN(.dev)` to `(X+1).0b0.dev`.
+
+Merge the bump PR first, then follow the normal
+[bulk](#bulk-release-default) or
+[single-package](#single-package-release) release flow. `Prepare release`
+picks up the new dev version verbatim.
 
 ## Backport patch (older minor line)
+
+Once `main` has moved past the minor line you need to patch (i.e. after a
+minor bump), patches for the older line must come from a backport branch.
 
 1. Create `package-release/<pkg>/v<X>.<Y>bx` from the `<pkg>==<X>.<Y>b<N>`
    tag if it does not exist yet.
 2. Cherry-pick or develop the fix on the branch.
 3. Run
-   [`Prepare package patch release`](./.github/workflows/prepare-package-patch.yml)
+   [`Prepare backport patch`](./.github/workflows/prepare-backport-patch.yml)
    against the backport branch. Bumps the patch version and runs
    `towncrier build`.
 4. Review and merge the prepare PR into the backport branch.
@@ -94,16 +118,6 @@ rest of the workspace is not ready for a bulk release.
    against the backport branch.
    - Tags the backport branch and opens a PR copying changelog updates to
      `main`.
-
-## Major release
-
-Major bumps (e.g. `1.YbN` → `2.0b0`) are not automated. To release a major:
-
-1. Open a PR against `main` that manually edits the target package's
-   `version.py` from `X.YbN.dev` to `(X+1).0b0.dev`.
-2. Merge that PR, add a changelog fragment describing the major change, then
-   follow the standard bulk-release or single-package minor path above.
-   `Prepare minor release` picks up the new version verbatim.
 
 ## Pre-existing static `## Unreleased` entries
 
@@ -123,8 +137,9 @@ When a new package is ready to ship:
    `eachdist.ini`. Packages not listed here are skipped by the release
    workflows.
 2. Add the package to the dropdown options in the workflow files that offer
-   a package selector: `release-package.yml`, `prepare-minor.yml`, and
-   `prepare-package-patch.yml`.
+   a package selector: `release-package.yml`, `prepare-release.yml`,
+   `prepare-backport-patch.yml`, `bump-package-minor.yml`, and
+   `bump-package-major.yml`.
 3. Create the PyPI project and register **two** trusted publishers (*Manage*
    → *Publishing* → *Add a new pending publisher*), one for each workflow
    that publishes. For detailed instructions, refer to PyPI's documentation on
@@ -151,7 +166,7 @@ each publisher.
 
 ## Troubleshooting
 
-### No packages found during `Prepare minor release`
+### No packages found during `Prepare release`
 
 At least one publishable package needs a towncrier fragment under
 `.changelog/` (any file other than `.gitkeep` / `.gitignore`).
@@ -159,7 +174,7 @@ At least one publishable package needs a towncrier fragment under
 ### PyPI publish failed mid-workflow
 
 Re-run the release workflow (`Release package` or `Release all`). Trusted
-Publishing only works from GitHub Actions — there is no repo-stored PyPI token
+Publishing only works from GitHub Actions, there is no repo-stored PyPI token
 for manual `twine upload`.
 
 If the wheel was built but upload failed, fix the underlying issue (PyPI
@@ -179,4 +194,3 @@ Merge the prepare PR first. Release workflows require a non-`.dev` version in
 
 - A `backport` workflow (create backport branches manually from release tags
   when needed).
-- An automated major-bump workflow (see [Major release](#major-release)).
