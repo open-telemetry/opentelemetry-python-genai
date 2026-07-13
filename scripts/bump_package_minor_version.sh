@@ -13,6 +13,13 @@ package="${1:?usage: bump_package_minor_version.sh PACKAGE}"
 path="./$(./scripts/eachdist.py find-package --package "$package")"
 version="$(./scripts/eachdist.py version --package "$package")"
 version_file="$(find "$path" -type f -path "**/version.py")"
+file_count="$(echo "$version_file" | wc -l | tr -d ' ')"
+
+if [[ "$file_count" -ne 1 ]]; then
+  echo "Error: expected one version file, found ${file_count}"
+  echo "$version_file"
+  exit 1
+fi
 
 base_version="${version%.dev}"
 
