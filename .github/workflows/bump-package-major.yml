@@ -1,4 +1,4 @@
-name: "Prepare package patch release"
+name: "Bump package major version"
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +11,7 @@ on:
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-util-genai
-        description: 'Package to prepare for patch release'
+        description: 'Package to bump to the next major .dev version'
         required: true
 
 permissions:
@@ -20,19 +20,19 @@ permissions:
 env:
   UV_FROZEN: "true"
 
-run-name: "Prepare patch release: ${{ inputs.package }}"
+run-name: "Bump major: ${{ inputs.package }}"
 
 jobs:
-  prepare:
+  bump:
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: ./.github/actions/prepare-package
+      - uses: ./.github/actions/bump-package
         with:
           package: ${{ inputs.package }}
-          release_type: patch
-          otelbot-app-id: ${{ vars.OTELBOT_APP_ID }}
+          operation: bump-major
+          otelbot-client-id: ${{ vars.OTELBOT_CLIENT_ID }}
           otelbot-private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
