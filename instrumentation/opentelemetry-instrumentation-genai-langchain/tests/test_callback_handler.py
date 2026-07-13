@@ -11,6 +11,7 @@ the callback-handler logic and the invocation-manager bookkeeping.
 import uuid
 from unittest import mock
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
@@ -22,6 +23,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     make_last_output_message,
     make_output_message,
     serialize,
+    to_input_messages,
     to_output_messages,
 )
 from opentelemetry.util.genai.invocation import (
@@ -649,14 +651,72 @@ class TestMakeInputMessage:
 
         assert len(result) == 1
         assert result[0].parts[0].content == "hello"
-    
-    def test_messages_key_skips_non_basemessage_entries(self):
+
+    def test_messages_key_converts_raw_role_content_tuples(self):
         result = make_input_message(
             {"messages": [("human", "Hello"), HumanMessage(content="Hi")]}
         )
 
+        assert len(result) == 2
+        assert result[0].role == "user"
+        assert result[0].parts[0].content == "Hello"
+        assert result[1].parts[0].content == "Hi"
+
+    def test_messages_key_converts_role_content_dicts(self):
+        result = make_input_message(
+            {"messages": [{"role": "user", "content": "Hello"}]}
+        )
+
+        assert len(result) == 1
+        assert result[0].role == "user"
+        assert result[0].parts[0].content == "Hello"
+
+    # Edge cases: a malformed message entry must never raise. An exception here
+    # aborts on_chain_start before the agent invocation is registered, which is
+    # what caused duplicate/deformed ``invoke_agent`` spans. These assert the
+    # callback stays intact (valid prompts preserved, bad entries dropped).
+    @pytest.mark.parametrize(
+        "bad_entry",
+        [
+            ("human",),  # too few items for (role, content)
+            ("human", "hi", "extra"),  # too many items
+            ("not_a_real_role", "hi"),  # unknown role string
+            {"content": "no role key"},  # dict missing role
+            {"role": "user"},  # dict missing content
+            None,  # not a message at all
+            42,  # not a message at all
+            object(),  # arbitrary object
+        ],
+    )
+    def test_messages_key_malformed_entry_does_not_raise(self, bad_entry):
+        # A valid message alongside the malformed one must still be recorded so
+        # the prompt is never silently lost.
+        result = make_input_message(
+            {"messages": [bad_entry, HumanMessage(content="Hi")]}
+        )
+
         assert len(result) == 1
         assert result[0].parts[0].content == "Hi"
+
+    def test_messages_key_all_malformed_returns_empty_without_raising(self):
+        result = make_input_message(
+            {"messages": [("human",), None, {"content": "x"}]}
+        )
+
+        assert result == []
+
+    def test_to_input_messages_never_raises_on_mixed_bad_input(self):
+        # Direct call: even with a completely unconvertible mix, no exception
+        # escapes and any BaseMessage content is preserved.
+        result = to_input_messages(
+            [object(), ("bad", "role", "shape"), HumanMessage(content="ok")]
+        )
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "ok"
+
+    def test_to_input_messages_empty_iterable_returns_empty(self):
+        assert to_input_messages([]) == []
 
     def test_fallback_serializes_non_message_state_fields(self):
         result = make_input_message({"user_query": "what is 2+2?"})

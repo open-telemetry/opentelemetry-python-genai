@@ -12,6 +12,7 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     ToolMessage,
+    convert_to_messages,
 )
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -152,13 +153,19 @@ def _message_parts(message: BaseMessage) -> list[MessagePart]:
 
 
 def to_input_messages(
-    messages: Iterable[BaseMessage],
+    messages: Iterable[Any],
 ) -> list[InputMessage]:
     """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
+    try:
+        normalized_messages: Iterable[BaseMessage] = convert_to_messages(
+            list(messages)
+        )
+    except Exception:  # pylint: disable=broad-except
+        normalized_messages = [
+            m for m in messages if isinstance(m, BaseMessage)
+        ]
     result: list[InputMessage] = []
-    for message in messages:
-        if not isinstance(message, BaseMessage):
-            continue
+    for message in normalized_messages:
         parts = _message_parts(message)
         if not parts:
             continue
