@@ -671,10 +671,6 @@ class TestMakeInputMessage:
         assert result[0].role == "user"
         assert result[0].parts[0].content == "Hello"
 
-    # Edge cases: a malformed message entry must never raise. An exception here
-    # aborts on_chain_start before the agent invocation is registered, which is
-    # what caused duplicate/deformed ``invoke_agent`` spans. These assert the
-    # callback stays intact (valid prompts preserved, bad entries dropped).
     @pytest.mark.parametrize(
         "bad_entry",
         [
@@ -689,8 +685,6 @@ class TestMakeInputMessage:
         ],
     )
     def test_messages_key_malformed_entry_does_not_raise(self, bad_entry):
-        # A valid message alongside the malformed one must still be recorded so
-        # the prompt is never silently lost.
         result = make_input_message(
             {"messages": [bad_entry, HumanMessage(content="Hi")]}
         )
@@ -706,8 +700,6 @@ class TestMakeInputMessage:
         assert result == []
 
     def test_to_input_messages_never_raises_on_mixed_bad_input(self):
-        # Direct call: even with a completely unconvertible mix, no exception
-        # escapes and any BaseMessage content is preserved.
         result = to_input_messages(
             [object(), ("bad", "role", "shape"), HumanMessage(content="ok")]
         )
