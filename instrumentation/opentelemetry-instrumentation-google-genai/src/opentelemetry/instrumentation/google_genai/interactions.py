@@ -103,11 +103,26 @@ from opentelemetry.util.genai.types import (
 class _InteractionsMethodsSnapshot:
     def __init__(self) -> None:
         self._original_create = InteractionsResource.create
+        self._original_create_code = InteractionsResource.create.__code__
         self._original_async_create = AsyncInteractionsResource.create
+        self._original_async_create_code = (
+            AsyncInteractionsResource.create.__code__
+        )
 
     def restore(self) -> None:
+        self._original_create.__code__ = self._original_create_code
+        self._original_async_create.__code__ = self._original_async_create_code
+
         InteractionsResource.create = self._original_create
         AsyncInteractionsResource.create = self._original_async_create
+
+
+# Magic incantation used by native Google ADK instrumentation to identify
+# instrumented functions and suppress its own internal tracing when OTel is active.
+def _set_co_filename(wrapped: object) -> None:
+    wrapped.__wrapped__.__code__ = wrapped.__wrapped__.__code__.replace(
+        co_filename=__file__.replace("\\", "/")
+    )
 
 
 def _apply_interaction_response_attributes(
@@ -431,14 +446,16 @@ def instrument_interactions(
         sync_class = "Interactions"
         async_class = "AsyncInteractions"
 
-    wrap_function_wrapper(
+    wrapped = wrap_function_wrapper(
         module_path,
         f"{sync_class}.create",
         _create_instrumented_interactions_create(telemetry_handler),
     )
-    wrap_function_wrapper(
+    _set_co_filename(wrapped)
+    wrapped2 = wrap_function_wrapper(
         module_path,
         f"{async_class}.create",
         _create_instrumented_async_interactions_create(telemetry_handler),
     )
+    _set_co_filename(wrapped2)
     return snapshot
