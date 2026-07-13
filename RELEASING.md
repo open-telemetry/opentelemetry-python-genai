@@ -4,10 +4,10 @@ Every package releases independently. The default path is a coordinated
 **release-all** workflow; per-package workflows are for urgent or partial
 releases.
 
-Releases are **tag-from-`main`**: each publish creates a tag
-(`<pkg>==<version>`) pointing at the release commit on `main`. Patch
-branches (`package-release/<pkg>/v*`) are created lazily from a release tag
-only when patching an already-released version, not for every release.
+Normal releases are **tag-from-`main`**: each publish creates a tag
+(`<pkg>==<version>`) pointing at the release commit on `main`. Patches are the
+exception — they are cut from `package-release/<pkg>/v*` branches created lazily
+from a release tag, and their tags point at the backport branch, not `main`.
 
 Releases are driven by GitHub Actions workflows. They handle version bumps,
 changelog generation (via [towncrier](https://towncrier.readthedocs.io/)),
@@ -106,7 +106,7 @@ picks up the new dev version verbatim.
 
 ## Backport patch (older line)
 
-Patching *any* already-released version — the latest or an older one — 
+Patching *any* already-released version — the latest or an older one —
 comes from a branch cut from that version's tag.
 
 1. Create `package-release/<pkg>/v<X>.<Y>bx` from the `<pkg>==<X>.<Y>b<N>`
