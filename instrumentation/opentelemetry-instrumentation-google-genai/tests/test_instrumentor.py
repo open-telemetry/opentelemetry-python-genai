@@ -8,20 +8,12 @@ from google.genai.models import AsyncModels, Models
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
 )
+from opentelemetry.instrumentation.google_genai.interactions import (
+    _HAS_INTERACTIONS,
+    AsyncInteractionsResource,
+    InteractionsResource,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
-
-try:
-    from google.genai._interactions.resources.interactions import (
-        AsyncInteractionsResource,
-        InteractionsResource,
-    )
-except ImportError:
-    from google.genai._gaos.interactions import (
-        AsyncInteractions as AsyncInteractionsResource,
-    )
-    from google.genai._gaos.interactions import (
-        Interactions as InteractionsResource,
-    )
 
 
 def test_co_filename_on_wrapped_functions(
@@ -36,9 +28,14 @@ def test_co_filename_on_wrapped_functions(
         AsyncModels.generate_content_stream,
         Models.embed_content,
         AsyncModels.embed_content,
-        InteractionsResource.create,
-        AsyncInteractionsResource.create,
     ]
+    # The interactions API only exists on newer google-genai versions; the
+    # instrumentation skips wrapping it otherwise, so only assert on it there.
+    if _HAS_INTERACTIONS:
+        wrapped_functions += [
+            InteractionsResource.create,
+            AsyncInteractionsResource.create,
+        ]
 
     with instrument(
         GoogleGenAiSdkInstrumentor(),
