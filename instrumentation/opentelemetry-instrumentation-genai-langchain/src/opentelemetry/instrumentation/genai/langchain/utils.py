@@ -157,6 +157,8 @@ def to_input_messages(
     """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
     result: list[InputMessage] = []
     for message in messages:
+        if not isinstance(message, BaseMessage):
+            continue
         parts = _message_parts(message)
         if not parts:
             continue

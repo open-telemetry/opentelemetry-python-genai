@@ -649,6 +649,14 @@ class TestMakeInputMessage:
 
         assert len(result) == 1
         assert result[0].parts[0].content == "hello"
+    
+    def test_messages_key_skips_non_basemessage_entries(self):
+        result = make_input_message(
+            {"messages": [("human", "Hello"), HumanMessage(content="Hi")]}
+        )
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "Hi"
 
     def test_fallback_serializes_non_message_state_fields(self):
         result = make_input_message({"user_query": "what is 2+2?"})
