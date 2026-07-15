@@ -176,10 +176,10 @@ class InferenceInvocation(GenAIInvocation):
         counts: dict[str, int] = {}
         if self.input_tokens is not None:
             counts[GenAI.GenAiTokenTypeValues.INPUT.value] = self.input_tokens
-        if self.output_tokens is not None:
+        if self.output_tokens is not None or self.thinking_tokens is not None:
             counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
-                self.output_tokens
-            )
+                self.output_tokens or 0
+            ) + (self.thinking_tokens or 0)
         return counts
 
     def _apply_finish(self, error: Error | None = None) -> None:

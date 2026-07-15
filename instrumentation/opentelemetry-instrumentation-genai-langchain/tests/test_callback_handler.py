@@ -19,6 +19,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    extract_token_details,
     make_input_message,
     make_last_output_message,
     make_output_message,
@@ -1206,3 +1207,346 @@ class TestOnLlmEndToolCalls:
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
+
+    def test_legacy_function_call_finish_reason_produces_tool_call_request(
+        self,
+    ):
+        """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequest."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="",
+            additional_kwargs={
+                "function_call": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg,
+            generation_info={"finish_reason": "function_call"},
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequest)
+        assert part.name == "get_weather"
+        assert part.arguments == {"city": "Paris"}
+
+
+# ---------------------------------------------------------------------------
+# on_llm_end – token usage break-downs
+# ---------------------------------------------------------------------------
+
+
+class TestOnLlmEndTokenDetails:
+    def test_cache_and_reasoning_tokens_set_on_invocation(self):
+        """Cache/reasoning break-downs are recorded and reasoning is subtracted
+        from ``output_tokens`` (util-genai re-sums ``output + thinking``)."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi there",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+                "input_token_details": {
+                    "cache_creation": 3,
+                    "cache_read": 2,
+                },
+                "output_token_details": {"reasoning": 5},
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 10
+        assert llm_inv.cache_creation_input_tokens == 3
+        assert llm_inv.cache_read_input_tokens == 2
+        assert llm_inv.thinking_tokens == 5
+        # 20 (provider output, includes reasoning) - 5 reasoning = 15; util-genai
+        # re-sums output + thinking back to the provider's 20.
+        assert llm_inv.output_tokens == 15
+
+    def test_audio_tokens_ignored(self):
+        """Audio tokens have no GenAI semconv attribute and are dropped."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+                "input_token_details": {"audio": 5},
+                "output_token_details": {"audio": 4},
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 10
+        assert llm_inv.output_tokens == 20
+
+
+# ---------------------------------------------------------------------------
+# utils - multimodal image parsing (_media_part / _image_from_url)
+# ---------------------------------------------------------------------------
+
+
+def test_image_from_url_data_uri_returns_blob():
+    part = _image_from_url("data:image/jpeg;base64,QUJD")
+    assert isinstance(part, Blob)
+    assert part.mime_type == "image/jpeg"
+    assert part.modality == "image"
+    assert part.content == b"ABC"
+
+
+def test_image_from_url_http_returns_uri():
+    part = _image_from_url("https://example.com/cat.png")
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/cat.png"
+    assert part.modality == "image"
+
+
+def test_image_from_url_data_uri_without_base64_keeps_text_bytes():
+    # A non-base64 ``data:`` URL carries literal text; it is stored verbatim
+    # as utf-8 bytes rather than being base64-decoded.
+    part = _image_from_url("data:text/plain,hello")
+    assert isinstance(part, Blob)
+    assert part.mime_type == "text/plain"
+    assert part.content == b"hello"
+
+
+def test_image_from_url_data_uri_no_mime_type():
+    # ``data:;base64,...`` (empty header before ``;``) yields ``mime_type=None``.
+    part = _image_from_url("data:;base64,QUJD")
+    assert isinstance(part, Blob)
+    assert part.mime_type is None
+    assert part.content == b"ABC"
+
+
+def test_image_from_url_data_uri_malformed_base64_returns_none():
+    part = _image_from_url("data:image/png;base64,not!valid!base64!")
+    assert part is None
+
+
+def test_media_part_openai_image_url_dict():
+    item = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/a.png"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/a.png"
+
+
+def test_media_part_openai_image_url_string():
+    item = {"type": "image_url", "image_url": "https://example.com/b.png"}
+    part = _media_part(item)
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/b.png"
+
+
+def test_media_part_anthropic_base64_source_returns_blob():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "R0lGODlh",
+        },
+    }
+    part = _media_part(item)
+    assert isinstance(part, Blob)
+    assert part.mime_type == "image/png"
+    assert part.content == b"GIF89a"
+
+
+def test_media_part_anthropic_base64_source_without_media_type():
+    # ``media_type`` is optional; its absence yields ``mime_type=None``.
+    item = {
+        "type": "image",
+        "source": {"type": "base64", "data": "QUJD"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, Blob)
+    assert part.mime_type is None
+    assert part.content == b"ABC"
+
+
+def test_media_part_anthropic_url_source_returns_uri():
+    item = {
+        "type": "image",
+        "source": {"type": "url", "url": "https://example.com/c.png"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/c.png"
+
+
+def test_media_part_unrecognized_returns_none():
+    assert _media_part({"type": "text", "text": "hi"}) is None
+    assert _media_part({"type": "image_url", "image_url": {}}) is None
+    # ``image_url`` dict with a non-string url is not usable.
+    assert (
+        _media_part({"type": "image_url", "image_url": {"url": 123}}) is None
+    )
+    # ``image`` block whose source is not a mapping is ignored.
+    assert _media_part({"type": "image", "source": "nope"}) is None
+    # ``image`` base64 source with non-string data is ignored.
+    assert (
+        _media_part({"type": "image", "source": {"type": "base64", "data": 5}})
+        is None
+    )
+    # ``image`` url source with an empty url is ignored.
+    assert (
+        _media_part({"type": "image", "source": {"type": "url", "url": ""}})
+        is None
+    )
+
+
+def test_media_part_malformed_base64_returns_none():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "not!valid!base64!",
+        },
+    }
+    assert _media_part(item) is None
+
+
+def test_to_input_messages_extracts_image_part():
+    image_url = "data:image/jpeg;base64,QUJD"
+    content = [
+        {"type": "text", "text": "What's in this image?"},
+        {"type": "image_url", "image_url": {"url": image_url}},
+    ]
+    messages = to_input_messages([HumanMessage(content=content)])
+    assert len(messages) == 1
+    parts = messages[0].parts
+    # text part followed by an image Blob (data: URL)
+    assert any(isinstance(p, Blob) for p in parts)
+    blob = next(p for p in parts if isinstance(p, Blob))
+    assert blob.mime_type == "image/jpeg"
+    assert blob.content == b"ABC"
+
+
+# ---------------------------------------------------------------------------
+# utils - legacy OpenAI function_call (_legacy_function_call_request)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_function_call_dict_arguments():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": {"city": "New York"},
+            }
+        },
+    )
+    call = _legacy_function_call_request(message)
+    assert isinstance(call, ToolCallRequest)
+    assert call.name == "get_weather"
+    assert call.arguments == {"city": "New York"}
+
+
+def test_legacy_function_call_string_arguments_parsed():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": '{"city": "New York"}',
+            }
+        },
+    )
+    call = _legacy_function_call_request(message)
+    assert isinstance(call, ToolCallRequest)
+    assert call.arguments == {"city": "New York"}
+
+
+def test_legacy_function_call_absent_returns_none():
+    assert _legacy_function_call_request(AIMessage(content="hi")) is None
+
+
+def test_to_input_messages_includes_legacy_function_call():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {"name": "f", "arguments": {"x": 1}},
+        },
+    )
+    messages = to_input_messages([message])
+    assert len(messages) == 1
+    assert any(
+        isinstance(p, ToolCallRequest) and p.name == "f"
+        for p in messages[0].parts
+    )
+
+
+# ---------------------------------------------------------------------------
+# utils.extract_token_details
+# ---------------------------------------------------------------------------
+
+
+def test_extract_token_details_cache_and_reasoning():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {"cache_creation": 3, "cache_read": 2},
+        "output_token_details": {"reasoning": 5},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_creation_input_tokens": 3,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+def test_extract_token_details_ignores_audio_tokens():
+    # No GenAI semconv attribute exists for audio tokens, so they are dropped.
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "input_token_details": {"audio": 5},
+        "output_token_details": {"audio": 4},
+    }
+    assert extract_token_details(usage) == {}
+
+
+def test_extract_token_details_zero_values_omitted():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "input_token_details": {"cache_creation": 0, "cache_read": 0},
+    }
+    assert extract_token_details(usage) == {}
+
+
+def test_extract_token_details_no_details_key():
+    assert extract_token_details({"input_tokens": 1, "output_tokens": 2}) == {}
