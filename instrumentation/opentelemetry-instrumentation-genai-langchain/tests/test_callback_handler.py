@@ -1245,8 +1245,6 @@ class TestOnLlmEndTokenDetails:
         assert llm_inv.cache_creation_input_tokens == 3
         assert llm_inv.cache_read_input_tokens == 2
         assert llm_inv.thinking_tokens == 5
-        # 20 (provider output, includes reasoning) - 5 reasoning = 15; util-genai
-        # re-sums output + thinking back to the provider's 20.
         assert llm_inv.output_tokens == 15
 
     def test_audio_tokens_ignored(self):
