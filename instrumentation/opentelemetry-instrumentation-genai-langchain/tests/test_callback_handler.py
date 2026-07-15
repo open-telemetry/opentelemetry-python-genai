@@ -1216,8 +1216,6 @@ class TestOnLlmEndToolCalls:
 
 class TestOnLlmEndTokenDetails:
     def test_cache_and_reasoning_tokens_set_on_invocation(self):
-        """Cache/reasoning break-downs are recorded and reasoning is subtracted
-        from ``output_tokens`` (util-genai re-sums ``output + thinking``)."""
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
@@ -1248,7 +1246,6 @@ class TestOnLlmEndTokenDetails:
         assert llm_inv.output_tokens == 15
 
     def test_audio_tokens_ignored(self):
-        """Audio tokens have no GenAI semconv attribute and are dropped."""
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
@@ -1295,7 +1292,6 @@ def test_extract_token_details_cache_and_reasoning():
 
 
 def test_extract_token_details_ignores_audio_tokens():
-    # No GenAI semconv attribute exists for audio tokens, so they are dropped.
     usage = {
         "input_tokens": 10,
         "output_tokens": 20,
