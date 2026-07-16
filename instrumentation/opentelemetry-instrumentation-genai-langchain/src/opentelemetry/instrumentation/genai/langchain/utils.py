@@ -325,12 +325,14 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
     """Extract cache/reasoning token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
-    input_details = usage_metadata.get("input_token_details")
-    if not isinstance(input_details, dict):
-        input_details = {}
-    output_details = usage_metadata.get("output_token_details")
-    if not isinstance(output_details, dict):
-        output_details = {}
+    raw_input_details = usage_metadata.get("input_token_details")
+    input_details: dict[str, Any] = (
+        raw_input_details if isinstance(raw_input_details, dict) else {}
+    )
+    raw_output_details = usage_metadata.get("output_token_details")
+    output_details: dict[str, Any] = (
+        raw_output_details if isinstance(raw_output_details, dict) else {}
+    )
 
     cache_creation = input_details.get("cache_creation")
     if isinstance(cache_creation, int) and cache_creation:
