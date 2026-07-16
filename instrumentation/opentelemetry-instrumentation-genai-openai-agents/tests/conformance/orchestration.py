@@ -70,11 +70,11 @@ def _build_triage_agent() -> Agent:
 
 
 class OrchestrationScenario(Scenario):
-    expected_spans = (
-        "invoke_workflow",
-        "invoke_agent",
-        "execute_tool",
-    )
+    expected_spans = {
+        "invoke_workflow": 1,
+        "invoke_agent": 2,
+        "execute_tool": 1,
+    }
     expected_metrics = ("gen_ai.client.operation.duration",)
     expected_violations = (
         # `FunctionSpanData` in the openai-agents library doesn't expose
@@ -120,13 +120,6 @@ class OrchestrationScenario(Scenario):
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
-        operations = [
-            attr["value"]
-            for entry in report["samples"]
-            if "span" in entry
-            for attr in entry["span"]["attributes"]
-            if attr["name"] == "gen_ai.operation.name"
-        ]
         agent_names = {
             attr["value"]
             for entry in report["samples"]
@@ -134,14 +127,6 @@ class OrchestrationScenario(Scenario):
             for attr in entry["span"]["attributes"]
             if attr["name"] == "gen_ai.agent.name"
         }
-        assert operations.count("invoke_agent") >= 2, (
-            "Orchestration involves a triage agent handing off to a specialist; "
-            f"expected at least two invoke_agent spans, saw {operations}"
-        )
-        assert operations.count("execute_tool") >= 1, (
-            "Specialist agent calls the get_weather function tool; "
-            f"expected at least one execute_tool span, saw {operations}"
-        )
         assert len(agent_names) >= 2, (
             "Triage and specialist must each surface their own gen_ai.agent.name; "
             f"saw {sorted(agent_names)}"
