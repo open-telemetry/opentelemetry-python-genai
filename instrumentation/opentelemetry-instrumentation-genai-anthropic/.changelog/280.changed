@@ -1,0 +1,1 @@
+Disable pyright `reportDeprecated` for GenAI semantic convention enums that moved to the semantic-conventions-genai repository.
