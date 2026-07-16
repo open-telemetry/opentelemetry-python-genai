@@ -240,7 +240,7 @@ deny contains _span_finding(
 	},
 	sprintf(
 		"Span '%v' (operation '%v') has kind '%v'; semconv expects one of %v",
-		[input.sample.span.name, op, input.sample.span.kind, sort(expected_kinds)],
+		[input.sample.span.name, op, input.sample.span.kind, sort([k | expected_kinds[k]])],
 	),
 ) if {
 	input.sample.span
