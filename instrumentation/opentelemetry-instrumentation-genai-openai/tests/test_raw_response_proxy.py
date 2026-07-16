@@ -3,17 +3,15 @@
 
 """Unit tests for the streaming ``with_raw_response`` proxy.
 
-These exercise ``RawResponseStreamProxy.parse()`` for today's synchronous
-``parse()`` and for the graceful back-off when ``parse()`` returns an
-unexpected shape (the async coroutine ``parse()`` the OpenAI SDK documents for
-a future major version): the proxy hands the SDK result back untouched and
-still finalizes the span so it does not leak.
+These exercise ``RawResponseStreamProxy.parse()`` — it wraps only SDK streams
+it can drive and hands anything else back untouched — and the close fallback
+that finalizes the span when the caller never parses, so the span never leaks.
 """
 
-import inspect
 import logging
 
 import pytest
+from openai import Stream
 
 from opentelemetry.instrumentation.genai.openai._raw_response import (
     RawResponseStreamProxy,
@@ -24,20 +22,31 @@ from opentelemetry.instrumentation.genai.openai.chat_wrappers import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 
-class _SyncRawResponse:
+class _HttpResponse:
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+class _FakeStream(Stream):
+    # Bypass Stream.__init__ (needs an httpx response + client); the proxy only
+    # checks isinstance to decide whether it can wrap the parse result.
+    def __init__(self):
+        pass
+
+
+class _RawResponse:
     headers = {"openai-version": "2020-10-01"}
     request_id = "req_123"
+
+    def __init__(self, parse_result):
+        self.http_response = _HttpResponse()
+        self._parse_result = parse_result
 
     def parse(self, *, to=None):
-        return "sync-stream"
-
-
-class _AsyncRawResponse:
-    headers = {"openai-version": "2020-10-01"}
-    request_id = "req_123"
-
-    async def parse(self, *, to=None):
-        return "async-stream"
+        return self._parse_result
 
 
 def _noop() -> None:
@@ -50,11 +59,13 @@ def fixture_vcr():
     yield
 
 
-def test_sync_parse_wraps_and_forwards_metadata():
+def test_parse_wraps_stream_and_memoizes():
+    stream = _FakeStream()
+    raw = _RawResponse(stream)
     proxy = RawResponseStreamProxy(
-        _SyncRawResponse(),
+        raw,
         wrap_stream=lambda s: ("wrapped", s),
-        on_backoff=_noop,
+        finalize=_noop,
     )
 
     # Metadata resolves natively off the raw response.
@@ -62,46 +73,85 @@ def test_sync_parse_wraps_and_forwards_metadata():
     assert proxy.request_id == "req_123"
 
     parsed = proxy.parse()
-    assert parsed == ("wrapped", "sync-stream")
+    assert parsed == ("wrapped", stream)
     # Memoized so repeated calls share one wrapper / span.
     assert proxy.parse() is parsed
 
 
-@pytest.mark.asyncio()
-async def test_async_parse_backs_off_and_finalizes_once(caplog):
-    # Simulates the SDK's documented future: async client parse() becomes a
-    # coroutine. That is not the synchronous stream we expect, so the proxy
-    # backs off: it hands the coroutine back untouched, logs a debug notice,
-    # and finalizes the span exactly once (nothing else will close it).
+def test_parse_non_stream_returned_untouched(caplog):
+    # parse() may return something we can't drive — e.g. the coroutine the SDK
+    # documents parse() "will become in the next major version", or a custom
+    # non-stream target. The proxy hands it back untouched, logs, and does NOT
+    # finalize; the close fallback stays armed to finalize on drain/close.
+    raw = _RawResponse("not-a-stream")
     wrapped_calls = []
-    backoff_calls = []
+    finalize_calls = []
     proxy = RawResponseStreamProxy(
-        _AsyncRawResponse(),
+        raw,
         wrap_stream=lambda s: wrapped_calls.append(s) or ("wrapped", s),
-        on_backoff=lambda: backoff_calls.append(True),
+        finalize=lambda: finalize_calls.append(True),
     )
 
     with caplog.at_level(
         logging.DEBUG,
         logger="opentelemetry.instrumentation.genai.openai._raw_response",
     ):
-        parsed = await proxy.parse()
-    assert parsed == "async-stream"  # raw stream, not wrapped
-    assert wrapped_calls == []  # wrap_stream never invoked on the coroutine
-    assert backoff_calls == [True]  # span finalized
+        parsed = proxy.parse()
+    assert parsed == "not-a-stream"  # handed back untouched
+    assert wrapped_calls == []  # wrap_stream never invoked
+    assert finalize_calls == []  # parse must not finalize; the close hook does
     assert "skipping stream instrumentation" in caplog.text
 
-    # A second parse() must not finalize the span again.
-    await proxy.parse()
-    assert backoff_calls == [True]
+    # Fallback still armed: closing the body finalizes the span.
+    raw.http_response.close()
+    assert finalize_calls == [True]
 
 
-def test_wrap_result_backoff_closes_span(
+def test_close_without_parse_finalizes_once():
+    # A caller can drain the body off the http response without ever calling
+    # parse(). Closing it must finalize the span exactly once (so it does not
+    # leak) and still run the real close.
+    raw = _RawResponse(_FakeStream())
+    finalize_calls = []
+    # The proxy installs the close fallback in __init__; the closure it hangs on
+    # http_response keeps it alive, so we drive the response directly.
+    RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: ("wrapped", s),
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    raw.http_response.close()
+    assert raw.http_response.close_calls == 1  # real close still ran
+    assert finalize_calls == [True]  # span finalized
+
+    raw.http_response.close()  # a second close must not finalize again
+    assert finalize_calls == [True]
+
+
+def test_close_after_parse_does_not_double_finalize():
+    # When parse() built a stream wrapper, that wrapper owns finalization; the
+    # close fallback must stay out of the way and not finalize the span itself.
+    raw = _RawResponse(_FakeStream())
+    finalize_calls = []
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: ("wrapped", s),
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    proxy.parse()
+    raw.http_response.close()
+    assert raw.http_response.close_calls == 1  # real close still ran
+    assert finalize_calls == []  # fallback did not fire
+
+
+def test_wrap_result_non_stream_finalizes_on_close(
     tracer_provider, meter_provider, logger_provider, span_exporter
 ):
-    # End-to-end: an unexpected raw-response shape must not leak the span the
-    # instrumentation already started. Drive the real wrap_result path with a
-    # raw response whose parse() returns a coroutine and assert the span ends.
+    # End-to-end: a parse result we can't wrap must not leak the span the
+    # instrumentation already started. Drive the real wrap_result path and
+    # assert parse() leaves the span open, then closing the body finalizes it.
     handler = TelemetryHandler(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
@@ -109,16 +159,18 @@ def test_wrap_result_backoff_closes_span(
     )
     invocation = handler.inference("openai", request_model="gpt-4")
 
+    raw = _RawResponse("not-a-stream")
     result = ChatStreamWrapper.wrap_result(
-        _AsyncRawResponse(), invocation, capture_content=False
+        raw, invocation, capture_content=False
     )
 
     assert span_exporter.get_finished_spans() == ()  # not closed yet
 
-    parsed = result.parse()  # back-off path finalizes the span
-    # Coroutine handed back untouched (not wrapped); close to avoid a warning.
-    assert inspect.iscoroutine(parsed)
-    parsed.close()
+    parsed = result.parse()  # non-stream handed back untouched
+    assert parsed == "not-a-stream"
+    assert span_exporter.get_finished_spans() == ()  # parse did not finalize
+
+    raw.http_response.close()  # close fallback finalizes the span
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1

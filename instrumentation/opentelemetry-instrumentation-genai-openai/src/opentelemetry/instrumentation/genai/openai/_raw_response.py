@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
+from openai import AsyncStream, Stream
 from wrapt import ObjectProxy
 
 if TYPE_CHECKING:
@@ -28,45 +28,97 @@ class RawResponseStreamProxy(ObjectProxy):
     instrumented stream wrapper. Parsing is deferred until the caller asks for
     it and memoized so repeated calls share one span.
 
-    ``LegacyAPIResponse.parse()`` returns the stream synchronously today, but
-    the SDK documents that it "will become a coroutine in the next major
-    version" for the async client. If it ever hands back something other than a
-    synchronous stream (e.g. an awaitable), we can't wrap it without breaking
-    the caller, so we back off: finalize the span (nothing will drive the
-    stream wrapper to close it) and return the SDK result untouched. Telemetry
-    is degraded for that call, but the caller's code keeps working unchanged.
+    ``parse()`` wraps the result only when it is an SDK ``Stream`` /
+    ``AsyncStream`` we know how to drive. Anything else is handed back untouched
+    (for example the coroutine ``parse()`` the SDK documents it "will become in
+    the next major version" for the async client, or a custom non-stream parse
+    target): we can't instrument it, so we just log and step aside.
+
+    The span is finalized independently of ``parse()``. Whether the caller
+    parses and drains the wrapper, drains the body directly via the raw
+    response's ``read()``/``iter_bytes()``, or never parses at all, every path
+    ends by closing the underlying httpx response — so a fallback on its
+    ``close``/``aclose`` finalizes the span when ``parse()`` never built a
+    wrapper that would finalize it instead.
     """
 
     def __init__(
         self,
         raw_response: object,
         wrap_stream: Callable[[object], object],
-        on_backoff: Callable[[], None],
+        finalize: Callable[[], None],
     ) -> None:
         super().__init__(raw_response)
         self._self_wrap_stream = wrap_stream
-        self._self_on_backoff: Callable[[], None] | None = on_backoff
+        self._self_finalize: Callable[[], None] | None = finalize
         self._self_parsed: object | None = None
+        self._install_close_fallback(raw_response)
+
+    def _install_close_fallback(self, raw_response: object) -> None:
+        # httpx exposes a sync ``close`` and an async ``aclose``; wrap whichever
+        # the underlying response has so the appropriate one finalizes the span.
+        http_response = getattr(raw_response, "http_response", None)
+        close = getattr(http_response, "close", None)
+        if close is not None:
+            http_response.close = self._wrap_sync_close(close)
+        aclose = getattr(http_response, "aclose", None)
+        if aclose is not None:
+            http_response.aclose = self._wrap_async_close(aclose)
+
+    def _wrap_sync_close(
+        self, original: Callable[..., object]
+    ) -> Callable[..., object]:
+        def _close(*args: object, **kwargs: object) -> object:
+            try:
+                return original(*args, **kwargs)
+            finally:
+                self._finalize_close_fallback()
+
+        return _close
+
+    def _wrap_async_close(
+        self, original: Callable[..., Awaitable[object]]
+    ) -> Callable[..., Awaitable[object]]:
+        async def _aclose(*args: object, **kwargs: object) -> object:
+            try:
+                return await original(*args, **kwargs)
+            finally:
+                self._finalize_close_fallback()
+
+        return _aclose
+
+    def _finalize_close_fallback(self) -> None:
+        # When ``parse()`` built a stream wrapper, that wrapper owns
+        # finalization; only finalize here for callers that never parsed.
+        if self._self_parsed is None:
+            self._finalize_once()
+
+    def _finalize_once(self) -> None:
+        # ``stop()`` is not idempotent, so finalize at most once.
+        if self._self_finalize is not None:
+            finalize, self._self_finalize = self._self_finalize, None
+            finalize()
 
     def parse(self, *args: object, **kwargs: object) -> object:
-        if self._self_parsed is None:
-            stream = self.__wrapped__.parse(*args, **kwargs)
-            if inspect.isawaitable(stream):
-                _logger.debug(
-                    "with_raw_response.parse() returned %s, not a synchronous "
-                    "stream; skipping stream instrumentation for this call",
-                    type(stream).__name__,
-                )
-                self._finalize_on_backoff()
-                return stream
+        # We memoize the first parse regardless of the arguments it was called
+        # with, so calling parse() again with different args (e.g. a different
+        # ``to=`` type) returns the same wrapper rather than re-parsing. This is
+        # deliberate: one raw response backs one span, and re-parsing a stream
+        # would consume it twice anyway.
+        if self._self_parsed is not None:
+            return self._self_parsed
+        stream = self.__wrapped__.parse(*args, **kwargs)
+        if isinstance(stream, (Stream, AsyncStream)):
             self._self_parsed = self._self_wrap_stream(stream)
-        return self._self_parsed
-
-    def _finalize_on_backoff(self) -> None:
-        # ``stop()`` is not idempotent, so finalize at most once.
-        if self._self_on_backoff is not None:
-            on_backoff, self._self_on_backoff = self._self_on_backoff, None
-            on_backoff()
+            return self._self_parsed
+        # Not a stream we can drive; hand it back untouched. The close fallback
+        # finalizes the span once the caller drains/closes the response body.
+        _logger.debug(
+            "with_raw_response.parse() returned %s, not an SDK stream; "
+            "skipping stream instrumentation for this call",
+            type(stream).__name__,
+        )
+        return stream
 
 
 class StreamResultFactory:
@@ -90,6 +142,6 @@ class StreamResultFactory:
             return RawResponseStreamProxy(
                 result,
                 lambda stream: cls(stream, invocation, capture_content),
-                on_backoff=invocation.stop,
+                finalize=invocation.stop,
             )
         return cls(result, invocation, capture_content)

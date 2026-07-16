@@ -171,10 +171,6 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
             pass
         return self
 
-    def parse(self) -> "ResponseStreamWrapper":
-        """Called when using with_raw_response with stream=True."""
-        return self
-
     @property
     def response(self):
         response = _get_stream_response(self.stream)
@@ -183,7 +179,7 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
         return _ResponseProxy(response, lambda: self._stop(None))
 
     def process_event(self, event: "ResponseStreamEvent[TextFormatT]") -> None:
-        # can happen when raw response stream is parsed into something custom.
+        # raw-response stream can be parsed into a caller-defined event type.
         event_type = getattr(event, "type", None)
         if not isinstance(event_type, str):
             _logger.debug(
@@ -197,7 +193,7 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
         )
 
         if response and not self._self_invocation.request_model:
-            model = response.model
+            model = getattr(response, "model", None)
             if model:
                 self._self_invocation.request_model = model
 
@@ -373,10 +369,6 @@ class AsyncResponseStreamWrapper(
     async def until_done(self) -> "AsyncResponseStreamWrapper[TextFormatT]":
         async for _ in self:
             pass
-        return self
-
-    def parse(self) -> "AsyncResponseStreamWrapper[TextFormatT]":
-        """Called when using with_raw_response with stream=True."""
         return self
 
     @property

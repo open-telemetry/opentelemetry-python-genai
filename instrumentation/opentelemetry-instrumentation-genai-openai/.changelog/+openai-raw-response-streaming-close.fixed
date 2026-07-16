@@ -1,0 +1,1 @@
+Finalize the span for a streaming ``with_raw_response`` result that is drained off the underlying httpx response without calling ``parse()``, so the span no longer leaks open.

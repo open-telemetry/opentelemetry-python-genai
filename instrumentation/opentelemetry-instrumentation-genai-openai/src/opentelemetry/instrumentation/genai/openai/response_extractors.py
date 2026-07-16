@@ -442,9 +442,8 @@ def set_invocation_response_attributes(
     capture_content: bool,
 ) -> None:
     if hasattr(response, "parse"):
-        # LegacyAPIResponse (with_raw_response): parse to the actual response.
-        # this is invoked on non-streaming responses, so we can call parse() here
-        # without introducing any side effects.
+        # with_raw_response: safe to parse() here since this is the
+        # non-streaming path, so it has no side effects on the caller's stream.
         response = response.parse()
 
     if Response is None or not isinstance(response, Response):

@@ -9,9 +9,11 @@ import pytest
 from openai import (
     APIConnectionError,
     AsyncOpenAI,
+    AsyncStream,
     BadRequestError,
     NotFoundError,
 )
+from pydantic import BaseModel
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
@@ -231,6 +233,46 @@ async def test_async_responses_with_raw_response_streaming(
         request_service_tier="default",
         response_service_tier=getattr(response, "service_tier", None),
     )
+
+
+class _UnrelatedEvent(BaseModel):
+    """An event type unrelated to the Responses stream events."""
+
+    foo: str = "bar"
+
+
+@pytest.mark.asyncio()
+async def test_async_responses_with_raw_response_streaming_unknown_event_type(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    # Parsing the raw stream into an event type we don't recognize must not
+    # break iteration: the caller drains the same events it would with
+    # instrumentation disabled, and the span still closes instead of leaking.
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = (
+            await async_openai_client.responses.with_raw_response.create(
+                model=DEFAULT_MODEL,
+                instructions=SYSTEM_INSTRUCTIONS,
+                input=USER_ONLY_PROMPT[0]["content"],
+                service_tier="default",
+                stream=True,
+            )
+        )
+        events = [
+            event
+            async for event in raw_response.parse(
+                to=AsyncStream[_UnrelatedEvent]
+            )
+        ]
+
+    assert len(events) > 0  # drained fine, same as disabled instrumentation
+
+    (span,) = span_exporter.get_finished_spans()  # span closed, did not leak
+    assert span.end_time is not None
 
 
 @pytest.mark.asyncio()

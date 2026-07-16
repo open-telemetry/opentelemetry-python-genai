@@ -98,8 +98,8 @@ class _ChatStreamMixin(StreamResultFactory):
             self._self_prompt_tokens = usage.prompt_tokens
 
     def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
-        if not isinstance(chunk, ChatCompletionChunk):  # type: ignore
-            # can happen when raw response stream is parsed into something custom.
+        if not isinstance(chunk, ChatCompletionChunk):
+            # raw-response stream can be parsed into a caller-defined chunk type.
             _logger.debug(
                 "Skipping telemetry for unrecognized chat chunk type %s",
                 type(chunk).__name__,
@@ -152,10 +152,6 @@ class _ChatStreamMixin(StreamResultFactory):
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._cleanup(error)
-
-    def parse(self) -> _ChatStreamMixin:
-        """Called when using with_raw_response with stream=True."""
-        return self
 
     def _cleanup(self, error: Optional[BaseException] = None) -> None:
         self._self_invocation.response_model_name = self._self_response_model
