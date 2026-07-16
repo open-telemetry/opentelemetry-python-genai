@@ -1,1 +1,0 @@
-Expose raw-response attributes (headers, request_id, ...) on streaming ``with_raw_response`` responses for chat completions and the Responses API, and keep the caller's stream working unchanged when the raw response is parsed into a custom type (``parse(to=...)``).
