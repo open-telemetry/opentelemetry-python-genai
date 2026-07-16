@@ -68,6 +68,7 @@ _span_name_keyed_attr["embeddings"]        := "gen_ai.request.model"
 _span_name_keyed_attr["execute_tool"]      := "gen_ai.tool.name"
 _span_name_keyed_attr["invoke_agent"]      := "gen_ai.agent.name"
 _span_name_keyed_attr["create_agent"]      := "gen_ai.agent.name"
+_span_name_keyed_attr["retrieval"]         := "gen_ai.data_source.id"
 
 # Span name SHOULD be `{op}` (when the keyed attribute is absent) or
 # `{op} {value}` (when present). Mirrors the "SHOULD append when known"
@@ -171,9 +172,11 @@ _invoke_agent_expected["internal"] := {
 }
 
 # Invoke agent (client)
-# Required: gen_ai.operation.name, server.address
+# Required: gen_ai.operation.name, gen_ai.provider.name.
+# Always-emit Recommended: server.address.
 _invoke_agent_expected["client"] := {
 	"gen_ai.operation.name",
+	"gen_ai.provider.name",
 	"server.address",
 }
 
@@ -266,6 +269,43 @@ deny contains _span_finding(
 ) if {
 	input.sample.span
 	input.sample.span.status.code == "ok"
+}
+
+# ─── error.type on failure (violation) ──────────────────────────────────────
+#
+# Semconv requires `error.type` to be set when an operation fails. The
+# registry can't express this — it's conditional on span status — so check
+# both directions: an error span MUST carry error.type, and error.type MUST
+# NOT appear on a non-error span.
+
+deny contains _span_finding(
+	"genai_error_type_missing_on_error",
+	"violation",
+	input.sample.span,
+	{"status_code": input.sample.span.status.code},
+	sprintf(
+		"Span '%v' has status.code='error' but is missing 'error.type'; it MUST be set when the operation fails.",
+		[input.sample.span.name],
+	),
+) if {
+	input.sample.span
+	input.sample.span.status.code == "error"
+	not _has_attr(input.sample.span, "error.type")
+}
+
+deny contains _span_finding(
+	"genai_error_type_without_error_status",
+	"violation",
+	input.sample.span,
+	{"status_code": input.sample.span.status.code},
+	sprintf(
+		"Span '%v' sets 'error.type'='%v' but status.code is '%v', not 'error'.",
+		[input.sample.span.name, _attr_value(input.sample.span, "error.type"), input.sample.span.status.code],
+	),
+) if {
+	input.sample.span
+	_has_attr(input.sample.span, "error.type")
+	input.sample.span.status.code != "error"
 }
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
