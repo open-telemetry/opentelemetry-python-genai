@@ -15,6 +15,8 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import Error
 
+from ._raw_response import StreamResultFactory
+
 try:
     from opentelemetry.instrumentation.genai.openai.response_extractors import (  # pylint: disable=no-name-in-module
         set_invocation_response_attributes,
@@ -115,7 +117,7 @@ class _AsyncResponseProxy(Generic[ResponseT]):
         return getattr(self._response, name)
 
 
-class _ResponseStreamMixin(Generic[TextFormatT]):
+class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
     _self_invocation: "GenAIInvocation"
     _self_capture_content: bool
     _self_response_telemetry_finalized: bool

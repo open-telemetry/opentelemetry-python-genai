@@ -73,19 +73,12 @@ def chat_completions_create_v_new(
 
         try:
             result = wrapped(*args, **kwargs)
-            if hasattr(result, "parse"):
-                # result is of type LegacyAPIResponse, call parse to get the actual response
-                parsed_result = result.parse()
-            else:
-                parsed_result = result
             if is_streaming(kwargs):
-                return ChatStreamWrapper(
-                    parsed_result, chat_invocation, capture_content
+                return ChatStreamWrapper.wrap_result(
+                    result, chat_invocation, capture_content
                 )
 
-            _set_response_properties(
-                chat_invocation, parsed_result, capture_content
-            )
+            _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
         except Exception as error:
@@ -108,19 +101,12 @@ def async_chat_completions_create_v_new(
 
         try:
             result = await wrapped(*args, **kwargs)
-            if hasattr(result, "parse"):
-                # result is of type LegacyAPIResponse, calling parse to get the actual response
-                parsed_result = result.parse()
-            else:
-                parsed_result = result
             if is_streaming(kwargs):
-                return AsyncChatStreamWrapper(
-                    parsed_result, chat_invocation, capture_content
+                return AsyncChatStreamWrapper.wrap_result(
+                    result, chat_invocation, capture_content
                 )
 
-            _set_response_properties(
-                chat_invocation, parsed_result, capture_content
-            )
+            _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
 
@@ -172,6 +158,12 @@ def async_embeddings_create(handler: TelemetryHandler):
 def _set_response_properties(
     chat_invocation: InferenceInvocation, result, capture_content: bool
 ) -> InferenceInvocation:
+    if hasattr(result, "parse"):
+        # LegacyAPIResponse (with_raw_response): parse to the actual response.
+        # this is invoked on non-streaming responses, so we can call parse() here
+        # without consuming the stream or introducing any side effects.
+        result = result.parse()
+
     if getattr(result, "model", None):
         chat_invocation.response_model_name = result.model
 

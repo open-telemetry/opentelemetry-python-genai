@@ -413,6 +413,42 @@ def test_responses_create_streaming(
     )
 
 
+def test_responses_with_raw_response_streaming(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = openai_client.responses.with_raw_response.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+
+        # Raw-response metadata resolves natively off the wrapper (issue #46).
+        assert "openai-version" in raw_response.headers
+        assert raw_response.request_id is not None
+
+        response = _collect_completed_response(raw_response.parse())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
 def test_responses_stream_returns_wrapped_manager(
     openai_client, instrument_no_content
 ):

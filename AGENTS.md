@@ -177,6 +177,17 @@ Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (
 finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
 isn't enough, add the capability here rather than working around it.
 
+#### Preserve the SDK's return contract
+
+Instrumentation observes; it must not change what a call returns or when its work happens.
+
+- **No new side effects.** Don't do work the SDK didn't — building telemetry must never consume,
+  materialize, or otherwise trigger the result early. Stay as lazy as the original.
+- **Don't change the returned type.** The caller must get back the same type it would have without
+  instrumentation.
+- **If you wrap, keep the wrapper transparent.** It must be indistinguishable from the object it
+  wraps — every attribute and behavior forwards unchanged; only telemetry is added.
+
 ### Exception handling
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the

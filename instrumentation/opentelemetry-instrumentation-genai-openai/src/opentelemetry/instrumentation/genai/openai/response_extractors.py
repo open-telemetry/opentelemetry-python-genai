@@ -438,9 +438,15 @@ def extract_usage_tokens(usage: "ResponseUsage | None") -> UsageTokens:
 
 def set_invocation_response_attributes(
     invocation,
-    response: "Response | None",
+    response: object,
     capture_content: bool,
 ) -> None:
+    if hasattr(response, "parse"):
+        # LegacyAPIResponse (with_raw_response): parse to the actual response.
+        # this is invoked on non-streaming responses, so we can call parse() here
+        # without introducing any side effects.
+        response = response.parse()
+
     if Response is None or not isinstance(response, Response):
         return
 

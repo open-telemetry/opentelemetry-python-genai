@@ -417,6 +417,10 @@ async def test_chat_completion_with_raw_response_streaming(
             stream=True,
             stream_options={"include_usage": True},
         )
+
+    assert "openai-version" in raw_response.headers
+    assert raw_response.request_id is not None
+
     response = raw_response.parse()
 
     message_content = ""

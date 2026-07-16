@@ -20,6 +20,7 @@ from .response_wrappers import (
     ResponseStreamWrapper,
     responses_stream_context,
 )
+from .utils import is_streaming
 
 if TYPE_CHECKING:
     from openai import AsyncStream as OpenAIAsyncStream
@@ -35,21 +36,6 @@ if TYPE_CHECKING:
         ParsedResponse,
         Response,
     )
-
-try:
-    from openai import AsyncStream as _OpenAIAsyncStream
-    from openai import Stream as _OpenAIStream
-    from openai.lib.streaming.responses._responses import (  # pylint: disable=no-name-in-module
-        AsyncResponseStream as _AsyncResponseStream,
-    )
-    from openai.lib.streaming.responses._responses import (  # pylint: disable=no-name-in-module
-        ResponseStream as _ResponseStream,
-    )
-except ImportError:
-    _AsyncResponseStream = None
-    _OpenAIAsyncStream = None
-    _OpenAIStream = None
-    _ResponseStream = None
 
 ResponseResult = Union["ParsedResponse[Any]", "Response"]
 ResponseStreamResult = Union["OpenAIStream[Any]", "ResponseStream[Any]"]
@@ -89,8 +75,9 @@ def responses_create(
     ]:
         stream_context = responses_stream_context.get()
         if stream_context is not None:
-            result = wrapped(*args, **kwargs)
-            return _get_response_stream_result(result)
+            # Called by the Responses.stream() manager: it owns telemetry, so
+            # return the SDK stream unwrapped without a second invocation.
+            return wrapped(*args, **kwargs)
 
         params = extract_params(**kwargs)
         invocation = handler.inference(
@@ -100,25 +87,13 @@ def responses_create(
 
         try:
             result = wrapped(*args, **kwargs)
-            parsed_result = _get_response_stream_result(result)
-
-            if (
-                _ResponseStream is not None
-                and isinstance(parsed_result, _ResponseStream)
-            ) or (
-                _OpenAIStream is not None
-                and isinstance(parsed_result, _OpenAIStream)
-            ):
-                return ResponseStreamWrapper(
-                    cast("ResponseStreamResult", parsed_result),
-                    invocation,
-                    capture_content,
+            if is_streaming(kwargs):
+                return ResponseStreamWrapper.wrap_result(
+                    result, invocation, capture_content
                 )
 
             set_invocation_response_attributes(
-                invocation,
-                cast("ResponseResult", parsed_result),
-                capture_content,
+                invocation, result, capture_content
             )
             invocation.stop()
             return result
@@ -168,8 +143,9 @@ def async_responses_create(
     ]:
         stream_context = responses_stream_context.get()
         if stream_context is not None:
-            result = await wrapped(*args, **kwargs)
-            return _get_response_stream_result(result)
+            # Called by the Responses.stream() manager: it owns telemetry, so
+            # return the SDK stream unwrapped without a second invocation.
+            return await wrapped(*args, **kwargs)
 
         params = extract_params(**kwargs)
         invocation = handler.inference(
@@ -179,25 +155,13 @@ def async_responses_create(
 
         try:
             result = await wrapped(*args, **kwargs)
-            parsed_result = _get_response_stream_result(result)
-
-            if (
-                _AsyncResponseStream is not None
-                and isinstance(parsed_result, _AsyncResponseStream)
-            ) or (
-                _OpenAIAsyncStream is not None
-                and isinstance(parsed_result, _OpenAIAsyncStream)
-            ):
-                return AsyncResponseStreamWrapper(
-                    cast("AsyncResponseStreamResult", parsed_result),
-                    invocation,
-                    capture_content,
+            if is_streaming(kwargs):
+                return AsyncResponseStreamWrapper.wrap_result(
+                    result, invocation, capture_content
                 )
 
             set_invocation_response_attributes(
-                invocation,
-                cast("ResponseResult", parsed_result),
-                capture_content,
+                invocation, result, capture_content
             )
             invocation.stop()
             return result
@@ -283,9 +247,3 @@ def async_responses_stream(
     return cast(
         "Callable[..., AsyncResponseStreamManagerWrapper[Any]]", traced_method
     )
-
-
-def _get_response_stream_result(result):
-    if hasattr(result, "parse"):
-        return result.parse()
-    return result
