@@ -7,7 +7,7 @@ from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.trace import Tracer
+from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
@@ -71,6 +71,7 @@ class ToolInvocation(GenAIInvocation):
             completion_hook,
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
+            span_kind=SpanKind.INTERNAL,
         )
         self.should_capture_content_on_span = should_capture_content_on_spans()
         self.name = name
