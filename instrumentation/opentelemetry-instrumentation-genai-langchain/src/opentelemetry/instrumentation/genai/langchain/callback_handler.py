@@ -375,9 +375,17 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     if chat_generation.message.usage_metadata:
                         usage_metadata = chat_generation.message.usage_metadata
                         input_tokens = usage_metadata.get("input_tokens", 0)
+                        if not isinstance(input_tokens, int) or isinstance(
+                            input_tokens, bool
+                        ):
+                            input_tokens = 0
                         llm_invocation.input_tokens = input_tokens
 
                         output_tokens = usage_metadata.get("output_tokens", 0)
+                        if not isinstance(output_tokens, int) or isinstance(
+                            output_tokens, bool
+                        ):
+                            output_tokens = 0
 
                         # Cache/reasoning break-downs (Anthropic, OpenAI
                         # reasoning models, Bedrock). Audio tokens are dropped
