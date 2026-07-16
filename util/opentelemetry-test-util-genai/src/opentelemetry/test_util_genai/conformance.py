@@ -174,6 +174,7 @@ def _seen_span_operations(report: LiveCheckReport) -> dict[str, int]:
         for attr in entry["span"]["attributes"]:
             if attr["name"] == "gen_ai.operation.name":
                 counts[attr["value"]] = counts.get(attr["value"], 0) + 1
+                break
     return counts
 
 
