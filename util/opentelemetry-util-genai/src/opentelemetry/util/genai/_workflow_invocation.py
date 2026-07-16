@@ -58,7 +58,11 @@ class WorkflowInvocation(GenAIInvocation):
         self._start(self._get_base_attributes())
 
     def _get_base_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
+        """Return sampling-relevant attributes available at span creation time.
+
+        Includes ``gen_ai.workflow.name`` when a workflow name is set so it is
+        available to samplers at span creation.
+        """
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
         }
