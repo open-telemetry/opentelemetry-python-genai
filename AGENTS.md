@@ -183,8 +183,9 @@ Instrumentation observes; it must not change what a call returns or when its wor
 
 - **No new side effects.** Don't do work the SDK didn't — building telemetry must never consume,
   materialize, or otherwise trigger the result early. Stay as lazy as the original.
-- **Don't change the returned type.** The caller must get back the same type it would have without
-  instrumentation.
+- **Don't change the returned type.** `isinstance` and `__class__` must still resolve to the
+  original type. A transparent proxy (e.g. `wrapt.ObjectProxy`) satisfies this; returning a
+  different or already-parsed type does not.
 - **If you wrap, keep the wrapper transparent.** It must be indistinguishable from the object it
   wraps — every attribute and behavior forwards unchanged; only telemetry is added.
 
