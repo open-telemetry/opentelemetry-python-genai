@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
     )
 
     from opentelemetry.util.genai._invocation import GenAIInvocation
+
+_logger = logging.getLogger(__name__)
 
 TextFormatT = TypeVar("TextFormatT")
 ResponseT = TypeVar("ResponseT")
@@ -180,7 +183,15 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
         return _ResponseProxy(response, lambda: self._stop(None))
 
     def process_event(self, event: "ResponseStreamEvent[TextFormatT]") -> None:
-        event_type = event.type
+        # can happen when raw response stream is parsed into something custom.
+        event_type = getattr(event, "type", None)
+        if not isinstance(event_type, str):
+            _logger.debug(
+                "Skipping telemetry for unrecognized response event type %s",
+                type(event).__name__,
+            )
+            return
+
         response: "ParsedResponse[TextFormatT] | Response | None" = getattr(
             event, "response", None
         )

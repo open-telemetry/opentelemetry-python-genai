@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
 
 from openai import AsyncStream, Stream
@@ -25,6 +26,8 @@ from opentelemetry.util.genai.types import (
 
 from ._raw_response import StreamResultFactory
 from .chat_buffers import ChoiceBuffer
+
+_logger = logging.getLogger(__name__)
 
 
 class _ChatStreamMixin(StreamResultFactory):
@@ -95,6 +98,14 @@ class _ChatStreamMixin(StreamResultFactory):
             self._self_prompt_tokens = usage.prompt_tokens
 
     def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
+        if not isinstance(chunk, ChatCompletionChunk):  # type: ignore
+            # can happen when raw response stream is parsed into something custom.
+            _logger.debug(
+                "Skipping telemetry for unrecognized chat chunk type %s",
+                type(chunk).__name__,
+            )
+            return
+
         self._set_response_id(chunk)
         self._set_response_model(chunk)
         self._set_response_service_tier(chunk)
