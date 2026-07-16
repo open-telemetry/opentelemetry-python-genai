@@ -93,7 +93,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=kwargs.get("completion_hook"),
         )
-        provider = GenAI.GenAiProviderNameValues.OPENAI.value
+        provider = GenAI.GenAiProviderNameValues.OPENAI.value  # pyright: ignore[reportDeprecated]
         self._processor = GenAITracingProcessor(handler, provider)
 
         if kwargs.get("disable_openai_trace_export"):

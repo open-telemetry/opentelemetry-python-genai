@@ -51,7 +51,7 @@ class AgentInvocation(GenAIInvocation):
         agent_name: str | None = None,
     ) -> None:
         """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
-        _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
+        _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value  # pyright: ignore[reportDeprecated]
         super().__init__(
             tracer,
             metrics_recorder,
@@ -192,9 +192,9 @@ class AgentInvocation(GenAIInvocation):
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         if self.input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = self.input_tokens
+            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = self.input_tokens  # pyright: ignore[reportDeprecated]
         if self.output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
+            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (  # pyright: ignore[reportDeprecated]
                 self.output_tokens
             )
         return counts

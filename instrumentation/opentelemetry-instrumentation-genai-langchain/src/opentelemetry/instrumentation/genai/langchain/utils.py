@@ -33,17 +33,17 @@ from opentelemetry.util.genai.types import (
 # Mapping from LangChain ``ls_provider`` metadata values to the well-known
 # ``gen_ai.provider.name`` values defined by the GenAI semantic conventions.
 _PROVIDER_NAME_OVERRIDES: dict[str, str] = {
-    "amazon_bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
-    "bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
-    "bedrock_converse": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
-    "azure_openai": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_OPENAI.value,
-    "azure": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
-    "vertexai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
-    "google_vertexai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
-    "google_genai": GenAIAttributes.GenAiProviderNameValues.GCP_GEN_AI.value,
-    "google_generativeai": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,
-    "mistralai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
-    "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
+    "amazon_bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,  # pyright: ignore[reportDeprecated]
+    "bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,  # pyright: ignore[reportDeprecated]
+    "bedrock_converse": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,  # pyright: ignore[reportDeprecated]
+    "azure_openai": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_OPENAI.value,  # pyright: ignore[reportDeprecated]
+    "azure": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_INFERENCE.value,  # pyright: ignore[reportDeprecated]
+    "vertexai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,  # pyright: ignore[reportDeprecated]
+    "google_vertexai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,  # pyright: ignore[reportDeprecated]
+    "google_genai": GenAIAttributes.GenAiProviderNameValues.GCP_GEN_AI.value,  # pyright: ignore[reportDeprecated]
+    "google_generativeai": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,  # pyright: ignore[reportDeprecated]
+    "mistralai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,  # pyright: ignore[reportDeprecated]
+    "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,  # pyright: ignore[reportDeprecated]
 }
 
 

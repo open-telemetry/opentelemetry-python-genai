@@ -56,7 +56,7 @@ class RetrievalInvocation(GenAIInvocation):
         server_port: int | None = None,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
-        _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
+        _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value  # pyright: ignore[reportDeprecated]
         super().__init__(
             tracer,
             metrics_recorder,
