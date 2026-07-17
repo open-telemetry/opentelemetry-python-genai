@@ -20,6 +20,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     resolve_agent_name,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _legacy_function_call_request,
     _normalize_role,
     extract_token_details,
     make_input_message,
@@ -354,6 +355,19 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         output_message = OutputMessage(
                             role=_normalize_role(chat_generation.message),
                             parts=cast(list[MessagePart], tool_calls),
+                            finish_reason=finish_reason,
+                        )
+                    elif (
+                        legacy_call := _legacy_function_call_request(
+                            chat_generation.message
+                        )
+                    ) is not None:
+                        # Pre-tools OpenAI ``function_call`` (finish_reason
+                        # ``function_call``) — surface it as a tool-call
+                        # request part like the modern ``tool_calls`` path.
+                        output_message = OutputMessage(
+                            role=_normalize_role(chat_generation.message),
+                            parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
                         )
                     else:

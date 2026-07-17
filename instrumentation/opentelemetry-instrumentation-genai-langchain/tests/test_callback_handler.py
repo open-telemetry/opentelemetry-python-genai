@@ -20,6 +20,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     extract_token_details,
+    _legacy_function_call_request,
     make_input_message,
     make_last_output_message,
     make_output_message,
@@ -1312,3 +1313,90 @@ def test_extract_token_details_zero_values_omitted():
 
 def test_extract_token_details_no_details_key():
     assert extract_token_details({"input_tokens": 1, "output_tokens": 2}) == {}
+
+    def test_legacy_function_call_finish_reason_produces_tool_call_request(
+        self,
+    ):
+        """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequest."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="",
+            additional_kwargs={
+                "function_call": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg,
+            generation_info={"finish_reason": "function_call"},
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequest)
+        assert part.name == "get_weather"
+        assert part.arguments == {"city": "Paris"}
+
+
+# ---------------------------------------------------------------------------
+# utils - legacy OpenAI function_call (_legacy_function_call_request)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_function_call_dict_arguments():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": {"city": "New York"},
+            }
+        },
+    )
+    call = _legacy_function_call_request(message)
+    assert isinstance(call, ToolCallRequest)
+    assert call.name == "get_weather"
+    assert call.arguments == {"city": "New York"}
+
+
+def test_legacy_function_call_string_arguments_parsed():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": '{"city": "New York"}',
+            }
+        },
+    )
+    call = _legacy_function_call_request(message)
+    assert isinstance(call, ToolCallRequest)
+    assert call.arguments == {"city": "New York"}
+
+
+def test_legacy_function_call_absent_returns_none():
+    assert _legacy_function_call_request(AIMessage(content="hi")) is None
+
+
+def test_to_input_messages_includes_legacy_function_call():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {"name": "f", "arguments": {"x": 1}},
+        },
+    )
+    messages = to_input_messages([message])
+    assert len(messages) == 1
+    assert any(
+        isinstance(p, ToolCallRequest) and p.name == "f"
+        for p in messages[0].parts
+    )
