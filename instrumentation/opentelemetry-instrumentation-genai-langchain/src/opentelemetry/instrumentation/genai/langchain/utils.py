@@ -125,6 +125,7 @@ def _legacy_function_call_request(
     function_call = message.additional_kwargs.get("function_call")
     if not isinstance(function_call, dict):
         return None
+    function_call = cast(dict[str, Any], function_call)
     name = function_call.get("name")
     if not name:
         return None
