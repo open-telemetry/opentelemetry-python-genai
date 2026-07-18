@@ -21,5 +21,11 @@
 # OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 
+# Exception: this change depends on the output-token behavior added in opentelemetry-util-genai
+# 1.1b0 (thinking tokens no longer auto-summed into output_tokens), which is not on PyPI yet.
+# Install it from the workspace so the oldest env exercises the required behavior. Remove this once
+# 1.1b0 is released and bump the pyproject floor to >= 1.1b0.
+-e ./util/opentelemetry-util-genai
+
 google-auth==2.50.0
 fsspec==2025.9.0
