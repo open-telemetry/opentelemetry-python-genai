@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from openai.types.responses.response_usage import ResponseUsage
 
     from opentelemetry.util.genai.types import (
+        Error,
         InputMessage,
         OutputMessage,
         Text,
@@ -57,6 +58,7 @@ except ImportError:
 
 try:
     from opentelemetry.util.genai.types import (
+        Error,
         InputMessage,
         OutputMessage,
         Reasoning,
@@ -66,6 +68,7 @@ try:
         ToolCallRequest as ToolCall,
     )
 except ImportError:
+    Error = None
     InputMessage = None
     OutputMessage = None
     Reasoning = None
@@ -363,6 +366,21 @@ def extract_finish_reasons(response: "Response | None") -> list[str]:
         if finish_reason is not None:
             finish_reasons.append(finish_reason)
     return list(dict.fromkeys(finish_reasons))
+
+
+def get_response_error(response: "Response | None") -> "Error | None":
+    """Return an ``Error`` when the response failed, else ``None``.
+
+    A failed response carries a ``ResponseError`` (``code`` + ``message``).
+    Incomplete responses (``incomplete_details``) are *not* errors — they
+    surface as a finish reason instead.
+    """
+    if Response is None or Error is None or not isinstance(response, Response):
+        return None
+    error = response.error
+    if error is None or not getattr(error, "code", None):
+        return None
+    return Error(type=error.code, message=getattr(error, "message", None))
 
 
 def get_inference_creation_kwargs(

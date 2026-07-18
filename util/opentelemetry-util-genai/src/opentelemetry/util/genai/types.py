@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Type, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=useless-import-alias
@@ -226,8 +226,27 @@ class OutputMessage:
 
 @dataclass
 class Error:
-    message: str
-    type: Type[BaseException]
+    message: str | None
+    type: str
+    """The ``error.type`` attribute value. A short, low-cardinality string (an
+    exception type name, an error code, etc.) — not necessarily a Python
+    exception class."""
+    exception: BaseException | None = None
+    """The originating exception, when the error was produced from one; ``None``
+    when built from an explicit ``type``/``message``."""
+
+    @classmethod
+    def from_exception(cls, exception: BaseException) -> Error:
+        """Build an ``Error`` from an exception, deriving ``type`` and ``message``."""
+        from opentelemetry.util.genai.utils import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            fq_exception_type,
+        )
+
+        return cls(
+            message=str(exception),
+            type=fq_exception_type(exception),
+            exception=exception,
+        )
 
 
 def __getattr__(name: str) -> object:

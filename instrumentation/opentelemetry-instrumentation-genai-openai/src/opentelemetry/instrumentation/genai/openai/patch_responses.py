@@ -11,6 +11,7 @@ from .response_extractors import (
     apply_request_attributes,
     extract_params,
     get_inference_creation_kwargs,
+    get_response_error,
     set_invocation_response_attributes,
 )
 from .response_wrappers import (
@@ -115,12 +116,15 @@ def responses_create(
                     capture_content,
                 )
 
+            response = cast("ResponseResult", parsed_result)
             set_invocation_response_attributes(
-                invocation,
-                cast("ResponseResult", parsed_result),
-                capture_content,
+                invocation, response, capture_content
             )
-            invocation.stop()
+            error = get_response_error(response)
+            if error is not None:
+                invocation.fail(error)
+            else:
+                invocation.stop()
             return result
         except Exception as error:
             invocation.fail(error)
@@ -194,12 +198,15 @@ def async_responses_create(
                     capture_content,
                 )
 
+            response = cast("ResponseResult", parsed_result)
             set_invocation_response_attributes(
-                invocation,
-                cast("ResponseResult", parsed_result),
-                capture_content,
+                invocation, response, capture_content
             )
-            invocation.stop()
+            error = get_response_error(response)
+            if error is not None:
+                invocation.fail(error)
+            else:
+                invocation.stop()
             return result
         except Exception as error:
             invocation.fail(error)

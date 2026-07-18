@@ -210,7 +210,8 @@ def test_chat_completion_bad_endpoint(
     )
     assert 4242 == spans[0].attributes[ServerAttributes.SERVER_PORT]
     assert (
-        "APIConnectionError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+        "openai.APIConnectionError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
     )
 
     metrics = metric_reader.get_metrics_data().resource_metrics
@@ -231,7 +232,7 @@ def test_chat_completion_bad_endpoint(
         duration_metric.data.data_points[0].attributes[
             ErrorAttributes.ERROR_TYPE
         ]
-        == "APIConnectionError"
+        == "openai.APIConnectionError"
     )
 
 
@@ -253,7 +254,10 @@ def test_chat_completion_404(
     assert_all_attributes(
         spans[0], llm_model_value, latest_experimental_enabled
     )
-    assert "NotFoundError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    assert (
+        "openai.NotFoundError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    )
 
     metrics = metric_reader.get_metrics_data().resource_metrics
     assert len(metrics) == 1
@@ -273,7 +277,7 @@ def test_chat_completion_404(
         duration_metric.data.data_points[0].attributes[
             ErrorAttributes.ERROR_TYPE
         ]
-        == "NotFoundError"
+        == "openai.NotFoundError"
     )
 
 
