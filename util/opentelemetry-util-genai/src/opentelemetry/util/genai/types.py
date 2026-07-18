@@ -139,8 +139,8 @@ class Compaction:
     <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
     """
 
-    id: str | None
-    content: str | None
+    id: str | None = None
+    content: str | None = None
     type: Literal["compaction"] = "compaction"
 
 
