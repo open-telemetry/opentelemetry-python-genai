@@ -15,14 +15,12 @@
 # Oldest test-only dependency pins.
 #
 # The package's own declared deps (openai via the instruments extra, opentelemetry-api,
-# opentelemetry-instrumentation, opentelemetry-semantic-conventions) are resolved to their
-# pyproject.toml floors by UV_RESOLUTION=lowest-direct on the oldest tox factor, so they are NOT
-# pinned here — pyproject.toml is the single source of truth. The OpenTelemetry SDK and test
-# utilities come transitively from opentelemetry-test-util-genai, which every oldest env installs.
-# Pin here only test-only deps that nothing else already provides.
+# opentelemetry-instrumentation, opentelemetry-semantic-conventions, opentelemetry-util-genai)
+# are resolved to their pyproject.toml floors by UV_RESOLUTION=lowest-direct on the oldest tox
+# factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
+# OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
+# every oldest env installs. Pin here only test-only deps that nothing else already provides.
 
-# opentelemetry-util-genai is a co-developed workspace package, not an external floor: test against
-# the local source, not the last published release (which lags in-flight util-genai changes).
 -e ./util/opentelemetry-util-genai
 
 numpy==2.3.1 ; python_version >= "3.11"
