@@ -382,7 +382,7 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
+            '[{"name":"dict_tool","description":"Dict tool desc","type":"function"}]',
         )
 
     def test_interaction_with_builtin_tools_records_definitions(

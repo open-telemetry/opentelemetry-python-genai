@@ -30,12 +30,16 @@ class ContentCapturingMode(Enum):
 @dataclass()
 class GenericPart:
     """Used for provider-specific message part types that don't match
-    the standard MessagePart types defined in semantic conventions. Wrap custom
-    types with GenericPart(value=...) to explicitly opt-in to non-standard types.
-    This will be removed in a future version when all instrumentations use core types."""
+    the standard MessagePart types defined in semantic conventions. Set ``type``
+    to the provider-specific type discriminator and carry the payload in
+    ``value`` to explicitly opt-in to non-standard types.
+    This will be removed in a future version when all instrumentations use core types.
 
+    Per the semconv message schema, ``type`` is a free-form string (the
+    provider's own type name), not a fixed literal."""
+
+    type: str
     value: Any
-    type: Literal["generic"] = "generic"
 
 
 @dataclass()
@@ -127,7 +131,20 @@ class Reasoning:
     type: Literal["reasoning"] = "reasoning"
 
 
-Modality = Literal["image", "video", "audio"]
+@dataclass()
+class Compaction:
+    """Represents a compaction/summary of prior conversation history.
+
+    This model is specified as part of semconv in `GenAI messages Python models - CompactionPart
+    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    """
+
+    id: str | None
+    content: str | None
+    type: Literal["compaction"] = "compaction"
+
+
+Modality = Literal["image", "video", "audio", "document"]
 
 
 @dataclass()
@@ -202,12 +219,18 @@ MessagePart = Union[
     File,
     Uri,
     Reasoning,
+    Compaction,
     GenericPart,  # For provider-specific types; prefer standard types above
 ]
 
 
+# System instructions are a narrower set of parts than message content.
+# Mirrors the `gen_ai.system_instructions` semconv schema (TextPart | GenericPart).
+SystemInstructionPart = Union[Text, GenericPart]
+
+
 FinishReason = Literal[
-    "content_filter", "error", "length", "stop", "tool_calls"
+    "content_filter", "error", "length", "stop", "tool_call", "compaction"
 ]
 
 
@@ -215,6 +238,7 @@ FinishReason = Literal[
 class InputMessage:
     role: str
     parts: list[MessagePart]
+    name: str | None = None
 
 
 @dataclass()
@@ -222,6 +246,33 @@ class OutputMessage:
     role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason
+    name: str | None = None
+
+
+@dataclass()
+class MemoryRecord:
+    """Represents a single memory record exposed to or produced by the model.
+
+    This model is specified as part of semconv in `GenAI messages Python models - MemoryRecord
+    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    """
+
+    content: Any
+    id: str | None = None
+    metadata: dict[str, Any] | None = None
+    score: float | None = None
+
+
+@dataclass()
+class RetrievalDocument:
+    """Represents a document returned by a retrieval operation.
+
+    This model is specified as part of semconv in `GenAI messages Python models - RetrievalDocument
+    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    """
+
+    id: str
+    score: float
 
 
 @dataclass

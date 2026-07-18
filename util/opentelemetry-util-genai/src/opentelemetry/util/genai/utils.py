@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from base64 import b64encode
+from dataclasses import asdict
 from functools import partial
 from typing import Any
 
@@ -82,6 +83,19 @@ def should_capture_content_on_spans() -> bool:
     return get_content_capturing_mode() in (
         ContentCapturingMode.SPAN_ONLY,
         ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
+
+def asdict_without_none(obj: Any) -> dict[str, Any]:
+    """``dataclasses.asdict`` that omits keys whose value is ``None``.
+
+    Matches the GenAI semconv message schemas, which exclude unset optional
+    fields rather than serializing them as ``null``. The ``dict_factory`` is
+    applied recursively by ``asdict``, so nested message parts are pruned too.
+    """
+    return asdict(
+        obj,
+        dict_factory=lambda items: {k: v for k, v in items if v is not None},
     )
 
 

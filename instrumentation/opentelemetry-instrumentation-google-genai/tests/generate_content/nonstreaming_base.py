@@ -108,13 +108,11 @@ class NonStreamingTestCase(TestCase):
             {
                 "name": "_mock_callable_tool",
                 "description": "Description of some tool.",
-                "parameters": None,
                 "type": "function",
             },
             {
                 "name": "mock_tool",
                 "description": "Description of mock tool.",
-                "parameters": None,
                 "type": "function",
             },
             {
@@ -128,7 +126,6 @@ class NonStreamingTestCase(TestCase):
                     {
                         "name": "mcp_tool",
                         "description": "A standalone mcp tool",
-                        "parameters": None,
                         "type": "function",
                     },
                 ),
@@ -136,13 +133,11 @@ class NonStreamingTestCase(TestCase):
                     {
                         "name": "mcp_tool",
                         "description": "Tool from session",
-                        "parameters": None,
                         "type": "function",
                     },
                     {
                         "name": "mcp_tool",
                         "description": "A standalone mcp tool",
-                        "parameters": None,
                         "type": "function",
                     },
                 ),
@@ -534,14 +529,14 @@ class NonStreamingTestCase(TestCase):
             self.assertIn(
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
                 [
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"Tool from session","parameters":null,"type":"function"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":null,"type":"function"}]',
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":null,"type":"function"}]',
+                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","type":"function"},{"name":"mock_tool","description":"Description of mock tool.","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"Tool from session","type":"function"},{"name":"mcp_tool","description":"A standalone mcp tool","type":"function"}]',
+                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","type":"function"},{"name":"mock_tool","description":"Description of mock tool.","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"A standalone mcp tool","type":"function"}]',
                 ],
             )
         else:
             self.assertEqual(
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"}]',
+                '[{"name":"_mock_callable_tool","description":"Description of some tool.","type":"function"},{"name":"mock_tool","description":"Description of mock tool.","type":"function"},{"name":"google_maps","type":"google_maps"}]',
             )
 
     @patch.dict(
@@ -593,14 +588,14 @@ class NonStreamingTestCase(TestCase):
             self.assertIn(
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
                 [
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"Tool from session","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"}]',
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"}]',
+                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","type":"function"},{"name":"mock_tool","description":"Description of mock tool.","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"Tool from session","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"}]',
+                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","type":"function"},{"name":"mock_tool","description":"Description of mock tool.","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":{"type":"object","properties":{"id":{"type":"integer"}}},"type":"function"}]',
                 ],
             )
         else:
             self.assertEqual(
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"}]',
+                '[{"name":"_mock_callable_tool","description":"Description of some tool.","type":"function"},{"name":"mock_tool","description":"Description of mock tool.","type":"function"},{"name":"google_maps","type":"google_maps"}]',
             )
 
     def test_log_has_extra_genai_attributes(self):
