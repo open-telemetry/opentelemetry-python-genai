@@ -416,8 +416,12 @@ def _apply_response_attributes(
     if output_tokens is not None and isinstance(output_tokens, int):
         invocation.output_tokens = output_tokens
     if thinking_tokens is not None and isinstance(thinking_tokens, int):
-        # The util library will add this total to output tokens.
         invocation.thinking_tokens = thinking_tokens
+        # candidates_token_count excludes thoughts; output_tokens must be the
+        # full output count including reasoning tokens.
+        invocation.output_tokens = (
+            invocation.output_tokens or 0
+        ) + thinking_tokens
 
 
 def _maybe_get_tool_definitions(

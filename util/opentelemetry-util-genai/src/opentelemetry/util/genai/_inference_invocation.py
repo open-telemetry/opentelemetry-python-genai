@@ -76,7 +76,6 @@ class InferenceInvocation(GenAIInvocation):
         self.response_id: str | None = None
         self.finish_reasons: list[str] | None = None
         self.input_tokens: int | None = None
-        # Output tokens will ultimately be the sum of normal output tokens and thinking tokens.
         self.output_tokens: int | None = None
         self.thinking_tokens: int | None = None
         self.temperature: float | None = None
@@ -131,12 +130,6 @@ class InferenceInvocation(GenAIInvocation):
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs = self._get_base_attributes()
-        if self.output_tokens is None and self.thinking_tokens is None:
-            output_tokens = None
-        else:
-            output_tokens = (self.output_tokens or 0) + (
-                self.thinking_tokens or 0
-            )
         optional_attrs = (
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
             (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
@@ -150,7 +143,7 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
             (GenAI.GEN_AI_RESPONSE_ID, self.response_id),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
-            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens),
+            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
             (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
