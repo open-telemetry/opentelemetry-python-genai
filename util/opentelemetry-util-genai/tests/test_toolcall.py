@@ -167,7 +167,7 @@ def test_tool_span_is_internal_kind():
     assert span_exporter.get_finished_spans()[0].kind == SpanKind.INTERNAL
 
 
-def test_start_tool_passes_sampling_attributes_at_span_creation():
+def test_tool_passes_sampling_attributes_at_span_creation():
     """Verify that sampling-relevant attributes are available at start_span() time for tools."""
     captured_attributes = {}
 

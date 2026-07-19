@@ -49,8 +49,6 @@ from opentelemetry.trace import (
     get_tracer,
 )
 from opentelemetry.util.genai._agent_invocation import AgentInvocation
-from opentelemetry.util.genai._inference_invocation import LLMInvocation
-from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
@@ -126,77 +124,6 @@ class TelemetryHandler:
         """
         return self._capture_content
 
-    # New-style factory methods: construct + start in one call, handler stored on invocation
-    def start_inference(
-        self,
-        provider: str,
-        *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        operation_name: str | None = None,
-    ) -> InferenceInvocation:
-        """Create and start an LLM inference invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.inference()`` instead.
-
-        Set remaining attributes (input_messages, temperature, etc.) on the
-        returned invocation, then call invocation.stop() or invocation.fail().
-        """
-        return InferenceInvocation(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-            provider,
-            request_model=request_model,
-            server_address=server_address,
-            server_port=server_port,
-            operation_name=operation_name,
-        )
-
-    def start_llm(self, invocation: LLMInvocation) -> LLMInvocation:
-        """Start an LLM invocation.
-
-        .. deprecated::
-            Use ``handler.inference()`` instead.
-        """
-        invocation._start_with_handler(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-        )
-        return invocation
-
-    def start_embedding(
-        self,
-        provider: str,
-        *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-    ) -> EmbeddingInvocation:
-        """Create and start an Embedding invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.embedding()`` instead.
-
-        Set remaining attributes (encoding_formats, etc.) on the returned
-        invocation, then call invocation.stop() or invocation.fail().
-        """
-        return EmbeddingInvocation(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-            provider,
-            request_model=request_model,
-            server_address=server_address,
-            server_port=server_port,
-        )
-
     def retrieval(
         self,
         *,
@@ -225,80 +152,6 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
         )
-
-    def start_tool(
-        self,
-        name: str,
-        *,
-        tool_call_id: str | None = None,
-        tool_type: str | None = None,
-        tool_description: str | None = None,
-    ) -> ToolInvocation:
-        """Create and start a tool invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.tool()`` instead.
-
-        Set tool_result on the returned invocation when done, then call
-        invocation.stop() or invocation.fail().
-        """
-        return ToolInvocation(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-            name,
-            tool_call_id=tool_call_id,
-            tool_type=tool_type,
-            tool_description=tool_description,
-        )
-
-    def start_workflow(
-        self,
-        *,
-        name: str | None = None,
-    ) -> WorkflowInvocation:
-        """Create and start a workflow invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.workflow()`` instead.
-
-        Set remaining attributes on the returned invocation, then call
-        invocation.stop() or invocation.fail().
-        """
-        return WorkflowInvocation(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-            name,
-        )
-
-    def stop_llm(self, invocation: LLMInvocation) -> LLMInvocation:  # pylint: disable=no-self-use
-        """Finalize an LLM invocation successfully and end its span.
-
-        .. deprecated::
-            Use ``handler.inference()``  and then ``inference.stop()`` instead.
-        """
-        invocation._sync_to_invocation()
-        if invocation._inference_invocation is not None:
-            invocation._inference_invocation.stop()
-        return invocation
-
-    def fail_llm(  # pylint: disable=no-self-use
-        self,
-        invocation: LLMInvocation,
-        error: Error,
-    ) -> LLMInvocation:
-        """Fail an LLM invocation and end its span with error status.
-
-        .. deprecated::
-            Use ``handler.inference()``  and then ``inference.fail()`` instead.
-        """
-        invocation._sync_to_invocation()
-        if invocation._inference_invocation is not None:
-            invocation._inference_invocation.fail(error)
-        return invocation
 
     # New-style factory methods: construct + start in one call, handler stored on invocation
 
@@ -385,64 +238,6 @@ class TelemetryHandler:
             tool_call_id=tool_call_id,
             tool_type=tool_type,
             tool_description=tool_description,
-        )
-
-    def start_invoke_local_agent(
-        self,
-        *,
-        request_model: str | None = None,
-        agent_name: str | None = None,
-    ) -> AgentInvocation:
-        """Create and start a local agent invocation (INTERNAL span kind).
-
-        .. deprecated:: 1.0b0
-            Use ``handler.invoke_local_agent()`` instead.
-
-        Use for agents running within the same process (e.g. LangChain, CrewAI).
-
-        Set remaining attributes (agent_name, etc.) on the returned invocation,
-        then call invocation.stop() or invocation.fail().
-        """
-        return AgentInvocation(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
-            request_model=request_model,
-            agent_name=agent_name,
-        )
-
-    def start_invoke_remote_agent(
-        self,
-        provider: str,
-        *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        agent_name: str | None = None,
-    ) -> AgentInvocation:
-        """Create and start a remote agent invocation (CLIENT span kind).
-
-        .. deprecated:: 1.0b0
-            Use ``handler.invoke_remote_agent()`` instead.
-
-        Use for agents invoked over a remote service (e.g. OpenAI Assistants, AWS Bedrock).
-
-        Set remaining attributes (agent_name, etc.) on the returned invocation,
-        then call invocation.stop() or invocation.fail().
-        """
-        return AgentInvocation(
-            self._tracer,
-            self._metrics_recorder,
-            self._logger,
-            self._completion_hook,
-            provider=provider,
-            span_kind=SpanKind.CLIENT,
-            request_model=request_model,
-            agent_name=agent_name,
-            server_address=server_address,
-            server_port=server_port,
         )
 
     def invoke_local_agent(

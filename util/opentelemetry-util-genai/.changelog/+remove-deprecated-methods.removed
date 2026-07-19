@@ -1,0 +1,1 @@
+Remove deprecated ``start_inference``, ``start_llm``, ``start_embedding``, ``start_tool``, ``start_workflow``, ``stop_llm``, ``fail_llm``, ``start_invoke_local_agent``, and ``start_invoke_remote_agent`` methods from ``TelemetryHandler``. Use ``inference()``, ``embedding()``, ``tool()``, ``workflow()``, ``invoke_local_agent()``, and ``invoke_remote_agent()`` instead.

@@ -410,7 +410,7 @@ class TestTelemetryHandler(unittest.TestCase):
             },
         )
 
-    def test_start_inference_passes_sampling_attributes_at_span_creation(self):
+    def test_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
         captured_attributes = {}
 
@@ -461,7 +461,7 @@ class TestTelemetryHandler(unittest.TestCase):
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
 
-    def test_start_inference_sampler_can_drop_span_based_on_attributes(self):
+    def test_inference_sampler_can_drop_span_based_on_attributes(self):
         """Verify that a sampler can reject spans based on attributes passed at creation time."""
 
         class ModelRejectingSampler:  # pylint: disable=no-self-use
@@ -512,7 +512,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert len(spans) == 1
         assert spans[0].name == "chat accepted-model"
 
-    def test_start_embedding_passes_sampling_attributes_at_span_creation(self):
+    def test_embedding_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time for embeddings."""
         captured_attributes = {}
 
