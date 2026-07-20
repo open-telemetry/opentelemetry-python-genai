@@ -1,0 +1,1 @@
+Add tool definitions attribute to interactions API spans/events. Use invoke remote agent span instead of inference span when an agent is specified.

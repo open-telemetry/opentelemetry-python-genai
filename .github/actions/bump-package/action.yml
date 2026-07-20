@@ -1,0 +1,119 @@
+name: Bump package version
+description: >
+  Run a version-bump or prepare-release script against a single package, then
+  open a pull request with the resulting changes. Dispatch is driven by the
+  `operation` input.
+
+inputs:
+  package:
+    description: Package name (e.g. opentelemetry-instrumentation-genai-openai)
+    required: true
+  operation:
+    description: >
+      One of "drop-dev" (drop the .dev suffix and run towncrier on main),
+      "bump-patch" (bump the beta patch component on a backport branch),
+      "bump-minor" (bump to next minor .dev on main), or "bump-major" (bump
+      to next major .dev on main).
+    required: true
+  otelbot-client-id:
+    description: OTELBOT app client id used to open the pull request
+    required: true
+  otelbot-private-key:
+    description: OTELBOT app private key used to open the pull request
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify branch matches operation
+      shell: bash
+      run: |
+        case "${{ inputs.operation }}" in
+          drop-dev|bump-minor|bump-major)
+            if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+              echo "operation '${{ inputs.operation }}' must run on main, got '$GITHUB_REF_NAME'"
+              exit 1
+            fi
+            ;;
+          bump-patch)
+            if [[ "$GITHUB_REF_NAME" != package-release/${{ inputs.package }}/v* ]]; then
+              echo "operation 'bump-patch' must run on a package-release/${{ inputs.package }}/v* backport branch, got '$GITHUB_REF_NAME'"
+              exit 1
+            fi
+            ;;
+          *)
+            echo "unknown operation: '${{ inputs.operation }}'"
+            exit 1
+            ;;
+        esac
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+
+    - name: Run drop-dev
+      if: inputs.operation == 'drop-dev'
+      shell: bash
+      run: ./scripts/prepare_package_for_release.sh "${{ inputs.package }}"
+
+    - name: Run bump-patch
+      if: inputs.operation == 'bump-patch'
+      shell: bash
+      run: ./scripts/prepare_package_for_patch_release.sh "${{ inputs.package }}"
+
+    - name: Run bump-minor
+      if: inputs.operation == 'bump-minor'
+      shell: bash
+      run: ./scripts/bump_package_minor_version.sh "${{ inputs.package }}"
+
+    - name: Run bump-major
+      if: inputs.operation == 'bump-major'
+      shell: bash
+      run: ./scripts/bump_package_major_version.sh "${{ inputs.package }}"
+
+    - name: Compute resulting version
+      shell: bash
+      run: |
+        version=$(./scripts/eachdist.py version --package "${{ inputs.package }}")
+        echo "VERSION=${version}" >> "$GITHUB_ENV"
+        echo "PACKAGE_NAME=${{ inputs.package }}" >> "$GITHUB_ENV"
+
+    - name: Configure CLA-approved git bot
+      shell: bash
+      run: .github/scripts/use-cla-approved-github-bot.sh
+
+    - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      id: otelbot-token
+      with:
+        client-id: ${{ inputs.otelbot-client-id }}
+        private-key: ${{ inputs.otelbot-private-key }}
+
+    - name: Create pull request
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+      run: |
+        case "${{ inputs.operation }}" in
+          drop-dev)
+            title="Prepare release for ${PACKAGE_NAME} v${VERSION}"
+            branch="otelbot/prepare-${PACKAGE_NAME}-v${VERSION}"
+            ;;
+          bump-patch)
+            title="Prepare patch release for ${PACKAGE_NAME} v${VERSION}"
+            branch="otelbot/patch-${PACKAGE_NAME}-v${VERSION}"
+            ;;
+          bump-minor)
+            title="Bump ${PACKAGE_NAME} to next minor v${VERSION}"
+            branch="otelbot/bump-minor-${PACKAGE_NAME}-v${VERSION}"
+            ;;
+          bump-major)
+            title="Bump ${PACKAGE_NAME} to next major v${VERSION}"
+            branch="otelbot/bump-major-${PACKAGE_NAME}-v${VERSION}"
+            ;;
+        esac
+
+        git commit -a -m "$title"
+        git push origin HEAD:"$branch"
+        gh pr create --title "$title" \
+                     --body "$title." \
+                     --head "$branch" \
+                     --base "$GITHUB_REF_NAME"

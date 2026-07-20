@@ -18,7 +18,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class EmbeddingScenario(Scenario):
-    expected_spans = ("embeddings",)
+    expected_spans = {"embeddings": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -37,7 +37,6 @@ class EmbeddingScenario(Scenario):
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
-            semconv="gen_ai_latest_experimental",
             content_capture="SPAN_ONLY",
         ):
             with vcr.use_cassette("embedding_conformance.yaml"):

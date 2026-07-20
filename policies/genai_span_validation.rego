@@ -68,6 +68,7 @@ _span_name_keyed_attr["embeddings"]        := "gen_ai.request.model"
 _span_name_keyed_attr["execute_tool"]      := "gen_ai.tool.name"
 _span_name_keyed_attr["invoke_agent"]      := "gen_ai.agent.name"
 _span_name_keyed_attr["create_agent"]      := "gen_ai.agent.name"
+_span_name_keyed_attr["retrieval"]         := "gen_ai.data_source.id"
 
 # Span name SHOULD be `{op}` (when the keyed attribute is absent) or
 # `{op} {value}` (when present). Mirrors the "SHOULD append when known"
@@ -171,9 +172,11 @@ _invoke_agent_expected["internal"] := {
 }
 
 # Invoke agent (client)
-# Required: gen_ai.operation.name, server.address
+# Required: gen_ai.operation.name, gen_ai.provider.name.
+# Always-emit Recommended: server.address.
 _invoke_agent_expected["client"] := {
 	"gen_ai.operation.name",
+	"gen_ai.provider.name",
 	"server.address",
 }
 
@@ -210,6 +213,43 @@ deny contains _span_finding(
 	expected := _expected_for_op(op, input.sample.span.kind)
 	some attr_name in expected
 	not _has_attr(input.sample.span, attr_name)
+}
+
+# ─── Per-operation span kind (violation) ────────────────────────────────────
+#
+# Semconv pins the span kind for each operation. `_expected_kinds_for_op`
+# returns the set of kinds semconv allows; a span whose kind is outside that
+# set is flagged. Single-element sets are the unambiguous cases (inference and
+# embeddings are remote calls → CLIENT; tool execution runs in-process →
+# INTERNAL). `invoke_agent` / `create_agent` may be same-process or remote, so
+# both kinds are allowed. Undefined (→ no violation) for unmapped ops.
+_expected_kinds_for_op["chat"]             := {"client"}
+_expected_kinds_for_op["generate_content"] := {"client"}
+_expected_kinds_for_op["text_completion"]  := {"client"}
+_expected_kinds_for_op["embeddings"]       := {"client"}
+_expected_kinds_for_op["execute_tool"]     := {"internal"}
+_expected_kinds_for_op["invoke_workflow"]  := {"internal"}
+_expected_kinds_for_op["retrieval"]        := {"client"}
+_expected_kinds_for_op["invoke_agent"]     := {"internal", "client"}
+_expected_kinds_for_op["create_agent"]     := {"internal", "client"}
+
+deny contains _span_finding(
+	"genai_span_kind_unexpected",
+	"violation",
+	input.sample.span,
+	{
+		"operation": op,
+		"kind":      input.sample.span.kind,
+	},
+	sprintf(
+		"Span '%v' (operation '%v') has kind '%v'; semconv expects one of %v",
+		[input.sample.span.name, op, input.sample.span.kind, sort([k | expected_kinds[k]])],
+	),
+) if {
+	input.sample.span
+	op := _attr_value(input.sample.span, "gen_ai.operation.name")
+	expected_kinds := _expected_kinds_for_op[op]
+	not expected_kinds[input.sample.span.kind]
 }
 
 # ─── Unknown gen_ai.operation.name (violation) ──────────────────────────────
@@ -266,6 +306,43 @@ deny contains _span_finding(
 ) if {
 	input.sample.span
 	input.sample.span.status.code == "ok"
+}
+
+# ─── error.type on failure (violation) ──────────────────────────────────────
+#
+# Semconv requires `error.type` to be set when an operation fails. The
+# registry can't express this — it's conditional on span status — so check
+# both directions: an error span MUST carry error.type, and error.type MUST
+# NOT appear on a non-error span.
+
+deny contains _span_finding(
+	"genai_error_type_missing_on_error",
+	"violation",
+	input.sample.span,
+	{"status_code": input.sample.span.status.code},
+	sprintf(
+		"Span '%v' has status.code='error' but is missing 'error.type'; it MUST be set when the operation fails.",
+		[input.sample.span.name],
+	),
+) if {
+	input.sample.span
+	input.sample.span.status.code == "error"
+	not _has_attr(input.sample.span, "error.type")
+}
+
+deny contains _span_finding(
+	"genai_error_type_without_error_status",
+	"violation",
+	input.sample.span,
+	{"status_code": input.sample.span.status.code},
+	sprintf(
+		"Span '%v' sets 'error.type'='%v' but status.code is '%v', not 'error'.",
+		[input.sample.span.name, _attr_value(input.sample.span, "error.type"), input.sample.span.status.code],
+	),
+) if {
+	input.sample.span
+	_has_attr(input.sample.span, "error.type")
+	input.sample.span.status.code != "error"
 }
 
 # ─── Helpers ────────────────────────────────────────────────────────────────

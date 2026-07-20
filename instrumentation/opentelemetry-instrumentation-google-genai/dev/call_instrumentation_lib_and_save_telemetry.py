@@ -62,12 +62,13 @@ def add(a: int, b: int) -> int:
 
 def main():
     GoogleGenAiSdkInstrumentor().instrument()
-    # False for the embedding call
+    # set vertex ai to False to get the interactions/embedding API.
     client = genai.Client(
-        vertexai=True,
+        # vertexai=False,
         project=os.environ["PROJECT_ID"],
         location=os.environ["LOCATION"],
     )
+
     response = client.models.generate_content(
         model=os.environ["MODEL"],
         contents=os.environ["PROMPT"],
@@ -77,9 +78,19 @@ def main():
     #     model=os.environ["MODEL"],
     #     contents=os.environ["PROMPT"],
     # )
-    write_spans_to_file("test_span")
-    write_logs_to_file("test_log")
-    print(response.text)
+    # Example interactions API call..
+    # response = client.interactions.create(
+    #     model=os.environ["MODEL"],
+    #     input={
+    #         "type": "text",
+    #         "text": "What is the current weather in Tokyo?",
+    #     },
+    #     tools=[{"type": "google_search"}],
+    # )
+
+    write_spans_to_file("span_google_search")
+    write_logs_to_file("log_google_search")
+    print(response)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,20 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from importlib.metadata import version as _pkg_version
 from typing import Optional
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import (
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from openai import AuthenticationError
 
+from opentelemetry.instrumentation.genai.langchain.utils import (
+    to_input_messages,
+)
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
     event_attributes as EventAttributes,
@@ -16,8 +24,25 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.semconv.attributes import error_attributes
 
 
+def _openai_cassette_name(model, base: str) -> str:
+    # Newer langchain-openai renders ``max_completion_tokens`` on the request
+    # body while older versions send ``max_tokens`` (plus an explicit ``n``).
+    # The request bodies differ, so pick the cassette recorded for the
+    # installed version instead of fuzzy-matching one cassette across both.
+    payload = model._get_request_payload([], stop=None)
+    suffix = "" if "max_completion_tokens" in payload else "_old"
+    return f"{base}{suffix}.yaml"
+
+
+def _gemini_cassette_name(base: str) -> str:
+    # Newer langchain-google-genai serializes an empty ``safetySettings`` list
+    # onto the request body; older (2.x) versions omit it entirely.
+    major = int(_pkg_version("langchain-google-genai").split(".")[0])
+    suffix = "" if major >= 3 else "_old"
+    return f"{base}{suffix}.yaml"
+
+
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
 @pytest.mark.parametrize(
     "capture_content",
     ["SPAN_ONLY", "NO_CONTENT", "SPAN_AND_EVENT", "EVENT_ONLY"],
@@ -33,9 +58,6 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     vcr,
 ):
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
     )
 
@@ -45,7 +67,10 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     ]
 
     with vcr.use_cassette(
-        "test_chat_openai_gpt_3_5_turbo_model_llm_call.yaml"
+        _openai_cassette_name(
+            chat_openai_gpt_3_5_turbo_model,
+            "test_chat_openai_gpt_3_5_turbo_model_llm_call",
+        )
     ):
         response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
     assert response.content == "The capital of France is Paris."
@@ -82,13 +107,12 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     if capture_content in ("SPAN_AND_EVENT", "EVENT_ONLY"):
         assert len(logs) == 1
         log_record = logs[0].log_record
-        assert_log_record(log_record, spans[0])
+        assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
         assert len(logs) == 0
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
 @pytest.mark.parametrize(
     "capture_content",
     ["SPAN_ONLY", "NO_CONTENT", "SPAN_AND_EVENT", "EVENT_ONLY"],
@@ -104,9 +128,6 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     vcr,
 ):
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
     )
 
@@ -118,7 +139,10 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     response = None
     try:
         with vcr.use_cassette(
-            "test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error.yaml"
+            _openai_cassette_name(
+                chat_openai_gpt_3_5_turbo_model,
+                "test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error",
+            )
         ):
             response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
     except Exception as e:
@@ -158,16 +182,26 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
 
 
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
 def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
-    span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0
+    span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0, vcr
 ):
+    is_old_bedrock = not getattr(
+        us_amazon_nova_lite_v1_0, "beta_use_converse_api", False
+    )
+
+    cassette_name = (
+        "test_us_amazon_nova_lite_v1_0_bedrock_llm_call_old.yaml"
+        if is_old_bedrock
+        else "test_us_amazon_nova_lite_v1_0_bedrock_llm_call.yaml"
+    )
+
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    result = us_amazon_nova_lite_v1_0.invoke(messages)
+    with vcr.use_cassette(cassette_name):
+        result = us_amazon_nova_lite_v1_0.invoke(messages)
 
     assert result.content.find("The capital of France is Paris") != -1
 
@@ -177,25 +211,37 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
     for span in spans:
         print(f"span: {span}")
         print(f"span attributes: {span.attributes}")
-    # TODO: fix the code and ensure the assertions are correct
     assert_bedrock_completion_attributes(spans[0], result)
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
-@pytest.mark.vcr()
-def test_gemini(span_exporter, start_instrumentation, gemini):
+def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    result = gemini.invoke(messages)
+    with vcr.use_cassette(_gemini_cassette_name("test_gemini")):
+        result = gemini.invoke(messages)
 
     assert result.content.find("The capital of France is **Paris**") != -1
 
     # verify spans
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 0  # No spans should be created for gemini as of now
+    assert len(spans) == 1
+    assert_gemini_completion_attributes(spans[0], result)
+
+
+def test_function_message_role_maps_to_tool():
+    # Legacy LangChain ``FunctionMessage`` predates ``tool_calls`` and reports
+    # ``message.type == 'function'``. The GenAI semantic conventions enum has
+    # no ``function`` role, so the converter must remap it to ``tool`` before
+    # the message lands in ``gen_ai.input.messages``.
+    result = to_input_messages(
+        [FunctionMessage(name="get_weather", content="sunny")]
+    )
+    assert len(result) == 1
+    assert result[0].role == "tool"
 
 
 def assert_openai_completion_attributes(
@@ -215,7 +261,16 @@ def assert_openai_completion_attributes(
     assert attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
     assert attributes[gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE] == 0.1
     assert attributes["gen_ai.provider.name"] == "openai"
-    assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attributes
+    # Response ID may not be present in older langchain integration versions
+    has_response_id = False
+    if (
+        getattr(response, "response_metadata", None)
+        and "id" in response.response_metadata
+    ):
+        has_response_id = True
+
+    if has_response_id:
+        assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attributes
     assert attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_P] == 0.9
     assert (
         attributes[gen_ai_attributes.GEN_AI_REQUEST_FREQUENCY_PENALTY] == 0.5
@@ -254,13 +309,13 @@ def assert_openai_completion_attributes(
         assert input_message is not None
         assert '"role":"system"' in input_message
         assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"human"' in input_message
+        assert '"role":"user"' in input_message
         assert '"content":"What is the capital of France?"' in input_message
 
         # Assert output message
         output_message = attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
         assert output_message is not None
-        assert '"role":"ai"' in output_message
+        assert '"role":"assistant"' in output_message
         assert '"content":"The capital of France is Paris."' in output_message
         assert '"finish_reason":"stop"' in output_message
     else:
@@ -304,7 +359,7 @@ def assert_openai_completion_attributes_with_error(
         assert input_message is not None
         assert '"role":"system"' in input_message
         assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"human"' in input_message
+        assert '"role":"user"' in input_message
         assert '"content":"What is the capital of France?"' in input_message
 
         # Assert output message
@@ -324,7 +379,7 @@ def assert_bedrock_completion_attributes(
         == "us.amazon.nova-lite-v1:0"
     )
 
-    assert span.attributes["gen_ai.provider.name"] == "amazon_bedrock"
+    assert span.attributes["gen_ai.provider.name"] == "aws.bedrock"
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE] == 0.1
 
@@ -341,6 +396,41 @@ def assert_bedrock_completion_attributes(
 
     output_tokens = response.usage_metadata.get("output_tokens")
     if output_tokens:
+        assert (
+            output_tokens
+            == span.attributes[gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        )
+    else:
+        assert (
+            gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+        )
+
+
+def assert_gemini_completion_attributes(
+    span: ReadableSpan, response: Optional
+):
+    assert span is not None
+    assert span.name == "chat gemini-2.5-pro"
+    assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert (
+        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
+        == "gemini-2.5-pro"
+    )
+    assert span.attributes["gen_ai.provider.name"] == "gcp.gen_ai"
+
+    input_tokens = response.usage_metadata.get("input_tokens")
+    if input_tokens is not None:
+        assert (
+            input_tokens
+            == span.attributes[gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS]
+        )
+    else:
+        assert (
+            gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+        )
+
+    output_tokens = response.usage_metadata.get("output_tokens")
+    if output_tokens is not None:
         assert (
             output_tokens
             == span.attributes[gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS]
@@ -462,7 +552,7 @@ def assert_exemplars(exemplars, datapoint_sum, parent_span):
     assert exemplars[0].trace_id == parent_span.get_span_context().trace_id
 
 
-def assert_log_record(log_record, parent_span):
+def assert_log_record(log_record, parent_span, response=None):
     # Event name (support both .event_name and attributes for SDK differences)
     event_name = getattr(
         log_record, "event_name", None
@@ -490,7 +580,21 @@ def assert_log_record(log_record, parent_span):
         attrs.get(gen_ai_attributes.GEN_AI_RESPONSE_MODEL)
         == "gpt-3.5-turbo-0125"
     )
-    assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attrs
+
+    # Response ID may not be present in older langchain integration versions
+    has_response_id = False
+    if response:
+        if (
+            getattr(response, "response_metadata", None)
+            and "id" in response.response_metadata
+        ):
+            has_response_id = True
+    else:
+        # Fallback if response is not provided
+        has_response_id = gen_ai_attributes.GEN_AI_RESPONSE_ID in attrs
+
+    if has_response_id:
+        assert gen_ai_attributes.GEN_AI_RESPONSE_ID in attrs
     assert attrs.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 24
     assert attrs.get(gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 7
 
@@ -509,7 +613,7 @@ def assert_log_record(log_record, parent_span):
             "parts": [
                 {"content": "What is the capital of France?", "type": "text"}
             ],
-            "role": "human",
+            "role": "user",
         },
     ]
     assert len(input_msgs) == 2
@@ -523,7 +627,7 @@ def assert_log_record(log_record, parent_span):
     )
     assert len(output_msgs) == 1
     out = _normalize_to_dict(output_msgs[0])
-    assert out["role"] == "ai"
+    assert out["role"] == "assistant"
     assert out["finish_reason"] == "stop"
     assert _normalize_to_list(out["parts"]) == [
         {"content": "The capital of France is Paris.", "type": "text"}
@@ -573,7 +677,7 @@ def assert_log_record_when_error(log_record, parent_span):
             "parts": [
                 {"content": "What is the capital of France?", "type": "text"}
             ],
-            "role": "human",
+            "role": "user",
         },
     ]
     assert len(input_msgs) == 2

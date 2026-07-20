@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+from opentelemetry.trace import SpanKind
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -141,6 +142,14 @@ def test_server_tool_call_in_message():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_tool_span_is_internal_kind():
+    """execute_tool runs in-process, so its span must be INTERNAL, not CLIENT."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    handler.tool("get_weather").stop()
+
+    assert span_exporter.get_finished_spans()[0].kind == SpanKind.INTERNAL
 
 
 def test_start_tool_passes_sampling_attributes_at_span_creation():

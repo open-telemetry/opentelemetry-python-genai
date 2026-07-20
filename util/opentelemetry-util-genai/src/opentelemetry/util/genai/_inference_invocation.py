@@ -29,9 +29,6 @@ from opentelemetry.util.genai.utils import (
 )
 from opentelemetry.util.types import AttributeValue
 
-# TODO: Migrate to GenAI constants once available in semconv package
-_GEN_AI_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
-
 
 class InferenceInvocation(GenAIInvocation):
     """Represents a single LLM chat/completion call.
@@ -165,7 +162,7 @@ class InferenceInvocation(GenAIInvocation):
                 self.cache_read_input_tokens,
             ),
             (
-                _GEN_AI_REASONING_OUTPUT_TOKENS,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
                 self.thinking_tokens,
             ),
         )

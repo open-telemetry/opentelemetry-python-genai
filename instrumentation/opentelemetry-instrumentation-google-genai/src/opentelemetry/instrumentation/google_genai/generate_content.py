@@ -3,7 +3,7 @@
 
 import json
 import os
-from collections.abc import Callable
+from collections.abc import AsyncIterable, Callable, Iterable
 from typing import Any, Optional, Union
 
 from google.genai.models import AsyncModels, Models
@@ -27,6 +27,10 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
+from opentelemetry.util.genai.stream import (
+    AsyncStreamWrapper,
+    SyncStreamWrapper,
+)
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -35,6 +39,7 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.types import AttributeValue
 
 from .allowlist_util import AllowList
+from .client_info import get_client_info as _get_client_info
 from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
 from .dict_util import flatten_dict
 from .message import (
@@ -62,10 +67,20 @@ GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
 class _MethodsSnapshot:
     def __init__(self):
         self._original_generate_content = Models.generate_content
+        self._original_generate_content_code = Models.generate_content.__code__
         self._original_generate_content_stream = Models.generate_content_stream
+        self._original_generate_content_stream_code = (
+            Models.generate_content_stream.__code__
+        )
         self._original_async_generate_content = AsyncModels.generate_content
+        self._original_async_generate_content_code = (
+            AsyncModels.generate_content.__code__
+        )
         self._original_async_generate_content_stream = (
             AsyncModels.generate_content_stream
+        )
+        self._original_async_generate_content_stream_code = (
+            AsyncModels.generate_content_stream.__code__
         )
 
     @property
@@ -85,12 +100,33 @@ class _MethodsSnapshot:
         return self._original_async_generate_content_stream
 
     def restore(self):
+        self._original_generate_content.__code__ = (
+            self._original_generate_content_code
+        )
+        self._original_generate_content_stream.__code__ = (
+            self._original_generate_content_stream_code
+        )
+        self._original_async_generate_content.__code__ = (
+            self._original_async_generate_content_code
+        )
+        self._original_async_generate_content_stream.__code__ = (
+            self._original_async_generate_content_stream_code
+        )
+
         Models.generate_content = self._original_generate_content
         Models.generate_content_stream = self._original_generate_content_stream
         AsyncModels.generate_content = self._original_async_generate_content
         AsyncModels.generate_content_stream = (
             self._original_async_generate_content_stream
         )
+
+
+# Magic incantation used by native Google ADK instrumentation to identify
+# instrumented functions and suppress its own internal tracing when OTel is active.
+def _set_co_filename(wrapped: object) -> None:
+    wrapped.__wrapped__.__code__ = wrapped.__wrapped__.__code__.replace(
+        co_filename=__file__.replace("\\", "/")
+    )
 
 
 def _guess_genai_system_from_env():
@@ -353,7 +389,10 @@ def _apply_response_attributes(
     finish_reasons: list[str],
     invocation: InferenceInvocation,
 ):
-    invocation.response_id = response.response_id
+    if response.response_id:
+        invocation.response_id = response.response_id
+    if response.model_version:
+        invocation.response_model_name = response.model_version
     for candidate in response.candidates or []:
         if candidate.finish_reason:
             finish_reasons.append(candidate.finish_reason.value.lower())
@@ -428,10 +467,12 @@ def _create_instrumented_generate_content(
                 config,
             )
             finish_reasons = []
+            _, server_address = _get_client_info(instance)
             with telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             ) as invocation:
                 _apply_request_attributes(
                     wrapped_config,
@@ -484,6 +525,82 @@ def _create_instrumented_generate_content(
     return instrumented_generate_content
 
 
+class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
+    def __init__(
+        self,
+        stream: Iterable[GenerateContentResponse],
+        invocation: InferenceInvocation,
+        telemetry_handler: TelemetryHandler,
+    ) -> None:
+        super().__init__(stream)
+        self._self_invocation = invocation
+        self._self_telemetry_handler = telemetry_handler
+        self._self_finish_reasons: list[str] = []
+        self._self_candidates = []
+
+    def _process_chunk(self, chunk: GenerateContentResponse) -> None:
+        _apply_response_attributes(
+            chunk,
+            self._self_finish_reasons,
+            self._self_invocation,
+        )
+        if chunk.candidates:
+            self._self_candidates.extend(chunk.candidates)
+
+    def _on_stream_end(self) -> None:
+        if (
+            self._self_telemetry_handler.should_capture_content()
+            and self._self_candidates
+        ):
+            self._self_invocation.output_messages = to_output_messages(
+                candidates=self._self_candidates
+            )
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
+
+
+class AsyncGenerateContentStreamWrapper(
+    AsyncStreamWrapper[GenerateContentResponse]
+):
+    def __init__(
+        self,
+        stream: AsyncIterable[GenerateContentResponse],
+        invocation: InferenceInvocation,
+        telemetry_handler: TelemetryHandler,
+    ) -> None:
+        super().__init__(stream)
+        # _self_ is a naming convention used by the wrapt library to differentiate
+        # between attributes on the wrapped function and the original function.
+        self._self_invocation = invocation
+        self._self_telemetry_handler = telemetry_handler
+        self._self_finish_reasons: list[str] = []
+        self._self_candidates = []
+
+    def _process_chunk(self, chunk: GenerateContentResponse) -> None:
+        _apply_response_attributes(
+            chunk,
+            self._self_finish_reasons,
+            self._self_invocation,
+        )
+        if chunk.candidates:
+            self._self_candidates.extend(chunk.candidates)
+
+    def _on_stream_end(self) -> None:
+        if (
+            self._self_telemetry_handler.should_capture_content()
+            and self._self_candidates
+        ):
+            self._self_invocation.output_messages = to_output_messages(
+                candidates=self._self_candidates
+            )
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
+
+
 def _create_instrumented_generate_content_stream(
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
@@ -508,57 +625,46 @@ def _create_instrumented_generate_content_stream(
                 telemetry_handler,
                 config,
             )
-            finish_reasons = []
-            with telemetry_handler.inference(
+            _, server_address = _get_client_info(instance)
+            invocation = telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
-            ) as invocation:
-                _apply_request_attributes(
-                    wrapped_config,
-                    generate_content_config_key_allowlist,
-                    invocation,
-                )
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
-                )
-                invocation.tool_definitions = _maybe_get_tool_definitions(
-                    wrapped_config
-                )
+                server_address=server_address,
+            )
+            _apply_request_attributes(
+                wrapped_config,
+                generate_content_config_key_allowlist,
+                invocation,
+            )
+            invocation.attributes.update(
+                _get_extra_generate_content_attributes()
+            )
+            invocation.tool_definitions = _maybe_get_tool_definitions(
+                wrapped_config
+            )
 
-                if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
+            if telemetry_handler.should_capture_content():
+                invocation.input_messages = to_input_messages(
+                    contents=transformers.t_contents(contents)
+                )
+                if wrapped_config.system_instruction:
+                    invocation.system_instruction = to_system_instructions(
+                        content=transformers.t_contents(
+                            wrapped_config.system_instruction
+                        )[0]
                     )
-                    if wrapped_config.system_instruction:
-                        invocation.system_instruction = to_system_instructions(
-                            content=transformers.t_contents(
-                                wrapped_config.system_instruction
-                            )[0]
-                        )
-                candidates = []
-                try:
-                    for resp in wrapped(
-                        model=model,
-                        contents=contents,
-                        config=wrapped_config if has_wrapped_tools else config,
-                        *_args,
-                        **_kwargs,
-                    ):
-                        _apply_response_attributes(
-                            resp, finish_reasons, invocation
-                        )
-                        if resp.candidates:
-                            candidates.extend(resp.candidates)
-                        yield resp
-                finally:
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
-                        invocation.output_messages = to_output_messages(
-                            candidates=candidates
-                        )
+            return GenerateContentStreamWrapper(
+                wrapped(
+                    model=model,
+                    contents=contents,
+                    config=wrapped_config if has_wrapped_tools else config,
+                    *_args,
+                    **_kwargs,
+                ),
+                invocation,
+                telemetry_handler,
+            )
 
         return _execute(*args, **kwargs)
 
@@ -590,10 +696,12 @@ def _create_instrumented_async_generate_content(
                 config,
             )
             finish_reasons = []
+            _, server_address = _get_client_info(instance)
             with telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             ) as invocation:
                 invocation.attributes.update(
                     _get_extra_generate_content_attributes()
@@ -670,11 +778,12 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 telemetry_handler,
                 config,
             )
-            finish_reasons = []
+            _, server_address = _get_client_info(instance)
             invocation = telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
                 request_model=model,
                 operation_name="generate_content",
+                server_address=server_address,
             )
             invocation.attributes.update(
                 _get_extra_generate_content_attributes()
@@ -698,43 +807,17 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                             wrapped_config.system_instruction
                         )[0]
                     )
-
-            async def _response_async_generator_wrapper():
-                candidates = []
-                try:
-                    async for resp in await wrapped(
-                        model=model,
-                        contents=contents,
-                        config=wrapped_config if has_wrapped_tools else config,
-                        *_args,
-                        **_kwargs,
-                    ):
-                        _apply_response_attributes(
-                            resp, finish_reasons, invocation
-                        )
-                        if resp.candidates:
-                            candidates.extend(resp.candidates)
-                        yield resp
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
-                        invocation.output_messages = to_output_messages(
-                            candidates=candidates
-                        )
-                    invocation.stop()
-                except Exception as exc:
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
-                        invocation.output_messages = to_output_messages(
-                            candidates=candidates
-                        )
-                    invocation.fail(exc)
-                    raise
-
-            return _response_async_generator_wrapper()
+            return AsyncGenerateContentStreamWrapper(
+                await wrapped(
+                    model=model,
+                    contents=contents,
+                    config=wrapped_config if has_wrapped_tools else config,
+                    *_args,
+                    **_kwargs,
+                ),
+                invocation,
+                telemetry_handler,
+            )
 
         return await _execute(*args, **kwargs)
 
@@ -752,7 +835,7 @@ def instrument_generate_content(
 ) -> object:
     os.environ["OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"] = "true"
     snapshot = _MethodsSnapshot()
-    wrap_function_wrapper(
+    wrapped = wrap_function_wrapper(
         "google.genai.models",
         "Models.generate_content",
         _create_instrumented_generate_content(
@@ -760,7 +843,7 @@ def instrument_generate_content(
             generate_content_config_key_allowlist,
         ),
     )
-    wrap_function_wrapper(
+    wrapped2 = wrap_function_wrapper(
         "google.genai.models",
         "Models.generate_content_stream",
         _create_instrumented_generate_content_stream(
@@ -768,7 +851,7 @@ def instrument_generate_content(
             generate_content_config_key_allowlist,
         ),
     )
-    wrap_function_wrapper(
+    wrapped3 = wrap_function_wrapper(
         "google.genai.models",
         "AsyncModels.generate_content",
         _create_instrumented_async_generate_content(
@@ -776,7 +859,7 @@ def instrument_generate_content(
             generate_content_config_key_allowlist,
         ),
     )
-    wrap_function_wrapper(
+    wrapped4 = wrap_function_wrapper(
         "google.genai.models",
         "AsyncModels.generate_content_stream",
         _create_instrumented_async_generate_content_stream(
@@ -784,4 +867,8 @@ def instrument_generate_content(
             generate_content_config_key_allowlist,
         ),
     )
+    _set_co_filename(wrapped)
+    _set_co_filename(wrapped2)
+    _set_co_filename(wrapped3)
+    _set_co_filename(wrapped4)
     return snapshot

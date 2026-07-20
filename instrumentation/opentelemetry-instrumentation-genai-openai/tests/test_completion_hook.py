@@ -5,7 +5,6 @@ import os
 from unittest.mock import MagicMock, patch
 
 from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
     _OpenTelemetrySemanticConventionStability,
 )
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
@@ -16,10 +15,6 @@ from opentelemetry.util.genai.environment_variables import (
 from .test_utils import DEFAULT_MODEL, USER_ONLY_PROMPT
 
 
-@patch.dict(
-    os.environ,
-    {OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental"},
-)
 def test_custom_hook_is_called(
     span_exporter,
     log_exporter,
@@ -68,10 +63,7 @@ def test_custom_hook_is_called(
 
 @patch.dict(
     os.environ,
-    {
-        OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental",
-        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "span_only",
-    },
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "span_only"},
 )
 def test_default_hook_loaded_from_env(
     span_exporter,

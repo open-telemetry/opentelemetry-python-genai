@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This script builds wheels for a single package when triggered from per-package release
-# GitHub workflow (see .github/workflows/_release-package.yml).
-# The wheel is then published to PyPI via Trusted Publishing in that workflow.
+# This script builds wheels for a single package during the release workflows
+# (see .github/workflows/_release-build.yml). The resulting dist/ artifact is
+# then published to PyPI via Trusted Publishing in the top-level caller.
 
 set -ev
 

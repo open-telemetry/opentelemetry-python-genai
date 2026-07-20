@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-from opentelemetry.test_util_genai.vcr import scrub_response_headers_overwrite
+pytest.register_assert_rewrite("opentelemetry.test_util_genai.vcr")
+
+from opentelemetry.test_util_genai.vcr import (  # noqa: E402
+    scrub_response_headers_overwrite,
+)
 
 pytest_plugins = [
     "opentelemetry.test_util_genai.fixtures",

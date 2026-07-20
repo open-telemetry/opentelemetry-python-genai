@@ -1,1 +1,0 @@
-Renamed package to `opentelemetry-instrumentation-genai-anthropic` (imports `opentelemetry.instrumentation.genai.anthropic`).

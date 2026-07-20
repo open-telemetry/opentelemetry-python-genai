@@ -1,0 +1,1 @@
+Support raw LangChain message inputs (`("role", content)` tuples, dicts, and strings) in input messages, so the prompt is recorded and duplicate `invoke_agent` spans are avoided.

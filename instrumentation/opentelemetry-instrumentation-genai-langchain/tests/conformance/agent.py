@@ -18,7 +18,6 @@ from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     ExpectedViolation,
     Scenario,
@@ -39,7 +38,7 @@ def add(a: float, b: float) -> float:
 
 
 class AgentScenario(Scenario):
-    expected_spans = ("invoke_agent", "chat", "chat")
+    expected_spans = {"invoke_agent": 1, "chat": 3, "execute_tool": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -73,7 +72,6 @@ class AgentScenario(Scenario):
                 tracer_provider=tracer_provider,
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
-                semconv="gen_ai_latest_experimental",
                 content_capture="SPAN_ONLY",
             ):
                 llm = ChatOpenAI(
@@ -101,20 +99,3 @@ class AgentScenario(Scenario):
                             ]
                         }
                     )
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        operations = [
-            attr["value"]
-            for entry in report["samples"]
-            if "span" in entry
-            for attr in entry["span"]["attributes"]
-            if attr["name"] == "gen_ai.operation.name"
-        ]
-        assert "invoke_agent" in operations, (
-            f"Expected an invoke_agent span; saw operations {operations}"
-        )
-        assert operations.count("chat") >= 2, (
-            "ReAct agent exercises at least two chat completions "
-            f"(initial tool-call request and follow-up); saw {operations}"
-        )

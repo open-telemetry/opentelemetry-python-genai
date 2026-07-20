@@ -1,0 +1,164 @@
+name: _Release finalize
+on:
+  workflow_call:
+    inputs:
+      package:
+        required: true
+        type: string
+      ref:
+        required: false
+        type: string
+        default: ""
+      on_main:
+        required: false
+        type: boolean
+        default: false
+      bump_after_release:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release target
+        id: target
+        run: |
+          if [[ "${{ inputs.on_main }}" == "true" || "$GITHUB_REF_NAME" == "main" ]]; then
+            echo "on_main=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF_NAME" == package-release/${{ inputs.package }}/v* ]]; then
+            echo "on_main=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Run on main or package-release/${{ inputs.package }}/v*"
+            exit 1
+          fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: Set environment variables
+        run: |
+          version=$(./scripts/eachdist.py version --package ${{ inputs.package }})
+          if [[ $version =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            if [[ $patch != 0 ]]; then
+              prior_version_when_patch="${major}.${minor}.$((patch - 1))"
+            fi
+          elif [[ $version =~ ^([0-9]+)\.([0-9]+)b([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            if [[ $patch != 0 ]]; then
+              prior_version_when_patch="${major}.${minor}b$((patch - 1))"
+            fi
+          else
+            echo "unexpected version: $version"
+            exit 1
+          fi
+
+          path=$(./scripts/eachdist.py find-package --package ${{ inputs.package }})
+          echo "CHANGELOG=./$path/CHANGELOG.md" >> $GITHUB_ENV
+          echo "PACKAGE_NAME=${{ inputs.package }}" >> $GITHUB_ENV
+          echo "VERSION=$version" >> $GITHUB_ENV
+          echo "RELEASE_TAG=${{ inputs.package }}==$version" >> $GITHUB_ENV
+          echo "PRIOR_VERSION_WHEN_PATCH=$prior_version_when_patch" >> $GITHUB_ENV
+          if [[ "${{ steps.target.outputs.on_main }}" == "true" ]]; then
+            echo "RELEASE_TARGET=main" >> $GITHUB_ENV
+          else
+            echo "RELEASE_TARGET=$GITHUB_REF_NAME" >> $GITHUB_ENV
+          fi
+
+      - name: Generate release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/generate_release_notes.sh
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create --target "$RELEASE_TARGET" \
+                            --title "${PACKAGE_NAME} ${VERSION}" \
+                            --notes-file /tmp/release-notes.txt \
+                            "$RELEASE_TAG"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+
+      - name: Copy changelog updates to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/merge_changelog_to_main.sh
+
+      - name: Use CLA approved github bot
+        run: .github/scripts/use-cla-approved-github-bot.sh
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: otelbot-token
+        with:
+          client-id: ${{ vars.OTELBOT_CLIENT_ID }}
+          private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+
+      - name: Open pull request for changelog updates on main
+        env:
+          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+        run: |
+          message="Copy changelog updates for ${PACKAGE_NAME} v${VERSION}"
+          body="Copy changelog updates for \`${PACKAGE_NAME}\` v\`${VERSION}\`."
+          branch="otelbot/changelog-${PACKAGE_NAME}-${VERSION}"
+
+          changes=0
+          if [[ -z $PRIOR_VERSION_WHEN_PATCH ]]; then
+            if ! git diff --quiet; then
+              changes=1
+            fi
+          else
+            changes=1
+          fi
+
+          if [[ $changes == 0 ]]; then
+            echo "No changelog updates needed on main"
+            exit 0
+          fi
+
+          git commit -a -m "$message"
+          git push origin HEAD:"$branch"
+          gh pr create --title "$message" \
+                       --body "$body" \
+                       --head "$branch" \
+                       --base main
+
+      - name: Bump package version on main after release
+        if: inputs.bump_after_release && steps.target.outputs.on_main == 'true'
+        env:
+          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+        run: |
+          git checkout main
+          git pull origin main
+
+          ./scripts/bump_package_minor_version.sh "${PACKAGE_NAME}"
+
+          if git diff --quiet; then
+            echo "No version bump needed"
+            exit 0
+          fi
+
+          message="Bump ${PACKAGE_NAME} to next dev version after v${VERSION}"
+          branch="otelbot/bump-${PACKAGE_NAME}-after-v${VERSION}"
+
+          git commit -a -m "$message"
+          git push origin HEAD:"$branch"
+          gh pr create --title "$message" \
+                       --body "Bump \`${PACKAGE_NAME}\` to the next \`.dev\` version after releasing v\`${VERSION}\`." \
+                       --head "$branch" \
+                       --base main

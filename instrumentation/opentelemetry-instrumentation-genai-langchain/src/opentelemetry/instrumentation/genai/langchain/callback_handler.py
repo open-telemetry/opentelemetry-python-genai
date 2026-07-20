@@ -22,9 +22,12 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     resolve_agent_name,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _normalize_role,
     make_input_message,
     make_last_output_message,
+    normalize_provider,
     prepare_tool_definitions,
+    to_input_messages,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -35,7 +38,6 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
-    InputMessage,
     MessagePart,
     OutputMessage,
     Text,
@@ -194,10 +196,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
-        # Other providers/LLMs may be supported in the future and telemetry for them is skipped for now.
-        if serialized.get("name") not in ("ChatOpenAI", "ChatBedrock"):
-            return
-
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -206,21 +204,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         else:
             params = kwargs
 
-        request_model = "unknown"
+        # Resolve request_model from common provider-specific keys.
+        request_model: Optional[str] = None
         for model_tag in (
-            "model_name",  # ChatOpenAI
+            "model_name",  # ChatOpenAI / ChatAnthropic
             "model_id",  # ChatBedrock
+            "model",  # ChatGoogleGenerativeAI / ChatVertexAI / ChatGroq / ChatMistralAI / ChatCohere / ChatOllama / ChatDeepSeek / ChatXAI
         ):
             if (model := (params or {}).get(model_tag)) is not None:
-                request_model = model
+                request_model = str(model)
                 break
-            elif (model := (metadata or {}).get(model_tag)) is not None:
-                request_model = model
+            if (model := (metadata or {}).get(model_tag)) is not None:
+                request_model = str(model)
                 break
 
         # Skip telemetry for unsupported request models
-        if request_model == "unknown":
+        if request_model is None:
             return
+
+        if request_model.startswith("models/"):
+            request_model = request_model[7:]
 
         # Initialize variables with default values to avoid "possibly unbound" errors
         top_p = None
@@ -238,45 +241,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             stop_sequences = params.get("stop")
             seed = params.get("seed")
             temperature = params.get("temperature")
-            max_tokens = params.get("max_completion_tokens")
+            # ``max_completion_tokens`` is OpenAI-specific; fall back to the
+            # generic ``max_tokens`` used by Anthropic, Mistral, Cohere, etc.
+            max_tokens = params.get("max_completion_tokens") or params.get(
+                "max_tokens"
+            )
 
-        provider = "unknown"
+        provider = normalize_provider(metadata) or "unknown"
         if metadata is not None:
-            provider = metadata.get("ls_provider", "unknown")
-
             # Override with ChatBedrock values if present
             if "ls_temperature" in metadata:
                 temperature = metadata.get("ls_temperature")
             if "ls_max_tokens" in metadata:
                 max_tokens = metadata.get("ls_max_tokens")
 
-        input_messages: list[InputMessage] = []
-        for sub_messages in messages:
-            for message in sub_messages:
-                # Cast to Any to avoid type checking issues with LangChain's complex content type
-                raw_content: Any = message.content
-                role = message.type
-                parts: list[Text] = []
-
-                if isinstance(raw_content, str):
-                    parts = [Text(content=raw_content, type="text")]
-                elif isinstance(raw_content, list):
-                    for item in raw_content:  # type: ignore[misc]
-                        if isinstance(item, str):
-                            parts.append(Text(content=item, type="text"))
-                        elif isinstance(item, dict):
-                            # Safely extract text content from dict
-                            text_value = item.get("text")  # type: ignore[misc]
-                            if isinstance(text_value, str) and text_value:
-                                parts.append(
-                                    Text(content=text_value, type="text")
-                                )
-
-                input_messages.append(
-                    InputMessage(
-                        parts=cast(list[MessagePart], parts), role=role
-                    )
-                )
+        # ``messages`` from on_chat_model_start is ``list[list[BaseMessage]]``
+        # (one inner list per generation request). Flatten and let
+        # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
+        # with proper roles, tool-call requests, tool results, and reasoning.
+        flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
+        input_messages = to_input_messages(flattened)
 
         llm_invocation = self._telemetry_handler.inference(
             provider,
@@ -320,8 +304,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         output_messages: list[OutputMessage] = []
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
-                # Get finish reason
-                finish_reason = "unknown"  # Default value
+                message = chat_generation.message
+                if message is None:
+                    continue
+
+                # Resolve finish_reason from generation_info or response
+                # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
+                # (snake_case); older versions used ``stopReason``. Empty
+                # values are filtered out by util-genai when emitting
+                # ``gen_ai.response.finish_reasons``.
+                finish_reason = ""
                 generation_info = getattr(
                     chat_generation, "generation_info", None
                 )
@@ -352,7 +344,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                             tool_calls.append(tool_call_request)
                         output_message = OutputMessage(
-                            role=chat_generation.message.type,
+                            role=_normalize_role(chat_generation.message),
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
                         )
@@ -363,7 +355,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 type="text",
                             )
                         ]
-                        role = chat_generation.message.type
+                        role = _normalize_role(chat_generation.message)
                         output_message = OutputMessage(
                             role=role,
                             parts=cast(list[MessagePart], parts),
