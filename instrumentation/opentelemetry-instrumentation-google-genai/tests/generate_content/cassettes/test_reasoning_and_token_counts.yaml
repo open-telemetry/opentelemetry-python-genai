@@ -1,0 +1,410 @@
+interactions:
+- request:
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Explain quantum computing in one sentence."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "thinkingConfig": {
+            "thinking_budget": 2048
+          }
+        }
+      }
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - identity
+      connection:
+      - keep-alive
+      content-length:
+      - '166'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.11.0 gl-python/3.12.13
+      x-goog-api-client:
+      - <REDACTED>
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  response:
+    body:
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "Quantum computing harnesses quantum phenomena like superposition and entanglement in qubits to process information by simultaneously exploring vast numbers of possibilities, solving problems intractable for classical computers."
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 8,
+            "candidatesTokenCount": 29,
+            "totalTokenCount": 1147,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 8
+              }
+            ],
+            "thoughtsTokenCount": 1110,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "Nmteasf_NNGtsOIP1cXf4QQ"
+        }
+    headers:
+      accept-ranges:
+      - none
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Mon, 20 Jul 2026 18:38:52 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=5794
+      transfer-encoding:
+      - chunked
+      vary:
+      - X-Origin
+      - Referer
+      - Origin,Accept-Encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Explain quantum computing in one sentence."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "thinkingConfig": {
+            "thinking_budget": 2048
+          }
+        }
+      }
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - identity
+      connection:
+      - keep-alive
+      content-length:
+      - '166'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.11.0 gl-python/3.12.13
+      x-goog-api-client:
+      - <REDACTED>
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  response:
+    body:
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "Quantum computing leverages the principles of quantum mechanics, like superposition and entanglement, to process information in fundamentally new ways to solve complex problems beyond the capabilities of classical computers."
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 8,
+            "candidatesTokenCount": 32,
+            "totalTokenCount": 1210,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 8
+              }
+            ],
+            "thoughtsTokenCount": 1170,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "PmteaoiLLYOsz7IP4ZXcoAk"
+        }
+    headers:
+      accept-ranges:
+      - none
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Mon, 20 Jul 2026 18:39:00 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=6253
+      transfer-encoding:
+      - chunked
+      vary:
+      - X-Origin
+      - Referer
+      - Origin,Accept-Encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Explain quantum computing in one sentence."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "thinkingConfig": {
+            "thinking_budget": 2048
+          }
+        }
+      }
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - identity
+      connection:
+      - keep-alive
+      content-length:
+      - '166'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.11.0 gl-python/3.12.13
+      x-goog-api-client:
+      - <REDACTED>
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  response:
+    body:
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "Quantum computing harnesses the unique properties of quantum mechanics, like superposition and entanglement, to process information and solve complex problems far beyond the capabilities of classical computers."
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 8,
+            "candidatesTokenCount": 30,
+            "totalTokenCount": 977,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 8
+              }
+            ],
+            "thoughtsTokenCount": 939,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "R2teapeDCuXhqtsPj_SGmAI"
+        }
+    headers:
+      accept-ranges:
+      - none
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Mon, 20 Jul 2026 18:39:08 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=5171
+      transfer-encoding:
+      - chunked
+      vary:
+      - X-Origin
+      - Referer
+      - Origin,Accept-Encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Explain quantum computing in one sentence."
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "generationConfig": {
+          "thinkingConfig": {
+            "thinking_budget": 2048
+          }
+        }
+      }
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - identity
+      connection:
+      - keep-alive
+      content-length:
+      - '166'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.11.0 gl-python/3.12.13
+      x-goog-api-client:
+      - <REDACTED>
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  response:
+    body:
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "Quantum computing leverages principles of quantum mechanics, like superposition and entanglement, to process information with qubits and solve complex problems intractable for classical computers."
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 8,
+            "candidatesTokenCount": 27,
+            "totalTokenCount": 1065,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 8
+              }
+            ],
+            "thoughtsTokenCount": 1030,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "TmteatvnGa_Xz7IPsLD10Qw"
+        }
+    headers:
+      accept-ranges:
+      - none
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Mon, 20 Jul 2026 18:39:16 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=5779
+      transfer-encoding:
+      - chunked
+      vary:
+      - X-Origin
+      - Referer
+      - Origin,Accept-Encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1
