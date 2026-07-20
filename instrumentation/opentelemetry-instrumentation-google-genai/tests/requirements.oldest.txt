@@ -27,5 +27,4 @@
 # 1.1b0 is released and bump the pyproject floor to >= 1.1b0.
 -e ./util/opentelemetry-util-genai
 
-google-auth==2.50.0
 fsspec==2025.9.0
