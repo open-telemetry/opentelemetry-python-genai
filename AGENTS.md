@@ -107,6 +107,10 @@ Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, a
 test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
 the CI gates.
 
+tox reuses cached envs and won't re-resolve dependencies on its own, so pass `--recreate` (`-r`)
+after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound — otherwise the
+run silently uses the previously installed versions.
+
 ## Guidelines
 
 - Each package has its own `pyproject.toml` with version, dependencies, and entry points.
