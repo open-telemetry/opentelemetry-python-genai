@@ -37,7 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-google-auth==2.55.2
+google-auth==2.56.0
 
 google-genai==2.12.1
 
