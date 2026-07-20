@@ -636,3 +636,29 @@ class NonStreamingTestCase(TestCase):
         self.otel.assert_has_metrics_data_named(
             "gen_ai.client.operation.duration"
         )
+
+    def test_output_token_metric_includes_reasoning_tokens(self):
+        # candidates_token_count excludes thoughts, so the output token metric
+        # must add reasoning tokens on top - and stay consistent with the span.
+        self.configure_valid_response(
+            input_tokens=123,
+            output_tokens=456,
+            thinking_tokens=17,
+        )
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.usage.output_tokens"], 456 + 17
+        )
+
+        (token_metric,) = self.otel.get_metrics_data_named(
+            "gen_ai.client.token.usage"
+        )
+        output_points = [
+            point
+            for point in token_metric.data.data_points
+            if point.attributes["gen_ai.token.type"] == "output"
+        ]
+        self.assertEqual(len(output_points), 1)
+        self.assertEqual(output_points[0].sum, 456 + 17)
