@@ -92,7 +92,7 @@ def _normalize_role(message: BaseMessage) -> str:
 
 def _decode_base64(data: str) -> Optional[bytes]:
     try:
-        return base64.b64decode(data)
+        return base64.b64decode("".join(data.split()), validate=True)
     except Exception:  # pylint: disable=broad-exception-caught
         return None
 

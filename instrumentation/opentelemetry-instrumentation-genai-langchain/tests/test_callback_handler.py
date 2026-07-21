@@ -8,6 +8,7 @@ All TelemetryHandler interactions are mocked so that these tests exercise only
 the callback-handler logic and the invocation-manager bookkeeping.
 """
 
+import base64
 import uuid
 from unittest import mock
 
@@ -22,6 +23,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     extract_token_details,
+    _decode_base64,
     _image_from_url,
     _media_part,
     make_input_message,
