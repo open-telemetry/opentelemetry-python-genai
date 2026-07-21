@@ -362,8 +362,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             chat_generation.message
                         )
                     ) is not None:
-                        # Pre-tools OpenAI ``function_call`` (finish_reason
-                        # ``function_call``) — surface it as a tool-call
+                        # Pre-tools OpenAI ``function_call`` present in
+                        # ``additional_kwargs`` — surface it as a tool-call
                         # request part like the modern ``tool_calls`` path.
                         output_message = OutputMessage(
                             role=_normalize_role(chat_generation.message),
