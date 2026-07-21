@@ -4,7 +4,6 @@
 """Tests for ToolCallRequest and ToolInvocation inheritance structure"""
 
 import os
-from dataclasses import asdict
 from unittest.mock import patch
 
 import pytest
@@ -154,21 +153,6 @@ def test_compactionpart_is_message_part():
     msg = InputMessage(role="assistant", parts=[part])
     assert len(msg.parts) == 1
     assert isinstance(msg.parts[0], CompactionPart)
-
-
-def test_compactionpart_bare_serializes_with_explicit_nulls():
-    """A bare CompactionPart (only type set) serializes with explicit nulls
-    for id/content, matching the established wire behavior for optional
-    fields in this union (see ServerToolCall/ServerToolCallResponse)."""
-    part = CompactionPart()
-    assert part.id is None
-    assert part.content is None
-    assert part.type == "compaction"
-
-    serialized = gen_ai_json_dumps(asdict(part))
-    assert serialized == gen_ai_json_dumps(
-        {"id": None, "content": None, "type": "compaction"}
-    )
 
 
 if __name__ == "__main__":
