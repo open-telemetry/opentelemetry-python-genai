@@ -22,6 +22,8 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     extract_token_details,
+    _image_from_url,
+    _media_part,
     make_input_message,
     make_last_output_message,
     make_output_message,
@@ -36,10 +38,12 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
+    Blob,
     InputMessage,
     OutputMessage,
     TextPart,
     ToolCallRequestPart,
+    Uri,
 )
 
 # ---------------------------------------------------------------------------

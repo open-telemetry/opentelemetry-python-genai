@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Iterable
 from typing import Any, cast
@@ -20,6 +21,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.util.genai.types import (
+    Blob,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
@@ -29,6 +31,7 @@ from opentelemetry.util.genai.types import (
     ToolCallRequestPart,
     ToolCallResponsePart,
     ToolDefinition,
+    Uri,
 )
 
 # Mapping from LangChain ``ls_provider`` metadata values to the well-known
@@ -87,6 +90,83 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
+def _decode_base64(data: str) -> Optional[bytes]:
+    try:
+        return base64.b64decode(data)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def _media_part(item: dict[str, Any]) -> Optional[MessagePart]:
+    """Convert a LangChain multimodal image content block into a media part.
+
+    Handles the two shapes LangChain chat models accept:
+
+    - OpenAI style ``{"type": "image_url", "image_url": {"url": ...}}`` (or a
+      bare ``"image_url": "..."`` string). A ``data:<mime>;base64,<payload>``
+      URL becomes a :class:`Blob`; any other URL becomes a :class:`Uri`.
+    - Anthropic style ``{"type": "image", "source": {...}}`` where ``source``
+      is either ``{"type": "base64", "media_type": ..., "data": ...}`` (→
+      :class:`Blob`) or ``{"type": "url", "url": ...}`` (→ :class:`Uri`).
+    """
+    block_type = item.get("type")
+    if block_type == "image_url":
+        image_url = item.get("image_url")
+        url: Optional[str] = None
+        if isinstance(image_url, str):
+            url = image_url
+        elif isinstance(image_url, dict):
+            raw_url = image_url.get("url")
+            url = raw_url if isinstance(raw_url, str) else None
+        if not url:
+            return None
+        return _image_from_url(url)
+    if block_type == "image":
+        source = item.get("source")
+        if not isinstance(source, dict):
+            return None
+        source_type = source.get("type")
+        if source_type == "base64":
+            data = source.get("data")
+            if not isinstance(data, str):
+                return None
+            decoded = _decode_base64(data)
+            if decoded is None:
+                return None
+            media_type = source.get("media_type")
+            return Blob(
+                mime_type=media_type if isinstance(media_type, str) else None,
+                modality="image",
+                content=decoded,
+            )
+        if source_type == "url":
+            url = source.get("url")
+            if isinstance(url, str) and url:
+                return _image_from_url(url)
+    return None
+
+
+def _image_from_url(url: str) -> Optional[MessagePart]:
+    """Return a :class:`Blob` for a ``data:`` URL, else a :class:`Uri`."""
+
+    if url.startswith("data:"):
+        header, _, payload = url[len("data:") :].partition(",")
+        mime_type = header.split(";", 1)[0] or None
+        if ";base64" in header:
+            decoded = _decode_base64(payload)
+            if decoded is None:
+                return None
+            content = decoded
+        else:
+            content = payload.encode("utf-8")
+        return Blob(
+            mime_type=mime_type,
+            modality="image",
+            content=content,
+        )
+    return Uri(mime_type=None, modality="image", uri=url)
+
+
 def _content_to_parts(
     content: str | list[str | dict[str, Any]],
 ) -> list[MessagePart]:
@@ -121,6 +201,10 @@ def _content_to_parts(
             )
             if isinstance(reasoning_value, str) and reasoning_value:
                 parts.append(ReasoningPart(content=reasoning_value))
+        elif block_type in ("image_url", "image"):
+            media = _media_part(item)
+            if media is not None:
+                parts.append(media)
     return parts
 
 
