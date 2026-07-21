@@ -3,7 +3,6 @@
 
 import functools
 import inspect
-import json
 from typing import Any, Callable, Optional, Union
 
 from google.genai.types import (
@@ -13,6 +12,7 @@ from google.genai.types import (
 )
 
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 ToolFunction = Callable[..., Any]
 
@@ -84,12 +84,12 @@ def _wrap_tool_function(
             ) as tool_invocation:
                 # Do this before calling the tool in case that crashes.
                 if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.arguments = json.dumps(
+                    tool_invocation.arguments = gen_ai_json_dumps(
                         _get_function_args(tool_function, args, kwargs)
                     )
                 result = await tool_function(*args, **kwargs)
                 if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.tool_result = json.dumps(
+                    tool_invocation.tool_result = gen_ai_json_dumps(
                         _to_otel_value(result)
                     )
             return result
@@ -103,12 +103,12 @@ def _wrap_tool_function(
             ) as tool_invocation:
                 # Do this before calling the tool in case that crashes.
                 if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.arguments = json.dumps(
+                    tool_invocation.arguments = gen_ai_json_dumps(
                         _get_function_args(tool_function, args, kwargs)
                     )
                 result = tool_function(*args, **kwargs)
                 if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.tool_result = json.dumps(
+                    tool_invocation.tool_result = gen_ai_json_dumps(
                         _to_otel_value(result)
                     )
             return result

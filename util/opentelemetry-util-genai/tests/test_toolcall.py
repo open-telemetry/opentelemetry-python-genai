@@ -30,7 +30,6 @@ from opentelemetry.util.genai.types import (
     ServerToolCallResponse,
     ToolCallRequest,
 )
-from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 
 def _make_handler() -> TelemetryHandler:
@@ -227,24 +226,6 @@ def _make_span_exporter_and_handler():
     os.environ,
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
-def test_arguments_dict_serialized_to_json():
-    """dict arguments are JSON-serialized onto the span attribute."""
-    span_exporter, handler = _make_span_exporter_and_handler()
-    invocation = handler.tool("get_weather")
-    invocation.arguments = {"location": "Paris", "unit": "celsius"}
-    invocation.stop()
-
-    attrs = span_exporter.get_finished_spans()[0].attributes
-    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == gen_ai_json_dumps(
-        {"location": "Paris", "unit": "celsius"}
-    )
-
-
-@patch.dict(
-    os.environ,
-    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
-)
 def test_arguments_str_passed_through():
     """str arguments are stored as-is (no JSON wrapping)."""
     span_exporter, handler = _make_span_exporter_and_handler()
@@ -290,7 +271,7 @@ def test_arguments_omitted_when_content_capture_disabled():
     """arguments must not appear on the span when content capture is off."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("get_weather")
-    invocation.arguments = {"location": "Paris"}
+    invocation.arguments = "abasfasf"
     invocation.stop()
 
     attrs = span_exporter.get_finished_spans()[0].attributes

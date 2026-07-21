@@ -49,6 +49,7 @@ from opentelemetry.util.genai.invocation import (
     GenAIInvocation,
     ToolInvocation,
 )
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
@@ -126,9 +127,11 @@ class GenAITracingProcessor(TracingProcessor):
             span.span_data, FunctionSpanData
         ):
             output = span.span_data.output
-            if output is not None:
+            if self._handler.should_capture_content() and output is not None:
                 invocation.tool_result = (
-                    output if isinstance(output, str) else str(output)
+                    output
+                    if isinstance(output, str)
+                    else gen_ai_json_dumps(output)
                 )
         invocation.stop()
 

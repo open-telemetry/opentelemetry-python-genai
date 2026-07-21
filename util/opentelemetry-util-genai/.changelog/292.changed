@@ -1,0 +1,1 @@
+Update ``ToolInvocation`` arguments and results to accept ``AnyValue`` attribute types directly.

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional, cast
 from uuid import UUID
 
@@ -40,6 +39,7 @@ from opentelemetry.util.genai.types import (
     Text,
     ToolCallRequest,
 )
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -431,19 +431,22 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if serialized is not None:
             name = serialized.get("name") or "unknown"
             description = serialized.get("description")
-
-        arguments: Any
-        if inputs is not None:
-            arguments = inputs
-        else:
-            try:
-                arguments = json.loads(input_str)
-            except (json.JSONDecodeError, ValueError):
-                arguments = input_str
         tool_invocation = self._telemetry_handler.tool(
             name=name, tool_description=description, tool_type="function"
         )
-        tool_invocation.arguments = arguments
+        if self._telemetry_handler.should_capture_content():
+            arguments: Any
+            if inputs is not None:
+                arguments = inputs
+            else:
+                arguments = input_str
+
+            tool_invocation.arguments = (
+                arguments
+                if isinstance(arguments, str)
+                else gen_ai_json_dumps(arguments)
+            )
+
         self._invocation_manager.add_invocation_state(
             run_id, parent_run_id, tool_invocation
         )
@@ -460,7 +463,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if not isinstance(tool_invocation, ToolInvocation):
             return
         tool_invocation.tool_call_id = getattr(output, "tool_call_id", None)
-        tool_invocation.tool_result = getattr(output, "content", None)
+        raw_result = getattr(output, "content", output)
+        if self._telemetry_handler.should_capture_content():
+            tool_invocation.tool_result = (
+                raw_result
+                if isinstance(raw_result, str)
+                else gen_ai_json_dumps(raw_result)
+            )
         tool_invocation.stop()
         if not tool_invocation.span.is_recording():
             self._invocation_manager.delete_invocation_state(run_id=run_id)
