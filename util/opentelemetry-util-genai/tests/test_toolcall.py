@@ -24,6 +24,7 @@ from opentelemetry.util.genai.environment_variables import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import GenAIInvocation
 from opentelemetry.util.genai.types import (
+    CompactionPart,
     InputMessage,
     ServerToolCall,
     ServerToolCallResponse,
@@ -138,6 +139,20 @@ def test_server_tool_call_in_message():
     assert len(msg.parts) == 2
     assert isinstance(msg.parts[0], ServerToolCall)
     assert isinstance(msg.parts[1], ServerToolCallResponse)
+
+
+def test_compactionpart_is_message_part():
+    """CompactionPart works as a MessagePart alongside other part types."""
+    part = CompactionPart(
+        id="compact_001", content="Summary of earlier turns."
+    )
+    assert part.id == "compact_001"
+    assert part.content == "Summary of earlier turns."
+    assert part.type == "compaction"
+
+    msg = InputMessage(role="assistant", parts=[part])
+    assert len(msg.parts) == 1
+    assert isinstance(msg.parts[0], CompactionPart)
 
 
 if __name__ == "__main__":
