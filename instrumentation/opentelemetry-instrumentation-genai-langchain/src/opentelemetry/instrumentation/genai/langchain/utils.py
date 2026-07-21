@@ -116,7 +116,8 @@ def _media_part(item: dict[str, Any]) -> Optional[MessagePart]:
         if isinstance(image_url, str):
             url = image_url
         elif isinstance(image_url, dict):
-            raw_url = image_url.get("url")
+            image_url_dict = cast(dict[str, Any], image_url)
+            raw_url = image_url_dict.get("url")
             url = raw_url if isinstance(raw_url, str) else None
         if not url:
             return None
@@ -125,24 +126,25 @@ def _media_part(item: dict[str, Any]) -> Optional[MessagePart]:
         source = item.get("source")
         if not isinstance(source, dict):
             return None
-        source_type = source.get("type")
+        source_dict = cast(dict[str, Any], source)
+        source_type = source_dict.get("type")
         if source_type == "base64":
-            data = source.get("data")
+            data = source_dict.get("data")
             if not isinstance(data, str):
                 return None
             decoded = _decode_base64(data)
             if decoded is None:
                 return None
-            media_type = source.get("media_type")
+            media_type = source_dict.get("media_type")
             return Blob(
                 mime_type=media_type if isinstance(media_type, str) else None,
                 modality="image",
                 content=decoded,
             )
         if source_type == "url":
-            url = source.get("url")
-            if isinstance(url, str) and url:
-                return _image_from_url(url)
+            source_url = source_dict.get("url")
+            if isinstance(source_url, str) and source_url:
+                return _image_from_url(source_url)
     return None
 
 
