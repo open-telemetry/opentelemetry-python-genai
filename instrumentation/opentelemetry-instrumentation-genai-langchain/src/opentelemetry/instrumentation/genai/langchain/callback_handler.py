@@ -410,12 +410,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
                         if reasoning_tokens is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
-                            # LangChain folds reasoning into ``output_tokens``;
-                            # util-genai re-sums ``output + thinking`` so
-                            # subtract here to keep the provider total intact.
-                            output_tokens = max(
-                                output_tokens - reasoning_tokens, 0
-                            )
 
                         llm_invocation.output_tokens = output_tokens
 

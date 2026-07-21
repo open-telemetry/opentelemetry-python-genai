@@ -1243,7 +1243,7 @@ class TestOnLlmEndTokenDetails:
         assert llm_inv.cache_creation_input_tokens == 3
         assert llm_inv.cache_read_input_tokens == 2
         assert llm_inv.thinking_tokens == 5
-        assert llm_inv.output_tokens == 15
+        assert llm_inv.output_tokens == 20
 
     def test_audio_tokens_ignored(self):
         run_id = _run_id()
