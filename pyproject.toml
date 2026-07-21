@@ -30,6 +30,7 @@ required-version = ">=0.6.0"
 [tool.uv.sources]
 opentelemetry-test-util-genai = { workspace = true }
 opentelemetry-util-genai = { workspace = true }
+opentelemetry-instrumentation-genai-agentscope = { workspace = true }
 opentelemetry-instrumentation-genai-anthropic = { workspace = true }
 opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }

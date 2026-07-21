@@ -1,6 +1,7 @@
 
 | Instrumentation | Supported Packages | Metrics support | Semconv status |
 | --------------- | ------------------ | --------------- | -------------- |
+| [opentelemetry-instrumentation-genai-agentscope](./opentelemetry-instrumentation-genai-agentscope) | agentscope >= 1.0.0, < 3.0.0 | No | development
 | [opentelemetry-instrumentation-genai-anthropic](./opentelemetry-instrumentation-genai-anthropic) | anthropic >= 0.16.0 | No | development
 | [opentelemetry-instrumentation-genai-claude-agent-sdk](./opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14 | No | development
 | [opentelemetry-instrumentation-genai-langchain](./opentelemetry-instrumentation-genai-langchain) | langchain >= 0.3.21 | No | development

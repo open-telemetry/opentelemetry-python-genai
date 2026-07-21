@@ -1,0 +1,321 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You answer weather questions. Always call the get_weather tool for the requested city, then reply in one short sentence."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What is the weather in Hangzhou?"
+              }
+            ]
+          }
+        ],
+        "model": "qwen-plus",
+        "max_tokens": 256,
+        "stream": false,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "Look up the current weather for a city.",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "enable_thinking": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - <redacted>
+      connection:
+      - keep-alive
+      content-length:
+      - '563'
+      content-type:
+      - application/json
+      host:
+      - dashscope.aliyuncs.com
+      user-agent:
+      - AsyncOpenAI/Python 2.44.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 2.44.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.3
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen-plus",
+          "id": "chatcmpl-890d5345-1f24-9bfe-a0b3-c528f22749a2",
+          "choices": [
+            {
+              "message": {
+                "content": "",
+                "tool_calls": [
+                  {
+                    "index": 0,
+                    "id": "call_e06556d8e6dc4974a15b75",
+                    "type": "function",
+                    "function": {
+                      "name": "get_weather",
+                      "arguments": "{\"city\": \"Hangzhou\"}"
+                    }
+                  }
+                ],
+                "role": "assistant"
+              },
+              "index": 0,
+              "finish_reason": "tool_calls"
+            }
+          ],
+          "created": 1783485863,
+          "object": "chat.completion",
+          "usage": {
+            "total_tokens": 199,
+            "completion_tokens": 20,
+            "prompt_tokens": 179,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+    headers:
+      content-length:
+      - '488'
+      content-type:
+      - application/json
+      date:
+      - Wed, 08 Jul 2026 04:44:24 GMT
+      req-arrive-time:
+      - '1783485863491'
+      req-cost-time:
+      - '652'
+      resp-start-time:
+      - '1783485864144'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'true'
+      x-dashscope-timeout:
+      - '3600'
+      x-envoy-upstream-service-time:
+      - '652'
+      x-request-id:
+      - 890d5345-1f24-9bfe-a0b3-c528f22749a2
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You answer weather questions. Always call the get_weather tool for the requested city, then reply in one short sentence."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What is the weather in Hangzhou?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_e06556d8e6dc4974a15b75",
+                "type": "function",
+                "function": {
+                  "name": "get_weather",
+                  "arguments": "{\"city\": \"Hangzhou\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_e06556d8e6dc4974a15b75",
+            "content": "content=[TextBlock(type='text', text='The weather in Hangzhou is sunny with a high of 24C.', id='6cb39d766a6543e7855d19afe87e470f')] state=<ToolResultState.SUCCESS: 'success'> metadata={} id='8a83277fc8954a82a1ae99c04216f964'",
+            "name": "get_weather"
+          }
+        ],
+        "model": "qwen-plus",
+        "max_tokens": 256,
+        "stream": false,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "Look up the current weather for a city.",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "enable_thinking": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - <redacted>
+      connection:
+      - keep-alive
+      content-length:
+      - '1062'
+      content-type:
+      - application/json
+      host:
+      - dashscope.aliyuncs.com
+      user-agent:
+      - AsyncOpenAI/Python 2.44.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 2.44.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.3
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen-plus",
+          "id": "chatcmpl-619280e8-92c8-9043-a032-747d58a72dbf",
+          "choices": [
+            {
+              "message": {
+                "content": "The weather in Hangzhou is sunny with a high of 24\u00b0C.",
+                "role": "assistant"
+              },
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "created": 1783485864,
+          "object": "chat.completion",
+          "usage": {
+            "total_tokens": 331,
+            "completion_tokens": 16,
+            "prompt_tokens": 315,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+    headers:
+      content-length:
+      - '383'
+      content-type:
+      - application/json
+      date:
+      - Wed, 08 Jul 2026 04:44:25 GMT
+      req-arrive-time:
+      - '1783485864290'
+      req-cost-time:
+      - '958'
+      resp-start-time:
+      - '1783485865248'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'true'
+      x-dashscope-timeout:
+      - '3600'
+      x-envoy-upstream-service-time:
+      - '957'
+      x-request-id:
+      - 619280e8-92c8-9043-a032-747d58a72dbf
+    status:
+      code: 200
+      message: OK
+version: 1

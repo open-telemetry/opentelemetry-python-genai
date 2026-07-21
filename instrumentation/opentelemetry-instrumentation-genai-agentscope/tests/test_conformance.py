@@ -1,0 +1,44 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Per-scenario conformance tests for agentscope."""
+
+from __future__ import annotations
+
+import importlib.metadata
+from typing import Any
+
+import pytest
+
+# Skip collection when weaver_live_check or OTLP exporters aren't installed
+# (non-conformance envs).
+pytest.importorskip("opentelemetry.test.weaver_live_check")
+pytest.importorskip("opentelemetry.exporter.otlp.proto.grpc")
+
+agentscope = pytest.importorskip("agentscope")
+if not importlib.metadata.version("agentscope").startswith("2."):
+    pytest.skip(
+        "AgentScope conformance scenarios require agentscope>=2,<3",
+        allow_module_level=True,
+    )
+
+from opentelemetry.test.weaver_live_check import WeaverLiveCheck  # noqa: E402
+from opentelemetry.test_util_genai.conformance import (  # noqa: E402
+    Scenario,
+    run_conformance,
+)
+
+from .conformance.orchestration import OrchestrationScenario  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        OrchestrationScenario(),
+    ],
+    ids=lambda s: type(s).__name__,
+)
+def test_conformance(
+    scenario: Scenario, vcr: Any, weaver_live_check: WeaverLiveCheck
+) -> None:
+    run_conformance(scenario, vcr=vcr, weaver=weaver_live_check)
