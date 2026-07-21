@@ -92,17 +92,32 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 New instrumentations must ship a minimal example under the package's `examples/`, with both a
 `manual/` and a `zero-code/` (auto-instrumentation) variant.
 
-## 7. PR description
+## 7. README
+
+- Each package's `README.rst` is published as its PyPI long description. Flag PRs that make
+  user-visible changes to the public API, configuration (env vars, `instrument()` keyword
+  arguments), supported operations/span types, or examples without updating the package
+  `README.rst` to match.
+- README claims must be accurate — reject documented options, span types, or metrics the code does not actually emit.
+
+## 8. PR description
 
 - Cover which part of the GenAI semconv the change implements or follows (when applicable) and
   how instrumentations should consume it.
 
-## 8. Package naming and versioning
+## 9. Package naming and versioning
 
 - Instrumentation packages must be named `opentelemetry-instrumentation-genai-{lib}` and import
   as `opentelemetry.instrumentation.genai.{lib}` (`opentelemetry-instrumentation-google-genai`
   is a pre-existing exception that keeps its historical name).
 - Versions use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`);
   `version.py` carries a `.dev` suffix during development.
+
+## 10. Dependency versioning and compatibility
+
+- Reject dependency changes in `pyproject.toml` that unnecessarily pin versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`).
+- Prefer ranges that allow minor updates (e.g., `~= x.y` or `>= x.y.z, < (x+1)`).
+- For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), enforce the use of `>=` specifiers while pinning the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) instead of `~=`.
+
 
 See also [AGENTS.md](../../AGENTS.md) for general repo rules.

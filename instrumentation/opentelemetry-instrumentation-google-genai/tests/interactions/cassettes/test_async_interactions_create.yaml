@@ -1,0 +1,96 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gemini-2.5-flash",
+        "input": "Hello, how can you help me today?"
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      api-revision:
+      - '2026-05-20'
+      connection:
+      - keep-alive
+      content-length:
+      - '72'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 2.911.0 v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.9.0 gl-python/3.12.9
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |-
+        {
+          "id": "v1_ChdOQ2M4YXBYc0NyNnkxTWtQazctZDhRYxIXTkNjOGFwWHNDcjZ5MU1rUGs3LWQ4UWM",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 978,
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 10
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 133,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 835
+          },
+          "created": "2026-06-24T18:51:32Z",
+          "updated": "2026-06-24T18:51:32Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "signature": "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",
+              "type": "thought"
+            },
+            {
+              "content": [
+                {
+                  "text": "Hello! I'm an AI assistant, and I'm here to help you with a wide range of tasks.\n\nFor example, I can:\n*   **Answer your questions** on various topics.\n*   **Generate creative text formats** (like poems, code, scripts, musical pieces, email, letters, etc.).\n*   **Summarize** complex information.\n*   **Help you brainstorm** ideas.\n*   **Provide explanations** or definitions.\n*   **Translate languages.**\n*   And much more!\n\nPlease tell me what you have in mind or what you'd like to work on today!",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "object": "interaction",
+          "model": "gemini-2.5-flash"
+        }
+    headers:
+      content-length:
+      - '5602'
+      content-type:
+      - application/json
+      date:
+      - Wed, 24 Jun 2026 18:51:32 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=5925
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -50,6 +50,14 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`). `version.py` carries a `.dev`
   suffix during development (`1.0b0.dev`); the release workflow drops it.
 
+## Dependency versioning and compatibility
+
+- Use compatible release specifiers (e.g., `~= x.y` or `>= x.y.z, < (x+1)`) that pin the major version and allow minor/patch updates.
+- Avoid pinning versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`) in `pyproject.toml` unless strictly necessary.
+- Keep version requirements for shared OpenTelemetry packages (e.g., `opentelemetry-api`, `opentelemetry-instrumentation`, and `opentelemetry-semantic-conventions`) consistent across all packages.
+- For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), use `>=` specifiers and pin the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) rather than using `~=`.
+
+
 ## Adding a package to the workspace
 
 A new package under `instrumentation/<pkg>/` (where `<pkg>` is the full
@@ -89,7 +97,7 @@ uv run pre-commit run ruff --all-files
 uv run tox -e py312-test-instrumentation-genai-openai-latest
 
 # Run a package's conformance scenarios (only *-conformance envs collect test_conformance.py)
-uv run tox -e py312-test-instrumentation-genai-openai-conformance
+uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
 uv run tox -e typecheck
@@ -98,6 +106,10 @@ uv run tox -e typecheck
 Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, and the changed package's
 test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
 the CI gates.
+
+tox reuses cached envs and won't re-resolve dependencies on its own, so pass `--recreate` (`-r`)
+after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound — otherwise the
+run silently uses the previously installed versions.
 
 ## Guidelines
 
@@ -182,6 +194,15 @@ isn't enough, add the capability here rather than working around it.
 - For attributes with a well-known value set, use the generated enum from the same module instead
   of string literals.
 
+### README
+
+- Each package's `README.rst` is published as its PyPI long description. When a change introduces
+  user-visible changes to the public API, configuration (env vars, `instrument()` keyword
+  arguments), supported operations/span types, or examples, update the package `README.rst` in the
+  same PR so its claims stay accurate.
+- `README.rst` must render on PyPI. Do not use Sphinx-only roles (e.g. `:class:`, `:mod:`); they
+  fail the PyPI renderer. Run `uv run tox -e readme` to validate.
+
 ### Tests
 
 - For every public API instrumented, cover sync/async variants when both exist.
@@ -193,6 +214,11 @@ isn't enough, add the capability here rather than working around it.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
+- The `oldest` env must install exactly the lower bounds declared in `pyproject.toml`
+  (`dependencies` and the `instruments` extra) — the declared and tested versions must not drift.
+  `UV_RESOLUTION=lowest-direct` (set on the `oldest` factor) derives them from `pyproject.toml`, so
+  it stays the single source of truth; only pin test-only deps with no `pyproject.toml` bound in
+  `tests/requirements.oldest.txt`.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
   by registering them as plugins. Always register the fixtures plugin; register the VCR plugin
   too when the package's tests use VCR cassettes —
@@ -233,7 +259,7 @@ scenario hides the gap; writing it records the gap (as a declared violation
 or a skip reason) so it fails loudly once the gap is fixed. **Never** drop a
 scenario file because it would fail today.
 
-Run via `tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
+Run via `uv run tox -e py314-test-instrumentation-genai-<lib>-conformance`. The
 `*-conformance` tox envs target `tests/test_conformance.py` directly; the
 regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
 OTLP/gRPC exporter or `weaver_live_check`.

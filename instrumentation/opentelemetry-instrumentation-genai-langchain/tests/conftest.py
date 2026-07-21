@@ -68,7 +68,9 @@ def fixture_us_amazon_nova_lite_v1_0():
 @pytest.fixture(scope="function", name="gemini")
 def fixture_gemini():
     llm_model_value = "gemini-2.5-pro"
-    llm = ChatGoogleGenerativeAI(model=llm_model_value, api_key="test_key")
+    llm = ChatGoogleGenerativeAI(
+        model=llm_model_value, api_key="test_key", transport="rest"
+    )
     yield llm
 
 
@@ -144,5 +146,6 @@ def vcr_config():
                 "Set-Cookie": "test_set_cookie",
             }
         ),
+        "match_on": ["method", "scheme", "host", "port", "path", "body"],
         "ignore_hosts": ["169.254.169.254"],
     }

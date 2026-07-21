@@ -20,7 +20,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class InferenceScenario(Scenario):
-    expected_spans = ("chat",)
+    expected_spans = {"chat": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",

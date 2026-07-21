@@ -1,0 +1,53 @@
+interactions:
+- request:
+    body: '{"contents": [{"parts": [{"text": "What is the weather in Boston?"}], "role":
+      "user"}], "tools": [{"functionDeclarations": [{"description": "Get weather for
+      location", "name": "get_weather", "parameters": {"properties": {"location":
+      {"type": "STRING"}}, "required": ["location"], "type": "OBJECT"}}]}]}'
+    headers:
+      accept:
+      - '*/*'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  response:
+    body:
+      string: '{"candidates": [{"content": {"parts": [{"functionCall": {"args": {"location":
+        "Boston"}, "name": "get_weather"}}], "role": "model"}, "finishReason": "STOP",
+        "index": 0}], "modelVersion": "gemini-2.5-flash", "usageMetadata": {"candidatesTokenCount":
+        5, "promptTokenCount": 10, "totalTokenCount": 15}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"contents": [{"parts": [{"text": "What is the weather in Boston?"}], "role":
+      "user"}, {"parts": [{"functionCall": {"args": {"location": "Boston"}, "name":
+      "get_weather"}}], "role": "model"}, {"parts": [{"functionResponse": {"name":
+      "get_weather", "response": {"result": "sunny"}}}], "role": "user"}], "tools":
+      [{"functionDeclarations": [{"description": "Get weather for location", "name":
+      "get_weather", "parameters": {"properties": {"location": {"type": "STRING"}},
+      "required": ["location"], "type": "OBJECT"}}]}]}'
+    headers:
+      accept:
+      - '*/*'
+      content-type:
+      - application/json
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+  response:
+    body:
+      string: '{"candidates": [{"content": {"parts": [{"text": "The weather in Boston
+        is sunny."}], "role": "model"}, "finishReason": "STOP", "index": 0}], "modelVersion":
+        "gemini-2.5-flash", "usageMetadata": {"candidatesTokenCount": 10, "promptTokenCount":
+        20, "totalTokenCount": 30}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

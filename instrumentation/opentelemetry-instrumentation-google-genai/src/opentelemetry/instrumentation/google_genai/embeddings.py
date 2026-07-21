@@ -13,6 +13,9 @@ from google.genai.models import AsyncModels, Models
 from google.genai.types import EmbedContentResponse
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.google_genai.client_info import (
+    get_client_info as _get_client_info,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -29,15 +32,34 @@ _RAW_RESPONSE_BODY: ContextVar[str | None] = ContextVar(
 class _EmbeddingMethodsSnapshot:
     def __init__(self) -> None:
         self._original_embed_content = Models.embed_content
+        self._original_embed_content_code = Models.embed_content.__code__
         self._original_async_embed_content = AsyncModels.embed_content
+        self._original_async_embed_content_code = (
+            AsyncModels.embed_content.__code__
+        )
         self._original_client_request = BaseApiClient.request
         self._original_client_async_request = BaseApiClient.async_request
 
     def restore(self) -> None:
+        self._original_embed_content.__code__ = (
+            self._original_embed_content_code
+        )
+        self._original_async_embed_content.__code__ = (
+            self._original_async_embed_content_code
+        )
+
         Models.embed_content = self._original_embed_content
         AsyncModels.embed_content = self._original_async_embed_content
         BaseApiClient.request = self._original_client_request
         BaseApiClient.async_request = self._original_client_async_request
+
+
+# Magic incantation used by native Google ADK instrumentation to identify
+# instrumented functions and suppress its own internal tracing when OTel is active.
+def _set_co_filename(wrapped: object) -> None:
+    wrapped.__wrapped__.__code__ = wrapped.__wrapped__.__code__.replace(
+        co_filename=__file__.replace("\\", "/")
+    )
 
 
 def _apply_embedding_response_attributes(
@@ -65,31 +87,6 @@ def _apply_embedding_response_attributes(
                 )
         except Exception:
             pass
-
-
-def _get_client_info(instance: Any) -> tuple[bool, str | None]:
-    is_vertex = False
-    server_address = None
-    if hasattr(instance, "_api_client"):
-        api_client = instance._api_client
-        is_vertex = getattr(api_client, "vertexai", False)
-        if hasattr(api_client, "_http_options"):
-            server_address = getattr(
-                api_client._http_options, "base_url", None
-            )
-    elif hasattr(instance, "_client"):
-        client = instance._client
-        is_vertex = getattr(client, "_is_vertex", False)
-        server_address = getattr(client, "server", None)
-    elif hasattr(instance, "sdk_configuration"):
-        config = instance.sdk_configuration
-        server_url = getattr(config, "server_url", "")
-        if server_url:
-            server_address = server_url
-            if "aiplatform.googleapis.com" in server_url:
-                is_vertex = True
-
-    return is_vertex, server_address
 
 
 def _create_instrumented_embed_content(
@@ -172,16 +169,18 @@ def instrument_embeddings(
 ) -> object:
     snapshot = _EmbeddingMethodsSnapshot()
 
-    wrap_function_wrapper(
+    wrapped = wrap_function_wrapper(
         "google.genai.models",
         "Models.embed_content",
         _create_instrumented_embed_content(telemetry_handler),
     )
-    wrap_function_wrapper(
+    wrapped2 = wrap_function_wrapper(
         "google.genai.models",
         "AsyncModels.embed_content",
         _create_instrumented_async_embed_content(telemetry_handler),
     )
+    _set_co_filename(wrapped)
+    _set_co_filename(wrapped2)
 
     # Wrap BaseApiClient to capture raw responses
     def instrumented_request(wrapped, instance, args, kwargs):

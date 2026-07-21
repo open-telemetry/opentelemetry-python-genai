@@ -11,6 +11,7 @@ the callback-handler logic and the invocation-manager bookkeeping.
 import uuid
 from unittest import mock
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
@@ -22,6 +23,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     make_last_output_message,
     make_output_message,
     serialize,
+    to_input_messages,
+    to_output_messages,
 )
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
@@ -649,6 +652,64 @@ class TestMakeInputMessage:
         assert len(result) == 1
         assert result[0].parts[0].content == "hello"
 
+    def test_messages_key_converts_raw_role_content_tuples(self):
+        result = make_input_message(
+            {"messages": [("human", "Hello"), HumanMessage(content="Hi")]}
+        )
+
+        assert len(result) == 2
+        assert result[0].role == "user"
+        assert result[0].parts[0].content == "Hello"
+        assert result[1].parts[0].content == "Hi"
+
+    def test_messages_key_converts_role_content_dicts(self):
+        result = make_input_message(
+            {"messages": [{"role": "user", "content": "Hello"}]}
+        )
+
+        assert len(result) == 1
+        assert result[0].role == "user"
+        assert result[0].parts[0].content == "Hello"
+
+    @pytest.mark.parametrize(
+        "bad_entry",
+        [
+            ("human",),  # too few items for (role, content)
+            ("human", "hi", "extra"),  # too many items
+            ("not_a_real_role", "hi"),  # unknown role string
+            {"content": "no role key"},  # dict missing role
+            {"role": "user"},  # dict missing content
+            None,  # not a message at all
+            42,  # not a message at all
+            object(),  # arbitrary object
+        ],
+    )
+    def test_messages_key_malformed_entry_does_not_raise(self, bad_entry):
+        result = make_input_message(
+            {"messages": [bad_entry, HumanMessage(content="Hi")]}
+        )
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "Hi"
+
+    def test_messages_key_all_malformed_returns_empty_without_raising(self):
+        result = make_input_message(
+            {"messages": [("human",), None, {"content": "x"}]}
+        )
+
+        assert result == []
+
+    def test_to_input_messages_never_raises_on_mixed_bad_input(self):
+        result = to_input_messages(
+            [object(), ("bad", "role", "shape"), HumanMessage(content="ok")]
+        )
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "ok"
+
+    def test_to_input_messages_empty_iterable_returns_empty(self):
+        assert to_input_messages([]) == []
+
     def test_fallback_serializes_non_message_state_fields(self):
         result = make_input_message({"user_query": "what is 2+2?"})
 
@@ -723,7 +784,7 @@ class TestMakeOutputMessage:
         assert len(result) == 1
         assert isinstance(result[0], OutputMessage)
         assert result[0].role == "assistant"
-        assert result[0].finish_reason == "stop"
+        assert result[0].finish_reason == ""
         assert result[0].parts[0].content == "The answer is 42"
 
     def test_non_ai_message_skipped(self):
@@ -757,6 +818,40 @@ class TestMakeOutputMessage:
 
         assert len(result) == 1
         assert result[0].parts[0].content == "answer"
+
+    def test_finish_reason_default_is_empty_string(self):
+        # Workflow/agent output spans must not fabricate a finish reason:
+        # util-genai filters empty strings out of
+        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
+        # while the per-call inference spans report the real values.
+        result = make_output_message({"messages": [AIMessage(content="hi")]})
+        assert result[0].finish_reason == ""
+
+    def test_to_output_messages_propagates_explicit_finish_reason(self):
+        # The inference path passes the provider's finish_reason through
+        # ``to_output_messages``; the converter must forward it onto every
+        # ``OutputMessage`` so util-genai can aggregate it into
+        # ``gen_ai.response.finish_reasons``.
+        msgs = [
+            AIMessage(content="first"),
+            AIMessage(content="second"),
+        ]
+        result = to_output_messages(msgs, finish_reason="tool_calls")
+        assert [m.finish_reason for m in result] == [
+            "tool_calls",
+            "tool_calls",
+        ]
+
+    def test_to_output_messages_skips_non_ai_when_finish_reason_set(self):
+        # finish_reason should never bleed onto non-AI messages: those are
+        # filtered out entirely on the output side.
+        result = to_output_messages(
+            [HumanMessage(content="q"), AIMessage(content="a")],
+            finish_reason="length",
+        )
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].finish_reason == "length"
 
 
 class TestMakeLastOutputMessage:

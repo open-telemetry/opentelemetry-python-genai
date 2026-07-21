@@ -1,1 +1,0 @@
-Use `wrapt` instead of `functools.wraps` to monkey patch the SDK.

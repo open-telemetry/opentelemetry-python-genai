@@ -127,6 +127,25 @@ class Reasoning:
     type: Literal["reasoning"] = "reasoning"
 
 
+@dataclass()
+class CompactionPart:
+    """Represents a server-side context compaction event.
+
+    A bare ``CompactionPart`` (only ``type`` set) is the common case: it
+    records that the provider compacted the conversation without
+    returning an unencrypted summary. Requiring a payload field would
+    make providers that only return an opaque continuity value (e.g.
+    Anthropic) impossible to represent correctly.
+
+    This model is specified as part of semconv in `GenAI messages Python models - CompactionPart
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    id: str | None = None
+    content: str | None = None
+    type: Literal["compaction"] = "compaction"
+
+
 Modality = Literal["image", "video", "audio"]
 
 
@@ -202,6 +221,7 @@ MessagePart = Union[
     File,
     Uri,
     Reasoning,
+    CompactionPart,
     GenericPart,  # For provider-specific types; prefer standard types above
 ]
 

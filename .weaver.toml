@@ -6,6 +6,7 @@
 signal_type = "resource"
 exclude_samples = [
   "service.name",
+  "service.instance.id",
   "telemetry.sdk.language",
   "telemetry.sdk.name",
   "telemetry.sdk.version",

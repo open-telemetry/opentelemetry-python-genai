@@ -22,7 +22,7 @@ USER_PROMPT = "Say this is a test"
 
 
 class ResponsesStreamScenario(Scenario):
-    expected_spans = ("chat",)
+    expected_spans = {"chat": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",

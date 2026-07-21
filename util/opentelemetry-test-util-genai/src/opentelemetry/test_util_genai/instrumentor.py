@@ -6,23 +6,15 @@
 Every instrumentation's ``tests/conftest.py`` carries a handful of fixtures
 shaped like:
 
-- reset ``_OpenTelemetrySemanticConventionStability._initialized``
-- set ``OTEL_SEMCONV_STABILITY_OPT_IN`` and/or
-  ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` (and sometimes
+- set ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` (and sometimes
   ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT``)
 - ``instrumentor.instrument(tracer_provider=..., logger_provider=..., meter_provider=...)``
 - ``yield instrumentor``
-- restore env vars; ``instrumentor.uninstrument()``; reset the stability flag
+- restore env vars; ``instrumentor.uninstrument()``
 
 The body is identical across packages — only the instrumentor class and the
 env values differ. This module hosts that body once so per-package
 conftests collapse to a thin wrapper.
-
-The stability-class reset is required because
-``_OpenTelemetrySemanticConventionStability`` caches the first read of
-``OTEL_SEMCONV_STABILITY_OPT_IN`` — without resetting ``_initialized``
-mid-test, a later env change would not take effect on the next
-``.instrument()`` call.
 """
 
 from __future__ import annotations
@@ -32,9 +24,6 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-from opentelemetry.instrumentation._semconv import (
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -89,7 +78,6 @@ def instrument(
         overrides.update(extra_env)
     previous = {k: os.environ.get(k) for k in overrides}
 
-    _OpenTelemetrySemanticConventionStability._initialized = False
     os.environ.update(overrides)
     try:
         instrumentor.instrument(
@@ -107,4 +95,3 @@ def instrument(
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = prev
-        _OpenTelemetrySemanticConventionStability._initialized = False

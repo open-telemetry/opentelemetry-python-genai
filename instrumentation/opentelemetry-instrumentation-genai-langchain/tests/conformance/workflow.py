@@ -18,7 +18,6 @@ from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     ExpectedViolation,
     Scenario,
@@ -32,7 +31,7 @@ class GraphState(TypedDict):
 
 
 class WorkflowScenario(Scenario):
-    expected_spans = ("invoke_workflow", "chat", "chat")
+    expected_spans = {"invoke_workflow": 1, "chat": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -119,20 +118,3 @@ class WorkflowScenario(Scenario):
                             "research": "",
                         }
                     )
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        operations = [
-            attr["value"]
-            for entry in report["samples"]
-            if "span" in entry
-            for attr in entry["span"]["attributes"]
-            if attr["name"] == "gen_ai.operation.name"
-        ]
-        assert "invoke_workflow" in operations, (
-            f"Expected an invoke_workflow span; saw operations {operations}"
-        )
-        assert operations.count("chat") >= 2, (
-            "Two-node workflow exercises two chat completions "
-            f"(researcher and summariser); saw {operations}"
-        )

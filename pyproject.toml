@@ -91,6 +91,7 @@ reportUnnecessaryTypeIgnoreComment = true
 reportMissingTypeStubs = false
 pythonVersion = "3.10"
 reportPrivateUsage = false  # Ignore private attributes added by instrumentation packages.
+reportDeprecated = false  # Ignore deprecation on GenAI enums in opentelemetry.semconv 0.64b0 until semconv-genai python package is published.
 # Add progressively instrumentation packages here.
 include = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",

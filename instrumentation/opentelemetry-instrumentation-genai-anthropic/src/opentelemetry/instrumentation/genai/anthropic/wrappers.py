@@ -328,11 +328,19 @@ class AsyncMessagesStreamManagerWrapper(Generic[ResponseFormatT]):
     def __init__(
         self,
         manager: AsyncMessageStreamManager[ResponseFormatT],
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | Callable[[], InferenceInvocation],
         capture_content: bool,
     ):
         self._manager = manager
-        self._invocation = invocation
+        if callable(invocation):
+            invocation_factory = invocation
+        else:
+
+            def invocation_factory() -> InferenceInvocation:
+                return invocation
+
+        self._invocation_factory = invocation_factory
+        self._invocation: InferenceInvocation | None = None
         self._capture_content = capture_content
         self._stream_wrapper: (
             AsyncMessagesStreamWrapper[ResponseFormatT] | None
@@ -341,14 +349,16 @@ class AsyncMessagesStreamManagerWrapper(Generic[ResponseFormatT]):
     async def __aenter__(
         self,
     ) -> AsyncMessagesStreamWrapper[ResponseFormatT]:
+        invocation = self._invocation_factory()
+        self._invocation = invocation
         try:
             msg_stream = await self._manager.__aenter__()
         except Exception as exc:
-            self._invocation.fail(exc)
+            invocation.fail(exc)
             raise
         self._stream_wrapper = AsyncMessagesStreamWrapper(
             msg_stream,
-            self._invocation,
+            invocation,
             self._capture_content,
         )
         return self._stream_wrapper
@@ -370,7 +380,7 @@ class AsyncMessagesStreamManagerWrapper(Generic[ResponseFormatT]):
                 await stream_wrapper.__aexit__(
                     type(exc), exc, exc.__traceback__
                 )
-            else:
+            elif self._invocation is not None:
                 self._invocation.fail(exc)
             raise
         if stream_wrapper is not None:

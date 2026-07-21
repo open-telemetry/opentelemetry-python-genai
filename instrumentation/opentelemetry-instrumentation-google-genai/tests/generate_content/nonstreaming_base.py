@@ -231,6 +231,10 @@ class NonStreamingTestCase(TestCase):
         self.assertEqual(
             span.attributes["gen_ai.operation.name"], "generate_content"
         )
+        self.assertEqual(
+            span.attributes["server.address"],
+            "generativelanguage.googleapis.com",
+        )
 
     def test_generated_span_has_extra_genai_attributes(self):
         self.configure_valid_response(text="Yep, it works!")
@@ -308,6 +312,23 @@ class NonStreamingTestCase(TestCase):
         )
         self.assertEqual(
             span.attributes["gen_ai.usage.reasoning.output_tokens"], 17
+        )
+
+    def test_generated_span_records_response_model(self):
+        self.configure_valid_response(model_version="gemini-2.0-flash-001")
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.response.model"], "gemini-2.0-flash-001"
+        )
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            event.attributes["gen_ai.response.model"], "gemini-2.0-flash-001"
         )
 
     @patch.dict(
@@ -615,3 +636,29 @@ class NonStreamingTestCase(TestCase):
         self.otel.assert_has_metrics_data_named(
             "gen_ai.client.operation.duration"
         )
+
+    def test_output_token_metric_includes_reasoning_tokens(self):
+        # candidates_token_count excludes thoughts, so the output token metric
+        # must add reasoning tokens on top - and stay consistent with the span.
+        self.configure_valid_response(
+            input_tokens=123,
+            output_tokens=456,
+            thinking_tokens=17,
+        )
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.usage.output_tokens"], 456 + 17
+        )
+
+        (token_metric,) = self.otel.get_metrics_data_named(
+            "gen_ai.client.token.usage"
+        )
+        output_points = [
+            point
+            for point in token_metric.data.data_points
+            if point.attributes["gen_ai.token.type"] == "output"
+        ]
+        self.assertEqual(len(output_points), 1)
+        self.assertEqual(output_points[0].sum, 456 + 17)

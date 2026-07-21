@@ -17,12 +17,14 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+from opentelemetry.trace import SpanKind
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import GenAIInvocation
 from opentelemetry.util.genai.types import (
+    CompactionPart,
     InputMessage,
     ServerToolCall,
     ServerToolCallResponse,
@@ -139,8 +141,30 @@ def test_server_tool_call_in_message():
     assert isinstance(msg.parts[1], ServerToolCallResponse)
 
 
+def test_compactionpart_is_message_part():
+    """CompactionPart works as a MessagePart alongside other part types."""
+    part = CompactionPart(
+        id="compact_001", content="Summary of earlier turns."
+    )
+    assert part.id == "compact_001"
+    assert part.content == "Summary of earlier turns."
+    assert part.type == "compaction"
+
+    msg = InputMessage(role="assistant", parts=[part])
+    assert len(msg.parts) == 1
+    assert isinstance(msg.parts[0], CompactionPart)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_tool_span_is_internal_kind():
+    """execute_tool runs in-process, so its span must be INTERNAL, not CLIENT."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    handler.tool("get_weather").stop()
+
+    assert span_exporter.get_finished_spans()[0].kind == SpanKind.INTERNAL
 
 
 def test_start_tool_passes_sampling_attributes_at_span_creation():
