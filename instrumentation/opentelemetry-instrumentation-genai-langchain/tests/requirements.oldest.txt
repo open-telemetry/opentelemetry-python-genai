@@ -23,4 +23,5 @@
 langchain-openai==0.2.0
 langchain-aws==0.2.2
 langchain-google-genai==2.0.0
+langchain-anthropic==0.3.0
 boto3==1.37.0

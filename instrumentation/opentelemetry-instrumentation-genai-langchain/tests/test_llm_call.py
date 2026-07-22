@@ -5,11 +5,13 @@ from importlib.metadata import version as _pkg_version
 from typing import Optional
 
 import pytest
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import (
     FunctionMessage,
     HumanMessage,
     SystemMessage,
 )
+from langchain_core.tools import tool
 from openai import AuthenticationError
 
 from opentelemetry.instrumentation.genai.langchain.utils import (
@@ -212,6 +214,66 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
         print(f"span: {span}")
         print(f"span attributes: {span.attributes}")
     assert_bedrock_completion_attributes(spans[0], result)
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_llm_call(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    result = chat_anthropic_claude_sonnet.invoke(messages)
+
+    assert result.content.find("The capital of France is Paris") != -1
+
+    # verify spans
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
+        == "claude-sonnet-4-5"
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS)
+        == 1024
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_tool_call(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    @tool
+    def get_current_weather(location: str) -> str:
+        """Get the current weather in a given location."""
+        return f"The weather in {location} is sunny."
+
+    llm_with_tools = chat_anthropic_claude_sonnet.bind_tools(
+        [get_current_weather]
+    )
+
+    messages = [
+        HumanMessage(content="What's the weather in Seattle?"),
+    ]
+
+    llm_with_tools.invoke(messages)
+
+    # verify spans
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
+        == "claude-sonnet-4-5"
+    )
+    assert span.attributes.get(
+        gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("tool_use",)
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
@@ -705,3 +767,40 @@ def assert_log_parent(log_record, span):
         assert log_record.trace_id == span.get_span_context().trace_id
         assert log_record.span_id == span.get_span_context().span_id
         assert log_record.trace_flags == span.get_span_context().trace_flags
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_stop_sequences_fallback(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    llm = chat_anthropic_claude_sonnet.bind(stop_sequences=["STOP"])
+    llm.invoke([HumanMessage(content="Say hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    stop_sequences = span.attributes.get(
+        gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    )
+    assert stop_sequences == ("STOP",)
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
+    span_exporter, start_instrumentation
+):
+    model = ChatAnthropic(
+        model="claude-sonnet-4-5",
+        api_key="test_key",
+        max_tokens=1024,
+        stop_sequences=["STOP"],
+    )
+    model.invoke([HumanMessage(content="Say hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    stop_sequences = span.attributes.get(
+        gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    )
+    assert stop_sequences == ("STOP",)

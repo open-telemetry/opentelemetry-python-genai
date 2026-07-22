@@ -64,10 +64,10 @@ class InferenceInvocation(GenAIInvocation):
             else operation_name,
             span_kind=SpanKind.CLIENT,
         )
-        self.provider = provider
-        self.request_model = request_model
-        self.server_address = server_address
-        self.server_port = server_port
+        self._provider: str = provider
+        self._request_model: str | None = request_model
+        self._server_address: str | None = server_address
+        self._server_port: int | None = server_port
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -91,7 +91,7 @@ class InferenceInvocation(GenAIInvocation):
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
-        self._start(self._get_base_attributes())
+        self._start(self._get_start_attributes())
 
     def _get_message_attributes(
         self, *, for_span: bool
@@ -116,12 +116,12 @@ class InferenceInvocation(GenAIInvocation):
             return reasons or None
         return None
 
-    def _get_base_attributes(self) -> dict[str, AttributeValue]:
+    def _get_start_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -129,7 +129,7 @@ class InferenceInvocation(GenAIInvocation):
         }
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
-        attrs = self._get_base_attributes()
+        attrs: dict[str, AttributeValue] = {}
         optional_attrs = (
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
             (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
@@ -163,7 +163,7 @@ class InferenceInvocation(GenAIInvocation):
         return attrs
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs = self._get_base_attributes()
+        attrs = self._get_start_attributes()
         if self.response_model_name is not None:
             attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self.response_model_name
         attrs.update(self.metric_attributes)
@@ -207,7 +207,8 @@ class InferenceInvocation(GenAIInvocation):
         if not should_emit_event():
             return None
 
-        attributes = self._get_attributes()
+        attributes = self._get_start_attributes()
+        attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
         return LogRecord(
@@ -294,8 +295,8 @@ class LLMInvocation:
         inv = self._inference_invocation
         if inv is None:
             return
-        inv.provider = self.provider or ""
-        inv.request_model = self.request_model
+        # Start attributes (provider, request_model, server_address, server_port)
+        # are fixed at construction in _start_with_handler and cannot be reassigned.
         inv.input_messages = self.input_messages
         inv.output_messages = self.output_messages
         inv.system_instruction = self.system_instruction
@@ -311,8 +312,6 @@ class LLMInvocation:
         inv.max_tokens = self.max_tokens
         inv.stop_sequences = self.stop_sequences
         inv.seed = self.seed
-        inv.server_address = self.server_address
-        inv.server_port = self.server_port
         inv.attributes = self.attributes
         inv.metric_attributes = self.metric_attributes
 
