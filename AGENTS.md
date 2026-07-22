@@ -145,6 +145,29 @@ Apply to packages under `instrumentation/`.
 - Content capture, hooks, and configuration are owned by the util. Don't add instrumentation-local
   env vars or settings.
 
+#### Completion hook
+
+The `CompletionHook` (`opentelemetry.util.genai.completion_hook`) lets users forward captured
+prompt/completion content to external storage (e.g. object stores) instead of, or in addition to,
+recording it inline. Wiring is owned by the util — instrumentations just pass the hook through to
+the `TelemetryHandler`. Follow the OpenAI package
+([`OpenAIInstrumentor`](instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/__init__.py))
+as the reference:
+
+- In `_instrument(**kwargs)`, resolve the hook as
+  `kwargs.get("completion_hook") or load_completion_hook()` and pass it to the handler
+  (`TelemetryHandler(..., completion_hook=...)` or
+  `get_telemetry_handler(..., completion_hook=...)`). `load_completion_hook()` returns the hook
+  named by `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` (e.g. `upload`) via its entry point, or a
+  no-op. An explicit `instrument(completion_hook=…)` argument takes precedence over the env var.
+- Don't define your own hook interface, call `on_completion` yourself, or wrap it in `try/except` —
+  the util calls the hook and swallows hook exceptions internally.
+- Document the capability in the package `README.rst` (both the
+  `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload` env var with
+  `OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH`, and the programmatic
+  `instrument(completion_hook=…)` override) and ship a `custom_hook.py` example mirroring the
+  OpenAI package.
+
 #### Streaming responses
 
 A streamed response only finishes once the caller has drained the stream, so the invocation must
