@@ -1,4 +1,4 @@
-claude-agent-sdk>=0.2.125
+claude-agent-sdk>=0.2.126
 anyio>=4.14.2
 
 opentelemetry-sdk~=1.43.0
