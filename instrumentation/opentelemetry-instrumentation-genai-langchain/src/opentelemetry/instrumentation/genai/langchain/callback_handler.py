@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any, Optional, cast
+from typing import Any, Mapping, Optional, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -45,6 +45,8 @@ from opentelemetry.util.genai.types import (
     Text,
     ToolCallRequest,
 )
+
+SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -443,6 +445,35 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             response_id = llm_output.get("id")
             if response_id is not None:
                 llm_invocation.response_id = str(response_id)
+
+        # Responses API (RAPI) may include the served model in the response headers, which accurately returns the served model name for the request.
+        for generation in getattr(response, "generations", []):
+            for chat_generation in generation:
+                if chat_generation.message is not None:
+                    if chat_generation.message.response_metadata is not None:
+                        meta = chat_generation.message.response_metadata
+                        headers = (
+                            meta.get("headers")
+                            if isinstance(meta, Mapping)
+                            else None
+                        )
+                        if isinstance(headers, Mapping):
+                            for name, value in headers.items():
+                                if (
+                                    isinstance(name, str)
+                                    and name.lower()
+                                    in SUPPORTED_RAPI_RESPONSE_HEADERS
+                                    and value
+                                ):
+                                    served_model = str(value)
+                                    break
+                        if served_model:
+                            break
+            if served_model:
+                break
+
+        if served_model:
+            llm_invocation.response_model_name = served_model
 
         llm_invocation.stop()
         if not llm_invocation.span.is_recording():
