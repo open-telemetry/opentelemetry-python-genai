@@ -19,6 +19,7 @@ from opentelemetry.util.genai._invocation import (
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
+    ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -48,6 +49,7 @@ class InferenceInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         operation_name: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -63,6 +65,7 @@ class InferenceInvocation(GenAIInvocation):
             if request_model
             else operation_name,
             span_kind=SpanKind.CLIENT,
+            error_type_resolver=error_type_resolver,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model

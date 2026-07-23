@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, create_autospec, patch
 
 import pytest
+from google.genai import errors as genai_errors
 from google.genai.types import (
     FunctionDeclarationDict,
     GenerateContentConfig,
@@ -278,6 +279,28 @@ class NonStreamingTestCase(TestCase):
             span.attributes["error.type"]
             == event.attributes["error.type"]
             == "ValueError"
+        )
+
+    def test_error_type_uses_google_genai_code_not_class_name(self):
+        # google.genai collapses all 4xx into ClientError; the HTTP status code
+        # (e.g. 429) must surface as error.type instead of the class name.
+        self.configure_exception(
+            genai_errors.ClientError(
+                429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}}
+            )
+        )
+        with pytest.raises(genai_errors.ClientError):
+            self.generate_content(
+                model="gemini-2.0-flash", contents="Does this work?"
+            )
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        assert (
+            span.attributes["error.type"]
+            == event.attributes["error.type"]
+            == "429"
         )
 
     def test_generated_span_has_vertex_ai_system_when_configured(self):
