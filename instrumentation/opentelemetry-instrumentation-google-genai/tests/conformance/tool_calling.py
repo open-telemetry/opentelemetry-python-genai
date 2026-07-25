@@ -23,7 +23,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class ToolCallingScenario(Scenario):
-    expected_spans = ("generate_content",)
+    expected_spans = {"generate_content": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",

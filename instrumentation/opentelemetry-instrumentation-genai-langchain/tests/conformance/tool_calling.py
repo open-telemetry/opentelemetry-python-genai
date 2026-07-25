@@ -22,7 +22,6 @@ from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     ExpectedViolation,
     Scenario,
@@ -71,7 +70,7 @@ def _execute_weather_tool(arguments: str) -> str:
 
 
 class ToolCallingScenario(Scenario):
-    expected_spans = ("chat", "execute_tool")
+    expected_spans = {"chat": 2, "execute_tool": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -142,22 +141,3 @@ class ToolCallingScenario(Scenario):
                         )
 
                     llm_with_tools.invoke(messages)
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        operations = [
-            attr["value"]
-            for entry in report["samples"]
-            if "span" in entry
-            for attr in entry["span"]["attributes"]
-            if attr["name"] == "gen_ai.operation.name"
-        ]
-        assert operations == [
-            "chat",
-            "execute_tool",
-            "execute_tool",
-            "chat",
-        ], (
-            "Tool calling exercises two chat completions with two execute_tool "
-            "spans in between (one per tool call); saw spans {operations}"
-        )

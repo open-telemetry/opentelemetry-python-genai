@@ -19,8 +19,8 @@ to be installed in the conformance envs.
 
 Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
 
-- ``expected_spans`` — ``gen_ai.operation.name`` values that must appear in
-  the report's span samples.
+- ``expected_spans`` — maps each ``gen_ai.operation.name`` to the exact number
+  of spans the report must carry it on, with no undeclared operations present.
 - ``expected_metrics`` — metric names that must appear in
   ``statistics.seen_registry_metrics``.
 - ``expected_violations`` — :class:`ExpectedViolation` entries for known
@@ -30,9 +30,10 @@ Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
   the instrumentor against the providers and exercises one semconv operation
   type's happy path inside ``vcr.use_cassette(...)``.
 - ``validate(report)`` — asserts the emitted telemetry matches the scenario.
-  The base implementation enforces ``expected_spans`` / ``expected_metrics``
-  presence; per-scenario overrides call ``super().validate(report)`` and
-  layer on additional checks against the weaver report.
+  The base implementation enforces the exact ``expected_spans`` operation
+  counts and ``expected_metrics`` presence; per-scenario overrides call
+  ``super().validate(report)`` and layer on additional checks against the
+  weaver report.
 """
 
 from __future__ import annotations
@@ -79,7 +80,7 @@ class ExpectedViolation:
 class Scenario(ABC):
     """Base class every ``tests/conformance/<op>.py`` scenario must subclass."""
 
-    expected_spans: ClassVar[tuple[str, ...]] = ()
+    expected_spans: ClassVar[dict[str, int]] = {}
     expected_metrics: ClassVar[tuple[str, ...]] = ()
     expected_violations: ClassVar[tuple[ExpectedViolation, ...]] = ()
 
@@ -96,17 +97,18 @@ class Scenario(ABC):
     def validate(self, report: LiveCheckReport) -> None:
         """Assert the weaver live-check report matches the scenario.
 
-        The base implementation enforces that every ``expected_spans`` and
-        ``expected_metrics`` entry appears at least once. Subclasses should
-        override and call ``super().validate(report)`` to layer on extra
-        scenario-specific checks against the report.
+        ``expected_spans`` maps each ``gen_ai.operation.name`` to the exact
+        number of spans that must carry it: the report's spans must match these
+        operation counts exactly — no missing, no extra. ``expected_metrics``
+        entries must each appear at least once. Subclasses should override and
+        call ``super().validate(report)`` to layer on extra scenario-specific
+        checks against the report.
         """
-        expected_spans = set(self.expected_spans)
+        expected_spans = dict(self.expected_spans)
         seen_spans = _seen_span_operations(report)
-        missing_spans = expected_spans - seen_spans
-        assert not missing_spans, (
-            f"Expected span operations {sorted(expected_spans)} but weaver "
-            f"only saw {sorted(seen_spans)} — missing {sorted(missing_spans)}"
+        assert seen_spans == expected_spans, (
+            f"Expected span operation counts {dict(sorted(expected_spans.items()))} "
+            f"but weaver saw {dict(sorted(seen_spans.items()))}"
         )
 
         expected_metrics = set(self.expected_metrics)
@@ -163,15 +165,17 @@ def _seen_metric_names(report: LiveCheckReport) -> set[str]:
     return {name for name, count in seen.items() if count}
 
 
-def _seen_span_operations(report: LiveCheckReport) -> set[str]:
-    """`gen_ai.operation.name` values observed across the report's span samples."""
-    return {
-        attr["value"]
-        for entry in report["samples"]
-        if "span" in entry
-        for attr in entry["span"]["attributes"]
-        if attr["name"] == "gen_ai.operation.name"
-    }
+def _seen_span_operations(report: LiveCheckReport) -> dict[str, int]:
+    """`gen_ai.operation.name` counts across the report's span samples."""
+    counts: dict[str, int] = {}
+    for entry in report["samples"]:
+        if "span" not in entry:
+            continue
+        for attr in entry["span"]["attributes"]:
+            if attr["name"] == "gen_ai.operation.name":
+                counts[attr["value"]] = counts.get(attr["value"], 0) + 1
+                break
+    return counts
 
 
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:

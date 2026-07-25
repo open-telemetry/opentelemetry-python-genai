@@ -1,0 +1,2 @@
+Forward the configured ``CompletionHook`` (``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` or the
+``instrument(completion_hook=...)`` argument) to the telemetry handler.

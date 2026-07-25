@@ -29,7 +29,7 @@ class TestWorkflowInvocation(unittest.TestCase):
     def test_default_values(self):
         invocation = self.handler.workflow(name=None)
         invocation.stop()
-        assert invocation.name is None
+        assert invocation._name is None
         assert invocation._operation_name == "invoke_workflow"
         assert not invocation.input_messages
         assert not invocation.output_messages
@@ -39,7 +39,7 @@ class TestWorkflowInvocation(unittest.TestCase):
     def test_custom_name(self):
         invocation = self.handler.workflow(name="customer_support_pipeline")
         invocation.stop()
-        assert invocation.name == "customer_support_pipeline"
+        assert invocation._name == "customer_support_pipeline"
 
     def test_with_input_messages(self):
         msg = InputMessage(role="user", parts=[Text(content="hello")])
@@ -95,7 +95,7 @@ class TestWorkflowInvocation(unittest.TestCase):
         invocation.input_messages = [inp]
         invocation.output_messages = [out]
         invocation.stop()
-        assert invocation.name == "my_workflow"
+        assert invocation._name == "my_workflow"
         assert len(invocation.input_messages) == 1
         assert len(invocation.output_messages) == 1
         assert invocation.output_messages[0].parts[0].content == "answer"

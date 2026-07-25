@@ -31,6 +31,13 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   `Tracer`, `Meter`, `Logger`, or event APIs is not allowed.
 - Content capture, hooks, and other cross-cutting configuration are owned by the util.
   Instrumentations must not introduce their own env vars, settings, or hook interfaces.
+- Completion hook wiring must follow the util's contract (reference:
+  [`OpenAIInstrumentor`](../../instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/__init__.py)):
+  `_instrument` resolves `kwargs.get("completion_hook") or load_completion_hook()` and passes it to
+  the `TelemetryHandler` (an explicit `instrument(completion_hook=…)` takes precedence over the
+  `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` env var). Flag instrumentations that define their own
+  hook interface, call `on_completion` directly, wrap the hook in `try/except`, drop the
+  `load_completion_hook()` fallback, or fail to thread `completion_hook` through `instrument()`.
 - Message content, prompts, and tool call arguments must only be set through the util's content
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.

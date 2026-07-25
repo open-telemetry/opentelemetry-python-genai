@@ -292,3 +292,110 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+
+    def test_generates_agent_span(self) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(agent="my_agent", input="Does this work?")
+        self.otel.assert_has_span_named("invoke_agent my_agent")
+        span = self.otel.get_span_named("invoke_agent my_agent")
+        self.assertEqual(span.attributes["gen_ai.provider.name"], "gemini")
+        self.assertEqual(
+            span.attributes["gen_ai.operation.name"], "invoke_agent"
+        )
+        self.assertEqual(span.attributes["gen_ai.agent.name"], "my_agent")
+        self.assertEqual(
+            span.attributes["server.address"],
+            "generativelanguage.googleapis.com",
+        )
+
+    def test_streaming_generates_agent_span(self) -> None:
+        self.configure_valid_interaction(
+            interaction_id="stream-id-2",
+            output_text="Streaming response!",
+            input_tokens=5,
+            output_tokens=8,
+        )
+        events = self.run_streaming_interaction(
+            agent="my_agent",
+            input="Streaming test",
+            stream=True,
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].interaction.id, "stream-id-2")
+
+        self.otel.assert_has_span_named("invoke_agent my_agent")
+        span = self.otel.get_span_named("invoke_agent my_agent")
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+
+    def test_interaction_with_non_dict_tools_ignored(self) -> None:
+        # SDK will reject this currently, so we just ignore it..
+        def my_tool(x: int) -> int:
+            """A mock tool function."""
+            return x
+
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test tool",
+            tools=[my_tool],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertNotIn("gen_ai.tool.definitions", span.attributes)
+
+    def test_interaction_with_mcp_server_tool_records_definitions(
+        self,
+    ) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test mcp server tool",
+            tools=[
+                {
+                    "type": "mcp_server",
+                    "name": "weather_server",
+                    "url": "https://api.example.com/mcp",
+                }
+            ],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.tool.definitions"],
+            '[{"name":"weather_server","type":"mcp_server"}]',
+        )
+
+    def test_interaction_with_dict_tools_records_tool_definitions(
+        self,
+    ) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test dict tool",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "dict_tool",
+                    "description": "Dict tool desc",
+                }
+            ],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.tool.definitions"],
+            '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
+        )
+
+    def test_interaction_with_builtin_tools_records_definitions(
+        self,
+    ) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test builtin tools",
+            tools=[{"type": "google_search"}, {"type": "code_execution"}],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.tool.definitions"],
+            '[{"name":"google_search","type":"google_search"},{"name":"code_execution","type":"code_execution"}]',
+        )

@@ -52,12 +52,12 @@ class WorkflowInvocation(GenAIInvocation):
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
         )
-        self.name = name
+        self._name: str | None = name
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self._start(self._get_base_attributes())
+        self._start(self._get_start_attributes())
 
-    def _get_base_attributes(self) -> dict[str, AttributeValue]:
+    def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time.
 
         Includes ``gen_ai.workflow.name`` when a workflow name is set so it is
@@ -66,8 +66,8 @@ class WorkflowInvocation(GenAIInvocation):
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
         }
-        if self.name:
-            attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self.name
+        if self._name:
+            attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._name
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:
@@ -92,10 +92,7 @@ class WorkflowInvocation(GenAIInvocation):
         }
 
     def _apply_finish(self, error: Error | None = None) -> None:
-        attributes: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-        }
-        attributes.update(self._get_messages_for_span())
+        attributes: dict[str, AttributeValue] = self._get_messages_for_span()
         if error is not None:
             self._apply_error_attributes(error)
         attributes.update(self.attributes)

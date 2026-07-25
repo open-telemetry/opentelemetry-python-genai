@@ -1,0 +1,1 @@
+Include reasoning/thinking tokens in `gen_ai.usage.output_tokens` on both the span and the token-usage metric (candidates_token_count excludes thoughts).

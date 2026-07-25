@@ -63,12 +63,12 @@ class AgentInvocation(GenAIInvocation):
             else _operation_name,
             span_kind=span_kind,
         )
-        self.request_model = request_model
-        self.server_address = server_address
-        self.server_port = server_port
-        self.provider = provider
+        self._provider: str | None = provider
+        self._request_model: str | None = request_model
+        self._server_address: str | None = server_address
+        self._server_port: int | None = server_port
 
-        self.agent_name: str | None = agent_name
+        self._agent_name: str | None = agent_name
         self.agent_id: str | None = None
         self.agent_description: str | None = None
         self.agent_version: str | None = None
@@ -98,37 +98,35 @@ class AgentInvocation(GenAIInvocation):
         self.system_instruction: list[MessagePart] = []
         self.tool_definitions: list[ToolDefinition] | None = None
 
-        self._start(self._get_base_attributes())
+        self._start(self._get_start_attributes())
 
-    def _get_base_attributes(self) -> dict[str, AttributeValue]:
+    @property
+    def agent_name(self) -> str | None:
+        """The agent name provided at construction time."""
+        return self._agent_name
+
+    def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (GenAI.GEN_AI_AGENT_NAME, self.agent_name),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
             **{k: v for k, v in optional_attrs if v is not None},
         }
 
-    def _get_common_attributes(self) -> dict[str, AttributeValue]:
+    def _get_agent_attributes(self) -> dict[str, AttributeValue]:
+        """Return agent attributes not known at span creation time."""
         optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
-            (GenAI.GEN_AI_AGENT_NAME, self.agent_name),
             (GenAI.GEN_AI_AGENT_ID, self.agent_id),
             (GenAI.GEN_AI_AGENT_DESCRIPTION, self.agent_description),
             (GenAI.GEN_AI_AGENT_VERSION, self.agent_version),
         )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
+        return {k: v for k, v in optional_attrs if v is not None}
 
     def _get_request_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
@@ -177,10 +175,10 @@ class AgentInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -204,7 +202,7 @@ class AgentInvocation(GenAIInvocation):
             self._apply_error_attributes(error)
 
         attributes: dict[str, AttributeValue] = {}
-        attributes.update(self._get_common_attributes())
+        attributes.update(self._get_agent_attributes())
         attributes.update(self._get_request_attributes())
         attributes.update(self._get_response_attributes())
         attributes.update(self._get_usage_attributes())

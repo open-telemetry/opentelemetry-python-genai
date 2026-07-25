@@ -156,6 +156,50 @@ class TelemetryHandlerMetricsTest(TestBase):
         )
         self.assertAlmostEqual(token_point.sum, 11.0, places=3)
 
+    def test_fail_llm_error_type_uses_supplied_resolver(self) -> None:
+        # An instrumentor-supplied error_type_resolver derives error.type from
+        # the raw exception (e.g. surfacing a provider's canonical status).
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.inference(
+            "",
+            request_model="err-model",
+            error_type_resolver=lambda exc: "429",
+        )
+        invocation.fail(ValueError("boom"))
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertEqual(len(duration_points), 1)
+        self.assertEqual(
+            duration_points[0].attributes.get("error.type"),
+            "429",
+        )
+
+    def test_fail_llm_error_type_falls_back_when_resolver_returns_none(
+        self,
+    ) -> None:
+        # Resolver returning None falls back to the exception class name.
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.inference(
+            "",
+            request_model="err-model",
+            error_type_resolver=lambda exc: None,
+        )
+        invocation.fail(ValueError("boom"))
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertEqual(
+            duration_points[0].attributes.get("error.type"),
+            "ValueError",
+        )
+
     def _harvest_metrics(
         self,
     ) -> Dict[str, List[Any]]:

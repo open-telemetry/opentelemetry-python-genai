@@ -1,0 +1,1 @@
+Add ``CompactionPart`` message part type, mirroring the semconv model (``type``, ``id``, ``content``) for representing server-side context compaction events.

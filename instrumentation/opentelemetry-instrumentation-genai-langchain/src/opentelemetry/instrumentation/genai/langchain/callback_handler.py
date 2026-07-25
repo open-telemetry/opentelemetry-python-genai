@@ -236,12 +236,19 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             frequency_penalty = params.get("frequency_penalty")
             presence_penalty = params.get("presence_penalty")
             stop_sequences = params.get("stop")
+            if stop_sequences is None:
+                stop_sequences = params.get("stop_sequences")
+            if stop_sequences is None:
+                serialized_kwargs: dict[str, Any] = (
+                    serialized.get("kwargs") or {}
+                )
+                stop_sequences = serialized_kwargs.get("stop_sequences")
             seed = params.get("seed")
             temperature = params.get("temperature")
-            # ``max_completion_tokens`` is OpenAI-specific; fall back to the
-            # generic ``max_tokens`` used by Anthropic, Mistral, Cohere, etc.
-            max_tokens = params.get("max_completion_tokens") or params.get(
-                "max_tokens"
+            max_tokens = (
+                params.get("max_completion_tokens")
+                if params.get("max_completion_tokens") is not None
+                else params.get("max_tokens")
             )
 
         provider = normalize_provider(metadata) or "unknown"
@@ -327,7 +334,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     ):
                         finish_reason = (
                             chat_generation.message.response_metadata.get(
-                                "stopReason", "unknown"
+                                "stopReason"
+                            )
+                            or chat_generation.message.response_metadata.get(
+                                "stop_reason", "unknown"
                             )
                         )
 

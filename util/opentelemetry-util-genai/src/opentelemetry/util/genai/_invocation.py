@@ -23,6 +23,7 @@ from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     Error,
+    ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -64,11 +65,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         span_kind: SpanKind = SpanKind.CLIENT,
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
         self._logger = logger
         self._completion_hook = completion_hook
+        self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
@@ -112,7 +115,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def _apply_error_attributes(self, error: Error) -> None:
         """Apply error status and error.type attribute to the span, events, and metrics."""
-        error_type = error.type.__qualname__
+        error_type = error.type_str or error.type.__qualname__
         self.span.set_status(Status(StatusCode.ERROR, error.message))
         self.attributes[error_attributes.ERROR_TYPE] = error_type
         self.metric_attributes[error_attributes.ERROR_TYPE] = error_type
@@ -164,7 +167,14 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def fail(self, error: Error | BaseException) -> None:
         """Fail the invocation and end its span with error status."""
         if isinstance(error, BaseException):
-            error = Error(type=type(error), message=str(error))
+            type_str = (
+                self._error_type_resolver(error)
+                if self._error_type_resolver is not None
+                else None
+            )
+            error = Error(
+                message=str(error), type=type(error), type_str=type_str
+            )
         self._finish(error)
 
     def __enter__(self) -> GenAIInvocation:

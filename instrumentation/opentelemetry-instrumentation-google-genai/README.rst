@@ -15,9 +15,11 @@ GenAI operations in aggregate.
 Experimental
 ------------
 
-This package is still experimental. The instrumentation may not be complete or correct just yet.
+The ``interactions`` and ``embed_content`` methods are newly instrumented and may contain issues.
+Please treat the telemetry produced by these methods as experimental.
 
-Please see "TODOS.md" for a list of known defects/TODOs that are blockers to package stability.
+The ``interactions`` API currently does not support automatic function calling, so no ``execute_tool`` spans
+are generated.
 
 
 Installation
@@ -66,7 +68,7 @@ Make sure to configure OpenTelemetry tracing, logging, and metrics to capture al
 Limitations
 ***********
 
-When using the Google GenAI SDK with automatic function calling enabled,
+When using the Google GenAI SDK with automatic function calling enabled for ``generate_content``,
 the OpenTelemetry instrumentation creates an ``execute_tool`` span for each tool call the SDK executes,
 these spans are nested under the ``generate_content`` span.
 
