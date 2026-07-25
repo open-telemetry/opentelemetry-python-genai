@@ -30,6 +30,10 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 
+# Sentinel marking "completion_hook not supplied" so ``None`` stays a valid,
+# explicitly-forwardable value.
+_UNSET: Any = object()
+
 
 @contextmanager
 def instrument(
@@ -41,6 +45,7 @@ def instrument(
     content_capture: str | None = None,
     emit_event: bool = False,
     extra_env: Mapping[str, str] | None = None,
+    completion_hook: Any = _UNSET,
 ) -> Iterator[BaseInstrumentor]:
     """Set semconv/content envs, instrument, yield, restore env + uninstrument.
 
@@ -63,7 +68,9 @@ def instrument(
     ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` and
     ``emit_event=True`` sets ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` to
     ``"true"``; both default to leaving their variable untouched. Pass
-    ``extra_env`` for anything else.
+    ``extra_env`` for anything else. ``completion_hook`` is forwarded to
+    ``instrumentor.instrument(completion_hook=...)`` when provided (left off
+    entirely by default so the instrumentor's own default resolution runs).
 
     Previous values are restored on exit so tests stay isolated.
     """
@@ -78,13 +85,17 @@ def instrument(
         overrides.update(extra_env)
     previous = {k: os.environ.get(k) for k in overrides}
 
+    instrument_kwargs: dict[str, Any] = {
+        "tracer_provider": tracer_provider,
+        "logger_provider": logger_provider,
+        "meter_provider": meter_provider,
+    }
+    if completion_hook is not _UNSET:
+        instrument_kwargs["completion_hook"] = completion_hook
+
     os.environ.update(overrides)
     try:
-        instrumentor.instrument(
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-        )
+        instrumentor.instrument(**instrument_kwargs)
         try:
             yield instrumentor
         finally:

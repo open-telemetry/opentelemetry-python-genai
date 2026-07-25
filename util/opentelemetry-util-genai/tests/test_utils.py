@@ -5,7 +5,7 @@ import json
 import os
 import unittest
 from typing import Any, Mapping, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider
@@ -913,6 +913,43 @@ class TestTelemetryHandler(unittest.TestCase):
             _get_span_attributes(span)[error_attributes.ERROR_TYPE]
             == BoomError.__qualname__
         )
+
+    def test_inference_finish_does_not_duplicate_start_attributes(self):
+        mock_span = MagicMock()
+        with patch.object(
+            self.telemetry_handler._tracer,
+            "start_span",
+            return_value=mock_span,
+        ):
+            invocation = self.telemetry_handler.inference(
+                "test-provider",
+                request_model="test-model",
+                server_address="custom.server.com",
+                server_port=42,
+            )
+            mock_span.set_attributes.reset_mock()
+            mock_span.set_attribute.reset_mock()
+
+            invocation.stop()
+
+            # Inspect what was set on finish
+            if mock_span.set_attributes.call_args_list:
+                for call in mock_span.set_attributes.call_args_list:
+                    attrs = call[0][0]
+                    self.assertNotIn(GenAI.GEN_AI_OPERATION_NAME, attrs)
+                    self.assertNotIn(GenAI.GEN_AI_REQUEST_MODEL, attrs)
+                    self.assertNotIn(GenAI.GEN_AI_PROVIDER_NAME, attrs)
+                    self.assertNotIn(server_attributes.SERVER_ADDRESS, attrs)
+                    self.assertNotIn(server_attributes.SERVER_PORT, attrs)
+
+            if mock_span.set_attribute.call_args_list:
+                for call in mock_span.set_attribute.call_args_list:
+                    key = call[0][0]
+                    self.assertNotEqual(key, GenAI.GEN_AI_OPERATION_NAME)
+                    self.assertNotEqual(key, GenAI.GEN_AI_REQUEST_MODEL)
+                    self.assertNotEqual(key, GenAI.GEN_AI_PROVIDER_NAME)
+                    self.assertNotEqual(key, server_attributes.SERVER_ADDRESS)
+                    self.assertNotEqual(key, server_attributes.SERVER_PORT)
 
 
 class AnyNonNone:

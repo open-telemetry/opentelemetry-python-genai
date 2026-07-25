@@ -1,0 +1,1 @@
+Add an optional ``error_type_resolver`` callback to ``TelemetryHandler.inference()`` and ``InferenceInvocation`` so instrumentors can derive the ``error.type`` attribute from the raw exception, plus a ``type_str`` field on ``Error`` to carry the pre-resolved value.

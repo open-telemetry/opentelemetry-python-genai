@@ -75,6 +75,9 @@ except ImportError:
 
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.google_genai._error_type import (
+    resolve_error_type,
+)
 from opentelemetry.instrumentation.google_genai.client_info import (
     get_client_info as _get_client_info,
 )
@@ -83,6 +86,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
     InferenceInvocation,
 )
 from opentelemetry.util.genai.stream import (
@@ -90,12 +94,15 @@ from opentelemetry.util.genai.stream import (
     SyncStreamWrapper,
 )
 from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
     GenericPart,
+    GenericToolDefinition,
     InputMessage,
     OutputMessage,
     Text,
     ToolCallRequest,
     ToolCallResponse,
+    ToolDefinition,
     Uri,
 )
 
@@ -127,18 +134,20 @@ def _set_co_filename(wrapped: object) -> None:
 
 def _apply_interaction_response_attributes(
     response: Interaction,
-    invocation: InferenceInvocation,
+    invocation: InferenceInvocation | AgentInvocation,
     telemetry_handler: TelemetryHandler,
 ) -> None:
-    invocation.response_model_name = response.model
-    if getattr(response, "id", None):
-        invocation.response_id = response.id
+    if isinstance(invocation, InferenceInvocation):
+        invocation.response_model_name = response.model
+        if getattr(response, "id", None):
+            invocation.response_id = response.id
 
     usage = response.usage or Usage()
 
     invocation.input_tokens = usage.total_input_tokens
     invocation.output_tokens = usage.total_output_tokens
-    invocation.thinking_tokens = usage.total_thought_tokens
+    if isinstance(invocation, InferenceInvocation):
+        invocation.thinking_tokens = usage.total_thought_tokens
     invocation.cache_read_input_tokens = usage.total_cached_tokens
 
     if telemetry_handler.should_capture_content():
@@ -245,7 +254,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: Iterable[InteractionSSEEvent],
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | AgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -277,7 +286,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: AsyncIterable[InteractionSSEEvent],
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | AgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -305,6 +314,103 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
         self._self_invocation.fail(error)
 
 
+# See https://ai.google.dev/gemini-api/docs/function-calling
+def _maybe_get_tool_definitions(
+    tools: Any | None,
+) -> list[ToolDefinition] | None:
+    if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
+        return None
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        # Tool must be a list of dictionaries
+        if not isinstance(tool, dict):
+            continue
+        # This is currently a required field and the SDK will raise an error if it isn't present or
+        # takes on a type field that isn't supported.
+        tool_type = tool.get("type")
+        if tool_type in (
+            "bash",
+            "code_execution",
+            "filesystem",
+            "file_search",
+            "google_maps",
+            "google_search",
+            "url_context",
+            "computer_use",
+        ):
+            definitions.append(
+                GenericToolDefinition(
+                    name=tool.get("name") or tool_type,
+                    type=tool_type,
+                )
+            )
+
+        elif tool_type == "mcp_server":
+            # Name and uri are optional.
+            name = tool.get("name") or tool.get("url") or "mcp_server"
+            # GenericToolDefinition only has 2 fields (name and type). It'd be useful to
+            # add support for extra fields somehow, so we can put the URI in here.
+            definitions.append(
+                GenericToolDefinition(
+                    name=name,
+                    type="mcp_server",
+                )
+            )
+        elif tool_type == "function":
+            definitions.append(
+                FunctionToolDefinition(
+                    name=tool.get("name") or "function",
+                    description=tool.get("description"),
+                    parameters=tool.get("parameters"),
+                )
+            )
+    return definitions if definitions else None
+
+
+def _start_interactions_invocation(
+    telemetry_handler: TelemetryHandler,
+    instance: InteractionsResource | AsyncInteractionsResource,
+    kwargs: dict[str, Any],
+) -> InferenceInvocation | AgentInvocation:
+    # Vertex AI does not support the interactions API yet, but eventually will.
+    # SDK will raise an exception if model or agent is not passed or if input data is not passed.
+    is_vertex, server_address = _get_client_info(instance)
+    provider = (
+        GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
+        if is_vertex
+        else GenAIAttributes.GenAiSystemValues.GEMINI.value
+    )
+    if agent := kwargs.get("agent"):
+        invocation: InferenceInvocation | AgentInvocation = (
+            telemetry_handler.invoke_remote_agent(
+                provider=provider,
+                request_model=kwargs.get("model"),
+                server_address=server_address,
+                agent_name=agent,
+            )
+        )
+    else:
+        invocation = telemetry_handler.inference(
+            provider=provider,
+            request_model=kwargs.get("model"),
+            operation_name="interactions.create",
+            server_address=server_address,
+            error_type_resolver=resolve_error_type,
+        )
+    invocation.tool_definitions = _maybe_get_tool_definitions(
+        kwargs.get("tools")
+    )
+
+    if telemetry_handler.should_capture_content():
+        invocation.input_messages = _interactions_input_to_messages(
+            kwargs.get("input")
+        )
+        if system_instruction := kwargs.get("system_instruction"):
+            invocation.system_instruction = [Text(content=system_instruction)]
+
+    return invocation
+
+
 def _create_instrumented_interactions_create(
     telemetry_handler: TelemetryHandler,
 ) -> Callable[
@@ -322,32 +428,15 @@ def _create_instrumented_interactions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Interaction | InteractionsStreamWrapper:
-        # Vertex AI does not support the interactions API yet, but eventually will.
-        # SDK will raise an exception if model or agent is not passed or if input data is not passed.
-        is_vertex, server_address = _get_client_info(instance)
-        invocation = telemetry_handler.inference(
-            provider=(
-                GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
-                if is_vertex
-                else GenAIAttributes.GenAiSystemValues.GEMINI.value
-            ),
-            request_model=kwargs.get("model") or kwargs.get("agent"),
-            operation_name="interactions.create",
-            server_address=server_address,
+        invocation = _start_interactions_invocation(
+            telemetry_handler, instance, kwargs
         )
-
-        if telemetry_handler.should_capture_content():
-            invocation.input_messages = _interactions_input_to_messages(
-                kwargs.get("input")
-            )
-            if system_instruction := kwargs.get("system_instruction"):
-                invocation.system_instruction = [
-                    Text(content=system_instruction)
-                ]
 
         if kwargs.get("stream", False):
             return InteractionsStreamWrapper(
-                wrapped(*args, **kwargs), invocation, telemetry_handler
+                wrapped(*args, **kwargs),
+                invocation,
+                telemetry_handler,
             )
         try:
             response = wrapped(*args, **kwargs)
@@ -380,26 +469,9 @@ def _create_instrumented_async_interactions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Interaction | AsyncInteractionsStreamWrapper:
-        is_vertex, server_address = _get_client_info(instance)
-        invocation = telemetry_handler.inference(
-            provider=(
-                GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
-                if is_vertex
-                else GenAIAttributes.GenAiSystemValues.GEMINI.value
-            ),
-            request_model=kwargs.get("model") or kwargs.get("agent"),
-            operation_name="interactions.create",
-            server_address=server_address,
+        invocation = _start_interactions_invocation(
+            telemetry_handler, instance, kwargs
         )
-
-        if telemetry_handler.should_capture_content():
-            invocation.input_messages = _interactions_input_to_messages(
-                kwargs.get("input")
-            )
-            if system_instruction := kwargs.get("system_instruction"):
-                invocation.system_instruction = [
-                    Text(content=system_instruction)
-                ]
 
         if kwargs.get("stream", False):
             return AsyncInteractionsStreamWrapper(
@@ -408,7 +480,10 @@ def _create_instrumented_async_interactions_create(
                 telemetry_handler,
             )
         try:
-            response = cast(Interaction, await wrapped(*args, **kwargs))
+            response = cast(
+                Interaction,
+                await wrapped(*args, **kwargs),
+            )
             _apply_interaction_response_attributes(
                 response, invocation, telemetry_handler
             )

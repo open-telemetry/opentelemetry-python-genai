@@ -103,6 +103,12 @@ Each scenario module defines a subclass of `Scenario` from
 `opentelemetry.test_util_genai.conformance`. It sets the `expected_spans` /
 `expected_metrics` ClassVars and implements
 `run(self, *, tracer_provider, meter_provider, logger_provider, vcr)`.
+
+`expected_spans` is a `dict[str, int]` of exact per-operation span counts
+(e.g. `{"chat": 2}` for a tool-calling turn's two LLM calls); the base
+`validate` fails on any mismatch. Pin real counts here — don't re-assert them
+in a `validate` override. `expected_metrics` is a tuple of metric names that
+must each appear at least once.
 Drive instrumentation through the shared `instrument` context manager (not
 `instr.instrument()` / `trace.set_tracer_provider`). The runner injects an
 already-configured `vcr`, so a cassette-based scenario just calls
@@ -121,7 +127,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class InferenceScenario(Scenario):
-    expected_spans = ("chat",)
+    expected_spans = {"chat": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -219,7 +225,7 @@ from opentelemetry.test_util_genai.conformance import Scenario
 
 
 class ToolCallingScenario(Scenario):
-    expected_spans = ("chat",)
+    expected_spans = {"chat": 2}  # initial turn + follow-up with tool results
     expected_metrics = ("gen_ai.client.operation.duration",)
 
     def run(self, *, tracer_provider, meter_provider, logger_provider, vcr) -> None:

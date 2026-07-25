@@ -215,6 +215,43 @@ deny contains _span_finding(
 	not _has_attr(input.sample.span, attr_name)
 }
 
+# ─── Per-operation span kind (violation) ────────────────────────────────────
+#
+# Semconv pins the span kind for each operation. `_expected_kinds_for_op`
+# returns the set of kinds semconv allows; a span whose kind is outside that
+# set is flagged. Single-element sets are the unambiguous cases (inference and
+# embeddings are remote calls → CLIENT; tool execution runs in-process →
+# INTERNAL). `invoke_agent` / `create_agent` may be same-process or remote, so
+# both kinds are allowed. Undefined (→ no violation) for unmapped ops.
+_expected_kinds_for_op["chat"]             := {"client"}
+_expected_kinds_for_op["generate_content"] := {"client"}
+_expected_kinds_for_op["text_completion"]  := {"client"}
+_expected_kinds_for_op["embeddings"]       := {"client"}
+_expected_kinds_for_op["execute_tool"]     := {"internal"}
+_expected_kinds_for_op["invoke_workflow"]  := {"internal"}
+_expected_kinds_for_op["retrieval"]        := {"client"}
+_expected_kinds_for_op["invoke_agent"]     := {"internal", "client"}
+_expected_kinds_for_op["create_agent"]     := {"internal", "client"}
+
+deny contains _span_finding(
+	"genai_span_kind_unexpected",
+	"violation",
+	input.sample.span,
+	{
+		"operation": op,
+		"kind":      input.sample.span.kind,
+	},
+	sprintf(
+		"Span '%v' (operation '%v') has kind '%v'; semconv expects one of %v",
+		[input.sample.span.name, op, input.sample.span.kind, sort([k | expected_kinds[k]])],
+	),
+) if {
+	input.sample.span
+	op := _attr_value(input.sample.span, "gen_ai.operation.name")
+	expected_kinds := _expected_kinds_for_op[op]
+	not expected_kinds[input.sample.span.kind]
+}
+
 # ─── Unknown gen_ai.operation.name (violation) ──────────────────────────────
 #
 # Weaver's built-in `undefined_enum_variant` advice is `information`-level;
