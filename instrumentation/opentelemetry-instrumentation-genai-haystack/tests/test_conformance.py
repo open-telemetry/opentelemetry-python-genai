@@ -13,6 +13,7 @@ from opentelemetry.test_util_genai.conformance import (  # noqa: E402
 
 from .conformance.embedding import EmbeddingScenario  # noqa: E402
 from .conformance.inference import InferenceScenario  # noqa: E402
+from .conformance.invoke_agent import InvokeAgentScenario  # noqa: E402
 from .conformance.invoke_workflow import WorkflowScenario  # noqa: E402
 from .conformance.retrieval import RetrievalScenario  # noqa: E402
 from .conformance.tool_calling import ToolCallingScenario  # noqa: E402
@@ -26,6 +27,7 @@ from .conformance.tool_calling import ToolCallingScenario  # noqa: E402
         RetrievalScenario(),
         ToolCallingScenario(),
         WorkflowScenario(),
+        InvokeAgentScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

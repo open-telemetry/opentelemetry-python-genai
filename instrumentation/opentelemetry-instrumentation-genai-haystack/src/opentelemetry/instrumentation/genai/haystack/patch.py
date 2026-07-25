@@ -7,8 +7,9 @@ Builds ``opentelemetry-util-genai`` invocations around:
 
 - ``haystack.Pipeline.run`` / ``run_async`` -> ``WorkflowInvocation``
 - classified component ``run`` / ``run_async`` methods -> ``InferenceInvocation``
-  (generators), ``EmbeddingInvocation`` (embedders), or ``RetrievalInvocation``
-  (retrievers/rankers)
+  (generators), ``EmbeddingInvocation`` (embedders), ``RetrievalInvocation``
+  (retrievers/rankers), or ``AgentInvocation`` (``Agent``)
+- ``haystack.tools.tool.Tool.invoke`` / ``invoke_async`` -> ``ToolInvocation``
 
 See ``component_types.py`` for the classification and MIGRATION_REPORT.md for
 components/methods this migration deliberately doesn't wrap.
@@ -16,6 +17,7 @@ components/methods this migration deliberately doesn't wrap.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from inspect import BoundArguments, Parameter, signature
 from typing import Any, Callable, Mapping
 
@@ -24,9 +26,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
     EmbeddingInvocation,
     InferenceInvocation,
     RetrievalInvocation,
+    ToolInvocation,
 )
 
 from .component_types import ComponentType
@@ -63,13 +67,21 @@ def _bind_arguments(
 
 
 # ---------------------------------------------------------------------------
-# Pipeline.run / Pipeline.run_async -> WorkflowInvocation
+# Pipeline.run / Pipeline.run_async / Pipeline.run_async_generator -> WorkflowInvocation
 # ---------------------------------------------------------------------------
 #
 # Pipeline.run_async (the true async entry point) internally drains
-# run_async_generator() to completion — wrapping both would double-count a
-# single logical pipeline execution, so only the two entry points a caller
-# invokes directly are wrapped. See MIGRATION_REPORT.md.
+# run_async_generator() to completion in the same asyncio task. Wrapping
+# both unconditionally would double-count a single logical pipeline
+# execution, so `_inside_run_async` -- set for the duration of the outer
+# call -- lets the run_async_generator wrapper tell "called directly by
+# user code" (create a span) from "driven internally by run_async" (already
+# covered by the outer span; skip). contextvars propagate across `await`
+# within one task, so this holds across the internal `async for`.
+
+_inside_run_async: ContextVar[bool] = ContextVar(
+    "_inside_run_async", default=False
+)
 
 
 def pipeline_run(handler: TelemetryHandler) -> Callable[..., Any]:
@@ -99,13 +111,44 @@ def pipeline_run_async(handler: TelemetryHandler) -> Callable[..., Any]:
         kwargs: Mapping[str, Any],
     ) -> Any:
         invocation = handler.workflow(name=instance.__class__.__name__)
+        token = _inside_run_async.set(True)
         try:
             response = await wrapped(*args, **kwargs)
         except Exception as exc:
             invocation.fail(exc)
             raise
+        finally:
+            _inside_run_async.reset(token)
         invocation.stop()
         return response
+
+    return traced_method
+
+
+def pipeline_run_async_generator(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        if _inside_run_async.get():
+            # Driven internally by an already-wrapped run_async() call --
+            # its WorkflowInvocation already covers this execution.
+            async for item in wrapped(*args, **kwargs):
+                yield item
+            return
+        invocation = handler.workflow(name=instance.__class__.__name__)
+        try:
+            async for item in wrapped(*args, **kwargs):
+                yield item
+        except Exception as exc:
+            invocation.fail(exc)
+            raise
+        else:
+            invocation.stop()
 
     return traced_method
 
@@ -277,6 +320,110 @@ def _finish_retrieval_invocation(
     invocation.stop()
 
 
+def _start_agent_invocation(
+    handler: TelemetryHandler,
+    component: Any,
+    bound_arguments: BoundArguments,
+    capture_content: bool,
+) -> tuple[AgentInvocation, int]:
+    """Start an AgentInvocation for a Haystack ``Agent.run``.
+
+    The Agent's own LLM calls are already captured as nested ``chat``
+    spans -- the Agent instance's ``chat_generator`` is itself a
+    ``GENERATOR``-classified component, wrapped independently at the class
+    level regardless of how it's invoked. This invocation only needs to
+    provide the outer ``invoke_agent`` span that groups them.
+
+    Returns ``(invocation, input_message_count)`` -- the count is needed at
+    finish time to slice the agent's echoed-back conversation history into
+    just the newly generated output messages.
+    """
+    arguments = bound_arguments.arguments
+    agent_name = (
+        getattr(component, "name", None) or component.__class__.__name__
+    )
+    invocation = handler.invoke_local_agent(agent_name=agent_name)
+    messages = arguments.get("messages")
+    input_count = len(messages) if isinstance(messages, list) else 0
+    if capture_content and isinstance(messages, list):
+        invocation.input_messages = to_input_messages(messages)
+    tools = arguments.get("tools")
+    if capture_content and tools:
+        invocation.tool_definitions = tools_to_definitions(tools)
+    return invocation, input_count
+
+
+def _finish_agent_invocation(
+    invocation: AgentInvocation,
+    input_count: int,
+    response: Mapping[str, Any],
+    capture_content: bool,
+) -> None:
+    if capture_content and isinstance(
+        all_messages := response.get("messages"), list
+    ):
+        new_messages = all_messages[input_count:] or all_messages
+        invocation.output_messages = chat_replies_to_output_messages(
+            new_messages
+        )
+    invocation.stop()
+
+
+def _start_component_invocation(
+    handler: TelemetryHandler,
+    component_type: ComponentType,
+    instance: Any,
+    bound_arguments: BoundArguments,
+    capture_content: bool,
+) -> tuple[Any, Any]:
+    """Dispatch to the right ``handler.*()`` factory for ``component_type``.
+
+    Returns ``(invocation, extra)`` -- ``extra`` carries whatever bit of
+    start-time state the matching ``_finish_*`` function needs (``is_chat``
+    for generators, the input message count for agents, ``None`` otherwise).
+    Shared by both the sync and async component wrappers.
+    """
+    if component_type is ComponentType.GENERATOR:
+        return _start_generator_invocation(
+            handler, instance, bound_arguments, capture_content
+        )
+    if component_type is ComponentType.EMBEDDER:
+        return (
+            _start_embedding_invocation(handler, instance, capture_content),
+            None,
+        )
+    if component_type is ComponentType.AGENT:
+        return _start_agent_invocation(
+            handler, instance, bound_arguments, capture_content
+        )
+    # RANKER and RETRIEVER share the same retrieval invocation shape.
+    return (
+        _start_retrieval_invocation(
+            handler, instance, bound_arguments, capture_content
+        ),
+        None,
+    )
+
+
+def _finish_component_invocation(
+    component_type: ComponentType,
+    invocation: Any,
+    extra: Any,
+    response: Mapping[str, Any],
+    capture_content: bool,
+) -> None:
+    if component_type is ComponentType.GENERATOR:
+        _finish_generator_invocation(
+            invocation, extra, response, capture_content
+        )
+    elif component_type is ComponentType.EMBEDDER:
+        _finish_embedding_invocation(invocation, response)
+    elif component_type is ComponentType.AGENT:
+        _finish_agent_invocation(invocation, extra, response, capture_content)
+    else:
+        _finish_retrieval_invocation(invocation, response, capture_content)
+
+
 def component_run(
     handler: TelemetryHandler, component_type: ComponentType
 ) -> Callable[..., Any]:
@@ -290,31 +437,17 @@ def component_run(
         kwargs: Mapping[str, Any],
     ) -> Any:
         bound_arguments = _bind_arguments(wrapped, args, kwargs)
-        if component_type is ComponentType.GENERATOR:
-            invocation, is_chat = _start_generator_invocation(
-                handler, instance, bound_arguments, capture_content
-            )
-        elif component_type is ComponentType.EMBEDDER:
-            invocation = _start_embedding_invocation(
-                handler, instance, capture_content
-            )
-        else:
-            invocation = _start_retrieval_invocation(
-                handler, instance, bound_arguments, capture_content
-            )
+        invocation, extra = _start_component_invocation(
+            handler, component_type, instance, bound_arguments, capture_content
+        )
         try:
             response = wrapped(*args, **kwargs)
         except Exception as exc:
             invocation.fail(exc)
             raise
-        if component_type is ComponentType.GENERATOR:
-            _finish_generator_invocation(
-                invocation, is_chat, response, capture_content
-            )
-        elif component_type is ComponentType.EMBEDDER:
-            _finish_embedding_invocation(invocation, response)
-        else:
-            _finish_retrieval_invocation(invocation, response, capture_content)
+        _finish_component_invocation(
+            component_type, invocation, extra, response, capture_content
+        )
         return response
 
     return traced_method
@@ -333,31 +466,87 @@ def component_run_async(
         kwargs: Mapping[str, Any],
     ) -> Any:
         bound_arguments = _bind_arguments(wrapped, args, kwargs)
-        if component_type is ComponentType.GENERATOR:
-            invocation, is_chat = _start_generator_invocation(
-                handler, instance, bound_arguments, capture_content
-            )
-        elif component_type is ComponentType.EMBEDDER:
-            invocation = _start_embedding_invocation(
-                handler, instance, capture_content
-            )
-        else:
-            invocation = _start_retrieval_invocation(
-                handler, instance, bound_arguments, capture_content
-            )
+        invocation, extra = _start_component_invocation(
+            handler, component_type, instance, bound_arguments, capture_content
+        )
         try:
             response = await wrapped(*args, **kwargs)
         except Exception as exc:
             invocation.fail(exc)
             raise
-        if component_type is ComponentType.GENERATOR:
-            _finish_generator_invocation(
-                invocation, is_chat, response, capture_content
-            )
-        elif component_type is ComponentType.EMBEDDER:
-            _finish_embedding_invocation(invocation, response)
-        else:
-            _finish_retrieval_invocation(invocation, response, capture_content)
+        _finish_component_invocation(
+            component_type, invocation, extra, response, capture_content
+        )
         return response
+
+    return traced_method
+
+
+# ---------------------------------------------------------------------------
+# Tool.invoke / Tool.invoke_async -> ToolInvocation
+# ---------------------------------------------------------------------------
+#
+# haystack.tools.tool.Tool is the single concrete class every Haystack tool
+# is built from -- wrapped directly on the class, not via the component
+# registry (a Tool is not a Haystack ``Component``). Correlating the span
+# with the model's tool_call.id would require hooking the private
+# haystack.components.agents.tool_calling._make_context_bound_invoke, which
+# is where the id is available; deliberately not done here to avoid
+# depending on Haystack internals -- see MIGRATION_REPORT.md.
+
+
+def _start_tool_invocation(
+    handler: TelemetryHandler, instance: Any, kwargs: Mapping[str, Any]
+) -> ToolInvocation:
+    invocation = handler.tool(
+        name=getattr(instance, "name", None) or instance.__class__.__name__,
+        tool_type="function",
+        tool_description=getattr(instance, "description", None),
+    )
+    if invocation.should_capture_content_on_span:
+        invocation.arguments = dict(kwargs)
+    return invocation
+
+
+def _finish_tool_invocation(invocation: ToolInvocation, result: Any) -> None:
+    if invocation.should_capture_content_on_span:
+        invocation.tool_result = result
+    invocation.stop()
+
+
+def tool_invoke(handler: TelemetryHandler) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        invocation = _start_tool_invocation(handler, instance, kwargs)
+        try:
+            result = wrapped(*args, **kwargs)
+        except Exception as exc:
+            invocation.fail(exc)
+            raise
+        _finish_tool_invocation(invocation, result)
+        return result
+
+    return traced_method
+
+
+def tool_invoke_async(handler: TelemetryHandler) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        invocation = _start_tool_invocation(handler, instance, kwargs)
+        try:
+            result = await wrapped(*args, **kwargs)
+        except Exception as exc:
+            invocation.fail(exc)
+            raise
+        _finish_tool_invocation(invocation, result)
+        return result
 
     return traced_method

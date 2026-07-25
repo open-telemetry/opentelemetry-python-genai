@@ -10,12 +10,13 @@ component class name and the type hints on its ``run`` method (Haystack's
 
 Only classifications with a direct ``opentelemetry-util-genai`` invocation
 type are recognized (``GENERATOR`` -> inference, ``EMBEDDER`` -> embedding,
-``RANKER`` / ``RETRIEVER`` -> retrieval). Components that don't match any of
-these (prompt builders, routers, converters, joiners, agents, tool
-invokers, ...) classify as ``UNKNOWN`` and are not wrapped: there is no
-util-genai invocation type for a generic component step, and inventing one
-here would violate the "telemetry only through opentelemetry-util-genai
-public types" rule. See MIGRATION_REPORT.md for this gap.
+``RANKER`` / ``RETRIEVER`` -> retrieval, ``AGENT`` -> agent invocation).
+Components that don't match any of these (prompt builders, routers,
+converters, joiners, ...) classify as ``UNKNOWN`` and are not wrapped:
+there is no util-genai invocation type for a generic component step, and
+inventing one here would violate the "telemetry only through
+opentelemetry-util-genai public types" rule. See MIGRATION_REPORT.md for
+this gap.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ class ComponentType(Enum):
     EMBEDDER = auto()
     RANKER = auto()
     RETRIEVER = auto()
+    AGENT = auto()
     UNKNOWN = auto()
 
 
@@ -147,6 +149,8 @@ def get_component_type(component: Any) -> ComponentType:
     )
     if not callable(run_method):
         return ComponentType.UNKNOWN
+    if "Agent" in component_name:
+        return ComponentType.AGENT
     if "Generator" in component_name or _has_generator_output_type(run_method):
         return ComponentType.GENERATOR
     if "Embedder" in component_name:

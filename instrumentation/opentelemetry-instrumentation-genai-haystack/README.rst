@@ -8,7 +8,8 @@ OpenTelemetry Haystack Instrumentation
 
 This library allows tracing GenAI operations performed with the
 `Haystack <https://haystack.deepset.ai/>`_ Python framework: pipeline
-execution, LLM generator calls, embedder calls, and retriever/ranker calls.
+execution, LLM generator calls, embedder calls, retriever/ranker calls,
+``Agent`` runs, and tool calls.
 
 Installation
 ------------
@@ -39,17 +40,24 @@ Usage
 What gets instrumented
 ***********************
 
-- ``Pipeline.run`` / ``Pipeline.run_async`` -- one ``invoke_workflow`` span per
-  pipeline execution.
-- Components classified as a generator, embedder, or retriever/ranker --
-  one span per component ``run`` / ``run_async`` call. Classification is a
-  best-effort read of the component's class name and ``run`` method type
-  hints, since Haystack has no static component-kind marker. Components
-  that don't fall into one of these (prompt builders, routers, converters,
-  agents, tool invokers, ...) are not wrapped: ``opentelemetry-util-genai``
-  has no invocation type for a generic pipeline step. See
-  ``tests/conformance/`` for the exact operations covered and this
-  package's ``MIGRATION_REPORT.md`` for the full gap list.
+- ``Pipeline.run`` / ``Pipeline.run_async`` / ``Pipeline.run_async_generator``
+  -- one ``invoke_workflow`` span per pipeline execution (never double-counted
+  when ``run_async_generator`` is driven internally by ``run_async``).
+- Components classified as a generator, embedder, retriever/ranker, or
+  ``Agent`` -- one span per component ``run`` / ``run_async`` call.
+  Classification is a best-effort read of the component's class name and
+  ``run`` method type hints, since Haystack has no static component-kind
+  marker. Components that don't fall into one of these (prompt builders,
+  routers, converters, ...) are not wrapped: ``opentelemetry-util-genai``
+  has no invocation type for a generic pipeline step. Component classes are
+  classified the instant they're registered (hooking the ``@component``
+  decorator itself), so instrumenting before importing your pipeline's
+  components works correctly.
+- ``haystack.tools.Tool.invoke`` / ``invoke_async`` -- one ``execute_tool``
+  span per tool call, including calls an ``Agent`` drives internally.
+
+See ``tests/conformance/`` for the exact operations covered and this
+package's ``MIGRATION_REPORT.md`` for the full gap list.
 
 Configuration
 -------------
