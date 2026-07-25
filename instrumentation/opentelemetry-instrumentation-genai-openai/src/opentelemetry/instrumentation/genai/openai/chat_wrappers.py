@@ -24,13 +24,12 @@ from opentelemetry.util.genai.types import (
     ToolCallRequest,
 )
 
-from ._raw_response import StreamResultFactory
 from .chat_buffers import ChoiceBuffer
 
 _logger = logging.getLogger(__name__)
 
 
-class _ChatStreamMixin(StreamResultFactory):
+class _ChatStreamMixin:
     """Chat-specific hooks shared by sync and async stream wrappers."""
 
     _self_invocation: InferenceInvocation

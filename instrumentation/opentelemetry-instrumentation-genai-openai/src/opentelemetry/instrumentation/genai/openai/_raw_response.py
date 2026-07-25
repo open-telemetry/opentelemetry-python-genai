@@ -159,26 +159,33 @@ class RawResponseStreamProxy(ObjectProxy):
         return stream
 
 
-class StreamResultFactory:
-    """Mixin adding ``wrap_result`` to a stream wrapper class.
+class StreamWrapperFactory(Protocol):
+    """Constructor signature every stream wrapper class must satisfy."""
 
-    The concrete wrapper must accept ``(stream, invocation, capture_content)``.
-    Call it from a streaming branch: a ``with_raw_response`` result (matching
-    ``RawResponseLike``) is wrapped so its metadata resolves natively and
-    ``parse()`` is deferred; a plain SDK stream is wrapped directly.
-    """
-
-    @classmethod
-    def wrap_result(
-        cls: type,
-        result: Union[RawResponseLike, AnyStream],
+    def __call__(
+        self,
+        stream: AnyStream,
         invocation: GenAIInvocation,
         capture_content: bool,
-    ) -> object:
-        if isinstance(result, RawResponseLike):
-            return RawResponseStreamProxy(
-                result,
-                lambda stream: cls(stream, invocation, capture_content),
-                finalize=invocation.stop,
-            )
-        return cls(result, invocation, capture_content)
+    ) -> object: ...
+
+
+def wrap_stream_result(
+    wrapper_cls: StreamWrapperFactory,
+    result: Union[RawResponseLike, AnyStream],
+    invocation: GenAIInvocation,
+    capture_content: bool,
+) -> object:
+    """Wrap a streaming call's result, deferring ``parse()`` on raw responses.
+
+    A ``with_raw_response`` result (matching ``RawResponseLike``) is wrapped so
+    its metadata resolves natively and ``parse()`` is deferred; a plain SDK
+    stream is wrapped directly.
+    """
+    if isinstance(result, RawResponseLike):
+        return RawResponseStreamProxy(
+            result,
+            lambda stream: wrapper_cls(stream, invocation, capture_content),
+            finalize=invocation.stop,
+        )
+    return wrapper_cls(result, invocation, capture_content)

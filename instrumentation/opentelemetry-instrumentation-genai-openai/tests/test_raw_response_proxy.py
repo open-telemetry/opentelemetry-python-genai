@@ -15,6 +15,7 @@ from openai import Stream
 
 from opentelemetry.instrumentation.genai.openai._raw_response import (
     RawResponseStreamProxy,
+    wrap_stream_result,
 )
 from opentelemetry.instrumentation.genai.openai.chat_wrappers import (
     ChatStreamWrapper,
@@ -150,8 +151,9 @@ def test_wrap_result_non_stream_finalizes_on_close(
     tracer_provider, meter_provider, logger_provider, span_exporter
 ):
     # End-to-end: a parse result we can't wrap must not leak the span the
-    # instrumentation already started. Drive the real wrap_result path and
-    # assert parse() leaves the span open, then closing the body finalizes it.
+    # instrumentation already started. Drive the real wrap_stream_result path
+    # and assert parse() leaves the span open, then closing the body finalizes
+    # it.
     handler = TelemetryHandler(
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
@@ -160,8 +162,8 @@ def test_wrap_result_non_stream_finalizes_on_close(
     invocation = handler.inference("openai", request_model="gpt-4")
 
     raw = _RawResponse("not-a-stream")
-    result = ChatStreamWrapper.wrap_result(
-        raw, invocation, capture_content=False
+    result = wrap_stream_result(
+        ChatStreamWrapper, raw, invocation, capture_content=False
     )
 
     assert span_exporter.get_finished_spans() == ()  # not closed yet

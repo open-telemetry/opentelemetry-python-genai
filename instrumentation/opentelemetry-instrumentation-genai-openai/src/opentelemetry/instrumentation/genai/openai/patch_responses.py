@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Union, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 
+from ._raw_response import wrap_stream_result
 from .response_extractors import (
     apply_request_attributes,
     extract_params,
@@ -88,8 +89,11 @@ def responses_create(
         try:
             result = wrapped(*args, **kwargs)
             if is_streaming(kwargs):
-                return ResponseStreamWrapper.wrap_result(
-                    result, invocation, capture_content
+                return wrap_stream_result(
+                    ResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
                 )
 
             set_invocation_response_attributes(
@@ -156,8 +160,11 @@ def async_responses_create(
         try:
             result = await wrapped(*args, **kwargs)
             if is_streaming(kwargs):
-                return AsyncResponseStreamWrapper.wrap_result(
-                    result, invocation, capture_content
+                return wrap_stream_result(
+                    AsyncResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
                 )
 
             set_invocation_response_attributes(

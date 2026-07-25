@@ -21,7 +21,7 @@ from opentelemetry.util.genai.types import (
     Error,
 )
 
-from ._raw_response import ParsableResponse
+from ._raw_response import ParsableResponse, wrap_stream_result
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
@@ -75,8 +75,11 @@ def chat_completions_create_v_new(
         try:
             result = wrapped(*args, **kwargs)
             if is_streaming(kwargs):
-                return ChatStreamWrapper.wrap_result(
-                    result, chat_invocation, capture_content
+                return wrap_stream_result(
+                    ChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
                 )
 
             _set_response_properties(chat_invocation, result, capture_content)
@@ -103,8 +106,11 @@ def async_chat_completions_create_v_new(
         try:
             result = await wrapped(*args, **kwargs)
             if is_streaming(kwargs):
-                return AsyncChatStreamWrapper.wrap_result(
-                    result, chat_invocation, capture_content
+                return wrap_stream_result(
+                    AsyncChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
                 )
 
             _set_response_properties(chat_invocation, result, capture_content)
