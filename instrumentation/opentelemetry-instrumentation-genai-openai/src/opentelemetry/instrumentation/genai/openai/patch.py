@@ -21,6 +21,7 @@ from opentelemetry.util.genai.types import (
     Error,
 )
 
+from ._raw_response import ParsableResponse
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
@@ -158,7 +159,7 @@ def async_embeddings_create(handler: TelemetryHandler):
 def _set_response_properties(
     chat_invocation: InferenceInvocation, result, capture_content: bool
 ) -> InferenceInvocation:
-    if hasattr(result, "parse"):
+    if isinstance(result, ParsableResponse):
         # with_raw_response: safe to parse() here since this is the
         # non-streaming path, so it has no side effects on the caller's stream.
         result = result.parse()

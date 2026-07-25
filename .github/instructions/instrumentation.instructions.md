@@ -43,11 +43,11 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Adding attributes to invocations produced by the util is fine.
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
-- Instrumentation must not change what a call returns or when its work happens. Flag: side effects
-  the SDK didn't have (consuming or materializing a result early to build telemetry — stay lazy);
-  changing the returned type (`isinstance`/`__class__` must still resolve to the original — a
-  transparent proxy like `wrapt.ObjectProxy` is fine); and non-transparent wrappers (a wrapper must
-  forward every attribute and behavior of the wrapped object unchanged, adding only telemetry).
+- Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
+  didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
+  (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
+  way); and replacement functions missing `@functools.wraps(original)`. Full transparency isn't
+  always reachable — prefer the least intrusive option that works.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions

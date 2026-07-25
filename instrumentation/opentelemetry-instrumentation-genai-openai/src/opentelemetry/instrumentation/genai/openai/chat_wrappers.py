@@ -41,7 +41,6 @@ class _ChatStreamMixin(StreamResultFactory):
     _self_service_tier: Optional[str]
     _self_prompt_tokens: Optional[int]
     _self_completion_tokens: Optional[int]
-    _self_logged_unknown_chunk: bool
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
         if self._self_response_model:
@@ -101,13 +100,10 @@ class _ChatStreamMixin(StreamResultFactory):
     def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
         if not isinstance(chunk, ChatCompletionChunk):
             # raw-response stream can be parsed into a caller-defined chunk type.
-            # Log once per stream to avoid spamming on long streams.
-            if not self._self_logged_unknown_chunk:
-                self._self_logged_unknown_chunk = True
-                _logger.debug(
-                    "Skipping telemetry for unrecognized chat chunk type %s",
-                    type(chunk).__name__,
-                )
+            _logger.debug(
+                "Skipping telemetry for unrecognized chat chunk type %s",
+                type(chunk).__name__,
+            )
             return
 
         self._set_response_id(chunk)
@@ -203,7 +199,6 @@ class ChatStreamWrapper(
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
-        self._self_logged_unknown_chunk = False
 
 
 class AsyncChatStreamWrapper(
@@ -225,7 +220,6 @@ class AsyncChatStreamWrapper(
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
-        self._self_logged_unknown_chunk = False
 
 
 __all__ = [

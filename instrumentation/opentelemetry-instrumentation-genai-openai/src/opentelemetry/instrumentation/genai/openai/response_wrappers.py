@@ -124,7 +124,6 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
     _self_invocation: "GenAIInvocation"
     _self_capture_content: bool
     _self_response_telemetry_finalized: bool
-    _self_logged_unknown_event: bool
 
     def __init__(
         self,
@@ -134,7 +133,6 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
         self._self_invocation = invocation
         self._self_capture_content = capture_content
         self._self_response_telemetry_finalized = False
-        self._self_logged_unknown_event = False
 
     def _stop(
         self, result: "ParsedResponse[TextFormatT] | Response | None"
@@ -184,13 +182,10 @@ class _ResponseStreamMixin(StreamResultFactory, Generic[TextFormatT]):
         # raw-response stream can be parsed into a caller-defined event type.
         event_type = getattr(event, "type", None)
         if not isinstance(event_type, str):
-            # Log once per stream to avoid spamming on long streams.
-            if not self._self_logged_unknown_event:
-                self._self_logged_unknown_event = True
-                _logger.debug(
-                    "Skipping telemetry for unrecognized response event type %s",
-                    type(event).__name__,
-                )
+            _logger.debug(
+                "Skipping telemetry for unrecognized response event type %s",
+                type(event).__name__,
+            )
             return
 
         response: "ParsedResponse[TextFormatT] | Response | None" = getattr(
