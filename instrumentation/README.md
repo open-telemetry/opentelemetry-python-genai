@@ -7,5 +7,6 @@
 | [opentelemetry-instrumentation-genai-langchain](./opentelemetry-instrumentation-genai-langchain) | langchain >= 0.3.21 | No | development
 | [opentelemetry-instrumentation-genai-openai](./opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0 | Yes | development
 | [opentelemetry-instrumentation-genai-openai-agents](./opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3 | No | development
+| [opentelemetry-instrumentation-genai-qwenpaw](./opentelemetry-instrumentation-genai-qwenpaw) | qwenpaw >= 1.1.0, < 2.0.0 | Yes | development
 | [opentelemetry-instrumentation-genai-weaviate-client](./opentelemetry-instrumentation-genai-weaviate-client) | weaviate-client >= 3.0.0,<5.0.0 | No | development
 | [opentelemetry-instrumentation-google-genai](./opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | No | development

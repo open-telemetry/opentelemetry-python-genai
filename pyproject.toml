@@ -18,6 +18,9 @@ dependencies = [
   "opentelemetry-instrumentation-genai-langchain[instruments]",
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
+  # qwenpaw (the instrumented library) requires Python >=3.10,<3.14.
+  "opentelemetry-instrumentation-genai-qwenpaw[instruments]; python_version < '3.14'",
+  "opentelemetry-instrumentation-genai-qwenpaw; python_version >= '3.14'",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
 ]
 
@@ -38,6 +41,7 @@ opentelemetry-instrumentation-google-genai = { workspace = true }
 opentelemetry-instrumentation-genai-langchain = { workspace = true }
 opentelemetry-instrumentation-genai-openai = { workspace = true }
 opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
+opentelemetry-instrumentation-genai-qwenpaw = { workspace = true }
 opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
 
 
@@ -101,6 +105,7 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
+  "instrumentation/opentelemetry-instrumentation-genai-qwenpaw",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
 ]
@@ -117,6 +122,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/examples/**",
+  "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/examples/**/*.py",
   "util/opentelemetry-util-genai/tests/**/*.py",
