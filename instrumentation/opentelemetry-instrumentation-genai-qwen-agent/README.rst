@@ -67,6 +67,6 @@ precedence over the environment variable::
 References
 ----------
 
-* `OpenTelemetry Qwen-Agent Instrumentation <https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/qwen_agent/qwen_agent.html>`_
 * `OpenTelemetry Project <https://opentelemetry.io/>`_
-* `OpenTelemetry Python Examples <https://github.com/open-telemetry/opentelemetry-python/tree/main/docs/examples>`_
+* `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
+* `Qwen-Agent <https://github.com/QwenLM/Qwen-Agent>`_
