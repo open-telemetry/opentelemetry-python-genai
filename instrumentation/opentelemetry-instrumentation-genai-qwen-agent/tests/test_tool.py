@@ -99,9 +99,7 @@ def test_call_tool_no_content(span_exporter, instrument_no_content):
     assert attrs[GenAIAttributes.GEN_AI_TOOL_NAME] == "get_weather"
 
 
-def test_call_tool_records_tool_call_id(
-    span_exporter, instrument_no_content
-):
+def test_call_tool_records_tool_call_id(span_exporter, instrument_no_content):
     """The pending function_id from the message history becomes
     gen_ai.tool.call.id."""
     agent, _ = _make_agent_with_tool("get_weather")
@@ -117,9 +115,7 @@ def test_call_tool_records_tool_call_id(
         ),
     ]
 
-    agent._call_tool(
-        "get_weather", '{"city": "Beijing"}', messages=messages
-    )
+    agent._call_tool("get_weather", '{"city": "Beijing"}', messages=messages)
 
     tool_spans = _get_tool_spans(span_exporter)
     assert len(tool_spans) == 1

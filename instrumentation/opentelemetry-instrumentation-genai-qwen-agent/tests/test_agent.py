@@ -82,14 +82,13 @@ def test_agent_run(span_exporter, instrument_with_content):
     assert (
         attrs[GenAIAttributes.GEN_AI_AGENT_DESCRIPTION] == "A test assistant."
     )
-    assert attrs[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "dashscope"
+    # invoke_local_agent() produces INTERNAL spans without a provider.
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in attrs
     assert attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL] == "qwen-max"
 
     input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
     assert input_messages[-1]["role"] == "user"
-    output_messages = json.loads(
-        attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
     assert output_messages[0]["role"] == "assistant"
     system_instructions = json.loads(
         attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
@@ -342,9 +341,7 @@ def test_agent_run_records_only_final_output_message(
     agent_spans = _spans_named(span_exporter, "invoke_agent ToolHistoryBot")
     assert len(agent_spans) == 1
     attrs = dict(agent_spans[0].attributes or {})
-    output_messages = json.loads(
-        attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
     assert len(output_messages) == 1
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["finish_reason"] == "stop"
@@ -369,9 +366,7 @@ def test_nested_agent_runs_produce_nested_spans(
         else:
             yield [Message(role="assistant", content="child final")]
 
-    with patch.object(
-        _StubAgent, "_run", autospec=True, side_effect=fake_run
-    ):
+    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
         list(parent_agent.run([Message(role="user", content="parent task")]))
 
     parent_spans = _spans_named(span_exporter, "invoke_agent ParentBot")
@@ -379,6 +374,4 @@ def test_nested_agent_runs_produce_nested_spans(
     assert len(parent_spans) == 1
     assert len(child_spans) == 1
     assert child_spans[0].parent is not None
-    assert (
-        child_spans[0].parent.span_id == parent_spans[0].context.span_id
-    )
+    assert child_spans[0].parent.span_id == parent_spans[0].context.span_id

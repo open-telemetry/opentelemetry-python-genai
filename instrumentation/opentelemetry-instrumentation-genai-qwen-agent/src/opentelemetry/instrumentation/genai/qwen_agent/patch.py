@@ -39,6 +39,7 @@ def _finish_inference(
     invocation: InferenceInvocation,
     response: Any,
     capture_content: bool,
+    request_model: str | None,
 ) -> None:
     """Populate response attributes on a chat invocation before stop()."""
     if not response:
@@ -47,7 +48,9 @@ def _finish_inference(
     if capture_content:
         invocation.output_messages = convert_to_output_messages(response)
     invocation.response_id = extract_response_id(response)
-    invocation.response_model_name = invocation.request_model
+    # DashScope responses do not echo the model name; the request model is
+    # the best available value for gen_ai.response.model.
+    invocation.response_model_name = request_model
     invocation.finish_reasons = (
         ["tool_calls"] if has_tool_call(response) else ["stop"]
     )
@@ -65,10 +68,12 @@ class _ChatStreamWrapper(SyncStreamWrapper[Any]):
         stream: Any,
         invocation: InferenceInvocation,
         capture_content: bool,
+        request_model: str | None,
     ) -> None:
         super().__init__(stream)
         self._self_invocation = invocation
         self._self_capture_content = capture_content
+        self._self_request_model = request_model
         self._self_last_response: Any = None
 
     def _process_chunk(self, chunk: Any) -> None:
@@ -80,6 +85,7 @@ class _ChatStreamWrapper(SyncStreamWrapper[Any]):
             self._self_invocation,
             self._self_last_response,
             self._self_capture_content,
+            self._self_request_model,
         )
         self._self_invocation.stop()
 
@@ -156,6 +162,7 @@ def wrap_chat_model_chat(
         handler, instance, messages, functions, extra_generate_cfg
     )
     capture_content = handler.should_capture_content()
+    request_model = getattr(instance, "model", None)
 
     try:
         result = wrapped(*args, **kwargs)
@@ -165,12 +172,14 @@ def wrap_chat_model_chat(
 
     if isinstance(result, list):
         # Non-streaming: result is the full response message list.
-        _finish_inference(invocation, result, capture_content)
+        _finish_inference(invocation, result, capture_content, request_model)
         invocation.stop()
         return result
 
     # Streaming: result is an iterator of cumulative response message lists.
-    return _ChatStreamWrapper(result, invocation, capture_content)
+    return _ChatStreamWrapper(
+        result, invocation, capture_content, request_model
+    )
 
 
 def wrap_agent_call_tool(

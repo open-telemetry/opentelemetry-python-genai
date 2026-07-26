@@ -92,9 +92,7 @@ def test_stream_chat(span_exporter, metric_reader, instrument_with_content):
     input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
     assert input_messages[-1]["role"] == "user"
     assert input_messages[-1]["parts"][0]["type"] == "text"
-    output_messages = json.loads(
-        attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["finish_reason"] == "stop"
 
@@ -204,9 +202,7 @@ def test_non_stream_chat_records_token_usage(
     attrs = dict(chat_spans[0].attributes or {})
     assert attrs[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 21
     assert attrs[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 1
-    assert (
-        attrs[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 4
-    )
+    assert attrs[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 4
 
 
 def test_stream_chat_keeps_most_complete_usage(
@@ -240,9 +236,7 @@ def test_stream_chat_keeps_most_complete_usage(
         ]
         yield [Message(role="assistant", content="The answer is 4.")]
 
-    with patch.object(
-        _StubChatModel, "_chat_stream", side_effect=fake_stream
-    ):
+    with patch.object(_StubChatModel, "_chat_stream", side_effect=fake_stream):
         list(
             model.chat(
                 messages=[Message(role="user", content="What is 2+2?")],
@@ -287,9 +281,7 @@ def test_chat_with_function_call_response(
     assert attrs[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_calls",
     )
-    output_messages = json.loads(
-        attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
     tool_call_parts = [
         part
         for message in output_messages
@@ -316,10 +308,13 @@ def test_chat_with_tool_definitions(span_exporter, instrument_with_content):
         }
     ]
 
-    with patch.object(
-        _StubChatModel, "_chat_with_functions", return_value=fake_response
-    ), patch.object(
-        _StubChatModel, "_chat_no_stream", return_value=fake_response
+    with (
+        patch.object(
+            _StubChatModel, "_chat_with_functions", return_value=fake_response
+        ),
+        patch.object(
+            _StubChatModel, "_chat_no_stream", return_value=fake_response
+        ),
     ):
         model.chat(
             messages=[Message(role="user", content="Weather?")],
@@ -359,9 +354,7 @@ def test_non_stream_chat_error(span_exporter, instrument_no_content):
     assert attrs[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
 
 
-def test_stream_chat_error_mid_iteration(
-    span_exporter, instrument_no_content
-):
+def test_stream_chat_error_mid_iteration(span_exporter, instrument_no_content):
     """A stream-side error re-raises unchanged and finalizes the span."""
     model = _StubChatModel()
 
@@ -369,9 +362,7 @@ def test_stream_chat_error_mid_iteration(
         yield [Message(role="assistant", content="partial")]
         raise ConnectionError("stream broken")
 
-    with patch.object(
-        _StubChatModel, "_chat_stream", side_effect=fake_stream
-    ):
+    with patch.object(_StubChatModel, "_chat_stream", side_effect=fake_stream):
         stream = model.chat(
             messages=[Message(role="user", content="Hi")], stream=True
         )
@@ -396,9 +387,7 @@ def test_stream_chat_caller_side_error(span_exporter, instrument_no_content):
         yield [Message(role="assistant", content="partial")]
         yield [Message(role="assistant", content="partial more")]
 
-    with patch.object(
-        _StubChatModel, "_chat_stream", side_effect=fake_stream
-    ):
+    with patch.object(_StubChatModel, "_chat_stream", side_effect=fake_stream):
         stream = model.chat(
             messages=[Message(role="user", content="Hi")], stream=True
         )

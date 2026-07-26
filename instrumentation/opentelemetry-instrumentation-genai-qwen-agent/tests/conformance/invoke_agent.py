@@ -52,7 +52,11 @@ class _GetCurrentWeatherTool(BaseTool):
 
 
 class InvokeAgentScenario(Scenario):
-    expected_spans = ("invoke_agent", "chat", "execute_tool")
+    # The recorded run has the model requesting the weather tool twice
+    # before producing the final answer: 3 chat turns and 2 tool calls.
+    # Assistant internally runs its Memory sub-agent (also an Agent), which
+    # accounts for the second invoke_agent span.
+    expected_spans = {"invoke_agent": 2, "chat": 3, "execute_tool": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -79,7 +83,6 @@ class InvokeAgentScenario(Scenario):
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
-            semconv="gen_ai_latest_experimental",
             content_capture="SPAN_ONLY",
         ):
             bot = Assistant(
@@ -94,8 +97,7 @@ class InvokeAgentScenario(Scenario):
                             {
                                 "role": "user",
                                 "content": (
-                                    "What is the weather in Beijing right"
-                                    " now?"
+                                    "What is the weather in Beijing right now?"
                                 ),
                             }
                         ]

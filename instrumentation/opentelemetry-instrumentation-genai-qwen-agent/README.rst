@@ -43,9 +43,26 @@ Usage
         pass
 
 Message content capture is disabled by default. Set
-``OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`` and
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY`` to record
-prompts, completions, and tool arguments/results on spans.
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of
+``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT`` to record
+prompts, completions, and tool arguments/results.
+
+Uploading prompts and completions
+---------------------------------
+
+Instead of recording message content inline, prompts and completions can be
+uploaded to external storage via a completion hook. To enable the built-in
+upload hook, set:
+
+- ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload``
+- ``OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH`` to an ``fsspec``-compatible
+  URI/path (e.g. ``/path/to/prompts`` or ``gs://my_bucket``), and install the
+  ``upload`` extra (``pip install opentelemetry-util-genai[upload]``).
+
+A custom ``CompletionHook`` can also be passed programmatically, taking
+precedence over the environment variable::
+
+    QwenAgentInstrumentor().instrument(completion_hook=my_hook)
 
 References
 ----------

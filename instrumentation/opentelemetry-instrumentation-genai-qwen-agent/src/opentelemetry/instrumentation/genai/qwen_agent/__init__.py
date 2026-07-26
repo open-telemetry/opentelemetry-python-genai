@@ -50,10 +50,8 @@ from opentelemetry.instrumentation.genai.qwen_agent.patch import (
 from opentelemetry.instrumentation.genai.qwen_agent.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
-from opentelemetry.util.genai.handler import (
-    TelemetryHandler,
-    get_telemetry_handler,
-)
+from opentelemetry.util.genai.completion_hook import load_completion_hook
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 __all__ = ["QwenAgentInstrumentor", "__version__"]
 
@@ -93,10 +91,12 @@ class QwenAgentInstrumentor(BaseInstrumentor):
 
     def _instrument(self, **kwargs: Any) -> None:
         """Enable Qwen-Agent instrumentation."""
-        handler = get_telemetry_handler(
+        handler = TelemetryHandler(
             tracer_provider=kwargs.get("tracer_provider"),
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
+            completion_hook=kwargs.get("completion_hook")
+            or load_completion_hook(),
         )
 
         # Positional arguments for wrapt 1.x/2.x compatibility (wrapt 2.x
@@ -125,12 +125,3 @@ class QwenAgentInstrumentor(BaseInstrumentor):
         unwrap(qwen_agent.agent.Agent, "run")
         unwrap(qwen_agent.llm.base.BaseChatModel, "chat")
         unwrap(qwen_agent.agent.Agent, "_call_tool")
-
-        # Clear the TelemetryHandler singleton so the next instrument() uses
-        # the provided tracer_provider/meter_provider/logger_provider instead
-        # of reusing the previous handler.
-        if (
-            getattr(get_telemetry_handler, "_default_handler", None)
-            is not None
-        ):
-            delattr(get_telemetry_handler, "_default_handler")

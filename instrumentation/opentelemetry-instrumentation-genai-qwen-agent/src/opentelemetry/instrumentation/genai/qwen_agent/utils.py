@@ -517,14 +517,14 @@ def create_agent_invocation(
         getattr(agent_instance, "name", None) or type(agent_instance).__name__
     )
 
+    # invoke_local_agent() intentionally takes no provider: the INTERNAL
+    # invoke_agent span describes in-process agent logic, not a provider call.
     invocation = handler.invoke_local_agent(
         request_model=getattr(llm_instance, "model", None)
         if llm_instance is not None
         else None,
         agent_name=agent_name,
     )
-    if llm_instance is not None:
-        invocation.provider = _get_provider_name(llm_instance)
     invocation.agent_description = (
         getattr(agent_instance, "description", None) or None
     )
