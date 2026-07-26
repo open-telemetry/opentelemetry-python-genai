@@ -1,0 +1,1 @@
+Add `opentelemetry-instrumentation-genai-groq` package for instrumenting the official Groq Python client.
