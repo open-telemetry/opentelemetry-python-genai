@@ -15,6 +15,12 @@ the OpenTelemetry GenAI semantic conventions, carrying the agent id
 versions that expose it), the session id (``gen_ai.conversation.id``), and
 — when content capture is enabled — the turn's input and output messages.
 
+QwenPaw was originally published as ``copaw``; installations pinned to
+``copaw<=1.0.2`` are still supported during the transition. The package
+ships one instrumentor plugin per distribution — ``QwenPawInstrumentor``
+for ``qwenpaw`` and ``CoPawInstrumentor`` for legacy ``copaw`` — both
+emitting identical telemetry.
+
 QwenPaw delegates model (LLM) and tool execution to AgentScope, so this
 package emits no ``chat`` or ``execute_tool`` spans and its conformance
 suite covers none — those operations belong to the AgentScope
@@ -44,6 +50,10 @@ programmatically:
     QwenPawInstrumentor().instrument()
     # ... run the QwenPaw app in this process ...
     QwenPawInstrumentor().uninstrument()
+
+For a legacy ``copaw`` installation use ``CoPawInstrumentor`` instead; with
+zero-code instrumentation both plugins are registered and the one matching
+the installed distribution activates.
 
 Configuration
 -------------

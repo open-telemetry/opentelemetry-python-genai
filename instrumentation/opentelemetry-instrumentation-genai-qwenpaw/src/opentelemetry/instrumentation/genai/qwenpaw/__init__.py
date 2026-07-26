@@ -6,7 +6,12 @@ OpenTelemetry QwenPaw Instrumentation
 =====================================
 
 Instrumentation for `QwenPaw <https://github.com/agentscope-ai/QwenPaw>`_,
-a personal assistant application built on AgentScope.
+a personal assistant application built on AgentScope. QwenPaw was
+originally published as ``copaw``, so this package ships two instrumentor
+plugins targeting the same ``AgentRunner`` surface:
+
+- :class:`QwenPawInstrumentor` for the ``qwenpaw`` distribution
+- :class:`CoPawInstrumentor` for the legacy ``copaw`` distribution
 
 Each user turn handled by ``AgentRunner.query_handler`` is traced as one
 ``invoke_agent`` span following the OpenTelemetry GenAI semantic
@@ -50,7 +55,7 @@ from __future__ import annotations
 
 import logging
 from importlib import import_module
-from typing import Any, Collection
+from typing import Any, ClassVar, Collection
 
 from wrapt import wrap_function_wrapper
 
@@ -59,26 +64,27 @@ from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
-from .package import _instruments
+from .package import _instruments_copaw, _instruments_qwenpaw
 from .patch import make_query_handler_wrapper
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["QwenPawInstrumentor"]
-
-_RUNNER_MODULE = "qwenpaw.app.runner.runner"
+__all__ = ["CoPawInstrumentor", "QwenPawInstrumentor"]
 
 
-class QwenPawInstrumentor(BaseInstrumentor):
-    """An instrumentor for the QwenPaw application runner.
+class _AgentRunnerInstrumentor(BaseInstrumentor):
+    """Shared ``AgentRunner.query_handler`` instrumentation.
 
-    Traces ``AgentRunner.query_handler`` as an ``invoke_agent`` span and
-    optionally captures the turn's input/output messages. Model and tool
-    calls are delegated to AgentScope and are not instrumented here.
+    Subclasses bind one runtime distribution (``qwenpaw`` or legacy
+    ``copaw``) via :attr:`_instruments` and :attr:`_runner_module`; both
+    expose the same ``AgentRunner`` surface.
     """
 
+    _instruments: ClassVar[tuple[str, ...]]
+    _runner_module: ClassVar[str]
+
     def instrumentation_dependencies(self) -> Collection[str]:
-        return _instruments
+        return self._instruments
 
     def _instrument(self, **kwargs: Any) -> None:
         """Enable the ``AgentRunner.query_handler`` instrumentation.
@@ -99,19 +105,44 @@ class QwenPawInstrumentor(BaseInstrumentor):
             or load_completion_hook(),
         )
         wrap_function_wrapper(
-            _RUNNER_MODULE,
+            self._runner_module,
             "AgentRunner.query_handler",
             make_query_handler_wrapper(handler),
         )
         logger.debug(
-            "Instrumented %s.AgentRunner.query_handler", _RUNNER_MODULE
+            "Instrumented %s.AgentRunner.query_handler", self._runner_module
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable the ``AgentRunner.query_handler`` instrumentation."""
         del kwargs
-        runner_module = import_module(_RUNNER_MODULE)
+        runner_module = import_module(self._runner_module)
         unwrap(runner_module.AgentRunner, "query_handler")
         logger.debug(
-            "Uninstrumented %s.AgentRunner.query_handler", _RUNNER_MODULE
+            "Uninstrumented %s.AgentRunner.query_handler", self._runner_module
         )
+
+
+class QwenPawInstrumentor(_AgentRunnerInstrumentor):
+    """An instrumentor for the QwenPaw application runner.
+
+    Traces ``AgentRunner.query_handler`` as an ``invoke_agent`` span and
+    optionally captures the turn's input/output messages. Model and tool
+    calls are delegated to AgentScope and are not instrumented here.
+    """
+
+    _instruments = (_instruments_qwenpaw,)
+    _runner_module = "qwenpaw.app.runner.runner"
+
+
+class CoPawInstrumentor(_AgentRunnerInstrumentor):
+    """An instrumentor for the legacy ``copaw`` application runner.
+
+    ``copaw`` is QwenPaw's former distribution name; its last release is
+    ``copaw 1.0.2``. Apart from the module path the runner surface matches
+    QwenPaw's, so the emitted telemetry is identical to
+    :class:`QwenPawInstrumentor`'s.
+    """
+
+    _instruments = (_instruments_copaw,)
+    _runner_module = "copaw.app.runner.runner"

@@ -34,6 +34,8 @@ _REMOVED_EXTENSION_ATTRIBUTES = (
     "gen_ai.response.time_to_first_token",
     "qwenpaw.agent_id",
     "qwenpaw.channel",
+    "copaw.agent_id",
+    "copaw.channel",
 )
 
 
@@ -73,8 +75,9 @@ async def test_query_handler_emits_invoke_agent_span(
     assert attributes[GenAI.GEN_AI_CONVERSATION_ID] == "sess-1"
     assert isinstance(attributes[GenAI.GEN_AI_CONVERSATION_ID], str)
 
-    # `agent_name` was added during the qwenpaw 1.1.x line, so the attribute
-    # (and span-name suffix) is optional on the oldest supported version.
+    # `agent_name` was added during the qwenpaw 1.1.x line and legacy copaw
+    # runners don't expose it, so the attribute (and span-name suffix) is
+    # optional.
     agent_name = getattr(runner, "agent_name", None)
     if agent_name:
         assert span.name == f"invoke_agent {agent_name}"

@@ -37,6 +37,7 @@ instruments = ["qwenpaw >= 1.1.0, < 2.0.0; python_version < '3.14'"]
 
 [project.entry-points.opentelemetry_instrumentor]
 qwenpaw = "opentelemetry.instrumentation.genai.qwenpaw:QwenPawInstrumentor"
+copaw = "opentelemetry.instrumentation.genai.qwenpaw:CoPawInstrumentor"
 
 [project.urls]
 Homepage = "https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/instrumentation/opentelemetry-instrumentation-genai-qwenpaw"

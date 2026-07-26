@@ -3,8 +3,10 @@
 
 """Conformance scenario: one QwenPaw turn traced as ``invoke_agent``.
 
-This package emits exactly one semconv operation — ``invoke_agent`` for
-each ``AgentRunner.query_handler`` turn. QwenPaw delegates model (LLM) and
+This package's instrumentors (``QwenPawInstrumentor`` for ``qwenpaw``,
+``CoPawInstrumentor`` for the legacy ``copaw`` distribution) emit exactly
+one semconv operation — ``invoke_agent`` for each
+``AgentRunner.query_handler`` turn. QwenPaw/CoPaw delegate model (LLM) and
 tool execution to AgentScope, so no ``chat`` or ``execute_tool`` spans are
 produced by this package and no scenario covers them — those operations
 belong to the AgentScope instrumentation. The runner's command path is
@@ -26,13 +28,34 @@ from tests.harness import (
     user_command_msgs,
 )
 
-from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
+from opentelemetry.instrumentation.genai.qwenpaw import (
+    CoPawInstrumentor,
+    QwenPawInstrumentor,
+)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
+
+# One instrumentor plugin per runtime distribution; the scenario runs
+# against whichever distribution is installed in the conformance env.
+_RUNTIME_TARGETS = (
+    ("qwenpaw.app.runner.runner", QwenPawInstrumentor),
+    ("copaw.app.runner.runner", CoPawInstrumentor),
+)
+
+
+def _import_runtime_target() -> tuple[Any, type]:
+    for module_name, instrumentor_cls in _RUNTIME_TARGETS:
+        try:
+            return importlib.import_module(module_name), instrumentor_cls
+        except ImportError:
+            continue
+    raise ModuleNotFoundError(
+        "No supported QwenPaw runtime distribution is installed"
+    )
 
 
 class InvokeAgentScenario(Scenario):
@@ -48,9 +71,9 @@ class InvokeAgentScenario(Scenario):
         vcr: Any,
     ) -> None:
         del vcr  # the command path is stubbed; no HTTP is involved
-        runner_module = importlib.import_module("qwenpaw.app.runner.runner")
+        runner_module, instrumentor_cls = _import_runtime_target()
         with instrument(
-            QwenPawInstrumentor(),
+            instrumentor_cls(),
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
