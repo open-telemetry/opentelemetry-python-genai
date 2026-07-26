@@ -163,9 +163,7 @@ async def test_query_handler_omits_messages_without_content_capture(
 ):
     runner = runner_module.AgentRunner(agent_id="entry-agent")
     with patched_command_path(runner_module, fake_run_command_path("ok")):
-        await _drain(
-            runner.query_handler(user_command_msgs(), make_request())
-        )
+        await _drain(runner.query_handler(user_command_msgs(), make_request()))
 
     (span,) = span_exporter.get_finished_spans()
     attributes = dict(span.attributes or {})
@@ -245,9 +243,7 @@ async def test_operation_duration_metric_recorded(
 ):
     runner = runner_module.AgentRunner(agent_id="entry-agent")
     with patched_command_path(runner_module, fake_run_command_path("ok")):
-        await _drain(
-            runner.query_handler(user_command_msgs(), make_request())
-        )
+        await _drain(runner.query_handler(user_command_msgs(), make_request()))
 
     metrics_data = metric_reader.get_metrics_data()
     duration_metrics = [

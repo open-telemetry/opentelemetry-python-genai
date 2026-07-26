@@ -20,9 +20,7 @@ from opentelemetry.instrumentation.genai.qwenpaw.utils import (
 def test_parse_query_handler_call_positional():
     msgs = [1]
     request = SimpleNamespace(session_id="a")
-    parsed_msgs, parsed_request = parse_query_handler_call(
-        (msgs, request), {}
-    )
+    parsed_msgs, parsed_request = parse_query_handler_call((msgs, request), {})
     assert parsed_msgs is msgs
     assert parsed_request is request
 

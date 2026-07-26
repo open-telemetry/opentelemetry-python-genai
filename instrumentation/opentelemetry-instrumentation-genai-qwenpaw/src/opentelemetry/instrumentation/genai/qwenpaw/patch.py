@@ -53,9 +53,7 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
 
     def _on_stream_end(self) -> None:
         if self._self_output_message is not None:
-            self._self_invocation.output_messages = [
-                self._self_output_message
-            ]
+            self._self_invocation.output_messages = [self._self_output_message]
         self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
