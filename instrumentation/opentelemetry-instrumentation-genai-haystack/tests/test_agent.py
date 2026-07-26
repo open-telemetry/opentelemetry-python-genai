@@ -47,14 +47,21 @@ class _ScriptedChatGenerator:
                     )
                 ],
                 meta={
+                    "id": "scripted-response-1",
                     "model": "scripted-model",
                     "finish_reason": "tool_calls",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
                 },
             )
         else:
             reply = ChatMessage.from_assistant(
                 text="It is sunny in Berlin.",
-                meta={"model": "scripted-model", "finish_reason": "stop"},
+                meta={
+                    "id": "scripted-response-2",
+                    "model": "scripted-model",
+                    "finish_reason": "stop",
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 8},
+                },
             )
         return {"replies": [reply]}
 

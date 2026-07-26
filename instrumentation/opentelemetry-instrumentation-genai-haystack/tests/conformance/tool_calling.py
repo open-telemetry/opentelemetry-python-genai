@@ -23,6 +23,8 @@ from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._known_gaps import MISSING_RESPONSE_ID, MISSING_SERVER_ADDRESS
+
 _WEATHER_TOOL = {
     "type": "function",
     "function": {
@@ -45,6 +47,7 @@ _WEATHER_TOOL = {
 class ToolCallingScenario(Scenario):
     expected_spans = {"chat": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_violations = (MISSING_RESPONSE_ID, MISSING_SERVER_ADDRESS)
 
     def run(
         self,

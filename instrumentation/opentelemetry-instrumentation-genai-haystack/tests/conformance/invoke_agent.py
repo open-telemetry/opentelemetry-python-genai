@@ -25,6 +25,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._known_gaps import MISSING_SERVER_ADDRESS, MISSING_TOOL_CALL_ID
+
 
 @component
 class _ScriptedChatGenerator:
@@ -52,14 +54,21 @@ class _ScriptedChatGenerator:
                     )
                 ],
                 meta={
+                    "id": "scripted-response-1",
                     "model": "scripted-model",
                     "finish_reason": "tool_calls",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
                 },
             )
         else:
             reply = ChatMessage.from_assistant(
                 text="It is sunny in Berlin.",
-                meta={"model": "scripted-model", "finish_reason": "stop"},
+                meta={
+                    "id": "scripted-response-2",
+                    "model": "scripted-model",
+                    "finish_reason": "stop",
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 8},
+                },
             )
         return {"replies": [reply]}
 
@@ -71,6 +80,10 @@ def _get_weather(city: str) -> str:
 class InvokeAgentScenario(Scenario):
     expected_spans = {"invoke_agent": 1, "chat": 2, "execute_tool": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
+    # _ScriptedChatGenerator is a bare test fake with no SDK client at all,
+    # so server.address is never available for it (not just a cold-start
+    # timing issue, unlike the real OpenAI-backed scenarios).
+    expected_violations = (MISSING_SERVER_ADDRESS, MISSING_TOOL_CALL_ID)
 
     def run(
         self,

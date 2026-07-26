@@ -19,6 +19,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._known_gaps import MISSING_RESPONSE_ID
+
 
 class WorkflowScenario(Scenario):
     expected_spans = {"invoke_workflow": 1, "chat": 1}
@@ -26,6 +28,11 @@ class WorkflowScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
+    # Unlike the standalone-call scenarios, Pipeline.run() calls warm_up() on
+    # its components before running them, so the chat generator's SDK client
+    # (and therefore server.address) is already constructed by the time our
+    # wrapper runs -- no server.address gap here.
+    expected_violations = (MISSING_RESPONSE_ID,)
 
     def run(
         self,

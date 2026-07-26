@@ -19,10 +19,13 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._known_gaps import MISSING_SERVER_ADDRESS
+
 
 class EmbeddingScenario(Scenario):
     expected_spans = {"embeddings": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_violations = (MISSING_SERVER_ADDRESS,)
 
     def run(
         self,

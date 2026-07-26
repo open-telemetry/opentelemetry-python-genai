@@ -17,6 +17,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._known_gaps import MISSING_RESPONSE_ID, MISSING_SERVER_ADDRESS
+
 
 class InferenceScenario(Scenario):
     expected_spans = {"chat": 1}
@@ -24,6 +26,7 @@ class InferenceScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
     )
+    expected_violations = (MISSING_RESPONSE_ID, MISSING_SERVER_ADDRESS)
 
     def run(
         self,

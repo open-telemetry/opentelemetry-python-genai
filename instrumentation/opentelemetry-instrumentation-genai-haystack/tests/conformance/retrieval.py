@@ -25,10 +25,15 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._known_gaps import MISSING_SERVER_ADDRESS
+
 
 class RetrievalScenario(Scenario):
     expected_spans = {"retrieval": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
+    # Unlike the generator/embedder scenarios, this isn't a lazy-client
+    # timing issue -- InMemoryDocumentStore has no server at all.
+    expected_violations = (MISSING_SERVER_ADDRESS,)
 
     def run(
         self,

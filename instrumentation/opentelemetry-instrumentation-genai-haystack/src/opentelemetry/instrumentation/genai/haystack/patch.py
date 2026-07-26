@@ -158,6 +158,26 @@ def pipeline_run_async_generator(
 # ---------------------------------------------------------------------------
 
 
+def _server_address_and_port(component: Any) -> tuple[str | None, int | None]:
+    """Best-effort ``server.address``/``server.port`` from a component's SDK client.
+
+    Haystack's OpenAI-backed generators/embedders construct their
+    underlying SDK client lazily via ``warm_up()`` (``self.client``/
+    ``self.async_client`` start as ``None``). ``Pipeline.run()`` calls
+    ``warm_up()`` on its components automatically, so this resolves
+    correctly for Pipeline-driven calls; a component called *standalone*
+    only gets it starting on the instance's second call, since nothing
+    else triggers ``warm_up()`` first. See MIGRATION_REPORT.md.
+    """
+    client = getattr(component, "client", None) or getattr(
+        component, "async_client", None
+    )
+    base_url = getattr(client, "base_url", None)
+    if base_url is None:
+        return None, None
+    return getattr(base_url, "host", None), getattr(base_url, "port", None)
+
+
 def _start_generator_invocation(
     handler: TelemetryHandler,
     component: Any,
@@ -180,10 +200,13 @@ def _start_generator_invocation(
     operation_name = CHAT if is_chat else TEXT_COMPLETION
     messages = arguments.get("messages")
     request_model = getattr(component, "model", None)
+    server_address, server_port = _server_address_and_port(component)
     invocation = handler.inference(
         provider=infer_provider(component) or "",
         request_model=request_model,
         operation_name=operation_name,
+        server_address=server_address,
+        server_port=server_port,
     )
     if capture_content:
         if is_chat and isinstance(messages, str):
@@ -238,6 +261,11 @@ def _finish_generator_invocation(
     if reply_meta is not None:
         if isinstance(model := reply_meta.get("model"), str):
             invocation.response_model_name = model
+        # Best-effort: Haystack's own OpenAIChatGenerator does not copy the
+        # provider response id into `reply.meta` (see MIGRATION_REPORT.md),
+        # so this only populates for generators/tests that do.
+        if isinstance(response_id := reply_meta.get("id"), str):
+            invocation.response_id = response_id
         usage = reply_meta.get("usage")
         if isinstance(usage, Mapping):
             if isinstance(prompt_tokens := usage.get("prompt_tokens"), int):
@@ -258,9 +286,12 @@ def _start_embedding_invocation(
     capture_content: bool,  # noqa: ARG001 - kept for signature symmetry with generator/retrieval starters
 ) -> EmbeddingInvocation:
     request_model = getattr(component, "model", None)
+    server_address, server_port = _server_address_and_port(component)
     return handler.embedding(
         provider=infer_provider(component) or "",
         request_model=request_model,
+        server_address=server_address,
+        server_port=server_port,
     )
 
 
@@ -303,7 +334,10 @@ def _start_retrieval_invocation(
     if top_k is None:
         top_k = getattr(component, "top_k", None)
     if isinstance(top_k, (int, float)):
-        invocation.top_k = float(top_k)
+        # gen_ai.request.top_k is registered as an int; Haystack's own
+        # top_k parameters are always a plain int count of results, so
+        # round-trip it as one rather than widening to float.
+        invocation.top_k = int(top_k)
     if capture_content and isinstance(query := arguments.get("query"), str):
         invocation.query_text = query
     return invocation
