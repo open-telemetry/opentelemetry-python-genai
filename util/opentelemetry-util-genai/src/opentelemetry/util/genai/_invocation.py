@@ -166,10 +166,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def fail(self, error: Error | BaseException) -> None:
         """Fail the invocation and end its span with error status."""
         if isinstance(error, BaseException):
-            exception = error
-            error = Error.from_exception(exception)
-            if self._error_type_resolver is not None:
-                error.type = self._error_type_resolver(exception) or error.type
+            error = Error.from_exception(error, self._error_type_resolver)
         self._finish(error)
 
     def __enter__(self) -> GenAIInvocation:

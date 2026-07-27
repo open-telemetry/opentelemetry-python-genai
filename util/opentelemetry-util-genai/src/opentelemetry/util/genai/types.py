@@ -251,6 +251,12 @@ class OutputMessage:
     finish_reason: str | FinishReason
 
 
+# Callback an instrumentor may supply to derive the error.type attribute from a
+# provider exception.
+# Returns None to fall back to the exception's fully qualified type name.
+ErrorTypeResolver: TypeAlias = Callable[[BaseException], "str | None"]
+
+
 @dataclass
 class Error:
     message: str | None
@@ -263,23 +269,22 @@ class Error:
     when built from an explicit ``type``/``message``."""
 
     @classmethod
-    def from_exception(cls, exception: BaseException) -> Error:
+    def from_exception(
+        cls,
+        exception: BaseException,
+        type_resolver: ErrorTypeResolver | None = None,
+    ) -> Error:
         """Build an ``Error`` from an exception, deriving ``type`` and ``message``."""
         from opentelemetry.util.genai.utils import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
             fq_exception_type,
         )
 
+        error_type = type_resolver(exception) if type_resolver else None
         return cls(
             message=str(exception),
-            type=fq_exception_type(exception),
+            type=error_type or fq_exception_type(exception),
             exception=exception,
         )
-
-
-# Callback an instrumentor may supply to derive the error.type attribute from a
-# provider exception.
-# Returns None to fall back to the exception's fully qualified type name.
-ErrorTypeResolver: TypeAlias = Callable[[BaseException], "str | None"]
 
 
 def __getattr__(name: str) -> object:
