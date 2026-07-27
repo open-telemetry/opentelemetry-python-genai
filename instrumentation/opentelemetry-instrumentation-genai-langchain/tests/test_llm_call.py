@@ -326,7 +326,17 @@ def test_chat_openai_legacy_function_call(
         HumanMessage(content="What is the weather in Paris?"),
     ]
 
-    with vcr.use_cassette("test_chat_openai_legacy_function_call"):
+    # This fixture sets no ``max_tokens``, so the shared cassette selector's
+    # ``max_completion_tokens`` discriminator does not apply. Older
+    # langchain-openai still serializes an explicit ``n`` (and ``temperature``)
+    # onto the request body while newer versions omit them, so select the
+    # cassette for the installed version off ``n`` directly.
+    payload = chat_openai_legacy_functions._get_request_payload([], stop=None)
+    cassette_suffix = "_old" if "n" in payload else ""
+
+    with vcr.use_cassette(
+        f"test_chat_openai_legacy_function_call{cassette_suffix}"
+    ):
         llm_with_functions.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
