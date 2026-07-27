@@ -289,6 +289,69 @@ def test_chat_anthropic_claude_sonnet_tool_call(
     ) == ("tool_use",)
 
 
+
+def test_chat_openai_legacy_function_call(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_legacy_functions,
+    monkeypatch,
+    vcr,
+):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+
+    functions = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name",
+                    },
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    llm_with_functions = chat_openai_legacy_functions.bind(
+        functions=functions,
+        function_call={"name": "get_current_weather"},
+    )
+
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the weather in Paris?"),
+    ]
+
+    with vcr.use_cassette("test_chat_openai_legacy_function_call"):
+        llm_with_functions.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
+        == "gpt-3.5-turbo"
+    )
+    # Pre-tools OpenAI models report the deprecated ``function_call`` finish
+    # reason rather than the modern ``tool_calls`` value.
+    assert span.attributes.get(
+        gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("function_call",)
+
+    output_messages = span.attributes.get(
+        gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages is not None
+    assert '"type":"tool_call"' in output_messages
+    assert '"name":"get_current_weather"' in output_messages
+    assert '"location":"Paris"' in output_messages
+
+
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
 def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     messages = [
