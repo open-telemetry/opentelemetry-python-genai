@@ -11,8 +11,8 @@ Builds ``opentelemetry-util-genai`` invocations around:
   (retrievers/rankers), or ``AgentInvocation`` (``Agent``)
 - ``haystack.tools.tool.Tool.invoke`` / ``invoke_async`` -> ``ToolInvocation``
 
-See ``component_types.py`` for the classification and MIGRATION_REPORT.md for
-components/methods this migration deliberately doesn't wrap.
+See ``component_types.py`` for the classification and which components/methods
+this migration deliberately doesn't wrap.
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def _server_address_and_port(component: Any) -> tuple[str | None, int | None]:
     ``warm_up()`` on its components automatically, so this resolves
     correctly for Pipeline-driven calls; a component called *standalone*
     only gets it starting on the instance's second call, since nothing
-    else triggers ``warm_up()`` first. See MIGRATION_REPORT.md.
+    else triggers ``warm_up()`` first.
     """
     client = getattr(component, "client", None) or getattr(
         component, "async_client", None
@@ -262,8 +262,8 @@ def _finish_generator_invocation(
         if isinstance(model := reply_meta.get("model"), str):
             invocation.response_model_name = model
         # Best-effort: Haystack's own OpenAIChatGenerator does not copy the
-        # provider response id into `reply.meta` (see MIGRATION_REPORT.md),
-        # so this only populates for generators/tests that do.
+        # provider response id into `reply.meta`, so this only populates for
+        # generators/tests that do.
         if isinstance(response_id := reply_meta.get("id"), str):
             invocation.response_id = response_id
         usage = reply_meta.get("usage")
@@ -526,7 +526,7 @@ def component_run_async(
 # with the model's tool_call.id would require hooking the private
 # haystack.components.agents.tool_calling._make_context_bound_invoke, which
 # is where the id is available; deliberately not done here to avoid
-# depending on Haystack internals -- see MIGRATION_REPORT.md.
+# depending on Haystack internals.
 
 
 def _start_tool_invocation(

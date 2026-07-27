@@ -56,8 +56,38 @@ What gets instrumented
 - ``haystack.tools.Tool.invoke`` / ``invoke_async`` -- one ``execute_tool``
   span per tool call, including calls an ``Agent`` drives internally.
 
-See ``tests/conformance/`` for the exact operations covered and this
-package's ``MIGRATION_REPORT.md`` for the full gap list.
+See ``tests/conformance/`` for the exact operations covered.
+
+Known limitations
+*****************
+
+- ``gen_ai.response.id`` is not populated for real OpenAI-backed chat
+  generators: Haystack's own ``OpenAIChatGenerator`` does not copy the
+  provider response id into the reply's ``meta``, so it's only populated for
+  generators (or tests) that do include it there.
+- ``server.address`` / ``server.port`` are only populated once a component's
+  underlying SDK client has been constructed. ``Pipeline.run()`` calls
+  ``warm_up()`` automatically, so this is available for pipeline-driven
+  calls; a component called standalone only gets it starting on its second
+  call, since nothing else triggers ``warm_up()`` first.
+- ``gen_ai.tool.call.id`` correlation between a tool-call span and the
+  assistant reply's ``tool_calls`` entry is not populated: it would require
+  hooking Haystack's private
+  ``haystack.components.agents.tool_calling._make_context_bound_invoke``,
+  which this instrumentation deliberately avoids depending on.
+- ``gen_ai.provider.name`` has no mapping for Hugging Face API
+  generators/embedders (their model string encodes the provider, but there's
+  no corresponding enum value yet) and is left unset for these.
+- Only components classified as a generator, embedder, retriever/ranker, or
+  ``Agent`` are wrapped -- there's no ``opentelemetry-util-genai`` invocation
+  type for a generic pipeline step (prompt builders, routers, converters,
+  joiners, ...).
+- Raw provider-format tool dicts passed via
+  ``generation_kwargs={"tools": [...]}}`` aren't converted to
+  ``ToolDefinition``\\ s -- only typed ``haystack.tools.Tool`` / ``Toolset``
+  objects passed as the dedicated ``tools`` parameter are.
+- Per-document embedded text/vectors aren't recorded -- ``EmbeddingInvocation``
+  only carries aggregate request/response metadata.
 
 Configuration
 -------------

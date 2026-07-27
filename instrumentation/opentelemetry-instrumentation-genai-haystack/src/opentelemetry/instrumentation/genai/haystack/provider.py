@@ -59,7 +59,6 @@ def infer_provider(component: Any) -> Optional[str]:
 
     Returns ``None`` for components with no known mapping (e.g. Hugging Face
     API generators, whose model string encodes the provider but has no
-    corresponding ``gen_ai.provider.name`` enum value yet) — see
-    MIGRATION_REPORT.md.
+    corresponding ``gen_ai.provider.name`` enum value yet).
     """
     return _CLASS_NAME_TO_PROVIDER.get(component.__class__.__name__)

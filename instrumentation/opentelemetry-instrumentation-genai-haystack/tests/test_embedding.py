@@ -5,8 +5,7 @@
 
 ``EmbeddingInvocation`` only carries aggregate request/response metadata
 (``dimension_count``, ``input_tokens``, ``response_model_name``) — there is
-no util-genai field for per-document embedded text or vectors. See
-MIGRATION_REPORT.md.
+no util-genai field for per-document embedded text or vectors.
 """
 
 import pytest

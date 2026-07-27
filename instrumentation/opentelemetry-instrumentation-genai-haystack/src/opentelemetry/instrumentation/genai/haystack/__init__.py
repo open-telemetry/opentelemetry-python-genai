@@ -40,8 +40,9 @@ What gets instrumented
 - ``haystack.tools.Tool.invoke`` / ``invoke_async`` — one ``execute_tool``
   span per tool call.
 
-See ``tests/conformance/`` and this package's ``MIGRATION_REPORT.md`` for
-the full list of gaps.
+See ``tests/conformance/`` for the exact operations covered and the
+package ``README.rst``'s "Known limitations" section for the full list of
+gaps.
 
 Configuration
 -------------

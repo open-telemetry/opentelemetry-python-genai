@@ -38,7 +38,7 @@ def test_pipeline_run_produces_workflow_and_chat_spans(
     """A prompt-builder + chat-generator pipeline yields exactly the spans this
     migration supports: one for the classified generator, one for the
     pipeline itself. ``ChatPromptBuilder`` has no util-genai invocation type
-    (see MIGRATION_REPORT.md) and produces no span of its own."""
+    and produces no span of its own."""
     pipeline = Pipeline()
     prompt_builder = ChatPromptBuilder()
     llm = OpenAIChatGenerator(model="gpt-4o")

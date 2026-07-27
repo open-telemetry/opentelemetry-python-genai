@@ -155,8 +155,8 @@ def test_component_defined_after_instrument_is_still_wrapped(
     """Regression test: a component class defined *after* ``instrument()``
     runs (the common "instrument first, build pipeline second" ordering)
     must still be classified and wrapped -- not just ones already imported
-    at instrumentation time. See MIGRATION_REPORT.md and __init__.py's
-    ``_Component._component`` registration hook.
+    at instrumentation time. See __init__.py's ``_Component._component``
+    registration hook.
     """
 
     @component

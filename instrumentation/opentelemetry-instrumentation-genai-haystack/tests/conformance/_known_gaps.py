@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Shared ``ExpectedViolation`` declarations for gaps that recur across
-several conformance scenarios in this package. See MIGRATION_REPORT.md for
-the full rationale behind each.
+several conformance scenarios in this package. See the package README's
+"Known limitations" section for the full rationale behind each.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ MISSING_SERVER_ADDRESS = ExpectedViolation(
 
 # tool_call.id correlation would require hooking the private
 # haystack.components.agents.tool_calling._make_context_bound_invoke -- see
-# MIGRATION_REPORT.md and patch.py's Tool.invoke wrapper comment.
+# patch.py's Tool.invoke wrapper comment.
 MISSING_TOOL_CALL_ID = ExpectedViolation(
     "genai_expected_attribute_missing", "gen_ai.tool.call.id"
 )

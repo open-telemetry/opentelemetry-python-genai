@@ -127,7 +127,7 @@ def tools_to_definitions(tools: Any) -> list[ToolDefinition] | None:
     caller passes as the dedicated ``tools`` run parameter. Raw provider-
     format tool dicts passed through ``generation_kwargs={"tools": [...]}}``
     are not typed Haystack objects and have no reliable common shape across
-    generators — see MIGRATION_REPORT.md.
+    generators.
     """
     if not tools:
         return None

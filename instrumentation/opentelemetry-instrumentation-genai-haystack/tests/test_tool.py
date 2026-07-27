@@ -3,7 +3,8 @@
 
 """Tests for ``haystack.tools.Tool.invoke`` / ``invoke_async`` -> ``ToolInvocation``.
 
-``tool_call_id`` correlation is not populated -- see MIGRATION_REPORT.md.
+``tool_call_id`` correlation is not populated -- see patch.py's Tool.invoke
+wrapper comment for why.
 """
 
 import json

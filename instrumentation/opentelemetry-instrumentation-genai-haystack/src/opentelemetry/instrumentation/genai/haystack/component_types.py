@@ -15,8 +15,7 @@ Components that don't match any of these (prompt builders, routers,
 converters, joiners, ...) classify as ``UNKNOWN`` and are not wrapped:
 there is no util-genai invocation type for a generic component step, and
 inventing one here would violate the "telemetry only through
-opentelemetry-util-genai public types" rule. See MIGRATION_REPORT.md for
-this gap.
+opentelemetry-util-genai public types" rule.
 """
 
 from __future__ import annotations
