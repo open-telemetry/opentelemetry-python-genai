@@ -46,8 +46,7 @@ def _gemini_cassette_name(base: str) -> str:
 
 def _langchain_openai_version() -> tuple:
     return tuple(
-        int(part)
-        for part in _pkg_version("langchain-openai").split(".")[:3]
+        int(part) for part in _pkg_version("langchain-openai").split(".")[:3]
     )
 
 
@@ -845,9 +844,7 @@ def test_chat_openai_reasoning_token_details(
     # fuzzy-matching a single cassette across both.
     payload = chat_openai_reasoning._get_request_payload(messages, stop=None)
     suffix = "_old" if "n" in payload else ""
-    with vcr.use_cassette(
-        f"test_chat_openai_reasoning_token_details{suffix}"
-    ):
+    with vcr.use_cassette(f"test_chat_openai_reasoning_token_details{suffix}"):
         chat_openai_reasoning.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
