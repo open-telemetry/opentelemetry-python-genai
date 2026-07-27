@@ -42,6 +42,7 @@ from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
+from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
@@ -106,6 +107,8 @@ class AnthropicInstrumentor(BaseInstrumentor):
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             logger_provider=logger_provider,
+            completion_hook=kwargs.get("completion_hook")
+            or load_completion_hook(),
         )
 
         wrap_function_wrapper(

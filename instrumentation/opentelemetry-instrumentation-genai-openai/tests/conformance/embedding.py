@@ -18,7 +18,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class EmbeddingScenario(Scenario):
-    expected_spans = ("embeddings",)
+    expected_spans = {"embeddings": 1}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",

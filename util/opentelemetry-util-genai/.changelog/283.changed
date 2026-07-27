@@ -1,0 +1,2 @@
+`gen_ai.usage.output_tokens` is now taken directly from `invocation.output_tokens`; `thinking_tokens` is no longer auto-added into it.
+Instrumentations must include reasoning/thinking tokens in `output_tokens` when their underlying library API does not do it.

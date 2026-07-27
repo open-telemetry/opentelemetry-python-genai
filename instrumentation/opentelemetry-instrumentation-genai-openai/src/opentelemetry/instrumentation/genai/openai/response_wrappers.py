@@ -183,10 +183,10 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
             event, "response", None
         )
 
-        if response and not self._self_invocation.request_model:
+        if response and not self._self_invocation.response_model_name:
             model = response.model
             if model:
-                self._self_invocation.request_model = model
+                self._self_invocation.response_model_name = model
 
         if event_type == "response.completed":
             self._stop(response)
