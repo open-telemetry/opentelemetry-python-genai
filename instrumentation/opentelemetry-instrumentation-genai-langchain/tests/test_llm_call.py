@@ -804,3 +804,75 @@ def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
         gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES
     )
     assert stop_sequences == ("STOP",)
+
+
+@pytest.mark.vcr()
+def test_chat_openai_reasoning_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning, vcr
+):
+    messages = [
+        SystemMessage(content="You are a careful mathematical reasoner."),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top? Think through it step by step."
+            )
+        ),
+    ]
+
+    with vcr.use_cassette("test_chat_openai_reasoning_token_details"):
+        chat_openai_reasoning.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 63
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 1284
+    )
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 1088
+    )
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_cache_token_details(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
+        )
+        == 5
+    )
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 4
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+    )
