@@ -86,7 +86,14 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_name: str = span_name
         self._span_kind: SpanKind = span_kind
         self._context_token: ContextToken | None = None
-        self._monotonic_start_s: float | None = None
+        self._monotonic_start_s: float
+        # Streaming state, set when the invocation is handed to a stream
+        # wrapper. ``_request_stream`` marks the request as streamed
+        # (gen_ai.request.stream); the timing fields are populated by
+        # ``_on_stream_chunk`` as each chunk arrives.
+        self._request_stream: bool | None = None
+        self._ttfc_seconds: float | None = None
+        self._stream_last_chunk_at: float | None = None
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None
@@ -112,6 +119,37 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def _get_metric_token_counts(self) -> dict[str, int]:  # pylint: disable=no-self-use
         """Return {token_type: count} for token histogram recording."""
         return {}
+
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        """Record streaming timing for one output chunk as it arrives.
+
+        The first chunk's delta from the invocation start is the
+        time-to-first-chunk; each later chunk's delta from the previous one is
+        the inter-chunk gap. Called by the stream wrapper for any invocation
+        type handed to it.
+        """
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
+        )
+
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
+        attributes = self._get_metric_attributes()
+        if self._ttfc_seconds is None:
+            self._ttfc_seconds = delta
+            self._metrics_recorder.record_time_to_first_chunk(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        else:
+            self._metrics_recorder.record_time_per_chunk(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
 
     def _apply_error_attributes(self, error: Error) -> None:
         """Apply error status and error.type attribute to the span, events, and metrics."""

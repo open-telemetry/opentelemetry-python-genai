@@ -1595,7 +1595,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
-    { name = "wrapt", specifier = ">=1.0.0,<3.0.0" },
+    { name = "wrapt", specifier = ">=1.14.0,<3.0.0" },
 ]
 provides-extras = ["test", "upload"]
 

@@ -224,7 +224,7 @@ class ResponseStreamWrapper(
         invocation: "GenAIInvocation",
         capture_content: bool,
     ):
-        SyncStreamWrapper.__init__(self, stream)
+        SyncStreamWrapper.__init__(self, stream, invocation=invocation)
         # Marks streams already wrapped by the inner Responses.create path so
         # Responses.stream manager entry can return them without wrapping twice.
         self._self_is_response_stream_wrapper = True
@@ -334,7 +334,7 @@ class AsyncResponseStreamWrapper(
         invocation: "GenAIInvocation",
         capture_content: bool,
     ):
-        AsyncStreamWrapper.__init__(self, stream)
+        AsyncStreamWrapper.__init__(self, stream, invocation=invocation)
         # Marks streams already wrapped by the inner AsyncResponses.create path
         # so AsyncResponses.stream manager entry avoids wrapping twice.
         self._self_is_response_stream_wrapper = True

@@ -19,6 +19,7 @@ from opentelemetry.test_util_genai.conformance import (  # noqa: E402
 )
 
 from .conformance.inference import InferenceScenario
+from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -26,6 +27,7 @@ from .conformance.tool_calling import ToolCallingScenario
     "scenario",
     [
         InferenceScenario(),
+        InferenceStreamingScenario(),
         ToolCallingScenario(),
     ],
     ids=lambda s: type(s).__name__,

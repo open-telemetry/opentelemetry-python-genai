@@ -200,6 +200,119 @@ class TelemetryHandlerMetricsTest(TestBase):
             "ValueError",
         )
 
+    def test_streaming_records_ttfc_and_per_output_chunk(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = handler.inference("prov", request_model="model")
+        invocation.response_model_name = "model-2025"
+
+        # First chunk 0.35s after start -> TTFC. Later chunks -> inter-chunk
+        # gaps of 0.05, 0.08, 0.12.
+        for chunk_at in (1000.35, 1000.40, 1000.48, 1000.60):
+            invocation._on_stream_chunk(chunk_at)
+
+        with patch("timeit.default_timer", return_value=1002.0):
+            invocation.stop()
+
+        metrics = self._harvest_metrics()
+
+        self.assertIn("gen_ai.client.operation.time_to_first_chunk", metrics)
+        ttfc_points = metrics["gen_ai.client.operation.time_to_first_chunk"]
+        self.assertEqual(len(ttfc_points), 1)
+        ttfc_point = ttfc_points[0]
+        self.assertEqual(ttfc_point.count, 1)
+        self.assertAlmostEqual(ttfc_point.sum, 0.35, places=6)
+        self.assertEqual(
+            ttfc_point.attributes[GenAI.GEN_AI_RESPONSE_MODEL], "model-2025"
+        )
+        self.assertEqual(
+            ttfc_point.attributes[GenAI.GEN_AI_REQUEST_MODEL], "model"
+        )
+        self.assertEqual(
+            ttfc_point.attributes[GenAI.GEN_AI_PROVIDER_NAME], "prov"
+        )
+
+        self.assertIn("gen_ai.client.operation.time_per_output_chunk", metrics)
+        chunk_points = metrics["gen_ai.client.operation.time_per_output_chunk"]
+        self.assertEqual(len(chunk_points), 1)
+        chunk_point = chunk_points[0]
+        # One data point per inter-chunk gap (3 gaps for 4 chunks).
+        self.assertEqual(chunk_point.count, 3)
+        self.assertAlmostEqual(chunk_point.sum, 0.25, places=6)
+        self.assertEqual(
+            chunk_point.attributes[GenAI.GEN_AI_RESPONSE_MODEL], "model-2025"
+        )
+
+    def test_streaming_records_ttfc_span_attribute(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = handler.inference("prov", request_model="model")
+
+        # First chunk 0.42s after the start (1000.0) yields TTFC = 0.42.
+        invocation._on_stream_chunk(1000.42)
+
+        with patch("timeit.default_timer", return_value=1002.0):
+            invocation.stop()
+
+        (span,) = self.get_finished_spans()
+        self.assertAlmostEqual(
+            span.attributes[GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK],
+            0.42,
+            places=6,
+        )
+
+    def test_streamed_request_sets_stream_span_attribute(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.inference("prov", request_model="model")
+        # Set by the stream wrapper when the invocation is streamed.
+        invocation._request_stream = True
+        invocation.stop()
+
+        (span,) = self.get_finished_spans()
+        self.assertIs(span.attributes[GenAI.GEN_AI_REQUEST_STREAM], True)
+
+    def test_non_streamed_request_omits_stream_span_attribute(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.inference("prov", request_model="model")
+        invocation.stop()
+
+        (span,) = self.get_finished_spans()
+        self.assertNotIn(GenAI.GEN_AI_REQUEST_STREAM, span.attributes)
+
+    def test_no_streaming_timing_metrics_without_chunks(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = handler.inference("prov", request_model="model")
+        with patch("timeit.default_timer", return_value=1002.0):
+            invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertNotIn(
+            "gen_ai.client.operation.time_to_first_chunk", metrics
+        )
+        self.assertNotIn(
+            "gen_ai.client.operation.time_per_output_chunk", metrics
+        )
+        (span,) = self.get_finished_spans()
+        self.assertNotIn(
+            GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, span.attributes
+        )
+
     def _harvest_metrics(
         self,
     ) -> Dict[str, List[Any]]:

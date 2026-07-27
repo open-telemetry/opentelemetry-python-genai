@@ -20,6 +20,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
@@ -138,6 +139,42 @@ def _collect_completed_response(stream):
             response = event.response
     assert response is not None
     return response
+
+
+def assert_responses_streaming_timing_metrics(metric_reader):
+    """Assert the streaming timing metrics are emitted through the real
+    Responses stream wrapper path.
+
+    Regression coverage for the ``invocation=invocation`` wiring in
+    ``response_wrappers.py``: dropping it would keep every span/attribute test
+    green but silently stop emitting TTFC and per-output-chunk metrics for the
+    Responses streaming path.
+    """
+    metrics = {}
+    for rm in metric_reader.get_metrics_data().resource_metrics:
+        for scope in rm.scope_metrics:
+            for metric in scope.metrics:
+                metrics[metric.name] = metric
+
+    ttfc = metrics.get(
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
+    )
+    assert ttfc is not None
+    ttfc_point = ttfc.data.data_points[0]
+    assert ttfc_point.count == 1
+    assert ttfc_point.sum >= 0
+    assert (
+        ttfc_point.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == GenAIAttributes.GenAiOperationNameValues.CHAT.value
+    )
+
+    per_chunk = metrics.get(
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_PER_OUTPUT_CHUNK
+    )
+    assert per_chunk is not None
+    per_chunk_point = per_chunk.data.data_points[0]
+    assert per_chunk_point.count >= 1
+    assert per_chunk_point.sum >= 0
 
 
 def test_responses_uninstrument_removes_patching(
@@ -382,6 +419,26 @@ def test_responses_create_api_error(
         span.attributes[ErrorAttributes.ERROR_TYPE]
         == type(exc_info.value).__name__
     )
+
+
+def test_responses_create_streaming_timing_metrics(
+    metric_reader, openai_client, instrument_no_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        with openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        ) as stream:
+            _collect_completed_response(stream)
+
+    assert_responses_streaming_timing_metrics(metric_reader)
 
 
 @pytest.mark.vcr()
