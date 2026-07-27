@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch, sentinel
 
 import pytest
 
-from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 from .harness import (
@@ -23,17 +22,16 @@ pytest.importorskip("agentscope.message")
 
 
 def test_completion_hook_forwarded_to_handler(
-    runner_module, tracer_provider, logger_provider, meter_provider
+    instrumentor_cls, tracer_provider, logger_provider, meter_provider
 ):
     """A hook passed to instrument() reaches the TelemetryHandler."""
-    del runner_module
     hook = MagicMock()
     with (
         patch(
             "opentelemetry.instrumentation.genai.qwenpaw.TelemetryHandler"
         ) as handler_cls,
         instrument(
-            QwenPawInstrumentor(),
+            instrumentor_cls(),
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
@@ -44,10 +42,9 @@ def test_completion_hook_forwarded_to_handler(
 
 
 def test_completion_hook_defaults_to_load_completion_hook(
-    runner_module, tracer_provider, logger_provider, meter_provider
+    instrumentor_cls, tracer_provider, logger_provider, meter_provider
 ):
     """Without an explicit hook, the one from load_completion_hook() is used."""
-    del runner_module
     with (
         patch(
             "opentelemetry.instrumentation.genai.qwenpaw.TelemetryHandler"
@@ -57,7 +54,7 @@ def test_completion_hook_defaults_to_load_completion_hook(
             return_value=sentinel.default_hook,
         ) as load_hook,
         instrument(
-            QwenPawInstrumentor(),
+            instrumentor_cls(),
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
@@ -72,12 +69,16 @@ def test_completion_hook_defaults_to_load_completion_hook(
 
 @pytest.mark.asyncio
 async def test_completion_hook_invoked(
-    runner_module, tracer_provider, logger_provider, meter_provider
+    instrumentor_cls,
+    runner_module,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
 ):
     """The hook's on_completion is called once the turn's stream is drained."""
     hook = MagicMock()
     with instrument(
-        QwenPawInstrumentor(),
+        instrumentor_cls(),
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
