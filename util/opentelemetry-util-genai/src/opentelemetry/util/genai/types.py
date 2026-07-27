@@ -5,7 +5,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Literal,
+    TypeAlias,
+    Union,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=useless-import-alias
@@ -127,6 +134,25 @@ class Reasoning:
     type: Literal["reasoning"] = "reasoning"
 
 
+@dataclass()
+class CompactionPart:
+    """Represents a server-side context compaction event.
+
+    A bare ``CompactionPart`` (only ``type`` set) is the common case: it
+    records that the provider compacted the conversation without
+    returning an unencrypted summary. Requiring a payload field would
+    make providers that only return an opaque continuity value (e.g.
+    Anthropic) impossible to represent correctly.
+
+    This model is specified as part of semconv in `GenAI messages Python models - CompactionPart
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    id: str | None = None
+    content: str | None = None
+    type: Literal["compaction"] = "compaction"
+
+
 Modality = Literal["image", "video", "audio"]
 
 
@@ -202,6 +228,7 @@ MessagePart = Union[
     File,
     Uri,
     Reasoning,
+    CompactionPart,
     GenericPart,  # For provider-specific types; prefer standard types above
 ]
 
@@ -247,6 +274,12 @@ class Error:
             type=fq_exception_type(exception),
             exception=exception,
         )
+
+
+# Callback an instrumentor may supply to derive the error.type attribute from a
+# provider exception.
+# Returns None to fall back to the exception's fully qualified type name.
+ErrorTypeResolver: TypeAlias = Callable[[BaseException], "str | None"]
 
 
 def __getattr__(name: str) -> object:

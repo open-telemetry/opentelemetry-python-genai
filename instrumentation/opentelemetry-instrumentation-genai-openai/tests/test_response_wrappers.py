@@ -547,7 +547,9 @@ def _make_response(**overrides):
 
 def _capturing_invocation():
     calls = {"stop": 0, "fail": []}
-    invocation = SimpleNamespace(request_model=None, attributes={})
+    invocation = SimpleNamespace(
+        request_model=None, response_model_name=None, attributes={}
+    )
     invocation.stop = lambda: calls.__setitem__("stop", calls["stop"] + 1)
     invocation.fail = lambda error: calls["fail"].append(error)
     return invocation, calls

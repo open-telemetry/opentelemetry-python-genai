@@ -1,0 +1,46 @@
+interactions:
+- request:
+    body: |-
+      {"model": "claude-sonnet-4-5", "max_tokens": 1024, "temperature": 0.1, "system": "You are a helpful assistant!", "messages": [{"role": "user", "content": "What is the capital of France?"}]}
+    headers:
+      Content-Type:
+      - application/json
+      User-Agent:
+      - !!binary |
+        QW50aHJvcGljL1B5dGhvbiAxLjAuMA==
+      x-api-key:
+      - test_key
+      anthropic-version:
+      - '2023-06-01'
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: |-
+        {
+          "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-4-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "The capital of France is Paris."
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 13,
+            "output_tokens": 10
+          }
+        }
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Thu, 04 Sep 2025 20:00:58 GMT
+    status:
+      code: 200
+      message: OK
+version: 1

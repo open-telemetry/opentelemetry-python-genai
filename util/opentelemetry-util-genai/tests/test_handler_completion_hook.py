@@ -231,8 +231,9 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             )
         ]
 
-        invocation = handler.invoke_local_agent(request_model="gpt-4")
-        invocation.agent_name = "Math Tutor"
+        invocation = handler.invoke_local_agent(
+            request_model="gpt-4", agent_name="Math Tutor"
+        )
         invocation.input_messages = input_messages
         invocation.output_messages = output_messages
         invocation.system_instruction = system_instruction

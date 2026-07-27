@@ -61,6 +61,23 @@ environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to o
     export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
 
 
+Uploading prompts and completions
+*********************************
+
+Instead of recording message content inline, prompts and completions can be uploaded to external
+storage via a completion hook. To enable the built-in upload hook, set:
+
+- ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload``
+- ``OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH`` to an ``fsspec``-compatible URI/path
+  (e.g. ``/path/to/prompts`` or ``gs://my_bucket``), and install the ``upload`` extra
+  (``pip install opentelemetry-util-genai[upload]``).
+
+A custom ``CompletionHook`` can also be passed programmatically, taking precedence over the
+environment variable::
+
+    AnthropicInstrumentor().instrument(completion_hook=my_hook)
+
+
 References
 ----------
 

@@ -71,8 +71,8 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
     def test_all_attributes(self):
         invocation = self.handler.invoke_local_agent(
             request_model="gpt-4",
+            agent_name="Full Agent",
         )
-        invocation.agent_name = "Full Agent"
         invocation.agent_id = "agent-123"
         invocation.agent_description = "A test agent"
         invocation.agent_version = "1.0.0"
@@ -175,8 +175,8 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
 
     def test_context_manager_default_invocation(self):
-        with self.handler.invoke_local_agent() as inv:
-            inv.agent_name = "Dynamic Agent"
+        with self.handler.invoke_local_agent(agent_name="Dynamic Agent"):
+            pass
         assert len(self.span_exporter.get_finished_spans()) == 1
 
     def test_default_values(self):
@@ -184,7 +184,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         invocation.stop()
         assert invocation._operation_name == "invoke_agent"
         assert invocation.agent_name is None
-        assert invocation.request_model is None
+        assert invocation._request_model is None
         assert not invocation.input_messages
         assert not invocation.output_messages
         assert invocation.tool_definitions is None
@@ -244,16 +244,6 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert "foo" not in inv2.attributes
         inv2.stop()
         inv1.stop()
-
-    def test_agent_name_set_after_construction(self):
-        invocation = self.handler.invoke_local_agent()
-        invocation.agent_name = "Named Agent"
-        invocation.stop()
-        span = self.span_exporter.get_finished_spans()[0]
-        # Span name is not updated after construction — agent_name should be
-        # passed at construction time for correct span naming and sampling.
-        assert span.name == "invoke_agent"
-        assert span.attributes[GenAI.GEN_AI_AGENT_NAME] == "Named Agent"
 
     def test_agent_name_passed_at_construction(self):
         invocation = self.handler.invoke_local_agent(
@@ -435,8 +425,8 @@ class TestRemoteAgentInvocation(unittest.TestCase):
             request_model="gpt-4",
             server_address="api.openai.com",
             server_port=443,
+            agent_name="Remote Agent",
         )
-        invocation.agent_name = "Remote Agent"
         invocation.agent_id = "agent-123"
         invocation.agent_description = "A remote test agent"
         invocation.agent_version = "1.0.0"

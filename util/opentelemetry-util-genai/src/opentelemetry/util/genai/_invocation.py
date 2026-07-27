@@ -23,6 +23,7 @@ from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     Error,
+    ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -64,11 +65,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         span_kind: SpanKind = SpanKind.CLIENT,
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
         self._logger = logger
         self._completion_hook = completion_hook
+        self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
@@ -163,7 +166,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def fail(self, error: Error | BaseException) -> None:
         """Fail the invocation and end its span with error status."""
         if isinstance(error, BaseException):
-            error = Error.from_exception(error)
+            exception = error
+            error = Error.from_exception(exception)
+            if self._error_type_resolver is not None:
+                error.type = self._error_type_resolver(exception) or error.type
         self._finish(error)
 
     def __enter__(self) -> GenAIInvocation:

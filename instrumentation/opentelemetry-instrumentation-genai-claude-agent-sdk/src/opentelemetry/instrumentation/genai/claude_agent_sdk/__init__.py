@@ -54,14 +54,12 @@ API
 
 from typing import Any, Collection
 
-from opentelemetry._logs import get_logger
 from opentelemetry.instrumentation.genai.claude_agent_sdk.package import (
     _instruments,
 )
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from opentelemetry.metrics import get_meter
-from opentelemetry.semconv.schemas import Schemas
-from opentelemetry.trace import get_tracer
+from opentelemetry.util.genai.completion_hook import load_completion_hook
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 
 class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
@@ -73,9 +71,7 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
 
     def __init__(self) -> None:
         super().__init__()
-        self._tracer = None
-        self._logger = None
-        self._meter = None
+        self._handler: TelemetryHandler | None = None
 
     # pylint: disable=no-self-use
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -96,34 +92,13 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
         logger_provider = kwargs.get("logger_provider")
         meter_provider = kwargs.get("meter_provider")
 
-        # Initialize tracer
-        tracer = get_tracer(
-            __name__,
-            "",
-            tracer_provider,
-            schema_url=Schemas.V1_28_0.value,
-        )
-
-        # Initialize logger for events
-        logger = get_logger(
-            __name__,
-            "",
-            schema_url=Schemas.V1_28_0.value,
+        self._handler = TelemetryHandler(
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
             logger_provider=logger_provider,
+            completion_hook=kwargs.get("completion_hook")
+            or load_completion_hook(),
         )
-
-        # Initialize meter for metrics
-        meter = get_meter(
-            __name__,
-            "",
-            meter_provider,
-            schema_url=Schemas.V1_28_0.value,
-        )
-
-        # Store for later use in _uninstrument
-        self._tracer = tracer
-        self._logger = logger
-        self._meter = meter
 
         # Patching will be added in a follow-up PR
 

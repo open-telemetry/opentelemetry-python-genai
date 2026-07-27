@@ -570,6 +570,69 @@ def test_upload_hook_non_streaming(
     )
 
 
+def test_reasoning_and_token_counts(
+    gemini_api_key,
+    otel_mocker: OTelMocker,
+    model,
+    genai_sdk_backend,
+    is_async,
+    enable_completion_hook,
+    vcr,
+):
+    client = google.genai.Client(
+        api_key=gemini_api_key,
+        vertexai=False,
+        http_options=types.HttpOptions(
+            headers={"accept-encoding": "identity"}
+        ),
+    )
+
+    if is_async:
+
+        def _call(*args, **kwargs):
+            return asyncio.run(
+                client.aio.models.generate_content(*args, **kwargs)
+            )
+    else:
+
+        def _call(*args, **kwargs):
+            return client.models.generate_content(*args, **kwargs)
+
+    with vcr.use_cassette("test_reasoning_and_token_counts.yaml"):
+        response = _call(
+            model=model,
+            contents="Explain quantum computing in one sentence.",
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_budget=2048)
+            ),
+        )
+    assert response.usage_metadata.thoughts_token_count is not None
+    assert response.usage_metadata.thoughts_token_count > 0
+    assert response.usage_metadata.candidates_token_count is not None
+    assert response.usage_metadata.candidates_token_count > 0
+
+    time.sleep(2)
+
+    span = otel_mocker.get_span_named(f"generate_content {model}")
+    assert span is not None
+
+    expected_output_tokens = (
+        response.usage_metadata.candidates_token_count
+        + response.usage_metadata.thoughts_token_count
+    )
+    assert (
+        span.attributes["gen_ai.usage.output_tokens"] == expected_output_tokens
+    )
+    assert (
+        span.attributes["gen_ai.usage.reasoning.output_tokens"]
+        == response.usage_metadata.thoughts_token_count
+    )
+    assert (
+        span.attributes["gen_ai.usage.input_tokens"]
+        == response.usage_metadata.prompt_token_count
+    )
+
+
 def assert_fsspec_equal(path, value):
     # Hide this function and its calls from traceback.
     __tracebackhide__ = True  # pylint: disable=unused-variable

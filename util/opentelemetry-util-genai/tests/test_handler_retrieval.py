@@ -279,7 +279,7 @@ class TelemetryHandlerRetrievalContextManagerTest(_RetrievalTestBase):
     def test_context_manager_default_invocation(self) -> None:
         with self.handler.retrieval() as inv:
             self.assertIsInstance(inv, RetrievalInvocation)
-            self.assertIsNone(inv.data_source_id)
+            self.assertIsNone(inv._data_source_id)
             self.assertEqual(inv._operation_name, "retrieval")
 
     def test_context_manager_success_has_unset_status(self) -> None:

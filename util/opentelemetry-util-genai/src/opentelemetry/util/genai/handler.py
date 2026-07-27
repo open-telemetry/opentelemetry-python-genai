@@ -63,7 +63,10 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
-from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
+    ErrorTypeResolver,
+)
 from opentelemetry.util.genai.utils import get_content_capturing_mode
 from opentelemetry.util.genai.version import __version__
 
@@ -310,6 +313,7 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         operation_name: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
     ) -> InferenceInvocation:
         """Returns an Inference invocation. Starts span when called.
 
@@ -329,6 +333,7 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             operation_name=operation_name,
+            error_type_resolver=error_type_resolver,
         )
 
     def embedding(
