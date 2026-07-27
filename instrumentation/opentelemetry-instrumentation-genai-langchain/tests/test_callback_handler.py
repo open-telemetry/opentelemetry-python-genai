@@ -19,6 +19,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    extract_token_details,
     make_input_message,
     make_last_output_message,
     make_output_message,
@@ -1206,3 +1207,108 @@ class TestOnLlmEndToolCalls:
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
+
+
+# ---------------------------------------------------------------------------
+# on_llm_end – token usage break-downs
+# ---------------------------------------------------------------------------
+
+
+class TestOnLlmEndTokenDetails:
+    def test_cache_and_reasoning_tokens_set_on_invocation(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi there",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+                "input_token_details": {
+                    "cache_creation": 3,
+                    "cache_read": 2,
+                },
+                "output_token_details": {"reasoning": 5},
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 10
+        assert llm_inv.cache_creation_input_tokens == 3
+        assert llm_inv.cache_read_input_tokens == 2
+        assert llm_inv.thinking_tokens == 5
+        assert llm_inv.output_tokens == 20
+
+    def test_audio_tokens_ignored(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+                "input_token_details": {"audio": 5},
+                "output_token_details": {"audio": 4},
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 10
+        assert llm_inv.output_tokens == 20
+
+
+# ---------------------------------------------------------------------------
+# utils.extract_token_details
+# ---------------------------------------------------------------------------
+
+
+def test_extract_token_details_cache_and_reasoning():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {"cache_creation": 3, "cache_read": 2},
+        "output_token_details": {"reasoning": 5},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_creation_input_tokens": 3,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+def test_extract_token_details_ignores_audio_tokens():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "input_token_details": {"audio": 5},
+        "output_token_details": {"audio": 4},
+    }
+    assert extract_token_details(usage) == {}
+
+
+def test_extract_token_details_zero_values_omitted():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "input_token_details": {"cache_creation": 0, "cache_read": 0},
+    }
+    assert extract_token_details(usage) == {}
+
+
+def test_extract_token_details_no_details_key():
+    assert extract_token_details({"input_tokens": 1, "output_tokens": 2}) == {}

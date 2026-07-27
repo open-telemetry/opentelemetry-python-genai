@@ -21,6 +21,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _normalize_role,
+    extract_token_details,
     make_input_message,
     make_last_output_message,
     normalize_provider,
@@ -372,18 +373,44 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                     # Get token usage if available
                     if chat_generation.message.usage_metadata:
-                        input_tokens = (
-                            chat_generation.message.usage_metadata.get(
-                                "input_tokens", 0
-                            )
-                        )
+                        usage_metadata = chat_generation.message.usage_metadata
+                        input_tokens = usage_metadata.get("input_tokens", 0)
+                        if not isinstance(input_tokens, int) or isinstance(
+                            input_tokens, bool
+                        ):
+                            input_tokens = 0
                         llm_invocation.input_tokens = input_tokens
 
-                        output_tokens = (
-                            chat_generation.message.usage_metadata.get(
-                                "output_tokens", 0
-                            )
+                        output_tokens = usage_metadata.get("output_tokens", 0)
+                        if not isinstance(output_tokens, int) or isinstance(
+                            output_tokens, bool
+                        ):
+                            output_tokens = 0
+
+                        # Cache/reasoning break-downs (Anthropic, OpenAI
+                        # reasoning models, Bedrock). Audio tokens are dropped
+                        # (no GenAI semconv attribute).
+                        token_details = extract_token_details(
+                            cast(dict[str, Any], usage_metadata)
                         )
+                        cache_creation = token_details.get(
+                            "cache_creation_input_tokens"
+                        )
+                        if cache_creation is not None:
+                            llm_invocation.cache_creation_input_tokens = (
+                                cache_creation
+                            )
+                        cache_read = token_details.get(
+                            "cache_read_input_tokens"
+                        )
+                        if cache_read is not None:
+                            llm_invocation.cache_read_input_tokens = cache_read
+                        reasoning_tokens = token_details.get(
+                            "reasoning_tokens"
+                        )
+                        if reasoning_tokens is not None:
+                            llm_invocation.thinking_tokens = reasoning_tokens
+
                         llm_invocation.output_tokens = output_tokens
 
         llm_invocation.output_messages = output_messages
