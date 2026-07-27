@@ -289,7 +289,6 @@ def test_chat_anthropic_claude_sonnet_tool_call(
     ) == ("tool_use",)
 
 
-
 def test_chat_openai_legacy_function_call(
     span_exporter,
     start_instrumentation,
