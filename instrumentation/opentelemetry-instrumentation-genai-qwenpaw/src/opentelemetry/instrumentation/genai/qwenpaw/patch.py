@@ -11,7 +11,9 @@ telemetry exactly once on success, error, or close.
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Callable, cast
+import logging
+from types import TracebackType
+from typing import Any, AsyncGenerator, Callable, Literal, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import AgentInvocation
@@ -25,9 +27,17 @@ from .utils import (
     parse_query_handler_call,
 )
 
+_logger = logging.getLogger(__name__)
+
 
 class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
-    """Proxy the ``query_handler`` async generator and finalize telemetry."""
+    """Proxy the ``query_handler`` async generator and finalize telemetry.
+
+    ``AsyncStreamWrapper`` closes the wrapped stream through ``close()``,
+    which async generators do not have — they expose ``aclose()`` instead.
+    The close overrides below bridge that gap so the generator is always
+    closed and telemetry is finalized exactly once.
+    """
 
     def __init__(
         self,
@@ -35,9 +45,6 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
         invocation: AgentInvocation,
         capture_content: bool,
     ) -> None:
-        # Async generators expose ``aclose()`` rather than the ``close()``
-        # the wrapper's structural stream type expects; the ``aclose``/
-        # ``close`` overrides below bridge that gap.
         super().__init__(cast(Any, stream))
         self._self_gen = stream
         self._self_invocation = invocation
@@ -62,10 +69,8 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
     async def aclose(self) -> None:
         """Close the underlying async generator and finalize telemetry.
 
-        ``AsyncStreamWrapper.close`` expects the wrapped stream to expose
-        ``close``; async generators expose ``aclose`` instead, so mirror the
-        base-class behavior here. An early close is treated as a successful
-        (partial) completion, matching a caller that stops consuming.
+        An early close is treated as a successful (partial) completion,
+        matching a caller that stops consuming.
         """
         try:
             await self._self_gen.aclose()
@@ -76,6 +81,26 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
 
     async def close(self) -> None:
         await self.aclose()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        if exc_val is None:
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+        # The base class closes the stream via ``close()`` here, so close the
+        # generator ourselves; failing to do so would leave it running.
+        self._finalize_failure(exc_val)
+        try:
+            await self._self_gen.aclose()
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "QwenPaw stream close error after user exception",
+                exc_info=True,
+            )
+        return False
 
 
 def _build_invocation(

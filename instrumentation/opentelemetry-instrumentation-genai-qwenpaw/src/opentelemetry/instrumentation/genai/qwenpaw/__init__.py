@@ -33,8 +33,14 @@ Usage
 Configuration
 -------------
 
-Message content capture can be enabled by setting the environment variable:
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true``
+Message content capture is enabled by setting the environment variable
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of
+``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT``.
+
+Captured content can be uploaded to external storage instead of being
+recorded inline by configuring a completion hook, either through
+``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` or by passing
+``instrument(completion_hook=...)``.
 
 API
 ---
@@ -50,6 +56,7 @@ from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
+from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
@@ -81,11 +88,15 @@ class QwenPawInstrumentor(BaseInstrumentor):
                 - tracer_provider: TracerProvider instance
                 - meter_provider: MeterProvider instance
                 - logger_provider: LoggerProvider instance
+                - completion_hook: CompletionHook instance, taking precedence
+                  over the one configured by environment variable
         """
         handler = TelemetryHandler(
             tracer_provider=kwargs.get("tracer_provider"),
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
+            completion_hook=kwargs.get("completion_hook")
+            or load_completion_hook(),
         )
         wrap_function_wrapper(
             _RUNNER_MODULE,

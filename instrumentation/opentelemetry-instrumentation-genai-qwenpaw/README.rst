@@ -51,12 +51,31 @@ Configuration
 Capture Message Content
 ***********************
 
-By default, input and output messages are not captured. To enable message
-content capture, set the environment variable:
+By default, input and output messages are not captured. To capture message
+content, set the environment variable
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of
+``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT``:
 
 ::
 
-    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
+
+
+Uploading prompts and completions
+*********************************
+
+Instead of recording message content inline, prompts and completions can be uploaded to external
+storage via a completion hook. To enable the built-in upload hook, set:
+
+- ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload``
+- ``OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH`` to an ``fsspec``-compatible URI/path
+  (e.g. ``/path/to/prompts`` or ``gs://my_bucket``), and install the ``upload`` extra
+  (``pip install opentelemetry-util-genai[upload]``).
+
+A custom ``CompletionHook`` can also be passed programmatically, taking precedence over the
+environment variable::
+
+    QwenPawInstrumentor().instrument(completion_hook=my_hook)
 
 Conformance
 -----------

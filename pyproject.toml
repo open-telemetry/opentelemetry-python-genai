@@ -18,9 +18,7 @@ dependencies = [
   "opentelemetry-instrumentation-genai-langchain[instruments]",
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
-  # qwenpaw (the instrumented library) requires Python >=3.10,<3.14.
-  "opentelemetry-instrumentation-genai-qwenpaw[instruments]; python_version < '3.14'",
-  "opentelemetry-instrumentation-genai-qwenpaw; python_version >= '3.14'",
+  "opentelemetry-instrumentation-genai-qwenpaw[instruments]",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
 ]
 

@@ -214,6 +214,28 @@ async def test_caller_side_error_reraises_and_fails_span(
 
 
 @pytest.mark.asyncio
+async def test_caller_side_error_closes_the_underlying_generator(
+    instrument_no_content,
+    runner_module,
+    span_exporter,
+):
+    """Leaving the ``async with`` block early must not leave the turn running."""
+    del span_exporter
+    runner = runner_module.AgentRunner(agent_id="entry-agent")
+    with patched_command_path(
+        runner_module, fake_run_command_path("early-output")
+    ):
+        stream = runner.query_handler(user_command_msgs(), make_request())
+        with pytest.raises(ValueError, match="caller bug"):
+            async with stream:
+                await anext(stream)
+                raise ValueError("caller bug")
+
+    # A suspended async generator keeps a frame; closing it clears it.
+    assert getattr(stream, "__wrapped__").ag_frame is None
+
+
+@pytest.mark.asyncio
 async def test_early_close_finalizes_span_with_partial_output(
     instrument_with_content,
     runner_module,

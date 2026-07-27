@@ -31,7 +31,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instruments = ["qwenpaw >= 1.1.0, < 2.0.0"]
+# qwenpaw itself requires Python <3.14, so the marker keeps the extra
+# installable (as a no-op) on newer interpreters used for tooling.
+instruments = ["qwenpaw >= 1.1.0, < 2.0.0; python_version < '3.14'"]
 
 [project.entry-points.opentelemetry_instrumentor]
 qwenpaw = "opentelemetry.instrumentation.genai.qwenpaw:QwenPawInstrumentor"
