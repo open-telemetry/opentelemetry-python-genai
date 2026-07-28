@@ -1,0 +1,1 @@
+Capture legacy OpenAI ``function_call`` responses (``additional_kwargs['function_call']``) as tool-call requests in input and output messages, matching the modern ``tool_calls`` path.

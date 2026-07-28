@@ -50,6 +50,12 @@ def fixture_chat_openai_reasoning():
     yield llm
 
 
+@pytest.fixture(scope="function", name="chat_openai_legacy_functions")
+def fixture_chat_openai_legacy_functions():
+    llm = ChatOpenAI(model="gpt-3.5-turbo")
+    yield llm
+
+
 @pytest.fixture(scope="function", name="us_amazon_nova_lite_v1_0")
 def fixture_us_amazon_nova_lite_v1_0():
     llm_model_value = "us.amazon.nova-lite-v1:0"
