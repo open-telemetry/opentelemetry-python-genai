@@ -58,6 +58,26 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), use `>=` specifiers and pin the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) rather than using `~=`.
 
 
+## Before adding a new instrumentation
+
+Before scaffolding a new instrumentation package, check whether the target library already
+provides its own GenAI telemetry, and get the user's acknowledgement before proceeding. Follow the
+[When to add an instrumentation here](CONTRIBUTING.md#when-to-add-an-instrumentation-here) policy.
+
+- **Check the library's dependencies.** A dependency on `opentelemetry-api` (or other
+  `opentelemetry-*` packages) in the library's metadata (`pyproject.toml` / `setup.py` /
+  `setup.cfg` / lockfile) usually means it ships native instrumentation — research it before
+  writing any code.
+- **Check the library's public docs.** Look for an OpenTelemetry / observability / tracing
+  integration that ships as a first-party plugin, even in a separate package that isn't a hard
+  dependency.
+- **Report findings and stop for acknowledgement.** Summarize whether the library is natively
+  instrumented or has a first-party plugin, whether it's based on the OTel API, and how closely it
+  follows the GenAI semantic conventions; map that onto the policy's decision tree and present a
+  recommendation. **Do not scaffold or write instrumentation code until the user explicitly
+  acknowledges that instrumentation here is needed.**
+
+
 ## Adding a package to the workspace
 
 A new package under `instrumentation/<pkg>/` (where `<pkg>` is the full

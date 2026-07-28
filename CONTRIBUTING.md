@@ -144,6 +144,56 @@ you start one of these tasks:
 
 Please contribute back anything you learn while using the skills that could help improve them!
 
+## When to add an instrumentation here
+
+We encourage libraries to emit GenAI telemetry themselves, following the
+[GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai),
+either with [native instrumentation](https://opentelemetry.io/docs/specs/otel/glossary/#natively-instrumented)
+(using the OpenTelemetry API directly) or through a plugin maintained by the
+same authors. Telemetry is best owned and maintained closest to the library it
+describes; re-instrumenting such a library here duplicates ownership and
+fragments the ecosystem.
+
+Some existing native instrumentations are not compatible with OpenTelemetry — for
+example, they may use tracing primitives not based on the OpenTelemetry API,
+export via OTLP only without interacting with OpenTelemetry context and SDK
+configuration, or not follow the GenAI semantic conventions.
+
+Before adding a new instrumentation, check whether the target library is already
+natively instrumented or has a first-party plugin, and how closely it follows the
+GenAI semantic conventions:
+
+- **None exists, or it isn't based on the OpenTelemetry API** (alternative
+  tracing primitives, OTLP-only, no OTel context) — proceed with instrumentation
+  in this repo.
+- **It exists and is reasonably compliant** — don't re-instrument here. Record
+  any gaps and open an issue in the corresponding repo, and work with the authors
+  to contribute fixes there if they're open to it.
+- **It's based on the OpenTelemetry API but doesn't follow the GenAI semantic
+  conventions** — record the gaps and open an issue in the corresponding repo.
+  If the authors are open to contributions, help align it there. If not, note in
+  the issue that we intend to host an alternative instrumentation in
+  OpenTelemetry, that we're happy to collaborate, and that we'll be happy to
+  retire ours once it aligns.
+
+```mermaid
+flowchart TD
+    A[Want to instrument a library] --> B{Natively instrumented<br/>or has a first-party plugin?}
+    B -->|No| P[Instrument in this repo]
+    B -->|Yes| C{Based on the<br/>OpenTelemetry API?}
+    C -->|No<br/>alt primitives / OTLP-only / no OTel context| P
+    C -->|Yes| D{Follows GenAI<br/>semantic conventions?}
+    D -->|Yes| E[Don't re-instrument.<br/>Record gaps, open an issue,<br/>work with authors on fixes]
+    D -->|No| F[Record gaps and<br/>open an issue]
+    F --> G{Authors open to<br/>contributions?}
+    G -->|Yes| H[Help align it<br/>there]
+    G -->|No| I[Host an alternative here;<br/>collaborate and retire<br/>ours once they align]
+```
+
+This isn't a one-time check. If a library we already instrument later ships
+compatible native instrumentation or a first-party plugin, we should consider
+retiring ours.
+
 ## Keep PRs small
 
 One logical change per PR. Don't bundle unrelated fixes, refactors, or
