@@ -4,7 +4,14 @@
 # pylint: disable=too-many-locals,too-many-lines
 
 import pytest
-from openai import APIConnectionError, AsyncOpenAI, NotFoundError
+from openai import (
+    APIConnectionError,
+    AsyncOpenAI,
+    AsyncStream,
+    NotFoundError,
+)
+from openai.types.chat import ChatCompletion
+from pydantic import BaseModel
 
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -417,6 +424,10 @@ async def test_chat_completion_with_raw_response_streaming(
             stream=True,
             stream_options={"include_usage": True},
         )
+
+    assert "openai-version" in raw_response.headers
+    assert raw_response.request_id is not None
+
     response = raw_response.parse()
 
     message_content = ""
@@ -475,6 +486,101 @@ async def test_chat_completion_with_raw_response_streaming(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+class _CustomChatCompletion(ChatCompletion):
+    """Caller-defined response type passed to non-streaming parse(to=...)."""
+
+
+class _UnrelatedChunk(BaseModel):
+    """A chunk type unrelated to ChatCompletionChunk."""
+
+    foo: str = "bar"
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_with_raw_response_parse_to_custom_type(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    # On the non-streaming path we call parse() internally to read telemetry;
+    # it must not stop the caller from parsing into their own type.
+    with vcr.use_cassette("test_async_chat_completion_with_raw_response.yaml"):
+        raw_response = await async_openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+        )
+
+    response = raw_response.parse(to=_CustomChatCompletion)
+
+    assert isinstance(response, _CustomChatCompletion)
+    assert response.choices[0].message.content
+
+    spans = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        spans[0],
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_with_raw_response_streaming_unknown_chunk_type(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    # Parsing the raw stream into a chunk type we don't recognize must not break
+    # iteration: the caller drains the same chunks it would with instrumentation
+    # disabled, and the span still closes (empty telemetry) instead of leaking.
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = await async_openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+    response = raw_response.parse(to=AsyncStream[_UnrelatedChunk])
+
+    chunks = [chunk async for chunk in response]
+    assert len(chunks) > 0  # drained fine, same as disabled instrumentation
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1  # span closed, did not leak
+    assert spans[0].end_time is not None
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_with_raw_response_streaming_read_without_parse(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    # A caller can drain the raw streaming body straight off the underlying
+    # httpx response without ever calling parse(). No stream wrapper is built,
+    # so telemetry is empty, but the span must still close (via aclose) instead
+    # of leaking.
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = await async_openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        body = b"".join(
+            [chunk async for chunk in raw_response.http_response.aiter_bytes()]
+        )
+
+    assert body  # drained the raw SSE bytes, same as disabled instrumentation
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1  # span closed, did not leak
+    assert spans[0].end_time is not None
 
 
 @pytest.mark.asyncio()

@@ -148,14 +148,17 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Apply finish telemetry (attributes, metrics, events)."""
 
     def _finish(self, error: Error | None = None) -> None:
-        """Apply finish telemetry and end the span."""
+        """Apply finish telemetry and end the span. Finishes at most once."""
         if self._context_token is None:
             return
+        # Clear up front so a nested or repeated finish is a no-op even if
+        # _apply_finish raises.
+        context_token, self._context_token = self._context_token, None
         try:
             self._apply_finish(error)
         finally:
             try:
-                detach(self._context_token)
+                detach(context_token)
             except Exception:  # pylint: disable=broad-except
                 pass
             self.span.end()
