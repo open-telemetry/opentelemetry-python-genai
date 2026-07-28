@@ -5,7 +5,14 @@ import inspect
 import json
 
 import pytest
-from openai import APIConnectionError, BadRequestError, NotFoundError, OpenAI
+from openai import (
+    APIConnectionError,
+    BadRequestError,
+    NotFoundError,
+    OpenAI,
+    Stream,
+)
+from pydantic import BaseModel
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
@@ -411,6 +418,75 @@ def test_responses_create_streaming(
         request_service_tier="default",
         response_service_tier=getattr(response, "service_tier", None),
     )
+
+
+def test_responses_with_raw_response_streaming(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = openai_client.responses.with_raw_response.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+
+        # Raw-response metadata resolves natively off the wrapper (issue #46).
+        assert "openai-version" in raw_response.headers
+        assert raw_response.request_id is not None
+
+        response = _collect_completed_response(raw_response.parse())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
+class _UnrelatedEvent(BaseModel):
+    """An event type unrelated to the Responses stream events."""
+
+    foo: str = "bar"
+
+
+def test_responses_with_raw_response_streaming_unknown_event_type(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A caller can parse the raw stream into an event type we don't recognize.
+    # Telemetry extraction must not break iteration: the caller must drain the
+    # same events it would with instrumentation disabled, and the span must
+    # still close (empty telemetry) instead of leaking.
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = openai_client.responses.with_raw_response.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+        events = list(raw_response.parse(to=Stream[_UnrelatedEvent]))
+
+    assert len(events) > 0  # drained fine, same as disabled instrumentation
+
+    (span,) = span_exporter.get_finished_spans()  # span closed, did not leak
+    assert span.end_time is not None
 
 
 def test_responses_stream_returns_wrapped_manager(

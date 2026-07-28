@@ -60,8 +60,6 @@ def test_model_omitted_when_missing(handler, span_exporter):
     invocation = create_embedding_invocation(handler, {}, _make_client())
     invocation.stop()
 
-    assert invocation.request_model is None
-
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
@@ -76,8 +74,6 @@ def test_model_preserved_when_provided(handler, span_exporter):
         handler, {"model": "text-embedding-3-small"}, _make_client()
     )
     invocation.stop()
-
-    assert invocation.request_model == "text-embedding-3-small"
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1

@@ -319,3 +319,35 @@ def serialize(obj: Any) -> Optional[str]:
         return json.dumps(obj, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         return None
+
+
+def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
+    """Extract cache/reasoning token break-downs from LangChain usage metadata."""
+
+    token_details: dict[str, int] = {}
+    raw_input_details = usage_metadata.get("input_token_details")
+    input_details: dict[str, Any] = (
+        cast(dict[str, Any], raw_input_details)
+        if isinstance(raw_input_details, dict)
+        else {}
+    )
+    raw_output_details = usage_metadata.get("output_token_details")
+    output_details: dict[str, Any] = (
+        cast(dict[str, Any], raw_output_details)
+        if isinstance(raw_output_details, dict)
+        else {}
+    )
+
+    cache_creation = input_details.get("cache_creation")
+    if isinstance(cache_creation, int) and cache_creation:
+        token_details["cache_creation_input_tokens"] = cache_creation
+
+    cache_read = input_details.get("cache_read")
+    if isinstance(cache_read, int) and cache_read:
+        token_details["cache_read_input_tokens"] = cache_read
+
+    reasoning = output_details.get("reasoning")
+    if isinstance(reasoning, int) and reasoning:
+        token_details["reasoning_tokens"] = reasoning
+
+    return token_details

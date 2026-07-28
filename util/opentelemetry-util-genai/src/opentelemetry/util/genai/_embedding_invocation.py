@@ -46,25 +46,26 @@ class EmbeddingInvocation(GenAIInvocation):
             else _operation_name,
             span_kind=SpanKind.CLIENT,
         )
-        self.provider = provider  # e.g., azure.ai.openai, openai, aws.bedrock
-        self.request_model = request_model
-        self.server_address = server_address
-        self.server_port = server_port
+        # e.g., azure.ai.openai, openai, aws.bedrock
+        self._provider: str = provider
+        self._request_model: str | None = request_model
+        self._server_address: str | None = server_address
+        self._server_port: int | None = server_port
         # encoding_formats can be multi-value -> combinational cardinality risk.
         # Keep on spans/events only.
         self.encoding_formats: list[str] | None = None
         self.input_tokens: int | None = None
         self.dimension_count: int | None = None
         self.response_model_name: str | None = None
-        self._start(self._get_base_attributes())
+        self._start(self._get_start_attributes())
 
-    def _get_base_attributes(self) -> dict[str, AttributeValue]:
+    def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -73,11 +74,11 @@ class EmbeddingInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
             (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -93,22 +94,13 @@ class EmbeddingInvocation(GenAIInvocation):
 
     def _apply_finish(self, error: Error | None = None) -> None:
         optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
             (GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT, self.dimension_count),
             (GenAI.GEN_AI_REQUEST_ENCODING_FORMATS, self.encoding_formats),
             (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
         )
         attributes: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{
-                key: value
-                for key, value in optional_attrs
-                if value is not None
-            },
+            key: value for key, value in optional_attrs if value is not None
         }
         if error is not None:
             self._apply_error_attributes(error)

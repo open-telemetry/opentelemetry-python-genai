@@ -15,6 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
 
+from ._raw_response import ParsableResponse
 from .utils import (
     _openai_response_format_to_output_type,
     get_server_address_and_port,
@@ -438,9 +439,14 @@ def extract_usage_tokens(usage: "ResponseUsage | None") -> UsageTokens:
 
 def set_invocation_response_attributes(
     invocation,
-    response: "Response | None",
+    response: object,
     capture_content: bool,
 ) -> None:
+    if isinstance(response, ParsableResponse):
+        # with_raw_response: safe to parse() here since this is the
+        # non-streaming path, so it has no side effects on the caller's stream.
+        response = response.parse()
+
     if Response is None or not isinstance(response, Response):
         return
 

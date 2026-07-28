@@ -31,11 +31,23 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   `Tracer`, `Meter`, `Logger`, or event APIs is not allowed.
 - Content capture, hooks, and other cross-cutting configuration are owned by the util.
   Instrumentations must not introduce their own env vars, settings, or hook interfaces.
+- Completion hook wiring must follow the util's contract (reference:
+  [`OpenAIInstrumentor`](../../instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/__init__.py)):
+  `_instrument` resolves `kwargs.get("completion_hook") or load_completion_hook()` and passes it to
+  the `TelemetryHandler` (an explicit `instrument(completion_hook=…)` takes precedence over the
+  `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` env var). Flag instrumentations that define their own
+  hook interface, call `on_completion` directly, wrap the hook in `try/except`, drop the
+  `load_completion_hook()` fallback, or fail to thread `completion_hook` through `instrument()`.
 - Message content, prompts, and tool call arguments must only be set through the util's content
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
+- Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
+  didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
+  (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
+  way); and replacement functions missing `@functools.wraps(original)`. Full transparency isn't
+  always reachable — prefer the least intrusive option that works.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions
