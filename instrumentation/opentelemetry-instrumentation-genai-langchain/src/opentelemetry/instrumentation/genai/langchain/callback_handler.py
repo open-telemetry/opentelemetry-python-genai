@@ -520,13 +520,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             self._invocation_manager.delete_invocation_state(run_id)
             return
 
-        invocation.documents = [
-            {
-                "content": doc.page_content,
-                "id": doc.id,
-            }
-            for doc in documents
-        ]
+        if self._telemetry_handler.should_capture_content():
+            invocation.documents = [
+                {
+                    "content": doc.page_content,
+                    "id": doc.id,
+                }
+                for doc in documents
+            ]
         invocation.stop()
         if not invocation.span.is_recording():
             self._invocation_manager.delete_invocation_state(run_id)

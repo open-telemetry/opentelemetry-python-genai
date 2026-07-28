@@ -1398,6 +1398,28 @@ class TestOnRetrieverEnd:
 
         assert run_id not in handler._invocation_manager._invocations
 
+    def test_documents_not_set_when_content_disabled(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+        telemetry.should_capture_content.return_value = False
+
+        docs = [Document(page_content="secret", metadata={})]
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=docs, run_id=run_id)
+
+        assert retrieval_inv.documents is None
+
+    def test_documents_set_when_content_enabled(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+        telemetry.should_capture_content.return_value = True
+
+        docs = [Document(page_content="visible", metadata={})]
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=docs, run_id=run_id)
+
+        assert retrieval_inv.documents[0]["content"] == "visible"
+
     def test_unknown_run_id_does_not_raise(self):
         handler, _, _ = _make_handler_with_retrieval()
         handler.on_retriever_end(documents=[], run_id=_run_id())

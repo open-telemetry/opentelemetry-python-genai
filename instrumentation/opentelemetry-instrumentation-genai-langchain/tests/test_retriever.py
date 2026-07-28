@@ -70,7 +70,9 @@ class _ErrorRetriever(BaseRetriever):
 def test_retrieval_span_attributes(
     span_exporter,
     metric_reader,
-    start_instrumentation,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
     monkeypatch,
     capture_content,
 ):
@@ -79,6 +81,15 @@ def test_retrieval_span_attributes(
     )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
+    )
+
+    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
     )
 
     docs = [
@@ -116,6 +127,8 @@ def test_retrieval_span_attributes(
     else:
         assert gen_ai_attributes.GEN_AI_RETRIEVAL_QUERY_TEXT not in attrs
         assert gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS not in attrs
+
+    instrumentor.uninstrument()
 
 
 def test_retrieval_span_name_without_data_source_id(
@@ -279,13 +292,21 @@ def test_retrieval_error_duration_metric_emitted(
 
 
 def test_document_id_in_span_content(
-    span_exporter, start_instrumentation, monkeypatch
+    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
     )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
     )
     docs = [Document(page_content="text", id="abc-123", metadata={})]
     retriever = _FakeRetriever(documents=docs)
@@ -296,16 +317,25 @@ def test_document_id_in_span_content(
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     ]
     assert "abc-123" in docs_attr
+    instrumentor.uninstrument()
 
 
 def test_document_without_id_in_span_content(
-    span_exporter, start_instrumentation, monkeypatch
+    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
     )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
     )
     docs = [Document(page_content="no id here", metadata={})]
     retriever = _FakeRetriever(documents=docs)
@@ -316,16 +346,25 @@ def test_document_without_id_in_span_content(
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     ]
     assert "no id here" in docs_attr
+    instrumentor.uninstrument()
 
 
 def test_document_metadata_not_in_span_content(
-    span_exporter, start_instrumentation, monkeypatch
+    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
     )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
     )
     docs = [
         Document(
@@ -343,16 +382,25 @@ def test_document_metadata_not_in_span_content(
     assert "text" in docs_attr
     assert "wiki" not in docs_attr
     assert "0.9" not in docs_attr
+    instrumentor.uninstrument()
 
 
 def test_empty_documents_in_span_content(
-    span_exporter, start_instrumentation, monkeypatch
+    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
     )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
     )
     retriever = _FakeRetriever(documents=[])
     retriever.invoke("q")
@@ -363,3 +411,4 @@ def test_empty_documents_in_span_content(
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     )
     assert docs_attr == "[]"
+    instrumentor.uninstrument()
