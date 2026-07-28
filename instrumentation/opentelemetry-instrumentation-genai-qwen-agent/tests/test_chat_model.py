@@ -151,20 +151,41 @@ def test_non_stream_chat(span_exporter, instrument_with_content):
 
 
 def test_non_stream_chat_no_content(span_exporter, instrument_no_content):
-    """Without content capture, no message content lands on the span."""
+    """Without content capture, no message content or tool definitions land
+    on the span."""
     model = _StubChatModel()
     fake_response = [Message(role="assistant", content="Hello there!")]
+    functions = [
+        {
+            "name": "get_weather",
+            "description": "Get the weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+    ]
 
-    with patch.object(
-        _StubChatModel, "_chat_no_stream", return_value=fake_response
+    with (
+        patch.object(
+            _StubChatModel, "_chat_with_functions", return_value=fake_response
+        ),
+        patch.object(
+            _StubChatModel, "_chat_no_stream", return_value=fake_response
+        ),
     ):
-        model.chat(messages=[Message(role="user", content="Hi")], stream=False)
+        model.chat(
+            messages=[Message(role="user", content="Hi")],
+            functions=functions,
+            stream=False,
+        )
 
     chat_spans = _get_chat_spans(span_exporter)
     assert len(chat_spans) == 1
     attrs = dict(chat_spans[0].attributes or {})
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attrs
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attrs
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in attrs
 
 
 def test_non_stream_chat_records_token_usage(

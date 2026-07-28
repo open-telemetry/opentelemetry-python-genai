@@ -498,10 +498,9 @@ def create_inference_invocation(
         if top_p is not None:
             invocation.top_p = top_p
 
-    invocation.tool_definitions = get_tool_definitions(functions)
-
     if handler.should_capture_content():
         invocation.input_messages = convert_to_input_messages(messages)
+        invocation.tool_definitions = get_tool_definitions(functions)
 
     return invocation
 
