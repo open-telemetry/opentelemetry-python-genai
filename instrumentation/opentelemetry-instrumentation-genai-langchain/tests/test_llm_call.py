@@ -819,7 +819,6 @@ def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
     assert stop_sequences == ("STOP",)
 
 
-@pytest.mark.vcr()
 @pytest.mark.skipif(
     not _supports_reasoning_token_details,
     reason="langchain-openai < 0.2.1 does not surface reasoning token details",
@@ -844,7 +843,9 @@ def test_chat_openai_reasoning_token_details(
     # fuzzy-matching a single cassette across both.
     payload = chat_openai_reasoning._get_request_payload(messages, stop=None)
     suffix = "_old" if "n" in payload else ""
-    with vcr.use_cassette(f"test_chat_openai_reasoning_token_details{suffix}"):
+    with vcr.use_cassette(
+        f"test_chat_openai_reasoning_token_details{suffix}.yaml"
+    ):
         chat_openai_reasoning.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
