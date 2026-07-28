@@ -1452,6 +1452,8 @@ class TestOnRetrieverError:
         handler.on_retriever_error(
             error=RuntimeError("boom"), run_id=_run_id()
         )
+
+
 # on_llm_end – token usage break-downs
 # ---------------------------------------------------------------------------
 

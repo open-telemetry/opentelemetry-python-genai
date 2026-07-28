@@ -83,7 +83,9 @@ def test_retrieval_span_attributes(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
     )
 
-    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+    from opentelemetry.instrumentation.genai.langchain import (
+        LangChainInstrumentor,
+    )
 
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
@@ -292,7 +294,11 @@ def test_retrieval_error_duration_metric_emitted(
 
 
 def test_document_id_in_span_content(
-    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
@@ -300,7 +306,9 @@ def test_document_id_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+    from opentelemetry.instrumentation.genai.langchain import (
+        LangChainInstrumentor,
+    )
 
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
@@ -321,7 +329,11 @@ def test_document_id_in_span_content(
 
 
 def test_document_without_id_in_span_content(
-    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
@@ -329,7 +341,9 @@ def test_document_without_id_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+    from opentelemetry.instrumentation.genai.langchain import (
+        LangChainInstrumentor,
+    )
 
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
@@ -350,7 +364,11 @@ def test_document_without_id_in_span_content(
 
 
 def test_document_metadata_not_in_span_content(
-    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
@@ -358,7 +376,9 @@ def test_document_metadata_not_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+    from opentelemetry.instrumentation.genai.langchain import (
+        LangChainInstrumentor,
+    )
 
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
@@ -386,7 +406,11 @@ def test_document_metadata_not_in_span_content(
 
 
 def test_empty_documents_in_span_content(
-    span_exporter, tracer_provider, meter_provider, logger_provider, monkeypatch
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
 ):
     monkeypatch.setenv(
         "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
@@ -394,7 +418,9 @@ def test_empty_documents_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+    from opentelemetry.instrumentation.genai.langchain import (
+        LangChainInstrumentor,
+    )
 
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
