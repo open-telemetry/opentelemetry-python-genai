@@ -112,11 +112,39 @@ def _content_to_parts(
     return parts
 
 
+def _legacy_function_call_request(
+    message: AIMessage,
+) -> Optional[ToolCallRequest]:
+    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
+
+    Pre-tools OpenAI models return a single call under
+    ``additional_kwargs['function_call']`` (``{"name", "arguments"}``) rather
+    than ``message.tool_calls``. ``arguments`` may be a JSON string or an
+    already-decoded mapping. Returns ``None`` when absent or unnamed.
+    """
+    function_call = message.additional_kwargs.get("function_call")
+    if not isinstance(function_call, dict):
+        return None
+    function_call = cast(dict[str, Any], function_call)
+    name = function_call.get("name")
+    if not name:
+        return None
+    raw_arguments = function_call.get("arguments")
+    arguments: Any = raw_arguments
+    if isinstance(raw_arguments, str):
+        try:
+            arguments = json.loads(raw_arguments)
+        except (json.JSONDecodeError, ValueError):
+            arguments = raw_arguments
+    return ToolCallRequest(arguments=arguments, name=name, id=None)
+
+
 def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
-    :class:`ToolCallRequest` for each entry in ``message.tool_calls``.
+    :class:`ToolCallRequest` for each entry in ``message.tool_calls``, plus a
+    legacy ``additional_kwargs['function_call']`` when present.
     """
     parts: list[MessagePart] = _content_to_parts(message.content)
     for call in message.tool_calls:
@@ -130,6 +158,10 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
                 id=call["id"],
             )
         )
+    if not message.tool_calls:
+        legacy_call = _legacy_function_call_request(message)
+        if legacy_call is not None:
+            parts.append(legacy_call)
     return parts
 
 
