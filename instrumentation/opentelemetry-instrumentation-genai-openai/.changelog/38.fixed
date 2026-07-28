@@ -1,0 +1,1 @@
+Ensure OpenAI embedding conformance runs in experimental semantic-convention mode and guards `gen_ai.provider.name` on both emitted metrics.
