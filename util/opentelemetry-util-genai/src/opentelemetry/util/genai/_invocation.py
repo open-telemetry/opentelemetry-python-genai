@@ -77,6 +77,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             {} if attributes is None else attributes
         )
         """Additional attributes to set on spans and/or events. Not set on metrics."""
+        self.event_attributes: dict[str, AttributeValue] = {}
+        """Additional attributes to set on events, but not spans or metrics."""
         self.metric_attributes: dict[str, AttributeValue] = (
             {} if metric_attributes is None else metric_attributes
         )

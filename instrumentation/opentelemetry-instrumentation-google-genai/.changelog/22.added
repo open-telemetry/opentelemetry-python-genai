@@ -1,0 +1,1 @@
+Add a context key for attaching attributes to `gen_ai.client.inference.operation.details` events without adding them to spans.

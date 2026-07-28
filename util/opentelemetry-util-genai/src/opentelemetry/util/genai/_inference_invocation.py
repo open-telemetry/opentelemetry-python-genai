@@ -214,6 +214,7 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
+        attributes.update(self.event_attributes)
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
