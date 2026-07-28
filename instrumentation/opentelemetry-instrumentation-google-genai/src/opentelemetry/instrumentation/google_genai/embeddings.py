@@ -10,7 +10,7 @@ from typing import Any
 
 from google.genai._api_client import BaseApiClient
 from google.genai.models import AsyncModels, Models
-from google.genai.types import EmbedContentResponse
+from google.genai.types import EmbedContentConfig, EmbedContentResponse
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.google_genai.client_info import (
@@ -23,6 +23,9 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
 )
+
+from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
+from .dict_util import flatten_dict
 
 _RAW_RESPONSE_BODY: ContextVar[str | None] = ContextVar(
     "raw_response_body", default=None
@@ -89,6 +92,28 @@ def _apply_embedding_response_attributes(
             pass
 
 
+def _apply_embedding_request_attributes(
+    config: EmbedContentConfig | dict[str, Any] | None,
+    invocation: EmbeddingInvocation,
+) -> None:
+    if config is None:
+        return
+    if isinstance(config, dict):
+        try:
+            config = EmbedContentConfig.model_validate(config)
+        except Exception:
+            return
+
+    attributes = flatten_dict(
+        config.model_dump(exclude_none=True),
+        key_prefix=GCP_GENAI_OPERATION_CONFIG,
+        # HTTP options can contain request headers and must not be copied into
+        # telemetry attributes.
+        exclude_keys={f"{GCP_GENAI_OPERATION_CONFIG}.http_options"},
+    )
+    invocation.attributes.update(attributes)
+
+
 def _create_instrumented_embed_content(
     telemetry_handler: TelemetryHandler,
 ) -> Callable[
@@ -116,6 +141,9 @@ def _create_instrumented_embed_content(
             request_model=kwargs.get("model"),
             server_address=server_address,
         ) as invocation:
+            _apply_embedding_request_attributes(
+                kwargs.get("config"), invocation
+            )
             response = wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
             _RAW_RESPONSE_BODY.set(None)
@@ -151,6 +179,9 @@ def _create_instrumented_async_embed_content(
             request_model=kwargs.get("model"),
             server_address=server_address,
         ) as invocation:
+            _apply_embedding_request_attributes(
+                kwargs.get("config"), invocation
+            )
             response = await wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
             _RAW_RESPONSE_BODY.set(None)

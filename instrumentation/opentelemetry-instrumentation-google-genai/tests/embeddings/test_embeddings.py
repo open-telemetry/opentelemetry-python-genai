@@ -8,6 +8,7 @@ from google.genai.models import AsyncModels, Models
 from google.genai.types import (
     ContentEmbedding,
     ContentEmbeddingStatistics,
+    EmbedContentConfig,
     EmbedContentResponse,
 )
 
@@ -126,6 +127,51 @@ class TestEmbeddings(TestCase):
         self.assertEqual(
             attrs["server.address"],
             "generativelanguage.googleapis.com",
+        )
+
+    def test_embed_content_captures_config_attributes(self):
+        self.client.models.embed_content(
+            model="text-embedding-004",
+            contents="hello world",
+            config=EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=256,
+                auto_truncate=True,
+            ),
+        )
+
+        span = self.otel.get_finished_spans()[0]
+        attrs = span.attributes
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.task_type"],
+            "RETRIEVAL_QUERY",
+        )
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.output_dimensionality"], 256
+        )
+        self.assertTrue(attrs["gcp.gen_ai.operation.config.auto_truncate"])
+
+    def test_async_embed_content_captures_config_attributes(self):
+        async def run_test():
+            await self.client.aio.models.embed_content(
+                model="text-embedding-004",
+                contents="hello world",
+                config={
+                    "taskType": "RETRIEVAL_DOCUMENT",
+                    "outputDimensionality": 128,
+                },
+            )
+
+        asyncio.run(run_test())
+
+        span = self.otel.get_finished_spans()[0]
+        attrs = span.attributes
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.task_type"],
+            "RETRIEVAL_DOCUMENT",
+        )
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.output_dimensionality"], 128
         )
 
     def test_embed_content_multiple_inputs(self):
