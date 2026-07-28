@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any, Optional, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 
@@ -33,6 +35,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
     InferenceInvocation,
+    RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
@@ -529,6 +532,74 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
         tool_invocation.fail(error)
         if not tool_invocation.span.is_recording():
+            self._invocation_manager.delete_invocation_state(run_id=run_id)
+
+    def on_retriever_start(
+        self,
+        serialized: dict[str, Any],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        meta = metadata or {}
+        provider = meta.get("ls_vector_store_provider") or None
+        request_model = meta.get("ls_embedding_model") or None
+        retrieval = self._telemetry_handler.retrieval(
+            provider=provider, request_model=request_model
+        )
+        retrieval.query_text = query
+        self._invocation_manager.add_invocation_state(
+            run_id, parent_run_id, retrieval
+        )
+
+    def on_retriever_end(
+        self,
+        documents: Sequence[Document],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        invocation = self._invocation_manager.get_invocation(run_id=run_id)
+        if invocation is None or not isinstance(
+            invocation, RetrievalInvocation
+        ):
+            self._invocation_manager.delete_invocation_state(run_id)
+            return
+
+        if self._telemetry_handler.should_capture_content():
+            invocation.documents = [
+                {
+                    "content": doc.page_content,
+                    "id": doc.id,
+                }
+                for doc in documents
+            ]
+        invocation.stop()
+        if not invocation.span.is_recording():
+            self._invocation_manager.delete_invocation_state(run_id)
+
+    def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        invocation = self._invocation_manager.get_invocation(run_id=run_id)
+        if invocation is None or not isinstance(
+            invocation, RetrievalInvocation
+        ):
+            self._invocation_manager.delete_invocation_state(run_id)
+            return
+
+        invocation.fail(error)
+        if not invocation.span.is_recording():
             self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def _find_nearest_agent(
