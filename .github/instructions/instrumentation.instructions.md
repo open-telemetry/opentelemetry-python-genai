@@ -14,9 +14,10 @@ For new instrumentations, consult upstream library docs and judge:
 - Is the library used widely enough to warrant a package in this repo?
 - Does it avoid unbounded in-memory accumulation or other side-effects?
 
-For a new instrumentation, check whether the instrumented library depends on `opentelemetry-api`
-(or other `opentelemetry-*` packages) in its `pyproject.toml` / lockfile, or documents a
-first-party OpenTelemetry plugin. If so, flag the PR and link to the
+For a new instrumentation, check whether the instrumented library has a *runtime* dependency on
+`opentelemetry-api` (or other `opentelemetry-*` packages) in its `pyproject.toml` / lockfile (a
+dev/test-only dependency doesn't count), or documents a first-party OpenTelemetry plugin. If so,
+flag the PR and link to the
 [When to add an instrumentation here](../../CONTRIBUTING.md#when-to-add-an-instrumentation-here)
 policy — the library may already be natively instrumented or ship a first-party plugin that we
 should not duplicate here.

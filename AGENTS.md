@@ -64,10 +64,11 @@ Before scaffolding a new instrumentation package, check whether the target libra
 provides its own GenAI telemetry, and get the user's acknowledgement before proceeding. Follow the
 [When to add an instrumentation here](CONTRIBUTING.md#when-to-add-an-instrumentation-here) policy.
 
-- **Check the library's dependencies.** A dependency on `opentelemetry-api` (or other
+- **Check the library's dependencies.** A runtime dependency on `opentelemetry-api` (or other
   `opentelemetry-*` packages) in the library's metadata (`pyproject.toml` / `setup.py` /
-  `setup.cfg` / lockfile) usually means it ships native instrumentation — research it before
-  writing any code.
+  `setup.cfg` / lockfile) can indicate it ships native instrumentation or a first-party
+  OpenTelemetry integration — research it before writing any code. (A dev/test-only dependency,
+  e.g. for examples, doesn't count.)
 - **Check the library's public docs.** Look for an OpenTelemetry / observability / tracing
   integration that ships as a first-party plugin, even in a separate package that isn't a hard
   dependency.
