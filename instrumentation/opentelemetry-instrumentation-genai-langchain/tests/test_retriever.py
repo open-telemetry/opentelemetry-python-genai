@@ -19,6 +19,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import Field
 
+from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.semconv.attributes import error_attributes
@@ -81,10 +82,6 @@ def test_retrieval_span_attributes(
     )
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
-    )
-
-    from opentelemetry.instrumentation.genai.langchain import (
-        LangChainInstrumentor,
     )
 
     instrumentor = LangChainInstrumentor()
@@ -306,10 +303,6 @@ def test_document_id_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import (
-        LangChainInstrumentor,
-    )
-
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,
@@ -341,10 +334,6 @@ def test_document_without_id_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import (
-        LangChainInstrumentor,
-    )
-
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,
@@ -376,10 +365,6 @@ def test_document_metadata_not_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import (
-        LangChainInstrumentor,
-    )
-
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,
@@ -418,10 +403,6 @@ def test_empty_documents_in_span_content(
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    from opentelemetry.instrumentation.genai.langchain import (
-        LangChainInstrumentor,
-    )
-
     instrumentor = LangChainInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,
