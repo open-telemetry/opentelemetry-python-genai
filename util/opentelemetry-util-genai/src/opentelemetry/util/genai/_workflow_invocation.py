@@ -62,6 +62,8 @@ class WorkflowInvocation(GenAIInvocation):
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
         }
+        if self._name is not None:
+            attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._name
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:

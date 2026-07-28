@@ -44,6 +44,19 @@ def _gemini_cassette_name(base: str) -> str:
     return f"{base}{suffix}.yaml"
 
 
+def _langchain_openai_version() -> tuple:
+    return tuple(
+        int(part) for part in _pkg_version("langchain-openai").split(".")[:3]
+    )
+
+
+# langchain-openai only started surfacing ``reasoning_tokens`` (via
+# ``output_token_details``) in the parsed usage metadata from 0.2.1 onward;
+# older releases drop the detail entirely, so the reasoning assertions below
+# cannot hold on those versions.
+_supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
+
+
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
 @pytest.mark.parametrize(
     "capture_content",
@@ -804,3 +817,87 @@ def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
         gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES
     )
     assert stop_sequences == ("STOP",)
+
+
+@pytest.mark.skipif(
+    not _supports_reasoning_token_details,
+    reason="langchain-openai < 0.2.1 does not surface reasoning token details",
+)
+def test_chat_openai_reasoning_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning, vcr
+):
+    messages = [
+        SystemMessage(content="You are a careful mathematical reasoner."),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top? Think through it step by step."
+            )
+        ),
+    ]
+
+    # Older langchain-openai sends an explicit ``n``/``temperature`` on the
+    # request body while newer versions omit them, so the recorded bodies
+    # differ. Pick the cassette recorded for the installed version instead of
+    # fuzzy-matching a single cassette across both.
+    payload = chat_openai_reasoning._get_request_payload(messages, stop=None)
+    suffix = "_old" if "n" in payload else ""
+    with vcr.use_cassette(
+        f"test_chat_openai_reasoning_token_details{suffix}.yaml"
+    ):
+        chat_openai_reasoning.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 63
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 1284
+    )
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 1088
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_cache_token_details(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
+        )
+        == 5
+    )
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 4
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+    )

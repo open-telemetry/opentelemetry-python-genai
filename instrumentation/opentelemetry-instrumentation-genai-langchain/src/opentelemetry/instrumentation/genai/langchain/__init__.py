@@ -36,6 +36,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.package import _instruments
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
+from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import get_telemetry_handler
 
 
@@ -66,6 +67,8 @@ class LangChainInstrumentor(BaseInstrumentor):
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             logger_provider=logger_provider,
+            completion_hook=kwargs.get("completion_hook")
+            or load_completion_hook(),
         )
         otel_callback_handler = OpenTelemetryLangChainCallbackHandler(
             telemetry_handler=telemetry_handler,

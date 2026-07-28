@@ -5,7 +5,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Literal,
+    Type,
+    TypeAlias,
+    Union,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=useless-import-alias
@@ -248,6 +256,16 @@ class OutputMessage:
 class Error:
     message: str
     type: Type[BaseException]
+    # Pre-resolved error.type value
+    # When set it takes precedence over error.type value derived from ``type``.
+    # Kept separate from ``type`` to stay backwards compatible.
+    type_str: str | None = None
+
+
+# Callback an instrumentor may supply to derive the error.type attribute from a
+# provider exception.
+# Returns None to fall back to the default derived from ``Error.type``.
+ErrorTypeResolver: TypeAlias = Callable[[BaseException], "str | None"]
 
 
 def __getattr__(name: str) -> object:

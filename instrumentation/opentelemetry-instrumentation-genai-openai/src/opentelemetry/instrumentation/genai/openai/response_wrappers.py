@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     )
 
     from opentelemetry.util.genai._invocation import GenAIInvocation
+
+_logger = logging.getLogger(__name__)
 
 TextFormatT = TypeVar("TextFormatT")
 ResponseT = TypeVar("ResponseT")
@@ -166,10 +169,6 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
             pass
         return self
 
-    def parse(self) -> "ResponseStreamWrapper":
-        """Called when using with_raw_response with stream=True."""
-        return self
-
     @property
     def response(self):
         response = _get_stream_response(self.stream)
@@ -178,13 +177,21 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         return _ResponseProxy(response, lambda: self._stop(None))
 
     def process_event(self, event: "ResponseStreamEvent[TextFormatT]") -> None:
-        event_type = event.type
+        # raw-response stream can be parsed into a caller-defined event type.
+        event_type = getattr(event, "type", None)
+        if not isinstance(event_type, str):
+            _logger.debug(
+                "Skipping telemetry for unrecognized response event type %s",
+                type(event).__name__,
+            )
+            return
+
         response: "ParsedResponse[TextFormatT] | Response | None" = getattr(
             event, "response", None
         )
 
         if response and not self._self_invocation.response_model_name:
-            model = response.model
+            model = getattr(response, "model", None)
             if model:
                 self._self_invocation.response_model_name = model
 
@@ -360,10 +367,6 @@ class AsyncResponseStreamWrapper(
     async def until_done(self) -> "AsyncResponseStreamWrapper[TextFormatT]":
         async for _ in self:
             pass
-        return self
-
-    def parse(self) -> "AsyncResponseStreamWrapper[TextFormatT]":
-        """Called when using with_raw_response with stream=True."""
         return self
 
     @property

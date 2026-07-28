@@ -96,6 +96,21 @@ calls nested underneath.
         }
     )
 
+Configuration
+-------------
+
+By default, prompts and completions are not captured. To capture message content, set the
+environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of
+``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT``.
+
+Prompts and completions can instead be uploaded to external storage via a completion hook: set
+``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` with
+``OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH`` (install the ``upload`` extra:
+``pip install opentelemetry-util-genai[upload]``), or pass a custom ``CompletionHook``
+programmatically, which takes precedence over the environment variable::
+
+    LangChainInstrumentor().instrument(completion_hook=my_hook)
+
 References
 ----------
 
