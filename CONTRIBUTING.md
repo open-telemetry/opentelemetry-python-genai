@@ -151,7 +151,6 @@ Please contribute back anything you learn while using the skills that could help
 > [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai),
 > either with [native instrumentation](https://opentelemetry.io/docs/specs/otel/glossary/#natively-instrumented)
 > (using the OpenTelemetry API directly) or through a first-party plugin. 
-
 > Telemetry is best owned and maintained closest to the library it
 > describes; When native instrumentation is available, re-instrumenting here 
 > fragments the ecosystem.
