@@ -360,6 +360,17 @@ def test_chat_openai_legacy_function_call(
     assert '"name":"get_current_weather"' in output_messages
     assert '"location":"Paris"' in output_messages
 
+    tool_definitions = span.attributes.get(
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    )
+    assert tool_definitions is not None
+    assert '"name":"get_current_weather"' in tool_definitions
+    assert (
+        '"description":"Get the current weather in a given location."'
+        in tool_definitions
+    )
+    assert '"location"' in tool_definitions
+
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
 def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
