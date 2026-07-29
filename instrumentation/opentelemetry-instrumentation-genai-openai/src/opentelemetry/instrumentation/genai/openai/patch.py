@@ -17,9 +17,6 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     InferenceInvocation,
 )
-from opentelemetry.util.genai.types import (
-    Error,
-)
 
 from ._raw_response import ParsableResponse, wrap_stream_result
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
@@ -86,7 +83,7 @@ def chat_completions_create_v_new(
             chat_invocation.stop()
             return result
         except Exception as error:
-            chat_invocation.fail(Error(type=type(error), message=str(error)))
+            chat_invocation.fail(error)
             raise
 
     return traced_method
@@ -118,7 +115,7 @@ def async_chat_completions_create_v_new(
             return result
 
         except Exception as error:
-            chat_invocation.fail(Error(type=type(error), message=str(error)))
+            chat_invocation.fail(error)
             raise
 
     return traced_method
@@ -133,7 +130,7 @@ def embeddings_create(handler: TelemetryHandler):
         try:
             result = wrapped(*args, **kwargs)
         except Exception as error:
-            invocation.fail(Error(type=type(error), message=str(error)))
+            invocation.fail(error)
             raise
 
         _safe_set_embeddings_response_properties(invocation, result)
@@ -152,7 +149,7 @@ def async_embeddings_create(handler: TelemetryHandler):
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as error:
-            invocation.fail(Error(type=type(error), message=str(error)))
+            invocation.fail(error)
             raise
 
         _safe_set_embeddings_response_properties(invocation, result)

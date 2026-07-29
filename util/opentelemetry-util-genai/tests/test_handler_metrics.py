@@ -124,7 +124,7 @@ class TelemetryHandlerMetricsTest(TestBase):
             invocation = handler.inference("", request_model="err-model")
         invocation.input_tokens = 11
 
-        error = Error(message="boom", type=ValueError)
+        error = Error(message="boom", type="ValueError")
         with patch(
             "timeit.default_timer",
             return_value=2001.0,
@@ -440,7 +440,7 @@ class TelemetryHandlerMetricsTest(TestBase):
                 "embed-prov", request_model="embed-err-model"
             )
 
-        error = Error(message="embedding failed", type=RuntimeError)
+        error = Error(message="embedding failed", type="RuntimeError")
         with patch("timeit.default_timer", return_value=3002.5):
             invocation.fail(error)
 
@@ -530,7 +530,7 @@ class TelemetryHandlerToolMetricsTest(TestBase):
         with patch("timeit.default_timer", return_value=500.0):
             invocation = handler.tool("failing_tool")
 
-        error = Error(message="Tool execution failed", type=RuntimeError)
+        error = Error(message="Tool execution failed", type="RuntimeError")
         with patch("timeit.default_timer", return_value=501.5):
             invocation.fail(error)
 
@@ -657,7 +657,7 @@ class TelemetryHandlerRetrievalMetricsTest(TestBase):
         with patch("timeit.default_timer", return_value=2000.0):
             invocation = handler.retrieval(provider="pinecone")
 
-        error = Error(message="retrieval failed", type=ConnectionError)
+        error = Error(message="retrieval failed", type="ConnectionError")
         with patch("timeit.default_timer", return_value=2003.0):
             invocation.fail(error)
 

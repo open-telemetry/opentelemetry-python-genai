@@ -35,6 +35,10 @@ from typing import Any, Collection
 from opentelemetry.instrumentation.genai.agno.package import (
     _instruments,
 )
+from opentelemetry.instrumentation.genai.agno.patch import (
+    patch_agent,
+    unpatch_agent,
+)
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -65,17 +69,17 @@ class AgnoInstrumentor(BaseInstrumentor):
             kwargs.get("completion_hook") or load_completion_hook()
         )
 
-        TelemetryHandler(
+        handler = TelemetryHandler(
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=completion_hook,
         )
-        # Patching will be added in a follow-up PR
+        patch_agent(handler)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Agno instrumentation.
 
         This removes all patches applied during instrumentation.
         """
-        # Unpatching will be added in a follow-up PR
+        unpatch_agent()

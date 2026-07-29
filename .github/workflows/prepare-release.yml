@@ -6,6 +6,7 @@ on:
         type: choice
         options:
         - ''
+        - opentelemetry-instrumentation-genai-agno
         - opentelemetry-instrumentation-genai-anthropic
         - opentelemetry-instrumentation-google-genai
         - opentelemetry-instrumentation-genai-langchain

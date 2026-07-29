@@ -153,10 +153,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def _apply_error_attributes(self, error: Error) -> None:
         """Apply error status and error.type attribute to the span, events, and metrics."""
-        error_type = error.type_str or error.type.__qualname__
         self.span.set_status(Status(StatusCode.ERROR, error.message))
-        self.attributes[error_attributes.ERROR_TYPE] = error_type
-        self.metric_attributes[error_attributes.ERROR_TYPE] = error_type
+        self.attributes[error_attributes.ERROR_TYPE] = error.type
+        self.metric_attributes[error_attributes.ERROR_TYPE] = error.type
 
     def _call_completion_hook(
         self,
@@ -208,14 +207,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def fail(self, error: Error | BaseException) -> None:
         """Fail the invocation and end its span with error status."""
         if isinstance(error, BaseException):
-            type_str = (
-                self._error_type_resolver(error)
-                if self._error_type_resolver is not None
-                else None
-            )
-            error = Error(
-                message=str(error), type=type(error), type_str=type_str
-            )
+            error = Error.from_exception(error, self._error_type_resolver)
         self._finish(error)
 
     def __enter__(self) -> GenAIInvocation:

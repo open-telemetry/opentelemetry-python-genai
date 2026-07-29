@@ -18,9 +18,11 @@ from opentelemetry.util.genai.types import Error
 
 try:
     from opentelemetry.instrumentation.genai.openai.response_extractors import (  # pylint: disable=no-name-in-module
+        get_response_error,
         set_invocation_response_attributes,
     )
 except ImportError:
+    get_response_error = None
     set_invocation_response_attributes = None
 
 if TYPE_CHECKING:
@@ -143,10 +145,10 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         self._self_invocation.stop()
         self._self_response_telemetry_finalized = True
 
-    def _fail(self, message: str, error_type: type[BaseException]) -> None:
+    def _fail(self, error: Error) -> None:
         if self._self_response_telemetry_finalized:
             return
-        self._self_invocation.fail(Error(message=message, type=error_type))
+        self._self_invocation.fail(error)
         self._self_response_telemetry_finalized = True
 
     def _process_chunk(
@@ -158,7 +160,10 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         self._stop(None)
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._fail(str(error), type(error))
+        if self._self_response_telemetry_finalized:
+            return
+        self._self_invocation.fail(error)
+        self._self_response_telemetry_finalized = True
 
     def get_final_response(self) -> "ParsedResponse[TextFormatT]":
         self.until_done()
@@ -195,23 +200,26 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
             if model:
                 self._self_invocation.response_model_name = model
 
-        if event_type == "response.completed":
+        if event_type in {"response.completed", "response.incomplete"}:
             self._stop(response)
             return
 
-        if event_type in {"response.failed", "response.incomplete"}:
+        if event_type == "response.failed":
             _set_response_attributes(
                 self._self_invocation,
                 response,
                 self._self_capture_content,
             )
-            self._fail(event_type, RuntimeError)
+            error = (
+                get_response_error(response) if get_response_error else None
+            )
+            self._fail(error or Error(type=event_type, message=None))
             return
 
-        if event_type == "response.error":
-            error_type = getattr(event, "code", None) or "response.error"
-            message = getattr(event, "message", None) or error_type
-            self._fail(message, RuntimeError)
+        if event.type == "error":
+            error_type = event.code or "error"
+            message = event.message or None
+            self._fail(Error(type=error_type, message=message))
 
 
 class ResponseStreamWrapper(

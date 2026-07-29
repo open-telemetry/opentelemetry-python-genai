@@ -476,7 +476,9 @@ def assert_openai_completion_attributes_with_error(
     assert span is not None
     assert span.name == "chat gpt-3.5-turbo"
     attributes = span.attributes
-    assert attributes[error_attributes.ERROR_TYPE] == "AuthenticationError"
+    assert (
+        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+    )
     assert attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     assert (
         attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == "gpt-3.5-turbo"
@@ -637,7 +639,9 @@ def assert_duration_metric_when_error(metric, parent_span):
 
 def assert_duration_metric_attributes_when_error(attributes, parent_span):
     assert len(attributes) == 4
-    assert attributes[error_attributes.ERROR_TYPE] == "AuthenticationError"
+    assert (
+        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+    )
     assert attributes.get(gen_ai_attributes.GEN_AI_PROVIDER_NAME) == "openai"
     assert (
         attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
