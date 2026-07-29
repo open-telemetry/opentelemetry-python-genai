@@ -12,7 +12,10 @@ from openai import (
     APIConnectionError,
     NotFoundError,
     OpenAI,
+    Stream,
 )
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from pydantic import BaseModel
 
 try:
     from openai import not_given  # pylint: disable=no-name-in-module
@@ -546,6 +549,39 @@ def test_chat_completion_with_raw_response(
         )
 
 
+class _CustomChatCompletion(ChatCompletion):
+    """Caller-defined response type passed to non-streaming parse(to=...)."""
+
+
+def test_chat_completion_with_raw_response_parse_to_custom_type(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # On the non-streaming path we call parse() internally to read telemetry.
+    # That must not consume the response or prevent the caller from parsing it
+    # into their own type: parse(to=CustomType) must still return CustomType.
+    with vcr.use_cassette("test_chat_completion_with_raw_response.yaml"):
+        raw_response = openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+        )
+
+    response = raw_response.parse(to=_CustomChatCompletion)
+
+    assert isinstance(response, _CustomChatCompletion)
+    assert response.choices[0].message.content
+
+    spans = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        spans[0],
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+    )
+
+
 def test_chat_completion_with_raw_response_streaming(
     span_exporter, log_exporter, openai_client, instrument_with_content, vcr
 ):
@@ -559,6 +595,10 @@ def test_chat_completion_with_raw_response_streaming(
             stream=True,
             stream_options={"include_usage": True},
         )
+
+    assert "openai-version" in raw_response.headers
+    assert raw_response.request_id is not None
+
     response = raw_response.parse()
 
     message_content = ""
@@ -617,6 +657,110 @@ def test_chat_completion_with_raw_response_streaming(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+class _CustomChatCompletionChunk(ChatCompletionChunk):
+    """Caller-defined chunk subclass passed via parse(to=Stream[...])."""
+
+
+class _UnrelatedChunk(BaseModel):
+    """A chunk type unrelated to ChatCompletionChunk."""
+
+    foo: str = "bar"
+
+
+def test_chat_completion_with_raw_response_streaming_custom_chunk_type(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A caller may parse the raw stream into a custom chunk type via
+    # parse(to=Stream[CustomChunk]). When it is a ChatCompletionChunk subclass,
+    # our proxy wraps the stream, accumulates telemetry as usual, and still
+    # hands the caller their own chunk type back.
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+    response = raw_response.parse(to=Stream[_CustomChatCompletionChunk])
+
+    response_stream_usage = None
+    response_stream_model = None
+    response_stream_id = None
+    for chunk in response:
+        assert isinstance(chunk, _CustomChatCompletionChunk)
+        if getattr(chunk, "usage", None):
+            response_stream_usage = chunk.usage
+            response_stream_model = chunk.model
+            response_stream_id = chunk.id
+
+    spans = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        spans[0],
+        DEFAULT_MODEL,
+        True,
+        response_stream_id,
+        response_stream_model,
+        response_stream_usage.prompt_tokens,
+        response_stream_usage.completion_tokens,
+        response_service_tier="default",
+    )
+
+
+def test_chat_completion_with_raw_response_streaming_unknown_chunk_type(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A caller can parse the raw stream into a chunk type we don't recognize.
+    # Telemetry extraction must not break iteration: the caller must drain the
+    # same chunks it would with instrumentation disabled, and the span must
+    # still close (empty telemetry) instead of leaking.
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+    response = raw_response.parse(to=Stream[_UnrelatedChunk])
+
+    chunks = list(response)
+    assert len(chunks) > 0  # drained fine, same as disabled instrumentation
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1  # span closed, did not leak
+    assert spans[0].end_time is not None
+
+
+def test_chat_completion_with_raw_response_streaming_read_without_parse(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A caller can drain the raw streaming body straight off the underlying
+    # httpx response without ever calling parse(). No stream wrapper is built,
+    # so telemetry is empty, but the span must still close instead of leaking.
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        body = b"".join(raw_response.http_response.iter_bytes())
+
+    assert body  # drained the raw SSE bytes, same as disabled instrumentation
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1  # span closed, did not leak
+    assert spans[0].end_time is not None
 
 
 def test_chat_completion_tool_calls_with_content(
