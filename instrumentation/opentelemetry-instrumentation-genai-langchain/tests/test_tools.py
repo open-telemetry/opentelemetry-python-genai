@@ -299,7 +299,6 @@ def test_prepare_tool_definitions_function_type_missing_function_body():
 
 
 def test_prepare_tool_definitions_non_function_type_with_name_skipped():
-    no ``type`` at all."""
     tools = [
         {
             "type": "web_search",
