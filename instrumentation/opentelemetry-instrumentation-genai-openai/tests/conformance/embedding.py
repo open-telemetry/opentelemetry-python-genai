@@ -38,9 +38,6 @@ class EmbeddingScenario(Scenario):
             logger_provider=logger_provider,
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
-            extra_env={
-                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"
-            },
         ):
             with vcr.use_cassette("embedding_conformance.yaml"):
                 OpenAI().embeddings.create(
