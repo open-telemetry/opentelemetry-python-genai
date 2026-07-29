@@ -298,6 +298,38 @@ def test_prepare_tool_definitions_function_type_missing_function_body():
     assert result is None
 
 
+def test_prepare_tool_definitions_non_function_type_with_name_skipped():
+    no ``type`` at all."""
+    tools = [
+        {
+            "type": "web_search",
+            "name": "search_the_web",
+            "description": "Vendor-specific tool",
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_non_function_type_with_name_skipped_in_mix():
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "modern_tool"},
+        },
+        {
+            "type": "web_search",
+            "name": "search_the_web",
+        },
+        {
+            "name": "legacy_tool",
+        },
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert [defn.name for defn in result] == ["modern_tool", "legacy_tool"]
+
+
 def test_prepare_tool_definitions_entry_without_type_or_name_skipped():
     tools = [{"description": "no type, no name"}]
     result = prepare_tool_definitions(tools)
