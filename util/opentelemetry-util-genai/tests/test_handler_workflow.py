@@ -86,6 +86,24 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(invocation._monotonic_start_s, 500.0)
         invocation.stop()
 
+    def test_start_workflow_sets_workflow_name_attribute(self) -> None:
+        invocation = self.handler.workflow(name="my_pipeline")
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        value = spans[0].attributes[GenAI.GEN_AI_WORKFLOW_NAME]
+        self.assertEqual(value, "my_pipeline")
+        self.assertIsInstance(value, str)
+
+    def test_start_workflow_without_name_omits_workflow_name_attribute(
+        self,
+    ) -> None:
+        invocation = self.handler.workflow(name=None)
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertNotIn(GenAI.GEN_AI_WORKFLOW_NAME, spans[0].attributes)
+
     # ------------------------------------------------------------------
     # stop_workflow
     # ------------------------------------------------------------------
@@ -216,6 +234,9 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
 
         self.assertEqual(
             captured_attributes[GenAI.GEN_AI_OPERATION_NAME], "invoke_workflow"
+        )
+        self.assertEqual(
+            captured_attributes[GenAI.GEN_AI_WORKFLOW_NAME], "my-workflow"
         )
 
         spans = self._get_finished_spans()

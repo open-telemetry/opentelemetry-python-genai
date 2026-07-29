@@ -204,6 +204,24 @@ Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (
 finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
 isn't enough, add the capability here rather than working around it.
 
+#### Preserve the SDK's return contract
+
+Instrumentation observes; it should not change what a call returns or when its work happens.
+
+- **No new side effects.** Don't do work the SDK didn't — building telemetry must never consume,
+  materialize, or otherwise trigger the result early. Stay as lazy as the original.
+- **Don't change the returned type.** `isinstance` and `__class__` must still resolve to the
+  original type. A transparent proxy (e.g. `wrapt.ObjectProxy`) satisfies this; returning a
+  different or already-parsed type does not.
+- **Keep wrappers transparent.** A wrapper should be indistinguishable from what it wraps —
+  attributes and behavior forward unchanged, only telemetry is added.
+- **Decorate replacement functions with `@functools.wraps(original)`.** Whenever a function or bound
+  method is swapped for a stand-in (`obj.close = _close`, wrapt patches), so introspection and
+  `help()` still see the original. Not needed for proxy-class methods, which shadow rather than
+  replace.
+
+Full transparency isn't always reachable — prefer the least intrusive option that works.
+
 ### Exception handling
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the

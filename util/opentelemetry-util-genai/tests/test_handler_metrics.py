@@ -563,3 +563,42 @@ class TelemetryHandlerRetrievalMetricsTest(TestBase):
         )
         self.assertAlmostEqual(duration_point.sum, 3.0, places=3)
         self.assertNotIn("gen_ai.client.token.usage", metrics)
+
+    def test_finishing_twice_records_metrics_once(self) -> None:
+        # stop()/fail() must be idempotent: the OTel SDK ignores a second
+        # span.end(), but metrics have no such guard, so a repeated finish
+        # would double-count duration and tokens.
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = handler.inference("prov", request_model="model")
+        invocation.input_tokens = 5
+        invocation.output_tokens = 7
+
+        with patch("timeit.default_timer", return_value=1002.0):
+            invocation.stop()
+            invocation.stop()
+            invocation.fail(Error(message="late", type=RuntimeError))
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertEqual(len(duration_points), 1)
+        self.assertAlmostEqual(duration_points[0].sum, 2.0, places=3)
+        self.assertNotIn("error.type", duration_points[0].attributes)
+
+        token_by_type = {
+            point.attributes[GenAI.GEN_AI_TOKEN_TYPE]: point
+            for point in metrics["gen_ai.client.token.usage"]
+        }
+        self.assertAlmostEqual(
+            token_by_type[GenAI.GenAiTokenTypeValues.INPUT.value].sum,
+            5.0,
+            places=3,
+        )
+        self.assertAlmostEqual(
+            token_by_type[GenAI.GenAiTokenTypeValues.COMPLETION.value].sum,
+            7.0,
+            places=3,
+        )

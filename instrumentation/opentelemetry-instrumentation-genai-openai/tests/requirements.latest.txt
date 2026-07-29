@@ -47,6 +47,7 @@ Deprecated==1.3.1
 importlib-metadata==9.0.0
 packaging==26.2
 wrapt==2.2.2
+opentelemetry-instrumentation-httpx==0.64b0
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e instrumentation/opentelemetry-instrumentation-genai-openai
