@@ -216,9 +216,9 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
             self._fail(error or Error(type=event_type, message=None))
             return
 
-        if event_type == "error":
-            error_type = getattr(event, "code", None) or "error"
-            message = getattr(event, "message", None)
+        if event.type == "error":
+            error_type = event.code or "error"
+            message = event.message or None
             self._fail(Error(type=error_type, message=message))
 
 

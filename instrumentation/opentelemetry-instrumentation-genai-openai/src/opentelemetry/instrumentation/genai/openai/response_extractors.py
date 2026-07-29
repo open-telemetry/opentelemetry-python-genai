@@ -379,9 +379,9 @@ def get_response_error(response: "Response | None") -> "Error | None":
     if Response is None or Error is None or not isinstance(response, Response):
         return None
     error = response.error
-    if error is None or not getattr(error, "code", None):
+    if error is None:
         return None
-    return Error(type=error.code, message=getattr(error, "message", None))
+    return Error(type=error.code, message=error.message)
 
 
 def get_inference_creation_kwargs(
