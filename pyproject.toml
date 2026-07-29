@@ -110,6 +110,8 @@ include = [
 # We should also add type hints to the test suite - It helps on finding bugs.
 # We are excluding for now because it's easier, and more important to add to the instrumentation packages.
 exclude = [
+  "**/dev/**",
+  "**/.venv/**",
   "instrumentation/opentelemetry-instrumentation-genai-agno/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-agno/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/**/*.py",
