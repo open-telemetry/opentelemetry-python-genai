@@ -377,6 +377,15 @@ def test_embeddings_token_metrics(
     )
     assert token_metric is not None
 
+    for metric in (duration_metric, token_metric):
+        assert metric.data.data_points, f"{metric.name} metric has no data points"
+        for point in metric.data.data_points:
+            assert (
+                point.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME]
+                == GenAIAttributes.GenAiProviderNameValues.OPENAI.value
+            )
+            assert GenAIAttributes.GEN_AI_SYSTEM not in point.attributes
+
     # Find the input token data point
     input_token_point = None
     for point in token_metric.data.data_points:

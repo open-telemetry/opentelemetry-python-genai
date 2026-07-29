@@ -140,40 +140,6 @@ def test_dimensions_omitted_when_not_provided(handler):
         invocation.stop()
 
 
-def test_embedding_metrics_use_provider_name_attribute(handler, metric_reader):
-    """Experimental metrics must use the current provider attribute."""
-    invocation = create_embedding_invocation(
-        handler, {"model": "text-embedding-3-small"}, _make_client()
-    )
-    invocation.input_tokens = 7
-    invocation.stop()
-
-    metrics = metric_reader.get_metrics_data()
-    metric_names = {
-        metric.name
-        for resource_metric in metrics.resource_metrics
-        for scope_metric in resource_metric.scope_metrics
-        for metric in scope_metric.metrics
-    }
-    assert {
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-    } <= metric_names
-
-    for resource_metric in metrics.resource_metrics:
-        for scope_metric in resource_metric.scope_metrics:
-            for metric in scope_metric.metrics:
-                if metric.name in {
-                    "gen_ai.client.operation.duration",
-                    "gen_ai.client.token.usage",
-                }:
-                    for point in metric.data.data_points:
-                        assert (
-                            point.attributes["gen_ai.provider.name"]
-                            == "openai"
-                        )
-
-
 def test_encoding_format_mapped_to_invocation(handler):
     invocation = create_embedding_invocation(
         handler,
