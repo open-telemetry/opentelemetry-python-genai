@@ -63,6 +63,9 @@ except ImportError:
 GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
     "generate_content_extra_attributes_context_key"
 )
+GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
+    "generate_content_event_only_extra_attributes_context_key"
+)
 
 
 class _MethodsSnapshot:
@@ -385,6 +388,13 @@ def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
     return dict(attrs or {})
 
 
+def _get_event_only_generate_content_attributes() -> dict[str, AttributeValue]:
+    attrs = context_api.get_value(
+        GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY
+    )
+    return dict(attrs or {})
+
+
 def _apply_response_attributes(
     response: GenerateContentResponse,
     finish_reasons: list[str],
@@ -487,6 +497,9 @@ def _create_instrumented_generate_content(
                 )
                 invocation.attributes.update(
                     _get_extra_generate_content_attributes()
+                )
+                invocation.event_attributes.update(
+                    _get_event_only_generate_content_attributes()
                 )
                 invocation.tool_definitions = _maybe_get_tool_definitions(
                     wrapped_config
@@ -647,6 +660,9 @@ def _create_instrumented_generate_content_stream(
             invocation.attributes.update(
                 _get_extra_generate_content_attributes()
             )
+            invocation.event_attributes.update(
+                _get_event_only_generate_content_attributes()
+            )
             invocation.tool_definitions = _maybe_get_tool_definitions(
                 wrapped_config
             )
@@ -713,6 +729,9 @@ def _create_instrumented_async_generate_content(
             ) as invocation:
                 invocation.attributes.update(
                     _get_extra_generate_content_attributes()
+                )
+                invocation.event_attributes.update(
+                    _get_event_only_generate_content_attributes()
                 )
                 _apply_request_attributes(
                     wrapped_config,
@@ -796,6 +815,9 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
             )
             invocation.attributes.update(
                 _get_extra_generate_content_attributes()
+            )
+            invocation.event_attributes.update(
+                _get_event_only_generate_content_attributes()
             )
             _apply_request_attributes(
                 wrapped_config,

@@ -5,6 +5,7 @@ import unittest
 
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.google_genai import (
+    GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
     GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
 )
 
@@ -116,5 +117,26 @@ class StreamingTestCase(TestCase):
                 event.attributes["extra_attribute_key"]
                 == "extra_attribute_value"
             )
+        finally:
+            context_api.detach(tok)
+
+    def test_event_only_extra_attributes_are_not_added_to_span(self):
+        self.configure_valid_response(text="Yep, it works!")
+        tok = context_api.attach(
+            context_api.set_value(
+                GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+                {"event_only_attribute": "event-value"},
+            )
+        )
+        try:
+            self.generate_content(
+                model="gemini-2.0-flash", contents="Does this work?"
+            )
+            span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+            event = self.otel.get_event_named(
+                "gen_ai.client.inference.operation.details"
+            )
+            self.assertNotIn("event_only_attribute", span.attributes)
+            self.assertEqual(event.attributes["event_only_attribute"], "event-value")
         finally:
             context_api.detach(tok)

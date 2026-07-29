@@ -1,0 +1,3 @@
+Support separate event-only attributes on ``InferenceInvocation`` so
+instrumentations can enrich GenAI operation-detail events without changing
+span attributes.

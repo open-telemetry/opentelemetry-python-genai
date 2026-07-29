@@ -94,6 +94,7 @@ class InferenceInvocation(GenAIInvocation):
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
+        self.event_attributes: dict[str, AttributeValue] = {}
         self._start(self._get_start_attributes())
 
     def _get_message_attributes(
@@ -214,6 +215,7 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
+        attributes.update(self.event_attributes)
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
