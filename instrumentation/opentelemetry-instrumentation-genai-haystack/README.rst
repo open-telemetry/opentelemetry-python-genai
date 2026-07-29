@@ -77,7 +77,7 @@ Known limitations
   which this instrumentation deliberately avoids depending on.
 - ``gen_ai.provider.name`` has no mapping for Hugging Face API
   generators/embedders (their model string encodes the provider, but there's
-  no corresponding enum value yet) and is left unset for these.
+  no corresponding enum value yet); it's set to ``"unknown"`` for these.
 - Only components classified as a generator, embedder, retriever/ranker, or
   ``Agent`` are wrapped -- there's no ``opentelemetry-util-genai`` invocation
   type for a generic pipeline step (prompt builders, routers, converters,

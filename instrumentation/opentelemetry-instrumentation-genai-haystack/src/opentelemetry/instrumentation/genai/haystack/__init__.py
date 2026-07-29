@@ -47,8 +47,9 @@ gaps.
 Configuration
 -------------
 
-Message content capture can be enabled by setting the environment variable:
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true``
+Message content capture can be enabled by setting
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to ``NO_CONTENT``,
+``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT``.
 
 API
 ---

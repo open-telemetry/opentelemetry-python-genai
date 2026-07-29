@@ -202,7 +202,7 @@ def _start_generator_invocation(
     request_model = getattr(component, "model", None)
     server_address, server_port = _server_address_and_port(component)
     invocation = handler.inference(
-        provider=infer_provider(component) or "",
+        provider=infer_provider(component) or "unknown",
         request_model=request_model,
         operation_name=operation_name,
         server_address=server_address,
@@ -288,7 +288,7 @@ def _start_embedding_invocation(
     request_model = getattr(component, "model", None)
     server_address, server_port = _server_address_and_port(component)
     return handler.embedding(
-        provider=infer_provider(component) or "",
+        provider=infer_provider(component) or "unknown",
         request_model=request_model,
         server_address=server_address,
         server_port=server_port,
