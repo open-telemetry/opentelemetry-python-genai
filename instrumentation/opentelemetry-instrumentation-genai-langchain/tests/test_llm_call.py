@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -55,6 +56,13 @@ def _langchain_openai_version() -> tuple:
 # older releases drop the detail entirely, so the reasoning assertions below
 # cannot hold on those versions.
 _supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
+
+_REAL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
+    "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
+    "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
+)
+_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -198,6 +206,63 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
         assert_log_record_when_error(log_record, spans[0])
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
         assert len(logs) == 0
+
+
+def test_chat_openai_multimodal_image_llm_call(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_vision,
+    monkeypatch,
+    vcr,
+):
+    """End-to-end: an OpenAI ``image_url`` content block is captured as an
+    image ``Blob`` part in ``gen_ai.input.messages``."""
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{_REAL_PNG_B64}"
+                    },
+                },
+            ]
+        ),
+    ]
+
+    payload = chat_openai_vision._get_request_payload(messages, stop=None)
+    if "n" in payload:
+        pytest.skip(
+            "langchain-openai < 1.0 sends a different request body "
+            "(explicit n/temperature); only the modern cassette is recorded"
+        )
+    with vcr.use_cassette("test_chat_openai_multimodal_image_llm_call.yaml"):
+        chat_openai_vision.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+        "gpt-4o"
+    )
+
+    input_message = span.attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"role":"user"' in input_message
+    assert '"type":"text"' in input_message
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
 
 
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
@@ -374,6 +439,58 @@ def test_chat_openai_legacy_function_call(
         in tool_definitions
     )
     assert '"location"' in tool_definitions
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_multimodal_image_llm_call(
+    span_exporter,
+    start_instrumentation,
+    chat_anthropic_claude_sonnet,
+    monkeypatch,
+):
+    """End-to-end: an Anthropic ``image`` content block is captured as an
+    image ``Blob`` part in ``gen_ai.input.messages``."""
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _REAL_PNG_B64,
+                    },
+                },
+            ]
+        ),
+    ]
+
+    chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+        "claude-sonnet-4-5"
+    )
+
+    input_message = span.attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"role":"user"' in input_message
+    assert '"type":"text"' in input_message
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py

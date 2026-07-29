@@ -21,11 +21,11 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
-    _legacy_function_call_request,
-    extract_token_details,
     _decode_base64,
     _image_from_url,
+    _legacy_function_call_request,
     _media_part,
+    extract_token_details,
     make_input_message,
     make_last_output_message,
     make_output_message,

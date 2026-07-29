@@ -99,6 +99,16 @@ def fixture_gemini():
     yield llm
 
 
+@pytest.fixture(scope="function", name="chat_openai_vision")
+def fixture_chat_openai_image():
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=0.1,
+        max_tokens=100,
+    )
+    yield llm
+
+
 @pytest.fixture(scope="function")
 def start_instrumentation(
     tracer_provider,
