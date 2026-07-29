@@ -94,6 +94,8 @@ class InferenceInvocation(GenAIInvocation):
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
+        # Rebuilt once per streaming chunk, so cache it and invalidate via
+        # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
         self._start(self._get_start_attributes())
 
@@ -105,7 +107,7 @@ class InferenceInvocation(GenAIInvocation):
     def response_model_name(self, value: str | None) -> None:
         if value != self._response_model_name:
             self._response_model_name = value
-            self._cached_metric_attributes = None
+            self._invalidate_metric_attributes()
 
     def _get_message_attributes(
         self, *, for_span: bool
@@ -181,9 +183,17 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
+    def _invalidate_metric_attributes(self) -> None:
+        """Drop the cached metric attributes so the next read rebuilds them.
+
+        Call this from anywhere that changes an input to
+        ``_get_metric_attributes`` (response model, error type, ...).
+        """
+        self._cached_metric_attributes = None
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        # Cached because this is called once per streaming chunk; invalidated
-        # by the ``response_model_name`` setter and ``_apply_error_attributes``.
+        # Cached because this is rebuilt once per streaming chunk. Any mutation
+        # of its inputs must call _invalidate_metric_attributes.
         if self._cached_metric_attributes is None:
             attrs = self._get_start_attributes()
             if self._response_model_name is not None:
@@ -194,8 +204,8 @@ class InferenceInvocation(GenAIInvocation):
 
     def _apply_error_attributes(self, error: Error) -> None:
         super()._apply_error_attributes(error)
-        # error.type was added to metric_attributes; invalidate the cache.
-        self._cached_metric_attributes = None
+        # error.type was just added to metric_attributes.
+        self._invalidate_metric_attributes()
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
