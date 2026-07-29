@@ -94,6 +94,8 @@ class InferenceInvocation(GenAIInvocation):
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
+        # These attributes are emitted only on the operation-details event,
+        # never on the corresponding span or metrics.
         self.event_attributes: dict[str, AttributeValue] = {}
         self._start(self._get_start_attributes())
 

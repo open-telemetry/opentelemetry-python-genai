@@ -63,6 +63,8 @@ except ImportError:
 GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
     "generate_content_extra_attributes_context_key"
 )
+# Unlike the regular extra-attributes key, these values are event-only. They
+# override regular extra attributes when the same key is present on the event.
 GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
     "generate_content_event_only_extra_attributes_context_key"
 )

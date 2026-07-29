@@ -65,6 +65,41 @@ Make sure to configure OpenTelemetry tracing, logging, and metrics to capture al
     )
 
 
+Adding extra attributes
+***********************
+
+The instrumentation exposes two Context API keys for adding caller-supplied
+attributes to ``generate_content`` telemetry. Import the keys from
+``opentelemetry.instrumentation.google_genai`` and attach a context value for
+the duration of the call:
+
+.. code-block:: python
+
+    from opentelemetry import context
+    from opentelemetry.instrumentation.google_genai import (
+        GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+        GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+    )
+
+    token = context.attach(
+        context.set_value(
+            GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+            {"tenant.id": "acme"},
+        )
+    )
+    try:
+        client.models.generate_content(model="gemini-1.5-flash-002", contents="Hi")
+    finally:
+        context.detach(token)
+
+``GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY`` adds attributes to both the
+span and the operation-details event. Use
+``GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY`` when an attribute
+should appear only on the operation-details event and not on the span. If both
+keys contain the same attribute name, the event-only value takes precedence on
+the event while the regular value remains on the span.
+
+
 Limitations
 ***********
 
