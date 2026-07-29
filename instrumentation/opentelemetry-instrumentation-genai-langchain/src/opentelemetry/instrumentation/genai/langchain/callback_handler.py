@@ -447,6 +447,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 llm_invocation.response_id = str(response_id)
 
         # Responses API (RAPI) may include the served model in the response headers, which accurately returns the served model name for the request.
+        served_model: str | None = None
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
                 if chat_generation.message is not None:
@@ -458,7 +459,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             else None
                         )
                         if isinstance(headers, Mapping):
-                            for name, value in headers.items():
+                            headers_map = cast(Mapping[Any, Any], headers)
+                            for name, value in headers_map.items():
                                 if (
                                     isinstance(name, str)
                                     and name.lower()
