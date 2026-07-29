@@ -452,12 +452,11 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             for chat_generation in generation:
                 if chat_generation.message is not None:
                     if chat_generation.message.response_metadata is not None:
-                        meta = chat_generation.message.response_metadata
-                        headers = (
-                            meta.get("headers")
-                            if isinstance(meta, Mapping)
-                            else None
+                        meta = cast(
+                            Mapping[Any, Any],
+                            chat_generation.message.response_metadata,
                         )
+                        headers = meta.get("headers")
                         if isinstance(headers, Mapping):
                             headers_map = cast(Mapping[Any, Any], headers)
                             for name, value in headers_map.items():
