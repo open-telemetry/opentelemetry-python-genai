@@ -360,6 +360,17 @@ def test_chat_openai_legacy_function_call(
     assert '"name":"get_current_weather"' in output_messages
     assert '"location":"Paris"' in output_messages
 
+    tool_definitions = span.attributes.get(
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    )
+    assert tool_definitions is not None
+    assert '"name":"get_current_weather"' in tool_definitions
+    assert (
+        '"description":"Get the current weather in a given location."'
+        in tool_definitions
+    )
+    assert '"location"' in tool_definitions
+
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
 def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
@@ -476,7 +487,9 @@ def assert_openai_completion_attributes_with_error(
     assert span is not None
     assert span.name == "chat gpt-3.5-turbo"
     attributes = span.attributes
-    assert attributes[error_attributes.ERROR_TYPE] == "AuthenticationError"
+    assert (
+        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+    )
     assert attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     assert (
         attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == "gpt-3.5-turbo"
@@ -637,7 +650,9 @@ def assert_duration_metric_when_error(metric, parent_span):
 
 def assert_duration_metric_attributes_when_error(attributes, parent_span):
     assert len(attributes) == 4
-    assert attributes[error_attributes.ERROR_TYPE] == "AuthenticationError"
+    assert (
+        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+    )
     assert attributes.get(gen_ai_attributes.GEN_AI_PROVIDER_NAME) == "openai"
     assert (
         attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)

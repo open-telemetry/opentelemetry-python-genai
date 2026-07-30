@@ -168,7 +168,8 @@ async def test_async_chat_completion_bad_endpoint(
     )
     assert 4242 == spans[0].attributes[ServerAttributes.SERVER_PORT]
     assert (
-        "APIConnectionError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+        "openai.APIConnectionError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
     )
 
 
@@ -191,7 +192,10 @@ async def test_async_chat_completion_404(
     assert_all_attributes(
         spans[0], llm_model_value, latest_experimental_enabled
     )
-    assert "NotFoundError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    assert (
+        "openai.NotFoundError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    )
 
 
 @pytest.mark.asyncio()

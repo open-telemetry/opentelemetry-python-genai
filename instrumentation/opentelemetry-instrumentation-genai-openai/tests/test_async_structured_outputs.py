@@ -187,4 +187,7 @@ async def test_async_structured_output_404(
     assert_all_attributes(
         spans[0], llm_model_value, latest_experimental_enabled
     )
-    assert "NotFoundError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    assert (
+        "openai.NotFoundError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    )

@@ -145,7 +145,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
 
     def test_fail_workflow_sets_error_status(self) -> None:
         invocation = self.handler.workflow(name="wf")
-        error = Error(message="something broke", type=RuntimeError)
+        error = Error(message="something broke", type="RuntimeError")
         invocation.fail(error)
 
         spans = self._get_finished_spans()
@@ -155,7 +155,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
 
     def test_fail_workflow_sets_error_type_attribute(self) -> None:
         invocation = self.handler.workflow(name="wf")
-        error = Error(message="bad", type=ValueError)
+        error = Error(message="bad", type="ValueError")
         invocation.fail(error)
 
         spans = self._get_finished_spans()
@@ -163,7 +163,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
 
     def test_fail_workflow_sets_operation_name_attribute(self) -> None:
         invocation = self.handler.workflow(name="wf")
-        error = Error(message="fail", type=TypeError)
+        error = Error(message="fail", type="TypeError")
         invocation.fail(error)
 
         spans = self._get_finished_spans()
@@ -174,7 +174,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
 
     def test_fail_workflow_ends_span(self) -> None:
         invocation = self.handler.workflow(name="wf")
-        invocation.fail(Error(message="err", type=RuntimeError))
+        invocation.fail(Error(message="err", type="RuntimeError"))
         spans = self._get_finished_spans()
         self.assertEqual(len(spans), 1)
         self.assertEqual(spans[0].status.status_code, StatusCode.ERROR)

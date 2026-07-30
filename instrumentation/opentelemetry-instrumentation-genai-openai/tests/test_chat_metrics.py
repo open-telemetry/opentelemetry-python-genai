@@ -254,3 +254,97 @@ async def test_async_chat_completion_metrics(
     assert_all_metric_attributes(
         output_token_usage, latest_experimental_enabled
     )
+
+
+def _metrics_by_name(metric_reader):
+    resource_metrics = metric_reader.get_metrics_data().resource_metrics
+    by_name = {}
+    for rm in resource_metrics:
+        for scope in rm.scope_metrics:
+            for metric in scope.metrics:
+                by_name[metric.name] = metric
+    return by_name
+
+
+def _assert_streaming_timing_metrics(metric_reader):
+    """Assert the streaming timing metrics are emitted through the real
+    ChatStreamWrapper path.
+
+    Regression coverage for the ``invocation=invocation`` wiring in
+    chat_wrappers.py: dropping it would still pass every util-layer test but
+    would silently stop emitting TTFC and per-output-chunk metrics for OpenAI
+    streaming.
+    """
+    metrics = _metrics_by_name(metric_reader)
+
+    ttfc = metrics.get(
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
+    )
+    assert ttfc is not None
+    ttfc_point = ttfc.data.data_points[0]
+    # Exactly one time-to-first-chunk record per stream.
+    assert ttfc_point.count == 1
+    assert ttfc_point.sum >= 0
+    assert (
+        ttfc_point.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == GenAIAttributes.GenAiOperationNameValues.CHAT.value
+    )
+    # response.model is set eagerly during streaming, so it lands on the
+    # first-chunk metric too.
+    assert (
+        ttfc_point.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "gpt-4-0613"
+    )
+
+    per_chunk = metrics.get(
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_PER_OUTPUT_CHUNK
+    )
+    assert per_chunk is not None
+    per_chunk_point = per_chunk.data.data_points[0]
+    # One record per inter-chunk gap; the streaming cassette has several
+    # chunks, so at least one gap is recorded.
+    assert per_chunk_point.count >= 1
+    assert per_chunk_point.sum >= 0
+    assert (
+        per_chunk_point.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "gpt-4-0613"
+    )
+
+
+def test_chat_completion_streaming_timing_metrics(
+    metric_reader, openai_client, instrument_with_content, vcr
+):
+    if not is_experimental_mode():
+        pytest.skip("streaming timing metrics require experimental semconv")
+    kwargs = {
+        "model": "gpt-4",
+        "messages": USER_ONLY_PROMPT,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    with vcr.use_cassette("test_chat_completion_streaming.yaml"):
+        response = openai_client.chat.completions.create(**kwargs)
+        for _ in response:
+            pass
+
+    _assert_streaming_timing_metrics(metric_reader)
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_streaming_timing_metrics(
+    metric_reader, async_openai_client, instrument_with_content, vcr
+):
+    if not is_experimental_mode():
+        pytest.skip("streaming timing metrics require experimental semconv")
+    kwargs = {
+        "model": "gpt-4",
+        "messages": USER_ONLY_PROMPT,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    with vcr.use_cassette("test_async_chat_completion_streaming.yaml"):
+        response = await async_openai_client.chat.completions.create(**kwargs)
+        async for _ in response:
+            pass
+
+    _assert_streaming_timing_metrics(metric_reader)

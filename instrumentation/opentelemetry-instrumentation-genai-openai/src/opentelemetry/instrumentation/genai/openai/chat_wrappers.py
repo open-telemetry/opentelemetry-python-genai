@@ -36,17 +36,18 @@ class _ChatStreamMixin:
     _self_capture_content: bool
     _self_choice_buffers: list[ChoiceBuffer]
     _self_response_id: Optional[str]
-    _self_response_model: Optional[str]
     _self_service_tier: Optional[str]
     _self_prompt_tokens: Optional[int]
     _self_completion_tokens: Optional[int]
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
-        if self._self_response_model:
+        # Set eagerly so the per-chunk streaming timing metrics carry
+        # gen_ai.response.model.
+        if self._self_invocation.response_model_name:
             return
 
         if chunk.model:
-            self._self_response_model = chunk.model
+            self._self_invocation.response_model_name = chunk.model
 
     def _set_response_id(self, chunk: ChatCompletionChunk) -> None:
         if self._self_response_id:
@@ -153,7 +154,6 @@ class _ChatStreamMixin:
         self._cleanup(error)
 
     def _cleanup(self, error: Optional[BaseException] = None) -> None:
-        self._self_invocation.response_model_name = self._self_response_model
         self._self_invocation.response_id = self._self_response_id
         self._self_invocation.input_tokens = self._self_prompt_tokens
         self._self_invocation.output_tokens = self._self_completion_tokens
@@ -189,12 +189,11 @@ class ChatStreamWrapper(
         invocation: InferenceInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None
-        self._self_response_model = None
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
@@ -210,12 +209,11 @@ class AsyncChatStreamWrapper(
         invocation: InferenceInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None
-        self._self_response_model = None
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None

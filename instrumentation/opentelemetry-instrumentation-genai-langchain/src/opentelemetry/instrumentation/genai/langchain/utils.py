@@ -262,6 +262,24 @@ def prepare_tool_definitions(tools: list[Any]) -> list[ToolDefinition] | None:
                         parameters=_get_property_value(func, "parameters"),
                     )
                 )
+        elif (
+            tool_type is None and _get_property_value(tool, "name") is not None
+        ):
+            # Pre-tools OpenAI ``functions`` entries are flat mappings
+            # (``{"name", "description", "parameters"}``) with no ``type`` or
+            # nested ``function`` wrapper. Surface them so the legacy
+            # function-calling path still populates ``gen_ai.tool.definitions``.
+            func_name = _get_property_value(tool, "name")
+            func_description = _get_property_value(tool, "description")
+            definitions.append(
+                FunctionToolDefinition(
+                    name=str(func_name),
+                    description=str(func_description)
+                    if func_description is not None
+                    else None,
+                    parameters=_get_property_value(tool, "parameters"),
+                )
+            )
     return definitions or None
 
 

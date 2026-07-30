@@ -183,7 +183,7 @@ class MessagesStreamWrapper(
         invocation: InferenceInvocation,
         capture_content: bool,
     ):
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_message = None
         self._self_capture_content = capture_content
@@ -225,7 +225,7 @@ class AsyncMessagesStreamWrapper(
         invocation: InferenceInvocation,
         capture_content: bool,
     ):
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_message = None
         self._self_capture_content = capture_content

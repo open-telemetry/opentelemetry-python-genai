@@ -21,5 +21,5 @@
 # OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 #
-# There is currently nothing to pin: anthropic has no test-only dependency that isn't already
-# provided by a declared bound or by the shared test fixtures.
+# Drop this once opentelemetry-util-genai 1.1b0 is published.
+-e util/opentelemetry-util-genai

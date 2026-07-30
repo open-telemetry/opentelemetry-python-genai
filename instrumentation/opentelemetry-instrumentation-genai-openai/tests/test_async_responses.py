@@ -30,6 +30,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.utils import is_experimental_mode
 
+from .test_responses import assert_responses_streaming_timing_metrics
 from .test_utils import (
     DEFAULT_MODEL,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
@@ -438,7 +439,10 @@ async def test_async_responses_create_connection_error(
     )
     assert span.attributes[ServerAttributes.SERVER_ADDRESS] == "localhost"
     assert span.attributes[ServerAttributes.SERVER_PORT] == 4242
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.asyncio()
@@ -462,8 +466,29 @@ async def test_async_responses_create_api_error(
     )
     assert (
         span.attributes[ErrorAttributes.ERROR_TYPE]
-        == type(exc_info.value).__name__
+        == f"openai.{type(exc_info.value).__name__}"
     )
+
+
+@pytest.mark.asyncio()
+async def test_async_responses_create_streaming_timing_metrics(
+    metric_reader, async_openai_client, instrument_no_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_streaming[content_mode0].yaml"
+    ):
+        stream = await async_openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+        await _collect_completed_response(stream)
+
+    assert_responses_streaming_timing_metrics(metric_reader)
 
 
 @pytest.mark.asyncio()
@@ -518,7 +543,10 @@ async def test_async_responses_stream_connection_error(
     assert (
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.asyncio()
@@ -736,7 +764,10 @@ async def test_async_responses_create_streaming_connection_error(
     assert (
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.asyncio()

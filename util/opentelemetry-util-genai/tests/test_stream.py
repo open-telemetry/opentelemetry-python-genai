@@ -5,6 +5,8 @@
 
 import asyncio
 import inspect
+import timeit
+from unittest.mock import patch
 
 import pytest
 
@@ -384,5 +386,161 @@ def test_async_stream_wrapper_stop_iteration_does_not_double_finalize():
 
         assert wrapper._self_stop_count == 1
         assert not wrapper._self_failures
+
+    asyncio.run(exercise())
+
+
+# --- Streaming timing seam tests ---
+#
+# The wrapper does not compute TTFC/gaps itself: when an invocation is passed
+# it reports each chunk's arrival time via invocation._on_stream_chunk, and the
+# invocation turns those timestamps into metrics (covered by
+# test_handler_metrics). These tests cover the wrapper's side of that seam.
+
+
+class _FakeTimingInvocation:
+    """Minimal stand-in for InferenceInvocation's timing seam."""
+
+    def __init__(self):
+        self.chunk_times = []
+        self._request_stream = None
+
+    def _on_stream_chunk(self, chunk_at):
+        self.chunk_times.append(chunk_at)
+
+
+class _TimingSyncWrapper(SyncStreamWrapper):
+    def __init__(self, stream, invocation=None, process_hook=None):
+        super().__init__(stream, invocation=invocation)
+        self._self_processed = []
+        self._self_process_hook = process_hook
+
+    def _process_chunk(self, chunk):
+        self._self_processed.append(chunk)
+        if self._self_process_hook is not None:
+            self._self_process_hook()
+
+    def _on_stream_end(self):
+        pass
+
+    def _on_stream_error(self, error):
+        pass
+
+
+class _TimingAsyncWrapper(AsyncStreamWrapper):
+    def __init__(self, stream, invocation=None):
+        super().__init__(stream, invocation=invocation)
+        self._self_processed = []
+
+    def _process_chunk(self, chunk):
+        self._self_processed.append(chunk)
+
+    def _on_stream_end(self):
+        pass
+
+    def _on_stream_error(self, error):
+        pass
+
+
+def test_sync_wrapper_reports_each_chunk_arrival():
+    invocation = _FakeTimingInvocation()
+    stream = _FakeSyncStream(chunks=["a", "b", "c"])
+    wrapper = _TimingSyncWrapper(stream, invocation=invocation)
+
+    with patch(
+        "timeit.default_timer", side_effect=iter([101.2, 101.8, 102.1])
+    ):
+        assert list(wrapper) == ["a", "b", "c"]
+
+    assert invocation.chunk_times == pytest.approx([101.2, 101.8, 102.1])
+
+
+def test_sync_wrapper_marks_request_stream():
+    invocation = _FakeTimingInvocation()
+    # The wrapper marks the request as streamed at construction, before any
+    # chunk is read.
+    _TimingSyncWrapper(_FakeSyncStream(chunks=["a"]), invocation=invocation)
+    assert invocation._request_stream is True
+
+
+def test_sync_wrapper_single_chunk_one_report():
+    invocation = _FakeTimingInvocation()
+    stream = _FakeSyncStream(chunks=["only"])
+    wrapper = _TimingSyncWrapper(stream, invocation=invocation)
+
+    with patch("timeit.default_timer", side_effect=iter([60.5])):
+        assert list(wrapper) == ["only"]
+
+    assert invocation.chunk_times == pytest.approx([60.5])
+
+
+def test_sync_wrapper_without_invocation_skips_timing():
+    stream = _FakeSyncStream(chunks=["a", "b"])
+    wrapper = _TimingSyncWrapper(stream)
+
+    with patch("timeit.default_timer") as timer:
+        assert list(wrapper) == ["a", "b"]
+
+    timer.assert_not_called()
+
+
+def test_sync_wrapper_error_before_first_chunk_no_report():
+    invocation = _FakeTimingInvocation()
+    stream = _FakeSyncStream(error=RuntimeError("network"))
+    wrapper = _TimingSyncWrapper(stream, invocation=invocation)
+
+    with pytest.raises(RuntimeError, match="network"):
+        next(wrapper)
+
+    assert invocation.chunk_times == []
+
+
+def test_sync_wrapper_captures_arrival_before_processing():
+    """Arrival time is taken before _process_chunk, so per-chunk timing
+    excludes the instrumentation's own processing of the chunk."""
+    invocation = _FakeTimingInvocation()
+    stream = _FakeSyncStream(chunks=["a"])
+    # First clock read is the chunk arrival (100.0); the second is consumed
+    # inside _process_chunk to simulate processing taking time.
+    times = iter([100.0, 100.9])
+    wrapper = _TimingSyncWrapper(
+        stream,
+        invocation=invocation,
+        process_hook=lambda: timeit.default_timer(),
+    )
+
+    with patch("timeit.default_timer", side_effect=times):
+        list(wrapper)
+
+    assert invocation.chunk_times == pytest.approx([100.0])
+
+
+def test_async_wrapper_reports_each_chunk_arrival():
+    async def exercise():
+        invocation = _FakeTimingInvocation()
+        stream = _FakeAsyncStream(chunks=["x", "y", "z"])
+        wrapper = _TimingAsyncWrapper(stream, invocation=invocation)
+
+        with patch(
+            "timeit.default_timer", side_effect=iter([201.3, 202.0, 202.2])
+        ):
+            chunks = [chunk async for chunk in wrapper]
+
+        assert chunks == ["x", "y", "z"]
+        assert invocation.chunk_times == pytest.approx([201.3, 202.0, 202.2])
+
+    asyncio.run(exercise())
+
+
+def test_async_wrapper_without_invocation_skips_timing():
+    async def exercise():
+        stream = _FakeAsyncStream(chunks=["a", "b"])
+        wrapper = _TimingAsyncWrapper(stream)
+
+        with patch("timeit.default_timer") as timer:
+            chunks = [chunk async for chunk in wrapper]
+
+        assert chunks == ["a", "b"]
+        timer.assert_not_called()
 
     asyncio.run(exercise())
