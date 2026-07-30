@@ -10,6 +10,7 @@ from google.genai.types import (
     ContentEmbeddingStatistics,
     EmbedContentConfig,
     EmbedContentResponse,
+    HttpOptions,
 )
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -173,6 +174,35 @@ class TestEmbeddings(TestCase):
         )
         self.assertEqual(
             attrs["gcp.gen_ai.operation.config.output_dimensionality"], 128
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES": "*"},
+    )
+    def test_sync_embed_content_captures_config_without_http_options(self):
+        self.client.models.embed_content(
+            model="text-embedding-004",
+            contents="hello world",
+            config=EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=256,
+                http_options=HttpOptions(headers={"authorization": "secret"}),
+            ),
+        )
+
+        attrs = self.otel.get_finished_spans()[0].attributes
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.task_type"], "RETRIEVAL_QUERY"
+        )
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.output_dimensionality"], 256
+        )
+        self.assertFalse(
+            any(
+                key.startswith("gcp.gen_ai.operation.config.http_options")
+                for key in attrs
+            )
         )
 
     def test_embed_content_multiple_inputs(self):
