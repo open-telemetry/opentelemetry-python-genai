@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from typing import Any, Mapping, Optional, cast
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
