@@ -21,6 +21,10 @@ from opentelemetry.trace import INVALID_SPAN as _INVALID_SPAN
 from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.context_attributes import (
+    _ContextScopedAttributes,
+    _get_context_scoped_attributes,
+)
 from opentelemetry.util.genai.types import (
     Error,
     ErrorTypeResolver,
@@ -94,6 +98,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._request_stream: bool | None = None
         self._ttfc_seconds: float | None = None
         self._stream_last_chunk_at: float | None = None
+        self._context_scoped_attributes = _ContextScopedAttributes()
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None
@@ -103,6 +108,12 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         Args:
             attributes: Initial span attributes available for sampling decisions.
         """
+        self._context_scoped_attributes = _get_context_scoped_attributes()
+        if self._context_scoped_attributes.span:
+            attributes = {
+                **self._context_scoped_attributes.span,
+                **(attributes or {}),
+            }
         self.span = self._tracer.start_span(
             name=self._span_name,
             kind=self._span_kind,

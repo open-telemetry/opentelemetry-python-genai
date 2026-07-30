@@ -246,6 +246,8 @@ class InferenceInvocation(GenAIInvocation):
             return None
 
         attributes = self._get_start_attributes()
+        if self._context_scoped_attributes.log:
+            attributes = {**self._context_scoped_attributes.log, **attributes}
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)

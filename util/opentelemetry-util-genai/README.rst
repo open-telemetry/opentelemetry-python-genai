@@ -12,6 +12,7 @@ Key Components
 - ``TelemetryHandler`` -- manages LLM invocation lifecycles (spans, metrics, events)
 - ``InferenceInvocation`` and message types (``Text``, ``Reasoning``, ``Blob``, etc.) -- structured data model for GenAI interactions
 - ``CompletionHook`` -- protocol for uploading content to external storage (built-in ``fsspec`` support)
+- ``set_context_scoped_attributes`` -- attach attributes to a context so GenAI telemetry emitted within it carries them
 - Metrics -- ``gen_ai.client.operation.duration`` and ``gen_ai.client.token.usage`` histograms, plus
   the streaming timing histograms ``gen_ai.client.operation.time_to_first_chunk`` and
   ``gen_ai.client.operation.time_per_output_chunk``
@@ -22,6 +23,47 @@ Usage
 
 See the module docstring in ``opentelemetry.util.genai.handler`` for usage examples,
 including context manager and manual lifecycle patterns.
+
+
+Context-scoped Attributes
+-------------------------
+
+An agentic framework knows which agent, workflow, or conversation is running.
+The model-client instrumentation that emits the inference telemetry sits a layer
+below it and has no way to learn any of it -- there is no shared call path, and
+attributes cannot be read back off a parent span.
+``set_context_scoped_attributes`` bridges the two through the OpenTelemetry
+context.
+
+Each attribute declares which signal it applies to, so content that is unsafe on
+a sampled, widely-read span can still be recorded on the event::
+
+    from opentelemetry import context
+    from opentelemetry.util.genai.context_attributes import (
+        set_context_scoped_attributes,
+    )
+
+    token = context.attach(
+        set_context_scoped_attributes(
+            span_attributes={"gen_ai.agent.name": "trip-planner"},
+            log_attributes={"user.id": user_id},
+        )
+    )
+    try:
+        client.chat.completions.create(...)  # instrumented elsewhere
+    finally:
+        context.detach(token)
+
+- Attributes apply to GenAI telemetry emitted by this package only. Other
+  instrumentation, and telemetry the application emits directly, are unaffected.
+- Attributes are never propagated out of the process.
+- ``span_attributes`` are applied when the span starts, so they are visible to
+  samplers. Attributes an invocation sets itself take precedence.
+- ``log_attributes`` apply to the ``gen_ai.client.inference.operation.details``
+  event, which is the only event this package emits.
+- Nested calls merge, with the inner call taking precedence for keys it sets.
+- An invocation reads the context once, when it starts.
+- Metrics are deliberately not supported, to avoid unbounded cardinality.
 
 
 Environment Variables

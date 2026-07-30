@@ -1,0 +1,1 @@
+Add ``set_context_scoped_attributes`` for attaching attributes to an OpenTelemetry context so that GenAI telemetry emitted within it carries them, targeted per signal at spans or events.
