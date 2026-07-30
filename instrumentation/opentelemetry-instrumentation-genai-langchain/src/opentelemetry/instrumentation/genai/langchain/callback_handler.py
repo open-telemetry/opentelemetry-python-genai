@@ -313,6 +313,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         output_messages: list[OutputMessage] = []
+        served_model: str | None = None
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
                 message = chat_generation.message
@@ -334,6 +335,30 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     )
 
                 if chat_generation.message:
+                    # Responses API (RAPI) may include the served model in the
+                    # response headers, which accurately returns the served
+                    # model name for the request.
+                    if (
+                        served_model is None
+                        and chat_generation.message.response_metadata
+                    ):
+                        headers = (
+                            chat_generation.message.response_metadata.get(
+                                "headers"
+                            )
+                        )
+                        if isinstance(headers, Mapping):
+                            headers_map = cast(Mapping[Any, Any], headers)
+                            for name, value in headers_map.items():
+                                if (
+                                    isinstance(name, str)
+                                    and name.lower()
+                                    in SUPPORTED_RAPI_RESPONSE_HEADERS
+                                    and value
+                                ):
+                                    served_model = str(value)
+                                    break
+
                     # Get finish reason if generation_info is None above
                     if (
                         generation_info is None
@@ -445,33 +470,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             response_id = llm_output.get("id")
             if response_id is not None:
                 llm_invocation.response_id = str(response_id)
-
-        # Responses API (RAPI) may include the served model in the response headers, which accurately returns the served model name for the request.
-        served_model: str | None = None
-        for generation in getattr(response, "generations", []):
-            for chat_generation in generation:
-                if chat_generation.message is not None:
-                    if chat_generation.message.response_metadata is not None:
-                        meta = cast(
-                            Mapping[Any, Any],
-                            chat_generation.message.response_metadata,
-                        )
-                        headers = meta.get("headers")
-                        if isinstance(headers, Mapping):
-                            headers_map = cast(Mapping[Any, Any], headers)
-                            for name, value in headers_map.items():
-                                if (
-                                    isinstance(name, str)
-                                    and name.lower()
-                                    in SUPPORTED_RAPI_RESPONSE_HEADERS
-                                    and value
-                                ):
-                                    served_model = str(value)
-                                    break
-                        if served_model:
-                            break
-            if served_model:
-                break
 
         if served_model:
             llm_invocation.response_model_name = served_model
