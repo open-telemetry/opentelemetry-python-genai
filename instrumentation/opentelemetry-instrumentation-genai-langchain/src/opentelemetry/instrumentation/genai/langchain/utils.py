@@ -22,6 +22,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.types import (
     Blob,
+    ContentCapturingMode,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
@@ -33,6 +34,7 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     Uri,
 )
+from opentelemetry.util.genai.utils import get_content_capturing_mode
 
 # Mapping from LangChain ``ls_provider`` metadata values to the well-known
 # ``gen_ai.provider.name`` values defined by the GenAI semantic conventions.
@@ -91,6 +93,10 @@ def _normalize_role(message: BaseMessage) -> str:
 
 
 def _decode_base64(data: str) -> Optional[bytes]:
+    # Skip the decode entirely when message content is not being captured;
+    # the resulting bytes would never be emitted under ``NO_CONTENT``.
+    if get_content_capturing_mode() is ContentCapturingMode.NO_CONTENT:
+        return None
     try:
         return base64.b64decode("".join(data.split()), validate=True)
     except Exception:  # pylint: disable=broad-exception-caught
