@@ -160,8 +160,9 @@ example, it may use tracing primitives not based on the OpenTelemetry API,
 export via OTLP only without interacting with OpenTelemetry context and SDK
 configuration, or not follow the GenAI semantic conventions.
 
-Before adding a new instrumentation, check whether the target library is already
-natively instrumented or has a first-party plugin, and how closely it follows the
+Before adding a new instrumentation, check whether the target library already
+emits first-party GenAI telemetry (built in, or through a first-party plugin),
+whether it's based on the OpenTelemetry API, and how closely it follows the
 GenAI semantic conventions:
 
 - **None exists, or it isn't based on the OpenTelemetry API** (alternative
@@ -179,7 +180,7 @@ GenAI semantic conventions:
 
 ```mermaid
 flowchart TD
-    A[Want to instrument a library] --> B{Natively instrumented<br/>or has a first-party plugin?}
+    A[Want to instrument a library] --> B{Has first-party<br/>GenAI telemetry?}
     B -->|No| P[OK to instrument here]
     B -->|Yes| C{Based on the<br/>OpenTelemetry API?}
     C -->|No<br/>alternative primitives / OTLP-only | P
