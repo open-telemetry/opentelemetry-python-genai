@@ -92,8 +92,9 @@ This controls whether the following content is captured on spans and/or events:
 Configuration recording
 ***********************
 
-The instrumentation can optionally record ``GenerateContentConfig`` parameters
-as span and event attributes under the ``gcp.gen_ai.operation.config.*`` namespace.
+The instrumentation can optionally record ``GenerateContentConfig`` and
+``EmbedContentConfig`` parameters as span and event attributes under the
+``gcp.gen_ai.operation.config.*`` namespace.
 
 By default, no config fields are recorded. You can control which fields are
 captured using the following environment variables:
@@ -114,6 +115,17 @@ captured using the following environment variables:
 
 If both variables are set, the includes list is applied first, then the
 excludes list filters the result further.
+
+Embedding configuration uses the same opt-in behavior, with its own variables:
+
+* ``OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES``
+* ``OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_EXCLUDES``
+
+For example, to capture all embedding configuration fields:
+
+.. code-block:: bash
+
+    export OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES=*
 
 Uninstrument
 ************

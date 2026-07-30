@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from google.genai.models import AsyncModels, Models
 from google.genai.types import (
@@ -129,7 +129,7 @@ class TestEmbeddings(TestCase):
             "generativelanguage.googleapis.com",
         )
 
-    def test_embed_content_captures_config_attributes(self):
+    def test_embed_content_does_not_capture_config_attributes_by_default(self):
         self.client.models.embed_content(
             model="text-embedding-004",
             contents="hello world",
@@ -142,15 +142,16 @@ class TestEmbeddings(TestCase):
 
         span = self.otel.get_finished_spans()[0]
         attrs = span.attributes
-        self.assertEqual(
-            attrs["gcp.gen_ai.operation.config.task_type"],
-            "RETRIEVAL_QUERY",
+        self.assertNotIn("gcp.gen_ai.operation.config.task_type", attrs)
+        self.assertNotIn(
+            "gcp.gen_ai.operation.config.output_dimensionality", attrs
         )
-        self.assertEqual(
-            attrs["gcp.gen_ai.operation.config.output_dimensionality"], 256
-        )
-        self.assertTrue(attrs["gcp.gen_ai.operation.config.auto_truncate"])
+        self.assertNotIn("gcp.gen_ai.operation.config.auto_truncate", attrs)
 
+    @patch.dict(
+        "os.environ",
+        {"OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES": "*"},
+    )
     def test_async_embed_content_captures_config_attributes(self):
         async def run_test():
             await self.client.aio.models.embed_content(

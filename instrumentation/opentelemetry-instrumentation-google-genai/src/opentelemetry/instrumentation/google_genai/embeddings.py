@@ -24,6 +24,7 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
 )
 
+from .allowlist_util import AllowList
 from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
 from .dict_util import flatten_dict
 
@@ -94,6 +95,7 @@ def _apply_embedding_response_attributes(
 
 def _apply_embedding_request_attributes(
     config: EmbedContentConfig | dict[str, Any] | None,
+    allow_list: AllowList,
     invocation: EmbeddingInvocation,
 ) -> None:
     if config is None:
@@ -111,11 +113,18 @@ def _apply_embedding_request_attributes(
         # telemetry attributes.
         exclude_keys={f"{GCP_GENAI_OPERATION_CONFIG}.http_options"},
     )
-    invocation.attributes.update(attributes)
+    invocation.attributes.update(
+        {
+            key: value
+            for key, value in attributes.items()
+            if allow_list.allowed(key)
+        }
+    )
 
 
 def _create_instrumented_embed_content(
     telemetry_handler: TelemetryHandler,
+    embed_content_config_key_allowlist: AllowList,
 ) -> Callable[
     [
         Callable[..., EmbedContentResponse],
@@ -142,7 +151,9 @@ def _create_instrumented_embed_content(
             server_address=server_address,
         ) as invocation:
             _apply_embedding_request_attributes(
-                kwargs.get("config"), invocation
+                kwargs.get("config"),
+                embed_content_config_key_allowlist,
+                invocation,
             )
             response = wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
@@ -154,6 +165,7 @@ def _create_instrumented_embed_content(
 
 def _create_instrumented_async_embed_content(
     telemetry_handler: TelemetryHandler,
+    embed_content_config_key_allowlist: AllowList,
 ) -> Callable[
     [
         Callable[..., Any],
@@ -180,7 +192,9 @@ def _create_instrumented_async_embed_content(
             server_address=server_address,
         ) as invocation:
             _apply_embedding_request_attributes(
-                kwargs.get("config"), invocation
+                kwargs.get("config"),
+                embed_content_config_key_allowlist,
+                invocation,
             )
             response = await wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
@@ -197,18 +211,23 @@ def uninstrument_embeddings(snapshot: object) -> None:
 
 def instrument_embeddings(
     telemetry_handler: TelemetryHandler,
+    embed_content_config_key_allowlist: AllowList,
 ) -> object:
     snapshot = _EmbeddingMethodsSnapshot()
 
     wrapped = wrap_function_wrapper(
         "google.genai.models",
         "Models.embed_content",
-        _create_instrumented_embed_content(telemetry_handler),
+        _create_instrumented_embed_content(
+            telemetry_handler, embed_content_config_key_allowlist
+        ),
     )
     wrapped2 = wrap_function_wrapper(
         "google.genai.models",
         "AsyncModels.embed_content",
-        _create_instrumented_async_embed_content(telemetry_handler),
+        _create_instrumented_async_embed_content(
+            telemetry_handler, embed_content_config_key_allowlist
+        ),
     )
     _set_co_filename(wrapped)
     _set_co_filename(wrapped2)
