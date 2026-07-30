@@ -52,12 +52,6 @@ class RetrievalScenario(Scenario):
     expected_spans = {"retrieval": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
     expected_violations = (
-        # LangChain's Document type has no relevance score field; the
-        # instrumentation cannot populate gen_ai.retrieval.documents[].score.
-        ExpectedViolation(
-            advice_id="genai_content_schema",
-            message_substring="score",
-        ),
         # _FakeRetriever is in-memory and has no backing server.
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",
