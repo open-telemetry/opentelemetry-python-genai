@@ -93,25 +93,29 @@ Configuration recording
 ***********************
 
 The instrumentation can optionally record ``GenerateContentConfig`` and
-``EmbedContentConfig`` parameters as span and event attributes under the
-``gcp.gen_ai.operation.config.*`` namespace.
+``EmbedContentConfig`` parameters under the
+``gcp.gen_ai.operation.config.*`` namespace. Generate-content configuration
+is recorded on both spans and events, while embedding configuration is
+recorded on spans only.
 
 By default, no config fields are recorded. You can control which fields are
 captured using the following environment variables:
 
-* ``OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES`` — A comma-separated
-  list of config field names to include in the span attributes. For example:
+* ``OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES`` - A comma-separated
+  list of fully-qualified attribute keys to include. The keys are produced by
+  flattening the configuration, so use the complete key rather than only the
+  config field name. For example:
 
   .. code-block:: bash
 
-      export OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES=temperature,max_output_tokens
+      export OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES=gcp.gen_ai.operation.config.temperature,gcp.gen_ai.operation.config.max_output_tokens
 
-* ``OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES`` — A comma-separated
-  list of config field names to exclude from the span attributes:
+* ``OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES`` - A comma-separated
+  list of fully-qualified attribute keys to exclude:
 
   .. code-block:: bash
 
-      export OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES=stop_sequences
+      export OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES=gcp.gen_ai.operation.config.stop_sequences
 
 If both variables are set, the includes list is applied first, then the
 excludes list filters the result further.
