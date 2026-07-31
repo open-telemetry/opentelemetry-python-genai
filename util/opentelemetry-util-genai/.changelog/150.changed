@@ -1,0 +1,1 @@
+Restricted start-time sampling attributes to invocation construction time so they are not settable after start, and prevented duplicating them on finishing.

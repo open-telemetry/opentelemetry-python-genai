@@ -14,6 +14,14 @@ For new instrumentations, consult upstream library docs and judge:
 - Is the library used widely enough to warrant a package in this repo?
 - Does it avoid unbounded in-memory accumulation or other side-effects?
 
+For a new instrumentation, check whether the instrumented library has a *runtime* dependency on
+`opentelemetry-api` (or other `opentelemetry-*` packages) in its `pyproject.toml` / lockfile (a
+dev/test-only dependency doesn't count), or documents a first-party OpenTelemetry plugin. If so,
+flag the PR and link to the
+[When to add an instrumentation here](../../CONTRIBUTING.md#when-to-add-an-instrumentation-here)
+policy — the library may already be natively instrumented or ship a first-party plugin that we
+should not duplicate here.
+
 For changes to existing instrumentations: prefer back-compat. Break users only for a real reason;
 prefer opt-in or additive. Breaking changes need explicit justification in the PR.
 
@@ -31,11 +39,23 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   `Tracer`, `Meter`, `Logger`, or event APIs is not allowed.
 - Content capture, hooks, and other cross-cutting configuration are owned by the util.
   Instrumentations must not introduce their own env vars, settings, or hook interfaces.
+- Completion hook wiring must follow the util's contract (reference:
+  [`OpenAIInstrumentor`](../../instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/__init__.py)):
+  `_instrument` resolves `kwargs.get("completion_hook") or load_completion_hook()` and passes it to
+  the `TelemetryHandler` (an explicit `instrument(completion_hook=…)` takes precedence over the
+  `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` env var). Flag instrumentations that define their own
+  hook interface, call `on_completion` directly, wrap the hook in `try/except`, drop the
+  `load_completion_hook()` fallback, or fail to thread `completion_hook` through `instrument()`.
 - Message content, prompts, and tool call arguments must only be set through the util's content
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
+- Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
+  didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
+  (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
+  way); and replacement functions missing `@functools.wraps(original)`. Full transparency isn't
+  always reachable — prefer the least intrusive option that works.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions
@@ -92,17 +112,32 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 New instrumentations must ship a minimal example under the package's `examples/`, with both a
 `manual/` and a `zero-code/` (auto-instrumentation) variant.
 
-## 7. PR description
+## 7. README
+
+- Each package's `README.rst` is published as its PyPI long description. Flag PRs that make
+  user-visible changes to the public API, configuration (env vars, `instrument()` keyword
+  arguments), supported operations/span types, or examples without updating the package
+  `README.rst` to match.
+- README claims must be accurate — reject documented options, span types, or metrics the code does not actually emit.
+
+## 8. PR description
 
 - Cover which part of the GenAI semconv the change implements or follows (when applicable) and
   how instrumentations should consume it.
 
-## 8. Package naming and versioning
+## 9. Package naming and versioning
 
 - Instrumentation packages must be named `opentelemetry-instrumentation-genai-{lib}` and import
   as `opentelemetry.instrumentation.genai.{lib}` (`opentelemetry-instrumentation-google-genai`
   is a pre-existing exception that keeps its historical name).
 - Versions use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`);
   `version.py` carries a `.dev` suffix during development.
+
+## 10. Dependency versioning and compatibility
+
+- Reject dependency changes in `pyproject.toml` that unnecessarily pin versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`).
+- Prefer ranges that allow minor updates (e.g., `~= x.y` or `>= x.y.z, < (x+1)`).
+- For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), enforce the use of `>=` specifiers while pinning the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) instead of `~=`.
+
 
 See also [AGENTS.md](../../AGENTS.md) for general repo rules.

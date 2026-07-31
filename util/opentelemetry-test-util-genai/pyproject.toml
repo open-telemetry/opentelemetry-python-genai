@@ -10,15 +10,17 @@ version = "0.0.0"
 description = "Internal-only test fixtures and helpers for the OpenTelemetry GenAI workspace. Not published."
 requires-python = ">=3.10"
 classifiers = ["Private :: Do Not Upload"]
+# Lower bounds are required: sibling packages install this editable in their oldest test env
+# under UV_RESOLUTION=lowest-direct, which floors every unbounded dep to its earliest release.
 dependencies = [
-  "opentelemetry-api",
-  "opentelemetry-instrumentation",
-  "opentelemetry-sdk",
-  "opentelemetry-semantic-conventions",
-  "opentelemetry-test-utils",
-  "opentelemetry-util-genai",
-  "pytest",
-  "PyYAML",
+  "opentelemetry-api ~= 1.43",
+  "opentelemetry-instrumentation >= 0.64b0, <1",
+  "opentelemetry-sdk ~= 1.43",
+  "opentelemetry-semantic-conventions >= 0.64b0, <1",
+  "opentelemetry-test-utils >= 0.64b0, <1",
+  "opentelemetry-util-genai >= 1.0b0, <2",
+  "pytest >= 8",
+  "PyYAML >= 6.0.2",
 ]
 
 [tool.hatch.build.targets.wheel]

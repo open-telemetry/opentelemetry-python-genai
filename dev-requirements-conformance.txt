@@ -4,11 +4,11 @@
 #
 # TODO: switch to PyPI versions once the test utils are released
 
-opentelemetry-api @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-api
-opentelemetry-sdk @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-sdk
-opentelemetry-semantic-conventions @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-semantic-conventions
-opentelemetry-test-utils @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=tests/opentelemetry-test-utils
-opentelemetry-instrumentation @ git+https://github.com/open-telemetry/opentelemetry-python-contrib@d2f396de68a969dfb74b8afc247e1d0dc6739b67#subdirectory=opentelemetry-instrumentation
-opentelemetry-exporter-otlp-proto-grpc @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-grpc
-opentelemetry-exporter-otlp-proto-common @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=exporter/opentelemetry-exporter-otlp-proto-common
-opentelemetry-proto @ git+https://github.com/open-telemetry/opentelemetry-python@1731583b4e7bc6ec6a33345aa19706fc83acc8d5#subdirectory=opentelemetry-proto
+opentelemetry-api @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=opentelemetry-api
+opentelemetry-sdk @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=opentelemetry-sdk
+opentelemetry-semantic-conventions @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=opentelemetry-semantic-conventions
+opentelemetry-test-utils @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=tests/opentelemetry-test-utils
+opentelemetry-instrumentation @ git+https://github.com/open-telemetry/opentelemetry-python-contrib@880e756428b6c34c31b9779804de2d24080f5602#subdirectory=opentelemetry-instrumentation
+opentelemetry-exporter-otlp-proto-grpc @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=exporter/opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-common @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=exporter/opentelemetry-exporter-otlp-proto-common
+opentelemetry-proto @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=opentelemetry-proto

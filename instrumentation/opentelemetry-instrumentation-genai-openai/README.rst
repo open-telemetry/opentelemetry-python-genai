@@ -8,7 +8,9 @@ OpenTelemetry OpenAI Instrumentation
 
 This library allows tracing LLM requests and logging of messages made by the
 `OpenAI Python API library <https://pypi.org/project/openai/>`_. It also captures
-the duration of the operations and the number of tokens used as metrics.
+the duration of the operations and the number of tokens used as metrics, and for
+streaming chat completions the time to the first chunk and the time between output
+chunks.
 
 .. note::
    This package continues the project previously published as
@@ -90,17 +92,13 @@ Enabling message content
 *************************
 
 Message content such as the contents of the prompt, completion, function arguments and return values
-are not captured by default. To capture message content as log events, set the environment variable
+are not captured by default. To capture message content, set the environment variable
 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of the following values:
 
-- ``true`` - Legacy. Used to enable content capturing on ``gen_ai.{role}.message`` and ``gen_ai.choice`` events when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are *not* enabled.
-- ``span_only`` - Used to enable content capturing on *span* attributes when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are enabled.
-- ``event_only`` - Used to enable content capturing on *event* attributes when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are enabled.
-- ``span_and_event`` - Used to enable content capturing on both *span* and *event* attributes when
-  `latest experimental features <#enabling-the-latest-experimental-features>`_ are enabled.
+- ``span_only`` - capture content on *span* attributes.
+- ``event_only`` - capture content on *event* attributes.
+- ``span_and_event`` - capture content on both *span* and *event* attributes.
+- ``no_content`` - do not capture content (the default).
 
 Uploading prompts and completions
 *********************************
@@ -122,14 +120,10 @@ for additional options.
 Enabling the latest experimental features
 ***********************************************
 
-To enable the latest experimental features, set the environment variable
-``OTEL_SEMCONV_STABILITY_OPT_IN`` to ``gen_ai_latest_experimental``. Or, if you use
-``OTEL_SEMCONV_STABILITY_OPT_IN`` to enable other features, append ``,gen_ai_latest_experimental`` to its value.
+The latest experimental GenAI semantic conventions are used unconditionally; there is
+no environment variable to opt in or out.
 
-Without this setting, OpenAI instrumentation aligns with `Semantic Conventions v1.30.0 <https://github.com/open-telemetry/semantic-conventions/tree/v1.30.0/docs/gen-ai>`_
-and would not capture additional details introduced in later versions.
-
-.. note:: Generative AI semantic conventions are still evolving. The latest experimental features will introduce breaking changes in future releases.
+.. note:: Generative AI semantic conventions are still evolving. The latest experimental features may introduce breaking changes in future releases.
 
 Uninstrument
 ************

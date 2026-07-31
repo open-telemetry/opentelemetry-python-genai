@@ -47,7 +47,10 @@ def _make_response(output=None, **overrides):
         "top_p": 1.0,
         "usage": {
             "input_tokens": 11,
-            "input_tokens_details": {"cached_tokens": 0},
+            "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+            },
             "output_tokens": 7,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 18,
@@ -207,6 +210,33 @@ def test_extract_finish_reasons_maps_terminal_message_and_tool_items(
     ]
 
 
+def test_get_response_error_returns_error_for_failed_response(loaded_module):
+    response = _make_response(
+        status="failed",
+        error={"code": "server_error", "message": "boom"},
+    )
+
+    error = loaded_module.get_response_error(response)
+
+    assert error is not None
+    assert error.type == "server_error"
+    assert error.message == "boom"
+
+
+def test_get_response_error_none_for_incomplete_response(loaded_module):
+    # Incomplete is a finish reason, not an error.
+    response = _make_response(
+        status="incomplete",
+        incomplete_details={"reason": "max_output_tokens"},
+    )
+
+    assert loaded_module.get_response_error(response) is None
+
+
+def test_get_response_error_none_for_successful_response(loaded_module):
+    assert loaded_module.get_response_error(_make_response()) is None
+
+
 def test_extract_output_type_handles_text_format_mapping(loaded_module):
     assert (
         loaded_module.extract_params(
@@ -276,6 +306,7 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
             "input_tokens_details": {
                 "cached_tokens": 3,
                 "cache_creation_input_tokens": 5,
+                "cache_write_tokens": 0,
             },
             "output_tokens": 7,
             "output_tokens_details": {"reasoning_tokens": 0},

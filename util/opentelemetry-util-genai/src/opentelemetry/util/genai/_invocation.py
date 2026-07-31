@@ -23,6 +23,7 @@ from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     Error,
+    ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -64,11 +65,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         span_kind: SpanKind = SpanKind.CLIENT,
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
         self._logger = logger
         self._completion_hook = completion_hook
+        self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
@@ -83,7 +86,14 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_name: str = span_name
         self._span_kind: SpanKind = span_kind
         self._context_token: ContextToken | None = None
-        self._monotonic_start_s: float | None = None
+        self._monotonic_start_s: float
+        # Streaming state, set when the invocation is handed to a stream
+        # wrapper. ``_request_stream`` marks the request as streamed
+        # (gen_ai.request.stream); the timing fields are populated by
+        # ``_on_stream_chunk`` as each chunk arrives.
+        self._request_stream: bool | None = None
+        self._ttfc_seconds: float | None = None
+        self._stream_last_chunk_at: float | None = None
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None
@@ -110,12 +120,42 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Return {token_type: count} for token histogram recording."""
         return {}
 
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        """Record streaming timing for one output chunk as it arrives.
+
+        The first chunk's delta from the invocation start is the
+        time-to-first-chunk; each later chunk's delta from the previous one is
+        the inter-chunk gap. Called by the stream wrapper for any invocation
+        type handed to it.
+        """
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
+        )
+
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
+        attributes = self._get_metric_attributes()
+        if self._ttfc_seconds is None:
+            self._ttfc_seconds = delta
+            self._metrics_recorder.record_time_to_first_chunk(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        else:
+            self._metrics_recorder.record_time_per_chunk(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
+
     def _apply_error_attributes(self, error: Error) -> None:
         """Apply error status and error.type attribute to the span, events, and metrics."""
-        error_type = error.type.__qualname__
         self.span.set_status(Status(StatusCode.ERROR, error.message))
-        self.attributes[error_attributes.ERROR_TYPE] = error_type
-        self.metric_attributes[error_attributes.ERROR_TYPE] = error_type
+        self.attributes[error_attributes.ERROR_TYPE] = error.type
+        self.metric_attributes[error_attributes.ERROR_TYPE] = error.type
 
     def _call_completion_hook(
         self,
@@ -145,14 +185,17 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Apply finish telemetry (attributes, metrics, events)."""
 
     def _finish(self, error: Error | None = None) -> None:
-        """Apply finish telemetry and end the span."""
+        """Apply finish telemetry and end the span. Finishes at most once."""
         if self._context_token is None:
             return
+        # Clear up front so a nested or repeated finish is a no-op even if
+        # _apply_finish raises.
+        context_token, self._context_token = self._context_token, None
         try:
             self._apply_finish(error)
         finally:
             try:
-                detach(self._context_token)
+                detach(context_token)
             except Exception:  # pylint: disable=broad-except
                 pass
             self.span.end()
@@ -164,7 +207,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def fail(self, error: Error | BaseException) -> None:
         """Fail the invocation and end its span with error status."""
         if isinstance(error, BaseException):
-            error = Error(type=type(error), message=str(error))
+            error = Error.from_exception(error, self._error_type_resolver)
         self._finish(error)
 
     def __enter__(self) -> GenAIInvocation:

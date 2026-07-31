@@ -59,6 +59,27 @@ def _load_span_messages(span, attribute):
     return parsed
 
 
+class _AsyncErrorInjectingStreamDelegate:
+    def __init__(self, inner):
+        self._inner = inner
+        self._count = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._count == 1:
+            raise ConnectionError("connection reset during stream")
+        self._count += 1
+        return await self._inner.__anext__()
+
+    async def close(self):
+        return await self._inner.close()
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 @pytest.mark.asyncio
 @pytest.mark.vcr()
 async def test_async_messages_create_basic(
@@ -387,6 +408,217 @@ async def test_async_messages_create_streaming_delegates_response_attribute(
     assert stream.response.status_code == 200
     assert stream.response.headers.get("request-id") is not None
     await stream.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream(  # pylint: disable=too-many-locals
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test AsyncMessages.stream produces correct span."""
+    model = "claude-haiku-4-5"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    response_id = None
+    response_model = None
+    stop_reason = None
+    input_tokens = None
+    output_tokens = None
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        async for chunk in stream:
+            if chunk.type == "message_start":
+                response_id = chunk.message.id
+                response_model = chunk.message.model
+                input_tokens = chunk.message.usage.input_tokens
+            elif chunk.type == "message_delta":
+                stop_reason = chunk.delta.stop_reason
+                output_tokens = chunk.usage.output_tokens
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == response_id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == response_model
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
+        == input_tokens
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        normalize_stop_reason(stop_reason),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream_captures_content(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """Test content capture on AsyncMessages.stream."""
+    model = "claude-haiku-4-5"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"][0]["type"] == "text"
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream_delegates_response_attribute(
+    async_anthropic_client, instrument_no_content
+):
+    """AsyncMessages.stream wrapper should expose wrapped response attributes."""
+    async with async_anthropic_client.messages.stream(
+        model="claude-haiku-4-5",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hi."}],
+    ) as stream:
+        assert stream.response is not None
+        assert stream.response.status_code == 200
+        assert stream.response.headers.get("request-id") is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream_api_error(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that API errors from AsyncMessages.stream are propagated."""
+    model = "invalid-model-name"
+    messages = [{"role": "user", "content": "Hello"}]
+
+    with pytest.raises(NotFoundError):
+        async with async_anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+        ) as stream:
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert ErrorAttributes.ERROR_TYPE in span.attributes
+    assert "NotFoundError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream_interrupted_mid_iteration(
+    span_exporter,
+    async_anthropic_client,
+    instrument_no_content,
+    monkeypatch,
+):
+    """Mid-stream errors from AsyncMessages.stream propagate and record error."""
+    model = "claude-haiku-4-5"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    with pytest.raises(
+        ConnectionError, match="connection reset during stream"
+    ):
+        async with async_anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+        ) as stream:
+            monkeypatch.setattr(
+                stream,
+                "stream",
+                _AsyncErrorInjectingStreamDelegate(stream.stream),
+            )
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream_closed_early_by_caller(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Caller-closing AsyncMessages.stream early finalizes without error."""
+    model = "claude-haiku-4-5"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        await anext(stream)
+        await stream.close()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_messages_stream_user_exception(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that user raised exceptions from AsyncMessages.stream propagate."""
+    model = "claude-haiku-4-5"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        async with async_anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+        ) as stream:
+            async for _ in stream:
+                raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
 
 
 @pytest.mark.asyncio

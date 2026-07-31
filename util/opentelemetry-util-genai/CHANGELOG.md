@@ -15,6 +15,57 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.0b0 (2026-07-09)
+
+### Added
+
+- Add `tool_result` as a parameter to `ToolInvocation`, add `tool_result` and
+  `arguments` as span attributes to the `execute_tool` span if `ContentCapture`
+  flag is set.
+  ([#17](https://github.com/open-telemetry/opentelemetry-python-genai/pull/17))
+- Add `RetrievalInvocation` type with `start_retrieval` / `retrieval` span
+  lifecycle, supporting `gen_ai.operation.name=retrieval` spans per the GenAI
+  semantic conventions.
+  ([#36](https://github.com/open-telemetry/opentelemetry-python-genai/pull/36))
+- Add shared sync and async stream wrapper base classes for GenAI
+  instrumentations.
+  ([#4500](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4500))
+
+### Changed
+
+- Bumped the version to `1.0b0` to align with the OpenTelemetry GenAI packages.
+  ([#60](https://github.com/open-telemetry/opentelemetry-python-genai/pull/60))
+- Use `AttributeValue` instead of `Any` for span and metric attribute types in
+  `GenAIInvocation` and its subclasses.
+  ([#153](https://github.com/open-telemetry/opentelemetry-python-genai/pull/153))
+- Apply attribute for sampling on instantiation of all invocation types.
+  ([#4553](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4553))
+- Change `InferenceInvocation` init params to only accept base params
+- Minor code cleanup and changes in preparation of moving google's GenAI
+  instrumentation library to use this util library
+  ([#4556](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4556))
+- Pass in `attributes` on invocation `_start` so samplers have access to
+  attributes.
+  ([#4538](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4538))
+
+### Deprecated
+
+- Deprecate all `start_` factories; update all `invocation` factories to return
+  objects that can be used as context managers.
+  ([#17](https://github.com/open-telemetry/opentelemetry-python-genai/pull/17))
+
+### Removed
+
+- Remove remaining usages of and references to deprecated functions
+  ([#47](https://github.com/open-telemetry/opentelemetry-python-genai/pull/47))
+- Removes all code referencing the "OTEL_SEMCONV_STABILITY_OPT_IN" flag, as we
+  are removing all code that sits behind the "default" value of that flag, and
+  having the code that sits behind "experimental" be the default.
+  ([#117](https://github.com/open-telemetry/opentelemetry-python-genai/pull/117))
+- Removed the `provider` parameter from the internal agent invocation APIs and
+  stopped emitting `gen_ai.provider.name` on internal agent spans and metrics.
+  ([#132](https://github.com/open-telemetry/opentelemetry-python-genai/pull/132))
+
 ## Version 0.4b0 (2026-05-01)
 
 - Add `AgentInvocation` type with `invoke_agent` span lifecycle

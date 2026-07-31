@@ -54,13 +54,6 @@ def reset_semconv_stability():
     _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING = {}
 
 
-def _enable_experimental_mode():
-    """Call after setting OTEL_SEMCONV_STABILITY_OPT_IN env var to activate it."""
-    _OpenTelemetrySemanticConventionStability._initialized = False
-    _OpenTelemetrySemanticConventionStability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING = {}
-    _OpenTelemetrySemanticConventionStability._initialize()
-
-
 # ---------------------------------------------------------------------------
 # Unit tests for _get_property_value
 # ---------------------------------------------------------------------------
@@ -195,6 +188,167 @@ def test_prepare_tool_definitions_object_tools():
 
 
 # ---------------------------------------------------------------------------
+# Unit tests for prepare_tool_definitions - legacy OpenAI ``functions`` shape
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_tool_definitions_legacy_flat_function():
+    """Pre-tools OpenAI ``functions`` entries are flat mappings with no
+    ``type``/nested ``function`` wrapper. They must still be surfaced as
+    function tool definitions."""
+    tools = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name"},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    defn = result[0]
+    assert isinstance(defn, FunctionToolDefinition)
+    assert defn.type == "function"
+    assert defn.name == "get_current_weather"
+    assert defn.description == "Get the current weather in a given location."
+    assert defn.parameters is not None
+    assert defn.parameters["properties"]["location"]["type"] == "string"
+
+
+def test_prepare_tool_definitions_legacy_none_description_stays_none():
+    tools = [{"name": "no_desc"}]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "no_desc"
+    assert result[0].description is None
+    assert result[0].parameters is None
+
+
+def test_prepare_tool_definitions_legacy_object_function():
+    """Legacy flat definitions may also arrive as objects rather than dicts."""
+
+    class LegacyFuncDef:
+        name = "get_weather"
+        description = "Get current weather"
+        parameters = {"type": "object"}
+
+    result = prepare_tool_definitions([LegacyFuncDef()])
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "get_weather"
+    assert result[0].description == "Get current weather"
+
+
+def test_prepare_tool_definitions_mixed_modern_and_legacy():
+    """A mix of modern wrapped ``tools`` and legacy flat ``functions`` entries
+    should both be surfaced."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "modern_tool",
+                "description": "Modern wrapped tool",
+            },
+        },
+        {
+            "name": "legacy_tool",
+            "description": "Legacy flat function",
+        },
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 2
+    assert result[0].name == "modern_tool"
+    assert result[1].name == "legacy_tool"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for prepare_tool_definitions - malformed / edge-case inputs
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_tool_definitions_wrapped_function_takes_precedence():
+    """An entry with ``type == 'function'`` is parsed via the wrapped path even
+    if it also carries a top-level ``name`` (the legacy branch must not fire)."""
+    tools = [
+        {
+            "type": "function",
+            "name": "top_level_ignored",
+            "function": {"name": "wrapped_name"},
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "wrapped_name"
+
+
+def test_prepare_tool_definitions_function_type_missing_function_body():
+    """``type == 'function'`` with no ``function`` body and no top-level
+    ``name`` yields nothing (neither branch produces a definition)."""
+    tools = [{"type": "function"}]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_non_function_type_with_name_skipped():
+    tools = [
+        {
+            "type": "web_search",
+            "name": "search_the_web",
+            "description": "Vendor-specific tool",
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_non_function_type_with_name_skipped_in_mix():
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "modern_tool"},
+        },
+        {
+            "type": "web_search",
+            "name": "search_the_web",
+        },
+        {
+            "name": "legacy_tool",
+        },
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert [defn.name for defn in result] == ["modern_tool", "legacy_tool"]
+
+
+def test_prepare_tool_definitions_entry_without_type_or_name_skipped():
+    tools = [{"description": "no type, no name"}]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_skips_malformed_keeps_valid():
+    """Malformed entries are skipped without discarding valid ones."""
+    tools = [
+        {"description": "malformed - no name/type"},
+        {"type": "retrieval", "retrieval": {}},
+        {"name": "legacy_valid", "description": "ok"},
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "legacy_valid"
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by callback-handler integration tests
 # ---------------------------------------------------------------------------
 
@@ -246,12 +400,8 @@ _OPENAI_METADATA: dict[str, Any] = {"ls_provider": "openai"}
 
 def test_on_tool_start_and_end_creates_span(monkeypatch):
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -290,12 +440,8 @@ def test_on_tool_start_and_end_creates_span(monkeypatch):
 
 def test_on_tool_start_with_string_input(monkeypatch):
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -325,10 +471,6 @@ def test_on_tool_start_with_string_input(monkeypatch):
 
 def test_on_tool_start_with_no_serialized(monkeypatch):
     """on_tool_start with serialized=None falls back to name='unknown'."""
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -354,10 +496,6 @@ def test_on_tool_start_with_no_serialized(monkeypatch):
 
 
 def test_on_tool_error_records_error_type(monkeypatch):
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -389,12 +527,8 @@ def test_on_tool_error_records_error_type(monkeypatch):
 def test_on_chat_model_start_with_tools_sets_definitions(monkeypatch):
     """Tool definitions passed via invocation_params are captured on the span."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -461,12 +595,8 @@ def _build_tool_call_llm_result(
 def test_on_llm_end_with_tool_calls_records_tool_call_requests(monkeypatch):
     """When finish_reason is tool_calls the output message parts are ToolCallRequests."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -499,12 +629,8 @@ def test_on_llm_end_with_tool_calls_records_tool_call_requests(monkeypatch):
 
 def test_on_llm_end_with_multiple_tool_calls(monkeypatch):
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -555,12 +681,8 @@ def test_on_llm_end_with_bedrock_tool_use_records_tool_call_requests(
     output message parts must be ToolCallRequests, same as for OpenAI's
     'tool_calls' finish reason."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -609,10 +731,6 @@ def test_on_llm_end_with_bedrock_tool_use_records_tool_call_requests(
 
 def test_tool_span_created_via_instrumentor(monkeypatch):
     """Using LangChainInstrumentor, on_tool_start/end produces an execute_tool span."""
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
 
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
@@ -663,10 +781,6 @@ def test_on_tool_start_and_end_no_content_capture_suppresses_arguments(
     monkeypatch,
 ):
     """Without content capture, arguments and result are absent from the span."""
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     # OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT intentionally not set
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
@@ -698,12 +812,8 @@ def test_on_tool_start_and_end_no_content_capture_suppresses_arguments(
 def test_on_tool_end_captures_result_with_span_only_mode(monkeypatch):
     """tool_result is set on the span when content capture is SPAN_ONLY."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -735,10 +845,6 @@ def test_on_tool_end_captures_result_with_span_only_mode(monkeypatch):
 
 def test_on_tool_end_sets_tool_call_id_attribute(monkeypatch):
     """tool_call_id from the output object is set on the span."""
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -765,10 +871,6 @@ def test_on_tool_end_sets_tool_call_id_attribute(monkeypatch):
 
 def test_on_tool_end_with_none_tool_call_id_omits_attribute(monkeypatch):
     """tool_call_id is absent when the output carries no call id."""
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -801,12 +903,8 @@ def test_on_tool_end_with_none_tool_call_id_omits_attribute(monkeypatch):
 def test_on_tool_start_with_complex_inputs_serializes_to_json(monkeypatch):
     """Complex dict inputs are serialized to a compact JSON string on the span."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -843,12 +941,8 @@ def test_on_tool_start_with_complex_inputs_serializes_to_json(monkeypatch):
 def test_on_tool_end_with_complex_result_serializes_to_json(monkeypatch):
     """Complex dict/list tool results are serialized to a JSON string on the span."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -884,12 +978,8 @@ def test_on_tool_end_with_complex_result_serializes_to_json(monkeypatch):
 def test_on_tool_end_with_list_result_serializes_to_json(monkeypatch):
     """List tool results are serialized to a JSON string on the span."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -925,10 +1015,6 @@ def test_on_tool_end_with_list_result_serializes_to_json(monkeypatch):
 
 
 def test_on_tool_end_unknown_run_id_does_not_raise(monkeypatch):
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -946,10 +1032,6 @@ def test_on_tool_end_unknown_run_id_does_not_raise(monkeypatch):
 
 
 def test_on_tool_error_unknown_run_id_does_not_raise(monkeypatch):
-    monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -970,12 +1052,8 @@ def test_on_tool_error_unknown_run_id_does_not_raise(monkeypatch):
 def test_on_tool_start_uses_input_str_when_inputs_is_none(monkeypatch):
     """When inputs kwarg is absent (None), input_str is used for arguments."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -1004,12 +1082,8 @@ def test_on_tool_start_uses_input_str_when_inputs_is_none(monkeypatch):
 def test_on_tool_start_inputs_takes_priority_over_input_str(monkeypatch):
     """When both inputs dict and input_str are provided, inputs dict wins."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -1040,12 +1114,8 @@ def test_on_tool_start_inputs_takes_priority_over_input_str(monkeypatch):
 def test_on_tool_start_json_input_str_is_deserialized(monkeypatch):
     """When inputs is None but input_str is valid JSON, it is deserialized to an object."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -1082,12 +1152,8 @@ def test_on_tool_start_json_input_str_is_deserialized(monkeypatch):
 def test_on_chat_model_start_with_functions_key_sets_definitions(monkeypatch):
     """Tool definitions are also picked up from the 'functions' invocation param."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )
@@ -1134,12 +1200,8 @@ def test_on_chat_model_start_with_functions_key_sets_definitions(monkeypatch):
 def test_on_chat_model_start_without_tools_omits_definitions(monkeypatch):
     """No tool_definitions attribute when invocation_params has no tools."""
     monkeypatch.setenv(
-        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
-    )
-    monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
     )
-    _enable_experimental_mode()
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
     )

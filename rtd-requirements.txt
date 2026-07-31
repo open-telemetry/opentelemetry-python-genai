@@ -2,6 +2,6 @@
 opentelemetry-api
 opentelemetry-semantic-conventions
 opentelemetry-sdk
-opentelemetry-instrumentation
+opentelemetry-instrumentation>=0.41b0
 ./util/opentelemetry-util-genai
 -r ./docs-requirements.txt

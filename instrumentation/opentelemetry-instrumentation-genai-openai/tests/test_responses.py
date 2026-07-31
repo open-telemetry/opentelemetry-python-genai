@@ -5,9 +5,19 @@ import inspect
 import json
 
 import pytest
-from openai import APIConnectionError, BadRequestError, NotFoundError, OpenAI
+from openai import (
+    APIConnectionError,
+    BadRequestError,
+    NotFoundError,
+    OpenAI,
+    Stream,
+)
+from pydantic import BaseModel
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
+from opentelemetry.instrumentation.genai.openai.response_wrappers import (
+    ResponseStreamManagerWrapper,
+)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -17,6 +27,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
@@ -67,6 +78,13 @@ format '[1,2],[3,4],[5,6]' and prints the transpose in the same format.
 
 
 def _skip_if_not_latest():
+    """Skip Responses API tests outside the latest experimental semconv path.
+
+    Responses instrumentation is implemented with the GenAI latest
+    experimental semantic conventions only. The regular test matrix can still
+    exercise older or non-experimental semconv paths, so those runs should not
+    assert telemetry this instrumentation does not emit.
+    """
     if not is_experimental_mode():
         pytest.skip(
             "Responses create instrumentation only supports the latest experimental semconv path"
@@ -128,6 +146,42 @@ def _collect_completed_response(stream):
             response = event.response
     assert response is not None
     return response
+
+
+def assert_responses_streaming_timing_metrics(metric_reader):
+    """Assert the streaming timing metrics are emitted through the real
+    Responses stream wrapper path.
+
+    Regression coverage for the ``invocation=invocation`` wiring in
+    ``response_wrappers.py``: dropping it would keep every span/attribute test
+    green but silently stop emitting TTFC and per-output-chunk metrics for the
+    Responses streaming path.
+    """
+    metrics = {}
+    for rm in metric_reader.get_metrics_data().resource_metrics:
+        for scope in rm.scope_metrics:
+            for metric in scope.metrics:
+                metrics[metric.name] = metric
+
+    ttfc = metrics.get(
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
+    )
+    assert ttfc is not None
+    ttfc_point = ttfc.data.data_points[0]
+    assert ttfc_point.count == 1
+    assert ttfc_point.sum >= 0
+    assert (
+        ttfc_point.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == GenAIAttributes.GenAiOperationNameValues.CHAT.value
+    )
+
+    per_chunk = metrics.get(
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_PER_OUTPUT_CHUNK
+    )
+    assert per_chunk is not None
+    per_chunk_point = per_chunk.data.data_points[0]
+    assert per_chunk_point.count >= 1
+    assert per_chunk_point.sum >= 0
 
 
 def test_responses_uninstrument_removes_patching(
@@ -271,7 +325,7 @@ def test_responses_retrieve_api_error(
     (span,) = span_exporter.get_finished_spans()
     assert (
         span.attributes[ErrorAttributes.ERROR_TYPE]
-        == type(exc_info.value).__name__
+        == f"openai.{type(exc_info.value).__name__}"
     )
 
 
@@ -422,7 +476,10 @@ def test_responses_create_connection_error(
     )
     assert span.attributes[ServerAttributes.SERVER_ADDRESS] == "localhost"
     assert span.attributes[ServerAttributes.SERVER_PORT] == 4242
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.vcr()
@@ -443,8 +500,28 @@ def test_responses_create_api_error(
     )
     assert (
         span.attributes[ErrorAttributes.ERROR_TYPE]
-        == type(exc_info.value).__name__
+        == f"openai.{type(exc_info.value).__name__}"
     )
+
+
+def test_responses_create_streaming_timing_metrics(
+    metric_reader, openai_client, instrument_no_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        with openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        ) as stream:
+            _collect_completed_response(stream)
+
+    assert_responses_streaming_timing_metrics(metric_reader)
 
 
 @pytest.mark.vcr()
@@ -474,6 +551,194 @@ def test_responses_create_streaming(
         request_service_tier="default",
         response_service_tier=getattr(response, "service_tier", None),
     )
+
+
+def test_responses_with_raw_response_streaming(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = openai_client.responses.with_raw_response.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+
+        # Raw-response metadata resolves natively off the wrapper (issue #46).
+        assert "openai-version" in raw_response.headers
+        assert raw_response.request_id is not None
+
+        response = _collect_completed_response(raw_response.parse())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
+class _UnrelatedEvent(BaseModel):
+    """An event type unrelated to the Responses stream events."""
+
+    foo: str = "bar"
+
+
+def test_responses_with_raw_response_streaming_unknown_event_type(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A caller can parse the raw stream into an event type we don't recognize.
+    # Telemetry extraction must not break iteration: the caller must drain the
+    # same events it would with instrumentation disabled, and the span must
+    # still close (empty telemetry) instead of leaking.
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = openai_client.responses.with_raw_response.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+        events = list(raw_response.parse(to=Stream[_UnrelatedEvent]))
+
+    assert len(events) > 0  # drained fine, same as disabled instrumentation
+
+    (span,) = span_exporter.get_finished_spans()  # span closed, did not leak
+    assert span.end_time is not None
+
+
+def test_responses_stream_returns_wrapped_manager(
+    openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    manager = openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+    )
+
+    assert isinstance(manager, ResponseStreamManagerWrapper)
+
+
+def test_responses_stream_connection_error(
+    span_exporter, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    client = OpenAI(base_url="http://localhost:4242")
+
+    with pytest.raises(APIConnectionError):
+        with client.responses.stream(
+            model=DEFAULT_MODEL,
+            input="Hello",
+            timeout=0.1,
+        ):
+            pass
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
+    )
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
+
+
+@pytest.mark.vcr()
+def test_responses_stream_captures_content(
+    span_exporter,
+    log_exporter,
+    openai_client,
+    instrument_with_content,
+):
+    _skip_if_not_latest()
+
+    with openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+    ) as stream:
+        response = _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+    _assert_response_content(span, response, log_exporter)
+
+
+@pytest.mark.vcr()
+def test_responses_stream_until_done(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+        service_tier="default",
+    ) as stream:
+        response = stream.get_final_response()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
+@pytest.mark.vcr()
+def test_responses_stream_user_exception(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        with openai_client.responses.stream(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+        ) as stream:
+            for _ in stream:
+                raise ValueError("User raised exception")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
+    )
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
 
 
 @pytest.mark.vcr()
@@ -593,7 +858,10 @@ def test_responses_create_streaming_connection_error(
     assert (
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.vcr()

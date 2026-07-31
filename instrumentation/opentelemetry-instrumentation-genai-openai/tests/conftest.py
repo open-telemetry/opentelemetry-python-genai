@@ -72,11 +72,6 @@ def fixture_content_mode(request):
     return request.param
 
 
-def _semconv_from_content_mode(content_mode) -> str:
-    latest_experimental_enabled, _ = content_mode
-    return "gen_ai_latest_experimental" if latest_experimental_enabled else ""
-
-
 @pytest.fixture(scope="function")
 def instrument_no_content(
     tracer_provider,
@@ -89,7 +84,6 @@ def instrument_no_content(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv=_semconv_from_content_mode(content_mode),
     ) as instrumentor:
         yield instrumentor
 
@@ -104,7 +98,6 @@ def instrument_with_content(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv=_semconv_from_content_mode(content_mode),
         content_capture=content_mode_value,
     ) as instrumentor:
         yield instrumentor
@@ -122,7 +115,6 @@ def instrument_with_content_unsampled(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv=_semconv_from_content_mode(content_mode),
         content_capture=content_mode_value,
     ) as instrumentor:
         yield instrumentor
@@ -135,7 +127,6 @@ def instrument_event_only(tracer_provider, logger_provider, meter_provider):
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
-        semconv="gen_ai_latest_experimental",
         content_capture="event_only",
     ) as instrumentor:
         yield instrumentor

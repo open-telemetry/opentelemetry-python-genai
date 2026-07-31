@@ -17,10 +17,8 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     InferenceInvocation,
 )
-from opentelemetry.util.genai.types import (
-    Error,
-)
 
+from ._raw_response import ParsableResponse, wrap_stream_result
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
@@ -73,23 +71,19 @@ def chat_completions_create_v_new(
 
         try:
             result = wrapped(*args, **kwargs)
-            if hasattr(result, "parse"):
-                # result is of type LegacyAPIResponse, call parse to get the actual response
-                parsed_result = result.parse()
-            else:
-                parsed_result = result
             if is_streaming(kwargs):
-                return ChatStreamWrapper(
-                    parsed_result, chat_invocation, capture_content
+                return wrap_stream_result(
+                    ChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
                 )
 
-            _set_response_properties(
-                chat_invocation, parsed_result, capture_content
-            )
+            _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
         except Exception as error:
-            chat_invocation.fail(Error(type=type(error), message=str(error)))
+            chat_invocation.fail(error)
             raise
 
     return traced_method
@@ -108,24 +102,20 @@ def async_chat_completions_create_v_new(
 
         try:
             result = await wrapped(*args, **kwargs)
-            if hasattr(result, "parse"):
-                # result is of type LegacyAPIResponse, calling parse to get the actual response
-                parsed_result = result.parse()
-            else:
-                parsed_result = result
             if is_streaming(kwargs):
-                return AsyncChatStreamWrapper(
-                    parsed_result, chat_invocation, capture_content
+                return wrap_stream_result(
+                    AsyncChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
                 )
 
-            _set_response_properties(
-                chat_invocation, parsed_result, capture_content
-            )
+            _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
 
         except Exception as error:
-            chat_invocation.fail(Error(type=type(error), message=str(error)))
+            chat_invocation.fail(error)
             raise
 
     return traced_method
@@ -140,7 +130,7 @@ def embeddings_create(handler: TelemetryHandler):
         try:
             result = wrapped(*args, **kwargs)
         except Exception as error:
-            invocation.fail(Error(type=type(error), message=str(error)))
+            invocation.fail(error)
             raise
 
         _safe_set_embeddings_response_properties(invocation, result)
@@ -159,7 +149,7 @@ def async_embeddings_create(handler: TelemetryHandler):
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as error:
-            invocation.fail(Error(type=type(error), message=str(error)))
+            invocation.fail(error)
             raise
 
         _safe_set_embeddings_response_properties(invocation, result)
@@ -172,6 +162,11 @@ def async_embeddings_create(handler: TelemetryHandler):
 def _set_response_properties(
     chat_invocation: InferenceInvocation, result, capture_content: bool
 ) -> InferenceInvocation:
+    if isinstance(result, ParsableResponse):
+        # with_raw_response: safe to parse() here since this is the
+        # non-streaming path, so it has no side effects on the caller's stream.
+        result = result.parse()
+
     if getattr(result, "model", None):
         chat_invocation.response_model_name = result.model
 

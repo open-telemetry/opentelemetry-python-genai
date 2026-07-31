@@ -9,11 +9,16 @@ import pytest
 from openai import (
     APIConnectionError,
     AsyncOpenAI,
+    AsyncStream,
     BadRequestError,
     NotFoundError,
 )
+from pydantic import BaseModel
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
+from opentelemetry.instrumentation.genai.openai.response_wrappers import (
+    AsyncResponseStreamManagerWrapper,
+)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -25,6 +30,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.utils import is_experimental_mode
 
+from .test_responses import assert_responses_streaming_timing_metrics
 from .test_utils import (
     DEFAULT_MODEL,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
@@ -73,6 +79,13 @@ format '[1,2],[3,4],[5,6]' and prints the transpose in the same format.
 
 
 def _skip_if_not_latest():
+    """Skip Responses API tests outside the latest experimental semconv path.
+
+    Responses instrumentation is implemented with the GenAI latest
+    experimental semantic conventions only. The regular test matrix can still
+    exercise older or non-experimental semconv paths, so those runs should not
+    assert telemetry this instrumentation does not emit.
+    """
     if not is_experimental_mode():
         pytest.skip(
             "Responses create instrumentation only supports the latest experimental semconv path"
@@ -268,8 +281,87 @@ async def test_async_responses_retrieve_api_error(
     (span,) = span_exporter.get_finished_spans()
     assert (
         span.attributes[ErrorAttributes.ERROR_TYPE]
-        == type(exc_info.value).__name__
+        == f"openai.{type(exc_info.value).__name__}"
     )
+
+
+@pytest.mark.asyncio()
+async def test_async_responses_with_raw_response_streaming(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = (
+            await async_openai_client.responses.with_raw_response.create(
+                model=DEFAULT_MODEL,
+                instructions=SYSTEM_INSTRUCTIONS,
+                input=USER_ONLY_PROMPT[0]["content"],
+                service_tier="default",
+                stream=True,
+            )
+        )
+
+        # Raw-response metadata resolves natively off the wrapper (issue #46).
+        assert "openai-version" in raw_response.headers
+        assert raw_response.request_id is not None
+
+        response = await _collect_completed_response(raw_response.parse())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
+class _UnrelatedEvent(BaseModel):
+    """An event type unrelated to the Responses stream events."""
+
+    foo: str = "bar"
+
+
+@pytest.mark.asyncio()
+async def test_async_responses_with_raw_response_streaming_unknown_event_type(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    # Parsing the raw stream into an event type we don't recognize must not
+    # break iteration: the caller drains the same events it would with
+    # instrumentation disabled, and the span still closes instead of leaking.
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        raw_response = (
+            await async_openai_client.responses.with_raw_response.create(
+                model=DEFAULT_MODEL,
+                instructions=SYSTEM_INSTRUCTIONS,
+                input=USER_ONLY_PROMPT[0]["content"],
+                service_tier="default",
+                stream=True,
+            )
+        )
+        events = [
+            event
+            async for event in raw_response.parse(
+                to=AsyncStream[_UnrelatedEvent]
+            )
+        ]
+
+    assert len(events) > 0  # drained fine, same as disabled instrumentation
+
+    (span,) = span_exporter.get_finished_spans()  # span closed, did not leak
+    assert span.end_time is not None
 
 
 @pytest.mark.asyncio()
@@ -435,7 +527,10 @@ async def test_async_responses_create_connection_error(
     )
     assert span.attributes[ServerAttributes.SERVER_ADDRESS] == "localhost"
     assert span.attributes[ServerAttributes.SERVER_PORT] == 4242
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.asyncio()
@@ -459,8 +554,29 @@ async def test_async_responses_create_api_error(
     )
     assert (
         span.attributes[ErrorAttributes.ERROR_TYPE]
-        == type(exc_info.value).__name__
+        == f"openai.{type(exc_info.value).__name__}"
     )
+
+
+@pytest.mark.asyncio()
+async def test_async_responses_create_streaming_timing_metrics(
+    metric_reader, async_openai_client, instrument_no_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_streaming[content_mode0].yaml"
+    ):
+        stream = await async_openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        )
+        await _collect_completed_response(stream)
+
+    assert_responses_streaming_timing_metrics(metric_reader)
 
 
 @pytest.mark.asyncio()
@@ -493,6 +609,117 @@ async def test_async_responses_create_streaming(
         request_service_tier="default",
         response_service_tier=getattr(response, "service_tier", None),
     )
+
+
+@pytest.mark.asyncio()
+async def test_async_responses_stream_connection_error(
+    span_exporter, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    client = AsyncOpenAI(base_url="http://localhost:4242")
+
+    with pytest.raises(APIConnectionError):
+        async with client.responses.stream(
+            model=DEFAULT_MODEL,
+            input="Hello",
+            timeout=0.1,
+        ):
+            pass
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
+    )
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.vcr()
+async def test_async_responses_stream_captures_content(
+    span_exporter,
+    log_exporter,
+    async_openai_client,
+    instrument_with_content,
+):
+    _skip_if_not_latest()
+
+    manager = async_openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+    )
+    assert isinstance(manager, AsyncResponseStreamManagerWrapper)
+    async with manager as stream:
+        response = await _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+    _assert_response_content(span, response, log_exporter)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.vcr()
+async def test_async_responses_stream_until_done(
+    span_exporter, async_openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    async with async_openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+        service_tier="default",
+    ) as stream:
+        response = await stream.get_final_response()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.vcr()
+async def test_async_responses_stream_user_exception(
+    span_exporter, async_openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        async with async_openai_client.responses.stream(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+        ) as stream:
+            async for _ in stream:
+                raise ValueError("User raised exception")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
+    )
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
 
 
 @pytest.mark.asyncio()
@@ -625,7 +852,10 @@ async def test_async_responses_create_streaming_connection_error(
     assert (
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "APIConnectionError"
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
 
 
 @pytest.mark.asyncio()

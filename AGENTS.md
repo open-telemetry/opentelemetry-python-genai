@@ -50,6 +50,35 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - Packages use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`). `version.py` carries a `.dev`
   suffix during development (`1.0b0.dev`); the release workflow drops it.
 
+## Dependency versioning and compatibility
+
+- Use compatible release specifiers (e.g., `~= x.y` or `>= x.y.z, < (x+1)`) that pin the major version and allow minor/patch updates.
+- Avoid pinning versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`) in `pyproject.toml` unless strictly necessary.
+- Keep version requirements for shared OpenTelemetry packages (e.g., `opentelemetry-api`, `opentelemetry-instrumentation`, and `opentelemetry-semantic-conventions`) consistent across all packages.
+- For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), use `>=` specifiers and pin the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) rather than using `~=`.
+
+
+## Before adding a new instrumentation
+
+Before scaffolding a new instrumentation package, check whether the target library already
+provides its own GenAI telemetry, and get the user's acknowledgement before proceeding. Follow the
+[When to add an instrumentation here](CONTRIBUTING.md#when-to-add-an-instrumentation-here) policy.
+
+- **Check the library's dependencies.** A runtime dependency on `opentelemetry-api` (or other
+  `opentelemetry-*` packages) in the library's metadata (`pyproject.toml` / `setup.py` /
+  `setup.cfg` / lockfile) can indicate it ships native instrumentation or a first-party
+  OpenTelemetry integration — research it before writing any code. (A dev/test-only dependency,
+  e.g. for examples, doesn't count.)
+- **Check the library's public docs.** Look for an OpenTelemetry / observability / tracing
+  integration that ships as a first-party plugin, even in a separate package that isn't a hard
+  dependency.
+- **Report findings and stop for acknowledgement.** Summarize whether the library is natively
+  instrumented or has a first-party plugin, whether it's based on the OTel API, and how closely it
+  follows the GenAI semantic conventions; map that onto the policy's decision tree and present a
+  recommendation. **Do not scaffold or write instrumentation code until the user explicitly
+  acknowledges that instrumentation here is needed.**
+
+
 ## Adding a package to the workspace
 
 A new package under `instrumentation/<pkg>/` (where `<pkg>` is the full
@@ -89,7 +118,7 @@ uv run pre-commit run ruff --all-files
 uv run tox -e py312-test-instrumentation-genai-openai-latest
 
 # Run a package's conformance scenarios (only *-conformance envs collect test_conformance.py)
-uv run tox -e py312-test-instrumentation-genai-openai-conformance
+uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
 uv run tox -e typecheck
@@ -98,6 +127,10 @@ uv run tox -e typecheck
 Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, and the changed package's
 test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
 the CI gates.
+
+tox reuses cached envs and won't re-resolve dependencies on its own, so pass `--recreate` (`-r`)
+after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound — otherwise the
+run silently uses the previously installed versions.
 
 ## Guidelines
 
@@ -132,6 +165,29 @@ Apply to packages under `instrumentation/`.
   `opentelemetry.util.genai._*` module.
 - Content capture, hooks, and configuration are owned by the util. Don't add instrumentation-local
   env vars or settings.
+
+#### Completion hook
+
+The `CompletionHook` (`opentelemetry.util.genai.completion_hook`) lets users forward captured
+prompt/completion content to external storage (e.g. object stores) instead of, or in addition to,
+recording it inline. Wiring is owned by the util — instrumentations just pass the hook through to
+the `TelemetryHandler`. Follow the OpenAI package
+([`OpenAIInstrumentor`](instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/__init__.py))
+as the reference:
+
+- In `_instrument(**kwargs)`, resolve the hook as
+  `kwargs.get("completion_hook") or load_completion_hook()` and pass it to the handler
+  (`TelemetryHandler(..., completion_hook=...)` or
+  `get_telemetry_handler(..., completion_hook=...)`). `load_completion_hook()` returns the hook
+  named by `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` (e.g. `upload`) via its entry point, or a
+  no-op. An explicit `instrument(completion_hook=…)` argument takes precedence over the env var.
+- Don't define your own hook interface, call `on_completion` yourself, or wrap it in `try/except` —
+  the util calls the hook and swallows hook exceptions internally.
+- Document the capability in the package `README.rst` (both the
+  `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload` env var with
+  `OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH`, and the programmatic
+  `instrument(completion_hook=…)` override) and ship a `custom_hook.py` example mirroring the
+  OpenAI package.
 
 #### Streaming responses
 
@@ -169,6 +225,24 @@ Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (
 finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
 isn't enough, add the capability here rather than working around it.
 
+#### Preserve the SDK's return contract
+
+Instrumentation observes; it should not change what a call returns or when its work happens.
+
+- **No new side effects.** Don't do work the SDK didn't — building telemetry must never consume,
+  materialize, or otherwise trigger the result early. Stay as lazy as the original.
+- **Don't change the returned type.** `isinstance` and `__class__` must still resolve to the
+  original type. A transparent proxy (e.g. `wrapt.ObjectProxy`) satisfies this; returning a
+  different or already-parsed type does not.
+- **Keep wrappers transparent.** A wrapper should be indistinguishable from what it wraps —
+  attributes and behavior forward unchanged, only telemetry is added.
+- **Decorate replacement functions with `@functools.wraps(original)`.** Whenever a function or bound
+  method is swapped for a stand-in (`obj.close = _close`, wrapt patches), so introspection and
+  `help()` still see the original. Not needed for proxy-class methods, which shadow rather than
+  replace.
+
+Full transparency isn't always reachable — prefer the least intrusive option that works.
+
 ### Exception handling
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the
@@ -182,6 +256,15 @@ isn't enough, add the capability here rather than working around it.
 - For attributes with a well-known value set, use the generated enum from the same module instead
   of string literals.
 
+### README
+
+- Each package's `README.rst` is published as its PyPI long description. When a change introduces
+  user-visible changes to the public API, configuration (env vars, `instrument()` keyword
+  arguments), supported operations/span types, or examples, update the package `README.rst` in the
+  same PR so its claims stay accurate.
+- `README.rst` must render on PyPI. Do not use Sphinx-only roles (e.g. `:class:`, `:mod:`); they
+  fail the PyPI renderer. Run `uv run tox -e readme` to validate.
+
 ### Tests
 
 - For every public API instrumented, cover sync/async variants when both exist.
@@ -193,6 +276,11 @@ isn't enough, add the capability here rather than working around it.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Test against oldest and latest supported library versions via `tests/requirements.{oldest,latest}.txt`
   and `{oldest,latest}` `tox.ini` factors.
+- The `oldest` env must install exactly the lower bounds declared in `pyproject.toml`
+  (`dependencies` and the `instruments` extra) — the declared and tested versions must not drift.
+  `UV_RESOLUTION=lowest-direct` (set on the `oldest` factor) derives them from `pyproject.toml`, so
+  it stays the single source of truth; only pin test-only deps with no `pyproject.toml` bound in
+  `tests/requirements.oldest.txt`.
 - `tests/conftest.py` must consume the shared fixtures from `opentelemetry.test_util_genai`
   by registering them as plugins. Always register the fixtures plugin; register the VCR plugin
   too when the package's tests use VCR cassettes —
@@ -233,7 +321,7 @@ scenario hides the gap; writing it records the gap (as a declared violation
 or a skip reason) so it fails loudly once the gap is fixed. **Never** drop a
 scenario file because it would fail today.
 
-Run via `tox -e py312-test-instrumentation-genai-<lib>-conformance`. The
+Run via `uv run tox -e py314-test-instrumentation-genai-<lib>-conformance`. The
 `*-conformance` tox envs target `tests/test_conformance.py` directly; the
 regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
 OTLP/gRPC exporter or `weaver_live_check`.

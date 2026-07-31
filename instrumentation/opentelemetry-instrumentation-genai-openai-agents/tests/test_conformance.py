@@ -25,18 +25,7 @@ from .conformance.orchestration import OrchestrationScenario
 
 @pytest.mark.parametrize(
     "scenario",
-    [
-        pytest.param(
-            OrchestrationScenario(),
-            marks=pytest.mark.skip(
-                reason=(
-                    "openai-agents instrumentation has multiple semconv gaps "
-                    "surfaced by this scenario; tracked in "
-                    "https://github.com/open-telemetry/opentelemetry-python-genai/issues/86"
-                )
-            ),
-        ),
-    ],
+    [pytest.param(OrchestrationScenario())],
     ids=lambda s: type(s).__name__,
 )
 def test_conformance(

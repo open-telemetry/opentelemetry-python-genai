@@ -15,6 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
 
+from ._raw_response import ParsableResponse
 from .utils import (
     _openai_response_format_to_output_type,
     get_server_address_and_port,
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     from openai.types.responses.response_usage import ResponseUsage
 
     from opentelemetry.util.genai.types import (
+        Error,
         InputMessage,
         OutputMessage,
         Text,
@@ -57,6 +59,7 @@ except ImportError:
 
 try:
     from opentelemetry.util.genai.types import (
+        Error,
         InputMessage,
         OutputMessage,
         Reasoning,
@@ -66,6 +69,7 @@ try:
         ToolCallRequest as ToolCall,
     )
 except ImportError:
+    Error = None
     InputMessage = None
     OutputMessage = None
     Reasoning = None
@@ -365,6 +369,21 @@ def extract_finish_reasons(response: "Response | None") -> list[str]:
     return list(dict.fromkeys(finish_reasons))
 
 
+def get_response_error(response: "Response | None") -> "Error | None":
+    """Return an ``Error`` when the response failed, else ``None``.
+
+    A failed response carries a ``ResponseError`` (``code`` + ``message``).
+    Incomplete responses (``incomplete_details``) are *not* errors — they
+    surface as a finish reason instead.
+    """
+    if Response is None or Error is None or not isinstance(response, Response):
+        return None
+    error = response.error
+    if error is None:
+        return None
+    return Error(type=error.code, message=error.message)
+
+
 def get_inference_creation_kwargs(
     params: ResponseRequestParams,
     client_instance: object,
@@ -438,9 +457,14 @@ def extract_usage_tokens(usage: "ResponseUsage | None") -> UsageTokens:
 
 def set_invocation_response_attributes(
     invocation,
-    response: "Response | None",
+    response: object,
     capture_content: bool,
 ) -> None:
+    if isinstance(response, ParsableResponse):
+        # with_raw_response: safe to parse() here since this is the
+        # non-streaming path, so it has no side effects on the caller's stream.
+        response = response.parse()
+
     if Response is None or not isinstance(response, Response):
         return
 

@@ -1,0 +1,197 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "You are a careful mathematical reasoner.",
+            "role": "system"
+          },
+          {
+            "content": "A snail climbs a 12 meter well. Each day it climbs up 3 meters, and each night it slides back 2 meters. On which day does it first reach the top? Think through it step by step.",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-5-mini",
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '326'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 2.48.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 2.48.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.6
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "content_filter_results": {
+                "hate": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "protected_material_code": {
+                  "detected": false,
+                  "filtered": false
+                },
+                "protected_material_text": {
+                  "detected": false,
+                  "filtered": false
+                },
+                "self_harm": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "sexual": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "violence": {
+                  "filtered": false,
+                  "severity": "safe"
+                }
+              },
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "Answer: on the 10th day.\n\nBrief step-by-step:\n- Start 0 m.\n- Day 1: climbs to 3 m \u2192 night slides to 1 m.\n- Day 2: climbs to 4 m \u2192 night slides to 2 m.\n- ...\n- Day 8: climbs to 10 m \u2192 night slides to 8 m.\n- Day 9: climbs to 11 m \u2192 night slides to 9 m.\n- Day 10: climbs from 9 m to 12 m and reaches the top (no more sliding back).\n\nQuick algebraic check: after k full day\u2013night cycles the snail is k meters up. At the start of day n it is at (n\u22121) meters; it reaches the top during that day's 3 m climb if (n\u22121)+3 \u2265 12 \u2192 n \u2265 10. So n = 10.",
+                "refusal": null,
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1784932201,
+          "id": "chatcmpl-E5IgzKcc2wIqYkEjaJeBgoIeMf3jS",
+          "model": "gpt-5-mini-2025-08-07",
+          "object": "chat.completion",
+          "prompt_filter_results": [
+            {
+              "prompt_index": 0,
+              "content_filter_results": {
+                "hate": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "jailbreak": {
+                  "detected": false,
+                  "filtered": false
+                },
+                "self_harm": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "sexual": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "violence": {
+                  "filtered": false,
+                  "severity": "safe"
+                }
+              }
+            }
+          ],
+          "service_tier": "default",
+          "system_fingerprint": null,
+          "usage": {
+            "completion_tokens": 1284,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 1088,
+              "rejected_prediction_tokens": 0
+            },
+            "latency_checkpoint": {
+              "engine_tbt_ms": 9,
+              "engine_ttft_ms": 35,
+              "engine_ttlt_ms": 12159,
+              "pre_inference_ms": 111,
+              "service_tbt_ms": 9,
+              "service_ttft_ms": 354,
+              "service_ttlt_ms": 12474,
+              "total_duration_ms": 12371,
+              "user_visible_ttft_ms": 243
+            },
+            "prompt_tokens": 63,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 0
+            },
+            "total_tokens": 1347
+          }
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Fri, 24 Jul 2026 22:30:13 GMT
+      Set-Cookie: test_set_cookie
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      content-length:
+      - '2024'
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '12371'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      x-ratelimit-limit-requests:
+      - '500'
+      x-ratelimit-limit-tokens:
+      - '500000'
+      x-ratelimit-remaining-requests:
+      - '499'
+      x-ratelimit-remaining-tokens:
+      - '499937'
+      x-ratelimit-reset-requests:
+      - '0'
+      x-ratelimit-reset-tokens:
+      - '0'
+      x-request-id:
+      - req_test_request_id
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -113,9 +113,7 @@ def create_chat_invocation(
     if (choice_count := get_value(kwargs.get("n"))) is not None:
         # Only add non default, meaningful values
         if isinstance(choice_count, int) and choice_count != 1:
-            invocation.attributes[
-                GenAIAttributes.GEN_AI_REQUEST_CHOICE_COUNT
-            ] = choice_count
+            invocation.request_choice_count = choice_count
 
     if (
         response_format := get_value(kwargs.get("response_format"))

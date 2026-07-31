@@ -19,6 +19,7 @@ def _make_invocation():
         request_model=None,
         stop=lambda: None,
         fail=lambda error: None,
+        _on_stream_chunk=lambda chunk_at: None,
     )
 
 
@@ -329,8 +330,9 @@ def test_sync_manager_does_not_create_invocation_until_enter():
     factory_calls = []
     wrapper = MessagesStreamManagerWrapper(
         manager=_FakeSyncManager(stream=stream),
-        invocation_factory=lambda: factory_calls.append(True)
-        or _make_invocation(),
+        invocation_factory=lambda: (
+            factory_calls.append(True) or _make_invocation()
+        ),
         capture_content=False,
     )
 

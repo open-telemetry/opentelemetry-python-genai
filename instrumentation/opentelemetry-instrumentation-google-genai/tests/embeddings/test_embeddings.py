@@ -42,8 +42,14 @@ class TestEmbeddings(TestCase):
             return_value=self.mock_response
         )
 
-        Models.embed_content = self.embed_content_mock
-        AsyncModels.embed_content = self.async_embed_content_mock
+        def _sync_embed_wrapped(self_obj, *args, **kwargs):
+            return self.embed_content_mock(*args, **kwargs)
+
+        async def _async_embed_wrapped(self_obj, *args, **kwargs):
+            return await self.async_embed_content_mock(*args, **kwargs)
+
+        Models.embed_content = _sync_embed_wrapped
+        AsyncModels.embed_content = _async_embed_wrapped
 
     def tearDown(self):
         super().tearDown()
@@ -80,6 +86,10 @@ class TestEmbeddings(TestCase):
         self.assertEqual(
             attrs[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT], 3
         )
+        self.assertEqual(
+            attrs["server.address"],
+            "generativelanguage.googleapis.com",
+        )
 
     def test_async_embed_content(self):
         async def run_test():
@@ -113,6 +123,10 @@ class TestEmbeddings(TestCase):
         self.assertEqual(
             attrs[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT], 3
         )
+        self.assertEqual(
+            attrs["server.address"],
+            "generativelanguage.googleapis.com",
+        )
 
     def test_embed_content_multiple_inputs(self):
         _ = self.client.models.embed_content(
@@ -137,8 +151,7 @@ class TestEmbeddings(TestCase):
         )
 
     def test_embed_content_error(self):
-        error_mock = MagicMock(side_effect=ValueError("invalid model"))
-        Models.embed_content = error_mock
+        self.embed_content_mock.side_effect = ValueError("invalid model")
 
         with self.assertRaises(ValueError):
             self.client.models.embed_content(

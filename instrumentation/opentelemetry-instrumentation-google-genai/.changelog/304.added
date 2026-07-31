@@ -1,0 +1,1 @@
+Surface the HTTP status code (e.g. ``429``) as ``error.type`` on failed ``generate_content`` and ``interactions.create`` inference spans and metrics, instead of collapsing every ``google.genai`` error into ``ClientError`` / ``ServerError``.

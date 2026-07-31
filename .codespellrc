@@ -1,4 +1,7 @@
+# check-hidden lets codespell scan hidden files/dirs (e.g. towncrier fragments in .changelog/),
+# which it skips by default.
 [codespell]
+check-hidden = true
 # skipping auto generated folders
-skip = ./.tox,./.mypy_cache,./docs/_build,./target,*/LICENSE,./venv,*/cassettes
+skip = ./.git,./.tox,./.venv,./.mypy_cache,./docs/_build,./target,*/LICENSE,./venv,*/cassettes
 ignore-words-list = ot

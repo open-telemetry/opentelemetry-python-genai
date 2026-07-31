@@ -12,15 +12,28 @@ from opentelemetry.instrumentation.genai.openai.response_wrappers import (
     ResponseStreamWrapper,
 )
 
+try:
+    from openai.types.responses.response import Response
+
+    HAS_RESPONSES_TYPES = True
+except ImportError:
+    Response = None
+    HAS_RESPONSES_TYPES = False
+
 
 class _FakeManager:
-    def __init__(self, stream, suppressed=False, exit_error=None):
+    def __init__(
+        self, stream, suppressed=False, enter_error=None, exit_error=None
+    ):
         self._stream = stream
         self._suppressed = suppressed
+        self._enter_error = enter_error
         self._exit_error = exit_error
         self.exit_args = None
 
     def __enter__(self):
+        if self._enter_error is not None:
+            raise self._enter_error
         return self._stream
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -31,13 +44,18 @@ class _FakeManager:
 
 
 class _FakeAsyncManager:
-    def __init__(self, stream, suppressed=False, exit_error=None):
+    def __init__(
+        self, stream, suppressed=False, enter_error=None, exit_error=None
+    ):
         self._stream = stream
         self._suppressed = suppressed
+        self._enter_error = enter_error
         self._exit_error = exit_error
         self.exit_args = None
 
     async def __aenter__(self):
+        if self._enter_error is not None:
+            raise self._enter_error
         return self._stream
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -55,15 +73,20 @@ def _noop_fail(error):
     del error
 
 
+def _noop_on_stream_chunk(chunk_at):
+    del chunk_at
+
+
 def _make_wrapper(manager):
     invocation = SimpleNamespace(
         request_model=None,
         stop=_noop_stop,
+        _on_stream_chunk=_noop_on_stream_chunk,
         fail=_noop_fail,
     )
     return ResponseStreamManagerWrapper(
         manager=manager,
-        invocation=invocation,
+        invocation_factory=lambda: invocation,
         capture_content=False,
     )
 
@@ -74,6 +97,7 @@ def _make_stream_wrapper(stream, invocation=None):
             request_model=None,
             stop=_noop_stop,
             fail=_noop_fail,
+            _on_stream_chunk=_noop_on_stream_chunk,
         )
     return ResponseStreamWrapper(
         stream=stream,
@@ -86,11 +110,12 @@ def _make_async_manager_wrapper(manager):
     invocation = SimpleNamespace(
         request_model=None,
         stop=_noop_stop,
+        _on_stream_chunk=_noop_on_stream_chunk,
         fail=_noop_fail,
     )
     return AsyncResponseStreamManagerWrapper(
         manager=manager,
-        invocation=invocation,
+        invocation_factory=lambda: invocation,
         capture_content=False,
     )
 
@@ -101,6 +126,7 @@ def _make_async_stream_wrapper(stream, invocation=None):
             request_model=None,
             stop=_noop_stop,
             fail=_noop_fail,
+            _on_stream_chunk=_noop_on_stream_chunk,
         )
     return AsyncResponseStreamWrapper(
         stream=stream,
@@ -206,6 +232,28 @@ def test_manager_exit_forwards_exception_to_stream_wrapper():
     assert wrapper._stream_wrapper is None
 
 
+def test_manager_enter_failure_fails_invocation_and_reraises():
+    error = RuntimeError("enter failure")
+    manager = _FakeManager(stream=SimpleNamespace(), enter_error=error)
+    failures = []
+    invocation = SimpleNamespace(
+        request_model=None,
+        stop=_noop_stop,
+        _on_stream_chunk=_noop_on_stream_chunk,
+        fail=failures.append,
+    )
+    wrapper = ResponseStreamManagerWrapper(
+        manager=manager,
+        invocation_factory=lambda: invocation,
+        capture_content=False,
+    )
+
+    with pytest.raises(RuntimeError, match="enter failure"):
+        wrapper.__enter__()
+
+    assert failures == [error]
+
+
 def test_manager_exit_uses_none_exception_when_manager_suppresses():
     manager = _FakeManager(stream=SimpleNamespace(), suppressed=True)
     wrapper = _make_wrapper(manager)
@@ -235,7 +283,8 @@ def test_manager_exit_still_finalizes_stream_wrapper_when_manager_raises():
         wrapper.__exit__(ValueError, error, None)
 
     assert manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args == (ValueError, error, None)
+    assert stream_wrapper.exit_args[:2] == (RuntimeError, manager_error)
+    assert stream_wrapper.exit_args[2] is not None
     assert wrapper._stream_wrapper is None
 
 
@@ -282,6 +331,29 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
 
 
 @pytest.mark.asyncio
+async def test_async_manager_enter_failure_fails_invocation_and_reraises():
+    error = RuntimeError("enter failure")
+    manager = _FakeAsyncManager(stream=SimpleNamespace(), enter_error=error)
+    failures = []
+    invocation = SimpleNamespace(
+        request_model=None,
+        stop=_noop_stop,
+        _on_stream_chunk=_noop_on_stream_chunk,
+        fail=failures.append,
+    )
+    wrapper = AsyncResponseStreamManagerWrapper(
+        manager=manager,
+        invocation_factory=lambda: invocation,
+        capture_content=False,
+    )
+
+    with pytest.raises(RuntimeError, match="enter failure"):
+        await wrapper.__aenter__()
+
+    assert failures == [error]
+
+
+@pytest.mark.asyncio
 async def test_async_manager_exit_uses_none_exception_when_manager_suppresses():
     manager = _FakeAsyncManager(stream=SimpleNamespace(), suppressed=True)
     wrapper = _make_async_manager_wrapper(manager)
@@ -312,7 +384,8 @@ async def test_async_manager_exit_still_finalizes_stream_wrapper_when_manager_ra
         await wrapper.__aexit__(ValueError, error, None)
 
     assert manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args == (ValueError, error, None)
+    assert stream_wrapper.exit_args[:2] == (RuntimeError, manager_error)
+    assert stream_wrapper.exit_args[2] is not None
     assert wrapper._stream_wrapper is None
 
 
@@ -334,15 +407,13 @@ async def test_async_stream_wrapper_exit_closes_without_exception():
 @pytest.mark.asyncio
 async def test_async_stream_wrapper_exit_fails_and_closes_on_exception():
     stream = _FakeAsyncStream()
-    wrapper = _make_async_stream_wrapper(stream)
     stopped = []
     failures = []
-
-    def record_failure(message, error_type):
-        failures.append((message, error_type))
-
+    invocation = SimpleNamespace(
+        request_model=None, stop=_noop_stop, fail=failures.append
+    )
+    wrapper = _make_async_stream_wrapper(stream, invocation=invocation)
     wrapper._stop = stopped.append
-    wrapper._fail = record_failure
 
     error = ValueError("boom")
     result = await wrapper.__aexit__(ValueError, error, None)
@@ -350,7 +421,7 @@ async def test_async_stream_wrapper_exit_fails_and_closes_on_exception():
     assert result is False
     assert stream.close_calls == 1
     assert not stopped
-    assert failures == [("boom", ValueError)]
+    assert failures == [error]
 
 
 @pytest.mark.asyncio
@@ -414,18 +485,16 @@ async def test_async_stream_wrapper_until_done_consumes_stream():
 async def test_async_stream_wrapper_fails_and_reraises_stream_errors():
     error = ValueError("boom")
     stream = _FakeAsyncStream(error=error)
-    wrapper = _make_async_stream_wrapper(stream)
     failures = []
-
-    def record_failure(message, error_type):
-        failures.append((message, error_type))
-
-    wrapper._fail = record_failure
+    invocation = SimpleNamespace(
+        request_model=None, stop=_noop_stop, fail=failures.append
+    )
+    wrapper = _make_async_stream_wrapper(stream, invocation=invocation)
 
     with pytest.raises(ValueError, match="boom"):
         await anext(wrapper)
 
-    assert failures == [("boom", ValueError)]
+    assert failures == [error]
 
 
 @pytest.mark.asyncio
@@ -463,3 +532,92 @@ async def test_async_stream_get_final_response_waits_for_completion():
 
     assert result is final_response
     assert stream.get_final_response_calls == 1
+
+
+_requires_responses_types = pytest.mark.skipif(
+    not HAS_RESPONSES_TYPES,
+    reason="Responses SDK types require a newer openai SDK",
+)
+
+
+def _make_response(**overrides):
+    payload = {
+        "id": "resp_1",
+        "created_at": 0.0,
+        "model": "gpt-4.1",
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": False,
+        "tool_choice": "auto",
+        "tools": [],
+    }
+    payload.update(overrides)
+    return Response.model_validate(payload)
+
+
+def _capturing_invocation():
+    calls = {"stop": 0, "fail": []}
+    invocation = SimpleNamespace(
+        request_model=None, response_model_name=None, attributes={}
+    )
+    invocation.stop = lambda: calls.__setitem__("stop", calls["stop"] + 1)
+    invocation.fail = lambda error: calls["fail"].append(error)
+    return invocation, calls
+
+
+@_requires_responses_types
+def test_process_event_failed_records_error_from_response_error():
+    invocation, calls = _capturing_invocation()
+    wrapper = _make_stream_wrapper(_FakeSyncStream(), invocation=invocation)
+    event = SimpleNamespace(
+        type="response.failed",
+        response=_make_response(
+            status="failed",
+            error={"code": "server_error", "message": "boom"},
+        ),
+    )
+
+    wrapper.process_event(event)
+
+    assert calls["stop"] == 0
+    (error,) = calls["fail"]
+    assert isinstance(error.type, str)
+    assert error.type == "server_error"
+    assert error.message == "boom"
+
+
+@_requires_responses_types
+def test_process_event_incomplete_is_not_an_error():
+    invocation, calls = _capturing_invocation()
+    wrapper = _make_stream_wrapper(_FakeSyncStream(), invocation=invocation)
+    event = SimpleNamespace(
+        type="response.incomplete",
+        response=_make_response(
+            status="incomplete",
+            incomplete_details={"reason": "max_output_tokens"},
+        ),
+    )
+
+    wrapper.process_event(event)
+
+    assert calls["fail"] == []
+    assert calls["stop"] == 1
+
+
+@_requires_responses_types
+def test_process_event_error_event_records_error():
+    invocation, calls = _capturing_invocation()
+    wrapper = _make_stream_wrapper(_FakeSyncStream(), invocation=invocation)
+    event = SimpleNamespace(
+        type="error",
+        code="rate_limit_exceeded",
+        message="slow down",
+        response=None,
+    )
+
+    wrapper.process_event(event)
+
+    assert calls["stop"] == 0
+    (error,) = calls["fail"]
+    assert error.type == "rate_limit_exceeded"
+    assert error.message == "slow down"

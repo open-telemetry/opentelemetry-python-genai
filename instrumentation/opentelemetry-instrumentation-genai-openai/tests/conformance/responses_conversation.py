@@ -13,7 +13,6 @@ from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -21,7 +20,7 @@ DEFAULT_MODEL = "gpt-4o-mini"
 
 
 class ResponsesConversationScenario(Scenario):
-    expected_spans = ("chat",)
+    expected_spans = {"chat": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -40,7 +39,6 @@ class ResponsesConversationScenario(Scenario):
             tracer_provider=tracer_provider,
             logger_provider=logger_provider,
             meter_provider=meter_provider,
-            semconv="gen_ai_latest_experimental",
             content_capture="SPAN_ONLY",
         ):
             with vcr.use_cassette("responses_conversation_conformance.yaml"):
@@ -55,17 +53,3 @@ class ResponsesConversationScenario(Scenario):
                     input="What is my favorite color?",
                     previous_response_id=first.id,
                 )
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        operations = [
-            attr["value"]
-            for entry in report["samples"]
-            if "span" in entry
-            for attr in entry["span"]["attributes"]
-            if attr["name"] == "gen_ai.operation.name"
-        ]
-        assert operations == ["chat", "chat"], (
-            "Responses conversation exercises two Responses API calls "
-            f"(initial request and follow-up); saw spans {operations}"
-        )

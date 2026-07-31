@@ -25,6 +25,7 @@ from .messages_extractors import (
     get_system_instruction,
 )
 from .wrappers import (
+    AsyncMessagesStreamManagerWrapper,
     AsyncMessagesStreamWrapper,
     MessagesStreamManagerWrapper,
     MessagesStreamWrapper,
@@ -34,6 +35,7 @@ from .wrappers import (
 if TYPE_CHECKING:
     from anthropic._streaming import AsyncStream as AnthropicAsyncStream
     from anthropic.lib.streaming._messages import (  # pylint: disable=no-name-in-module
+        AsyncMessageStreamManager,
         MessageStreamManager,
     )
     from anthropic.resources.messages import AsyncMessages, Messages
@@ -234,4 +236,30 @@ def messages_stream(
 
     return cast(
         "Callable[..., MessagesStreamManagerWrapper[Any]]", traced_method
+    )
+
+
+def async_messages_stream(
+    handler: TelemetryHandler,
+) -> Callable[..., AsyncMessagesStreamManagerWrapper[Any]]:
+    """Wrap the async `stream` method of the `AsyncMessages` class."""
+    capture_content = handler.should_capture_content()
+
+    def traced_method(
+        wrapped: Callable[..., AsyncMessageStreamManager[Any]],
+        instance: AsyncMessages,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> AsyncMessagesStreamManagerWrapper[Any]:
+        return AsyncMessagesStreamManagerWrapper(
+            wrapped(*args, **kwargs),
+            lambda: _create_invocation(
+                handler, instance, args, kwargs, capture_content
+            ),
+            capture_content,
+        )
+
+    return cast(
+        "Callable[..., AsyncMessagesStreamManagerWrapper[Any]]",
+        traced_method,
     )
