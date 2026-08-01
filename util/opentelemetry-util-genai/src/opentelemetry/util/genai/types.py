@@ -57,7 +57,7 @@ class ToolCallRequest:
     and metrics, use ToolInvocation instead.
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallRequestPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     arguments: Any
@@ -71,7 +71,7 @@ class ToolCallResponse:
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallResponsePart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     response: Any
@@ -88,7 +88,7 @@ class ServerToolCall:
     web_search) can have well-defined schemas defined by the respective providers.
 
     This model is specified as part of semconv in `GenAI messages Python models - ServerToolCallPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     name: str
@@ -106,7 +106,7 @@ class ServerToolCallResponse:
     defined by the respective providers.
 
     This model is specified as part of semconv in `GenAI messages Python models - ServerToolCallResponsePart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     server_tool_call_response: Any
@@ -119,7 +119,7 @@ class Text:
     """Represents text content sent to or received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - TextPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     content: str
@@ -131,7 +131,7 @@ class Reasoning:
     """Represents reasoning/thinking content received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - ReasoningPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     content: str
@@ -165,7 +165,7 @@ class Blob:
     """Represents blob binary data sent inline to the model
 
     This model is specified as part of semconv in `GenAI messages Python models - BlobPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     mime_type: str | None
@@ -179,7 +179,7 @@ class File:
     """Represents an external referenced file sent to the model by file id
 
     This model is specified as part of semconv in `GenAI messages Python models - FilePart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     mime_type: str | None
@@ -193,7 +193,7 @@ class Uri:
     """Represents an external referenced file sent to the model by URI
 
     This model is specified as part of semconv in `GenAI messages Python models - UriPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     mime_type: str | None
@@ -267,7 +267,7 @@ class MemoryRecord:
     """Represents a single memory record exposed to or produced by the model.
 
     This model is specified as part of semconv in `GenAI messages Python models - MemoryRecord
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     content: Any
@@ -281,11 +281,11 @@ class RetrievalDocument:
     """Represents a document returned by a retrieval operation.
 
     This model is specified as part of semconv in `GenAI messages Python models - RetrievalDocument
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
-    id: str
-    score: float
+    id: str | None = None
+    score: float | None = None
 
 
 # Callback an instrumentor may supply to derive the error.type attribute from a
