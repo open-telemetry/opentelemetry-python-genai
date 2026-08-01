@@ -14,6 +14,14 @@ For new instrumentations, consult upstream library docs and judge:
 - Is the library used widely enough to warrant a package in this repo?
 - Does it avoid unbounded in-memory accumulation or other side-effects?
 
+For a new instrumentation, check whether the instrumented library has a *runtime* dependency on
+`opentelemetry-api` (or other `opentelemetry-*` packages) in its `pyproject.toml` / lockfile (a
+dev/test-only dependency doesn't count), or documents a first-party OpenTelemetry plugin. If so,
+flag the PR and link to the
+[When to add an instrumentation here](../../CONTRIBUTING.md#when-to-add-an-instrumentation-here)
+policy — the library may already be natively instrumented or ship a first-party plugin that we
+should not duplicate here.
+
 For changes to existing instrumentations: prefer back-compat. Break users only for a real reason;
 prefer opt-in or additive. Breaking changes need explicit justification in the PR.
 
@@ -43,6 +51,11 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Adding attributes to invocations produced by the util is fine.
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
+- Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
+  didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
+  (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
+  way); and replacement functions missing `@functools.wraps(original)`. Full transparency isn't
+  always reachable — prefer the least intrusive option that works.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions

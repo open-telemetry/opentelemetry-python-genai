@@ -1,0 +1,2 @@
+Add skeleton and boilerplate for LlamaIndex instrumentation package
+(``opentelemetry-instrumentation-genai-llama-index``).
