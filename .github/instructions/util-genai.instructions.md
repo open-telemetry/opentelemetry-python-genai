@@ -32,8 +32,6 @@ land the semconv change first.
   - a field whose name, optionality, or value type diverges from the model — e.g. required where
     the model says optional, or a field the model does not declare;
   - a type added or edited without citing the model it mirrors;
-  - a type no instrumentation populates. Type surface that lands ahead of its producer cannot be
-    validated and drifts from the schema — it belongs in the PR that emits it.
 
 ## 3. API backwards compatibility
 
