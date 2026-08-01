@@ -68,7 +68,7 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   come from `opentelemetry.semconv._incubating.attributes.gen_ai_attributes`.
 - For attributes with a well-known value set in semconv, use the generated enum from the same
   module (e.g. `GenAiOutputTypeValues` for `gen_ai.output.type`) instead of string literals.
-- Flag a dict, `TypedDict`, or other ad-hoc value built for an attribute that semconv models in
+- Flag `Any`, a dict, `TypedDict`, or other ad-hoc value built for an attribute that semconv models in
   [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py)
   (messages, tool definitions, system instructions, retrieval documents, …). These must be built
   from the matching `opentelemetry.util.genai.types` dataclass.
