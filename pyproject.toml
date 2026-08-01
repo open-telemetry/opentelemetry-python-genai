@@ -11,10 +11,12 @@ dependencies = [
   "opentelemetry-test-utils",
   "opentelemetry-test-util-genai",
   "opentelemetry-util-genai",
+  "opentelemetry-instrumentation-genai-agno[instruments]",
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
+  "opentelemetry-instrumentation-genai-llama-index[instruments]",
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
@@ -30,10 +32,12 @@ required-version = ">=0.6.0"
 [tool.uv.sources]
 opentelemetry-test-util-genai = { workspace = true }
 opentelemetry-util-genai = { workspace = true }
+opentelemetry-instrumentation-genai-agno = { workspace = true }
 opentelemetry-instrumentation-genai-anthropic = { workspace = true }
 opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }
 opentelemetry-instrumentation-genai-langchain = { workspace = true }
+opentelemetry-instrumentation-genai-llama-index = { workspace = true }
 opentelemetry-instrumentation-genai-openai = { workspace = true }
 opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
 opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
@@ -94,9 +98,11 @@ reportPrivateUsage = false  # Ignore private attributes added by instrumentation
 reportDeprecated = false  # Ignore deprecation on GenAI enums in opentelemetry.semconv 0.64b0 until semconv-genai python package is published.
 # Add progressively instrumentation packages here.
 include = [
+  "instrumentation/opentelemetry-instrumentation-genai-agno",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
+  "instrumentation/opentelemetry-instrumentation-genai-llama-index",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
@@ -104,12 +110,18 @@ include = [
 # We should also add type hints to the test suite - It helps on finding bugs.
 # We are excluding for now because it's easier, and more important to add to the instrumentation packages.
 exclude = [
+  "**/dev/**",
+  "**/.venv/**",
+  "instrumentation/opentelemetry-instrumentation-genai-agno/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-agno/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-llama-index/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-llama-index/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/examples/**",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",

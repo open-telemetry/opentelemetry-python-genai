@@ -7,6 +7,7 @@ import os
 
 import boto3
 import pytest
+from langchain_anthropic import ChatAnthropic
 from langchain_aws import ChatBedrock
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -43,6 +44,18 @@ def fixture_chat_openai_gpt_3_5_turbo_model():
     yield llm
 
 
+@pytest.fixture(scope="function", name="chat_openai_reasoning")
+def fixture_chat_openai_reasoning():
+    llm = ChatOpenAI(model="gpt-5-mini")
+    yield llm
+
+
+@pytest.fixture(scope="function", name="chat_openai_legacy_functions")
+def fixture_chat_openai_legacy_functions():
+    llm = ChatOpenAI(model="gpt-3.5-turbo")
+    yield llm
+
+
 @pytest.fixture(scope="function", name="us_amazon_nova_lite_v1_0")
 def fixture_us_amazon_nova_lite_v1_0():
     llm_model_value = "us.amazon.nova-lite-v1:0"
@@ -61,6 +74,18 @@ def fixture_us_amazon_nova_lite_v1_0():
         provider="amazon",
         temperature=0.1,
         max_tokens=100,
+    )
+    yield llm
+
+
+@pytest.fixture(scope="function", name="chat_anthropic_claude_sonnet")
+def fixture_chat_anthropic_claude_sonnet():
+    llm_model_value = "claude-sonnet-4-5"
+    llm = ChatAnthropic(
+        model=llm_model_value,
+        api_key="test_key",
+        temperature=0.1,
+        max_tokens=1024,
     )
     yield llm
 

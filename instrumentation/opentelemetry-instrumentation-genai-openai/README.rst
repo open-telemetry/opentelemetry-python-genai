@@ -8,7 +8,9 @@ OpenTelemetry OpenAI Instrumentation
 
 This library allows tracing LLM requests and logging of messages made by the
 `OpenAI Python API library <https://pypi.org/project/openai/>`_. It also captures
-the duration of the operations and the number of tokens used as metrics.
+the duration of the operations and the number of tokens used as metrics, and for
+streaming chat completions the time to the first chunk and the time between output
+chunks.
 
 .. note::
    This package continues the project previously published as

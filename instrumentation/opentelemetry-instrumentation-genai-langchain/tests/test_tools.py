@@ -188,6 +188,167 @@ def test_prepare_tool_definitions_object_tools():
 
 
 # ---------------------------------------------------------------------------
+# Unit tests for prepare_tool_definitions - legacy OpenAI ``functions`` shape
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_tool_definitions_legacy_flat_function():
+    """Pre-tools OpenAI ``functions`` entries are flat mappings with no
+    ``type``/nested ``function`` wrapper. They must still be surfaced as
+    function tool definitions."""
+    tools = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name"},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    defn = result[0]
+    assert isinstance(defn, FunctionToolDefinition)
+    assert defn.type == "function"
+    assert defn.name == "get_current_weather"
+    assert defn.description == "Get the current weather in a given location."
+    assert defn.parameters is not None
+    assert defn.parameters["properties"]["location"]["type"] == "string"
+
+
+def test_prepare_tool_definitions_legacy_none_description_stays_none():
+    tools = [{"name": "no_desc"}]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "no_desc"
+    assert result[0].description is None
+    assert result[0].parameters is None
+
+
+def test_prepare_tool_definitions_legacy_object_function():
+    """Legacy flat definitions may also arrive as objects rather than dicts."""
+
+    class LegacyFuncDef:
+        name = "get_weather"
+        description = "Get current weather"
+        parameters = {"type": "object"}
+
+    result = prepare_tool_definitions([LegacyFuncDef()])
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "get_weather"
+    assert result[0].description == "Get current weather"
+
+
+def test_prepare_tool_definitions_mixed_modern_and_legacy():
+    """A mix of modern wrapped ``tools`` and legacy flat ``functions`` entries
+    should both be surfaced."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "modern_tool",
+                "description": "Modern wrapped tool",
+            },
+        },
+        {
+            "name": "legacy_tool",
+            "description": "Legacy flat function",
+        },
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 2
+    assert result[0].name == "modern_tool"
+    assert result[1].name == "legacy_tool"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for prepare_tool_definitions - malformed / edge-case inputs
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_tool_definitions_wrapped_function_takes_precedence():
+    """An entry with ``type == 'function'`` is parsed via the wrapped path even
+    if it also carries a top-level ``name`` (the legacy branch must not fire)."""
+    tools = [
+        {
+            "type": "function",
+            "name": "top_level_ignored",
+            "function": {"name": "wrapped_name"},
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "wrapped_name"
+
+
+def test_prepare_tool_definitions_function_type_missing_function_body():
+    """``type == 'function'`` with no ``function`` body and no top-level
+    ``name`` yields nothing (neither branch produces a definition)."""
+    tools = [{"type": "function"}]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_non_function_type_with_name_skipped():
+    tools = [
+        {
+            "type": "web_search",
+            "name": "search_the_web",
+            "description": "Vendor-specific tool",
+        }
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_non_function_type_with_name_skipped_in_mix():
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "modern_tool"},
+        },
+        {
+            "type": "web_search",
+            "name": "search_the_web",
+        },
+        {
+            "name": "legacy_tool",
+        },
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert [defn.name for defn in result] == ["modern_tool", "legacy_tool"]
+
+
+def test_prepare_tool_definitions_entry_without_type_or_name_skipped():
+    tools = [{"description": "no type, no name"}]
+    result = prepare_tool_definitions(tools)
+    assert result is None
+
+
+def test_prepare_tool_definitions_skips_malformed_keeps_valid():
+    """Malformed entries are skipped without discarding valid ones."""
+    tools = [
+        {"description": "malformed - no name/type"},
+        {"type": "retrieval", "retrieval": {}},
+        {"name": "legacy_valid", "description": "ok"},
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "legacy_valid"
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by callback-handler integration tests
 # ---------------------------------------------------------------------------
 

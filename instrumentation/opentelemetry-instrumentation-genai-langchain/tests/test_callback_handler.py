@@ -12,6 +12,7 @@ import uuid
 from unittest import mock
 
 import pytest
+from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
@@ -19,6 +20,8 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _legacy_function_call_request,
+    extract_token_details,
     make_input_message,
     make_last_output_message,
     make_output_message,
@@ -29,6 +32,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
     InferenceInvocation,
+    RetrievalInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
@@ -65,6 +69,15 @@ def _make_invoke_local_agent_side_effect(inv: mock.MagicMock):
     return _side_effect
 
 
+def _make_retrieval_inv_mock() -> mock.MagicMock:
+    retrieval_inv = mock.MagicMock(spec=RetrievalInvocation)
+    retrieval_inv.span = mock.MagicMock()
+    retrieval_inv.span.is_recording.return_value = False
+    retrieval_inv.query_text = None
+    retrieval_inv.documents = None
+    return retrieval_inv
+
+
 def _make_handler():
     """Return a handler wired to a MagicMock TelemetryHandler."""
     telemetry = mock.MagicMock()
@@ -84,6 +97,14 @@ def _make_handler():
 
     handler = OpenTelemetryLangChainCallbackHandler(telemetry)
     return handler, telemetry, workflow_inv, agent_inv
+
+
+def _make_handler_with_retrieval():
+    """Like _make_handler but also wires up a retrieval mock."""
+    handler, telemetry, workflow_inv, agent_inv = _make_handler()
+    retrieval_inv = _make_retrieval_inv_mock()
+    telemetry.retrieval.return_value = retrieval_inv
+    return handler, telemetry, retrieval_inv
 
 
 def _run_id():
@@ -1206,3 +1227,420 @@ class TestOnLlmEndToolCalls:
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
+
+
+# ---------------------------------------------------------------------------
+# on_retriever_start / on_retriever_end / on_retriever_error
+# ---------------------------------------------------------------------------
+
+
+class TestOnRetrieverStart:
+    def test_retrieval_span_created(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="what is AI?",
+            run_id=run_id,
+        )
+
+        telemetry.retrieval.assert_called_once()
+        assert (
+            handler._invocation_manager.get_invocation(run_id) is retrieval_inv
+        )
+
+    def test_query_text_set_on_invocation(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="semantic search query",
+            run_id=run_id,
+        )
+
+        assert retrieval_inv.query_text == "semantic search query"
+
+    def test_provider_passed_from_metadata(self):
+        handler, telemetry, _ = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=run_id,
+            metadata={"ls_vector_store_provider": "Chroma"},
+        )
+
+        telemetry.retrieval.assert_called_once_with(
+            provider="Chroma", request_model=None
+        )
+
+    def test_provider_none_when_metadata_absent(self):
+        handler, telemetry, _ = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=run_id,
+        )
+
+        telemetry.retrieval.assert_called_once_with(
+            provider=None, request_model=None
+        )
+
+    def test_request_model_passed_from_ls_embedding_model(self):
+        handler, telemetry, _ = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=run_id,
+            metadata={
+                "ls_vector_store_provider": "Chroma",
+                "ls_embedding_model": "text-embedding-3-small",
+            },
+        )
+
+        telemetry.retrieval.assert_called_once_with(
+            provider="Chroma", request_model="text-embedding-3-small"
+        )
+
+    def test_request_model_none_when_ls_embedding_model_absent(self):
+        handler, telemetry, _ = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=run_id,
+            metadata={"ls_vector_store_provider": "Chroma"},
+        )
+
+        telemetry.retrieval.assert_called_once_with(
+            provider="Chroma", request_model=None
+        )
+
+    def test_registered_in_invocation_manager(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=run_id,
+        )
+
+        assert run_id in handler._invocation_manager._invocations
+        assert (
+            handler._invocation_manager.get_invocation(run_id) is retrieval_inv
+        )
+
+
+class TestOnRetrieverEnd:
+    def test_invocation_stopped(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[], run_id=run_id)
+
+        retrieval_inv.stop.assert_called_once()
+
+    def test_documents_set_from_page_content(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        docs = [
+            Document(page_content="doc one", metadata={"source": "s1"}),
+            Document(page_content="doc two", metadata={}),
+        ]
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=docs, run_id=run_id)
+
+        assigned = retrieval_inv.documents
+        assert len(assigned) == 2
+        assert assigned[0]["content"] == "doc one"
+        assert "source" not in assigned[0]
+        assert assigned[1]["content"] == "doc two"
+
+    def test_document_id_included_when_present(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        doc = Document(page_content="text", id="doc-123", metadata={})
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[doc], run_id=run_id)
+
+        assert retrieval_inv.documents[0]["id"] == "doc-123"
+
+    def test_document_id_none_when_absent(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        doc = Document(page_content="text", metadata={})
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[doc], run_id=run_id)
+
+        assert retrieval_inv.documents[0]["id"] is None
+
+    def test_state_cleaned_up_after_end(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        retrieval_inv.span.is_recording.return_value = False
+        handler.on_retriever_end(documents=[], run_id=run_id)
+
+        assert run_id not in handler._invocation_manager._invocations
+
+    def test_documents_not_set_when_content_disabled(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+        telemetry.should_capture_content.return_value = False
+
+        docs = [Document(page_content="secret", metadata={})]
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=docs, run_id=run_id)
+
+        assert retrieval_inv.documents is None
+
+    def test_documents_set_when_content_enabled(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+        telemetry.should_capture_content.return_value = True
+
+        docs = [Document(page_content="visible", metadata={})]
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=docs, run_id=run_id)
+
+        assert retrieval_inv.documents[0]["content"] == "visible"
+
+    def test_unknown_run_id_does_not_raise(self):
+        handler, _, _ = _make_handler_with_retrieval()
+        handler.on_retriever_end(documents=[], run_id=_run_id())
+
+
+class TestOnRetrieverError:
+    def test_invocation_failed(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        err = RuntimeError("retrieval failed")
+        handler.on_retriever_error(error=err, run_id=run_id)
+
+        retrieval_inv.fail.assert_called_once_with(err)
+
+    def test_state_cleaned_up_after_error(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        retrieval_inv.span.is_recording.return_value = False
+        handler.on_retriever_error(error=RuntimeError("boom"), run_id=run_id)
+
+        assert run_id not in handler._invocation_manager._invocations
+
+    def test_unknown_run_id_does_not_raise(self):
+        handler, _, _ = _make_handler_with_retrieval()
+        handler.on_retriever_error(
+            error=RuntimeError("boom"), run_id=_run_id()
+        )
+
+
+# on_llm_end – token usage break-downs
+# ---------------------------------------------------------------------------
+
+
+class TestOnLlmEndTokenDetails:
+    def test_cache_and_reasoning_tokens_set_on_invocation(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi there",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+                "input_token_details": {
+                    "cache_creation": 3,
+                    "cache_read": 2,
+                },
+                "output_token_details": {"reasoning": 5},
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 10
+        assert llm_inv.cache_creation_input_tokens == 3
+        assert llm_inv.cache_read_input_tokens == 2
+        assert llm_inv.thinking_tokens == 5
+        assert llm_inv.output_tokens == 20
+
+    def test_audio_tokens_ignored(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+                "input_token_details": {"audio": 5},
+                "output_token_details": {"audio": 4},
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 10
+        assert llm_inv.output_tokens == 20
+
+
+# ---------------------------------------------------------------------------
+# utils.extract_token_details
+# ---------------------------------------------------------------------------
+
+
+def test_extract_token_details_cache_and_reasoning():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {"cache_creation": 3, "cache_read": 2},
+        "output_token_details": {"reasoning": 5},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_creation_input_tokens": 3,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+def test_extract_token_details_ignores_audio_tokens():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "input_token_details": {"audio": 5},
+        "output_token_details": {"audio": 4},
+    }
+    assert extract_token_details(usage) == {}
+
+
+def test_extract_token_details_zero_values_omitted():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "input_token_details": {"cache_creation": 0, "cache_read": 0},
+    }
+    assert extract_token_details(usage) == {}
+
+
+def test_extract_token_details_no_details_key():
+    assert extract_token_details({"input_tokens": 1, "output_tokens": 2}) == {}
+
+    def test_legacy_function_call_finish_reason_produces_tool_call_request(
+        self,
+    ):
+        """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequest."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="",
+            additional_kwargs={
+                "function_call": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg,
+            generation_info={"finish_reason": "function_call"},
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequest)
+        assert part.name == "get_weather"
+        assert part.arguments == {"city": "Paris"}
+
+
+# ---------------------------------------------------------------------------
+# utils - legacy OpenAI function_call (_legacy_function_call_request)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_function_call_dict_arguments():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": {"city": "New York"},
+            }
+        },
+    )
+    call = _legacy_function_call_request(message)
+    assert isinstance(call, ToolCallRequest)
+    assert call.name == "get_weather"
+    assert call.arguments == {"city": "New York"}
+
+
+def test_legacy_function_call_string_arguments_parsed():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": '{"city": "New York"}',
+            }
+        },
+    )
+    call = _legacy_function_call_request(message)
+    assert isinstance(call, ToolCallRequest)
+    assert call.arguments == {"city": "New York"}
+
+
+def test_legacy_function_call_absent_returns_none():
+    assert _legacy_function_call_request(AIMessage(content="hi")) is None
+
+
+def test_to_input_messages_includes_legacy_function_call():
+    message = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {"name": "f", "arguments": {"x": 1}},
+        },
+    )
+    messages = to_input_messages([message])
+    assert len(messages) == 1
+    assert any(
+        isinstance(p, ToolCallRequest) and p.name == "f"
+        for p in messages[0].parts
+    )

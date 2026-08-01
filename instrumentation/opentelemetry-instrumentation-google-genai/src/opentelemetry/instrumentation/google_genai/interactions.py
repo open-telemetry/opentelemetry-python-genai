@@ -75,6 +75,9 @@ except ImportError:
 
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.google_genai._error_type import (
+    resolve_error_type,
+)
 from opentelemetry.instrumentation.google_genai.client_info import (
     get_client_info as _get_client_info,
 )
@@ -392,6 +395,7 @@ def _start_interactions_invocation(
             request_model=kwargs.get("model"),
             operation_name="interactions.create",
             server_address=server_address,
+            error_type_resolver=resolve_error_type,
         )
     invocation.tool_definitions = _maybe_get_tool_definitions(
         kwargs.get("tools")

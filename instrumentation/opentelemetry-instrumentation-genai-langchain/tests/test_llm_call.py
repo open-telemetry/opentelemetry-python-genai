@@ -5,11 +5,13 @@ from importlib.metadata import version as _pkg_version
 from typing import Optional
 
 import pytest
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import (
     FunctionMessage,
     HumanMessage,
     SystemMessage,
 )
+from langchain_core.tools import tool
 from openai import AuthenticationError
 
 from opentelemetry.instrumentation.genai.langchain.utils import (
@@ -40,6 +42,19 @@ def _gemini_cassette_name(base: str) -> str:
     major = int(_pkg_version("langchain-google-genai").split(".")[0])
     suffix = "" if major >= 3 else "_old"
     return f"{base}{suffix}.yaml"
+
+
+def _langchain_openai_version() -> tuple:
+    return tuple(
+        int(part) for part in _pkg_version("langchain-openai").split(".")[:3]
+    )
+
+
+# langchain-openai only started surfacing ``reasoning_tokens`` (via
+# ``output_token_details``) in the parsed usage metadata from 0.2.1 onward;
+# older releases drop the detail entirely, so the reasoning assertions below
+# cannot hold on those versions.
+_supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -214,6 +229,149 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
     assert_bedrock_completion_attributes(spans[0], result)
 
 
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_llm_call(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    result = chat_anthropic_claude_sonnet.invoke(messages)
+
+    assert result.content.find("The capital of France is Paris") != -1
+
+    # verify spans
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
+        == "claude-sonnet-4-5"
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS)
+        == 1024
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_tool_call(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    @tool
+    def get_current_weather(location: str) -> str:
+        """Get the current weather in a given location."""
+        return f"The weather in {location} is sunny."
+
+    llm_with_tools = chat_anthropic_claude_sonnet.bind_tools(
+        [get_current_weather]
+    )
+
+    messages = [
+        HumanMessage(content="What's the weather in Seattle?"),
+    ]
+
+    llm_with_tools.invoke(messages)
+
+    # verify spans
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
+        == "claude-sonnet-4-5"
+    )
+    assert span.attributes.get(
+        gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("tool_use",)
+
+
+def test_chat_openai_legacy_function_call(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_legacy_functions,
+    monkeypatch,
+    vcr,
+):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+
+    functions = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name",
+                    },
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    llm_with_functions = chat_openai_legacy_functions.bind(
+        functions=functions,
+        function_call={"name": "get_current_weather"},
+    )
+
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the weather in Paris?"),
+    ]
+
+    # This fixture sets no ``max_tokens``, so the shared cassette selector's
+    # ``max_completion_tokens`` discriminator does not apply. Older
+    # langchain-openai still serializes an explicit ``n`` (and ``temperature``)
+    # onto the request body while newer versions omit them, so select the
+    # cassette for the installed version off ``n`` directly.
+    payload = chat_openai_legacy_functions._get_request_payload([], stop=None)
+    cassette_suffix = "_old" if "n" in payload else ""
+
+    with vcr.use_cassette(
+        f"test_chat_openai_legacy_function_call{cassette_suffix}"
+    ):
+        llm_with_functions.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
+        == "gpt-3.5-turbo"
+    )
+    # Pre-tools OpenAI models report the deprecated ``function_call`` finish
+    # reason rather than the modern ``tool_calls`` value.
+    assert span.attributes.get(
+        gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("function_call",)
+
+    output_messages = span.attributes.get(
+        gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages is not None
+    assert '"type":"tool_call"' in output_messages
+    assert '"name":"get_current_weather"' in output_messages
+    assert '"location":"Paris"' in output_messages
+
+    tool_definitions = span.attributes.get(
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    )
+    assert tool_definitions is not None
+    assert '"name":"get_current_weather"' in tool_definitions
+    assert (
+        '"description":"Get the current weather in a given location."'
+        in tool_definitions
+    )
+    assert '"location"' in tool_definitions
+
+
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
 def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     messages = [
@@ -329,7 +487,9 @@ def assert_openai_completion_attributes_with_error(
     assert span is not None
     assert span.name == "chat gpt-3.5-turbo"
     attributes = span.attributes
-    assert attributes[error_attributes.ERROR_TYPE] == "AuthenticationError"
+    assert (
+        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+    )
     assert attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     assert (
         attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == "gpt-3.5-turbo"
@@ -490,7 +650,9 @@ def assert_duration_metric_when_error(metric, parent_span):
 
 def assert_duration_metric_attributes_when_error(attributes, parent_span):
     assert len(attributes) == 4
-    assert attributes[error_attributes.ERROR_TYPE] == "AuthenticationError"
+    assert (
+        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+    )
     assert attributes.get(gen_ai_attributes.GEN_AI_PROVIDER_NAME) == "openai"
     assert (
         attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
@@ -705,3 +867,124 @@ def assert_log_parent(log_record, span):
         assert log_record.trace_id == span.get_span_context().trace_id
         assert log_record.span_id == span.get_span_context().span_id
         assert log_record.trace_flags == span.get_span_context().trace_flags
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_stop_sequences_fallback(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    llm = chat_anthropic_claude_sonnet.bind(stop_sequences=["STOP"])
+    llm.invoke([HumanMessage(content="Say hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    stop_sequences = span.attributes.get(
+        gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    )
+    assert stop_sequences == ("STOP",)
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
+    span_exporter, start_instrumentation
+):
+    model = ChatAnthropic(
+        model="claude-sonnet-4-5",
+        api_key="test_key",
+        max_tokens=1024,
+        stop_sequences=["STOP"],
+    )
+    model.invoke([HumanMessage(content="Say hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    stop_sequences = span.attributes.get(
+        gen_ai_attributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    )
+    assert stop_sequences == ("STOP",)
+
+
+@pytest.mark.skipif(
+    not _supports_reasoning_token_details,
+    reason="langchain-openai < 0.2.1 does not surface reasoning token details",
+)
+def test_chat_openai_reasoning_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning, vcr
+):
+    messages = [
+        SystemMessage(content="You are a careful mathematical reasoner."),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top? Think through it step by step."
+            )
+        ),
+    ]
+
+    # Older langchain-openai sends an explicit ``n``/``temperature`` on the
+    # request body while newer versions omit them, so the recorded bodies
+    # differ. Pick the cassette recorded for the installed version instead of
+    # fuzzy-matching a single cassette across both.
+    payload = chat_openai_reasoning._get_request_payload(messages, stop=None)
+    suffix = "_old" if "n" in payload else ""
+    with vcr.use_cassette(
+        f"test_chat_openai_reasoning_token_details{suffix}.yaml"
+    ):
+        chat_openai_reasoning.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 63
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+        == 1284
+    )
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 1088
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_cache_token_details(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
+        )
+        == 5
+    )
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 4
+    )
+
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+    )

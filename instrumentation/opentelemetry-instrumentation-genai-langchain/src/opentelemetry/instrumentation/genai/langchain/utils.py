@@ -112,11 +112,39 @@ def _content_to_parts(
     return parts
 
 
+def _legacy_function_call_request(
+    message: AIMessage,
+) -> Optional[ToolCallRequest]:
+    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
+
+    Pre-tools OpenAI models return a single call under
+    ``additional_kwargs['function_call']`` (``{"name", "arguments"}``) rather
+    than ``message.tool_calls``. ``arguments`` may be a JSON string or an
+    already-decoded mapping. Returns ``None`` when absent or unnamed.
+    """
+    function_call = message.additional_kwargs.get("function_call")
+    if not isinstance(function_call, dict):
+        return None
+    function_call = cast(dict[str, Any], function_call)
+    name = function_call.get("name")
+    if not name:
+        return None
+    raw_arguments = function_call.get("arguments")
+    arguments: Any = raw_arguments
+    if isinstance(raw_arguments, str):
+        try:
+            arguments = json.loads(raw_arguments)
+        except (json.JSONDecodeError, ValueError):
+            arguments = raw_arguments
+    return ToolCallRequest(arguments=arguments, name=name, id=None)
+
+
 def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
-    :class:`ToolCallRequest` for each entry in ``message.tool_calls``.
+    :class:`ToolCallRequest` for each entry in ``message.tool_calls``, plus a
+    legacy ``additional_kwargs['function_call']`` when present.
     """
     parts: list[MessagePart] = _content_to_parts(message.content)
     for call in message.tool_calls:
@@ -130,6 +158,10 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
                 id=call["id"],
             )
         )
+    if not message.tool_calls:
+        legacy_call = _legacy_function_call_request(message)
+        if legacy_call is not None:
+            parts.append(legacy_call)
     return parts
 
 
@@ -230,6 +262,24 @@ def prepare_tool_definitions(tools: list[Any]) -> list[ToolDefinition] | None:
                         parameters=_get_property_value(func, "parameters"),
                     )
                 )
+        elif (
+            tool_type is None and _get_property_value(tool, "name") is not None
+        ):
+            # Pre-tools OpenAI ``functions`` entries are flat mappings
+            # (``{"name", "description", "parameters"}``) with no ``type`` or
+            # nested ``function`` wrapper. Surface them so the legacy
+            # function-calling path still populates ``gen_ai.tool.definitions``.
+            func_name = _get_property_value(tool, "name")
+            func_description = _get_property_value(tool, "description")
+            definitions.append(
+                FunctionToolDefinition(
+                    name=str(func_name),
+                    description=str(func_description)
+                    if func_description is not None
+                    else None,
+                    parameters=_get_property_value(tool, "parameters"),
+                )
+            )
     return definitions or None
 
 
@@ -319,3 +369,35 @@ def serialize(obj: Any) -> Optional[str]:
         return json.dumps(obj, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         return None
+
+
+def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
+    """Extract cache/reasoning token break-downs from LangChain usage metadata."""
+
+    token_details: dict[str, int] = {}
+    raw_input_details = usage_metadata.get("input_token_details")
+    input_details: dict[str, Any] = (
+        cast(dict[str, Any], raw_input_details)
+        if isinstance(raw_input_details, dict)
+        else {}
+    )
+    raw_output_details = usage_metadata.get("output_token_details")
+    output_details: dict[str, Any] = (
+        cast(dict[str, Any], raw_output_details)
+        if isinstance(raw_output_details, dict)
+        else {}
+    )
+
+    cache_creation = input_details.get("cache_creation")
+    if isinstance(cache_creation, int) and cache_creation:
+        token_details["cache_creation_input_tokens"] = cache_creation
+
+    cache_read = input_details.get("cache_read")
+    if isinstance(cache_read, int) and cache_read:
+        token_details["cache_read_input_tokens"] = cache_read
+
+    reasoning = output_details.get("reasoning")
+    if isinstance(reasoning, int) and reasoning:
+        token_details["reasoning_tokens"] = reasoning
+
+    return token_details

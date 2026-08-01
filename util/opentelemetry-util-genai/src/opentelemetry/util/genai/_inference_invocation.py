@@ -19,6 +19,7 @@ from opentelemetry.util.genai._invocation import (
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
+    ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -48,6 +49,7 @@ class InferenceInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         operation_name: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -63,20 +65,20 @@ class InferenceInvocation(GenAIInvocation):
             if request_model
             else operation_name,
             span_kind=SpanKind.CLIENT,
+            error_type_resolver=error_type_resolver,
         )
-        self.provider = provider
-        self.request_model = request_model
-        self.server_address = server_address
-        self.server_port = server_port
+        self._provider: str = provider
+        self._request_model: str | None = request_model
+        self._server_address: str | None = server_address
+        self._server_port: int | None = server_port
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
         self.system_instruction: list[MessagePart] = []
-        self.response_model_name: str | None = None
+        self._response_model_name: str | None = None
         self.response_id: str | None = None
         self.finish_reasons: list[str] | None = None
         self.input_tokens: int | None = None
-        # Output tokens will ultimately be the sum of normal output tokens and thinking tokens.
         self.output_tokens: int | None = None
         self.thinking_tokens: int | None = None
         self.temperature: float | None = None
@@ -92,7 +94,20 @@ class InferenceInvocation(GenAIInvocation):
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
-        self._start(self._get_base_attributes())
+        # Rebuilt once per streaming chunk, so cache it and invalidate via
+        # _invalidate_metric_attributes whenever an input changes.
+        self._cached_metric_attributes: dict[str, AttributeValue] | None = None
+        self._start(self._get_start_attributes())
+
+    @property
+    def response_model_name(self) -> str | None:
+        return self._response_model_name
+
+    @response_model_name.setter
+    def response_model_name(self, value: str | None) -> None:
+        if value != self._response_model_name:
+            self._response_model_name = value
+            self._invalidate_metric_attributes()
 
     def _get_message_attributes(
         self, *, for_span: bool
@@ -117,12 +132,12 @@ class InferenceInvocation(GenAIInvocation):
             return reasons or None
         return None
 
-    def _get_base_attributes(self) -> dict[str, AttributeValue]:
+    def _get_start_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self.request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self.provider),
-            (server_attributes.SERVER_ADDRESS, self.server_address),
-            (server_attributes.SERVER_PORT, self.server_port),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (server_attributes.SERVER_ADDRESS, self._server_address),
+            (server_attributes.SERVER_PORT, self._server_port),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -130,14 +145,9 @@ class InferenceInvocation(GenAIInvocation):
         }
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
-        attrs = self._get_base_attributes()
-        if self.output_tokens is None and self.thinking_tokens is None:
-            output_tokens = None
-        else:
-            output_tokens = (self.output_tokens or 0) + (
-                self.thinking_tokens or 0
-            )
+        attrs: dict[str, AttributeValue] = {}
         optional_attrs = (
+            (GenAI.GEN_AI_REQUEST_STREAM, self._request_stream),
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
             (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
             (GenAI.GEN_AI_REQUEST_TOP_K, self.top_k),
@@ -150,7 +160,7 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
             (GenAI.GEN_AI_RESPONSE_ID, self.response_id),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
-            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens),
+            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
             (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
@@ -165,16 +175,37 @@ class InferenceInvocation(GenAIInvocation):
                 GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
                 self.thinking_tokens,
             ),
+            (
+                GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+                self._ttfc_seconds,
+            ),
         )
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
+    def _invalidate_metric_attributes(self) -> None:
+        """Drop the cached metric attributes so the next read rebuilds them.
+
+        Call this from anywhere that changes an input to
+        ``_get_metric_attributes`` (response model, error type, ...).
+        """
+        self._cached_metric_attributes = None
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs = self._get_base_attributes()
-        if self.response_model_name is not None:
-            attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self.response_model_name
-        attrs.update(self.metric_attributes)
-        return attrs
+        # Cached because this is rebuilt once per streaming chunk. Any mutation
+        # of its inputs must call _invalidate_metric_attributes.
+        if self._cached_metric_attributes is None:
+            attrs = self._get_start_attributes()
+            if self._response_model_name is not None:
+                attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self._response_model_name
+            attrs.update(self.metric_attributes)
+            self._cached_metric_attributes = attrs
+        return self._cached_metric_attributes
+
+    def _apply_error_attributes(self, error: Error) -> None:
+        super()._apply_error_attributes(error)
+        # error.type was just added to metric_attributes.
+        self._invalidate_metric_attributes()
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -214,7 +245,8 @@ class InferenceInvocation(GenAIInvocation):
         if not should_emit_event():
             return None
 
-        attributes = self._get_attributes()
+        attributes = self._get_start_attributes()
+        attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
         return LogRecord(
@@ -301,8 +333,8 @@ class LLMInvocation:
         inv = self._inference_invocation
         if inv is None:
             return
-        inv.provider = self.provider or ""
-        inv.request_model = self.request_model
+        # Start attributes (provider, request_model, server_address, server_port)
+        # are fixed at construction in _start_with_handler and cannot be reassigned.
         inv.input_messages = self.input_messages
         inv.output_messages = self.output_messages
         inv.system_instruction = self.system_instruction
@@ -318,8 +350,6 @@ class LLMInvocation:
         inv.max_tokens = self.max_tokens
         inv.stop_sequences = self.stop_sequences
         inv.seed = self.seed
-        inv.server_address = self.server_address
-        inv.server_port = self.server_port
         inv.attributes = self.attributes
         inv.metric_attributes = self.metric_attributes
 

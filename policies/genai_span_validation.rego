@@ -68,6 +68,7 @@ _span_name_keyed_attr["embeddings"]        := "gen_ai.request.model"
 _span_name_keyed_attr["execute_tool"]      := "gen_ai.tool.name"
 _span_name_keyed_attr["invoke_agent"]      := "gen_ai.agent.name"
 _span_name_keyed_attr["create_agent"]      := "gen_ai.agent.name"
+_span_name_keyed_attr["invoke_workflow"]   := "gen_ai.workflow.name"
 _span_name_keyed_attr["retrieval"]         := "gen_ai.data_source.id"
 
 # Span name SHOULD be `{op}` (when the keyed attribute is absent) or
@@ -123,6 +124,8 @@ _expected_for_op("invoke_agent", kind) := _invoke_agent_expected[kind]
 _expected_for_op("create_agent", _) := _create_agent_expected
 
 _expected_for_op("retrieval", _) := _retrieval_expected
+
+_expected_for_op("invoke_workflow", _) := _invoke_workflow_expected
 
 # Inference (chat / generate_content / text_completion).
 # Required: gen_ai.operation.name, gen_ai.provider.name.
@@ -192,6 +195,14 @@ _create_agent_expected := {
 _retrieval_expected := {
 	"gen_ai.operation.name",
 	"server.address",
+}
+
+# Invoke workflow. Only gen_ai.operation.name is unconditionally required;
+# gen_ai.workflow.name is conditionally required "when available" but is
+# effectively always known where a workflow is instrumented, so flag it.
+_invoke_workflow_expected := {
+	"gen_ai.operation.name",
+	"gen_ai.workflow.name",
 }
 
 # Per expected attribute, one violation if missing.
