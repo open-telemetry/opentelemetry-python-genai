@@ -139,6 +139,8 @@ run silently uses the previously installed versions.
 - `tox.ini` defines the test matrix - check it for available test environments.
 - Do not add `type: ignore` comments. If a type error arises, solve it properly or write a follow-up plan to address it in another PR.
 - Annotate function signatures (parameters and return types) and class attributes. Prefer `from __future__ import annotations` over runtime-quoted strings.
+- Avoid `Any` in the public API of `opentelemetry-util-genai` (anything not under a `_`-prefixed
+  module). Use the narrowest type that fits: the semconv model's type where one exists, union, `AttributeValues`.
 - When a file uses `from __future__ import annotations`, do not quote type annotations just to
   avoid forward references. Keep quotes only for expressions still evaluated at runtime, such as
   `typing.cast(...)`, unless the referenced type is imported at runtime.
@@ -255,6 +257,19 @@ Full transparency isn't always reachable — prefer the least intrusive option t
   attribute or metric name strings.
 - For attributes with a well-known value set, use the generated enum from the same module instead
   of string literals.
+- Attributes whose value is a structured document (messages, tool definitions, system
+  instructions, retrieval documents, …) have a **model** defined in
+  [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py)
+  and a generated JSON schema under `model/gen-ai/gen-ai-*.json`. Check the model before
+  adding or changing the corresponding type in `opentelemetry.util.genai.types`, and mirror its
+  field names, optionality, and value types. When the pinned registry
+  (`SEMCONV_GENAI_REF` in `versions.env`) is behind, check against the pinned ref, not `main`.
+- Build those values from the matching `opentelemetry.util.genai.types` dataclass — never a
+  hand-rolled dict — so the emitted shape stays tied to the schema. If the util type cannot
+  represent what the provider returns, extend it there rather than working around it locally.
+- Do not add a type to the util that no instrumentation populates. Type surface that lands ahead
+  of its producer cannot be validated and tends to drift from the schema — land it with the
+  instrumentation that emits it.
 
 ### README
 

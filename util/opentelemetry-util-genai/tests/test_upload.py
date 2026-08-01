@@ -454,7 +454,7 @@ class TestUploadCompletionHookIntegration(TestBase):
         )
         self.assert_fsspec_equal(
             span.attributes["gen_ai.tool.definitions_ref"],
-            '[{"name":"test_tool","description":"does something","type":"function"}]\n',
+            '[{"name":"test_tool","description":"does something","parameters":null,"type":"function"}]\n',
         )
 
     def test_stamps_empty_log(self):

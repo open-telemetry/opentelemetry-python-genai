@@ -7,6 +7,7 @@ import timeit
 from abc import abstractmethod
 from contextlib import AbstractContextManager
 from contextvars import Token
+from dataclasses import asdict
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Sequence, TypeAlias
 
@@ -30,7 +31,6 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    asdict_without_none,
     gen_ai_json_dumps,
     get_content_capturing_mode,
 )
@@ -257,7 +257,7 @@ def get_content_attributes(
     )
 
     def serialize(items: Sequence[Any]) -> Any:
-        dicts = [asdict_without_none(item) for item in items]
+        dicts = [asdict(item) for item in items]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
     # Tool definitions are always captured, the sem conv recommends adding params / description only

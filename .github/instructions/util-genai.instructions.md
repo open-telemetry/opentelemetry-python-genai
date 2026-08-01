@@ -24,6 +24,16 @@ land the semconv change first.
   Do not hardcode name strings if a constant exists.
 - Shared attributes must behave consistently across invocation types (same conditions, same
   defaults). If semconv marks an attribute for multiple invocations, set it on all.
+- Attributes whose value is a structured document (messages, tool definitions, system
+  instructions, retrieval documents, …) are modeled in
+  [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py),
+  with a generated JSON schema under `model/gen-ai/gen-ai-*.json`. Check any `types.py` change
+  against the ref pinned in `versions.env` (`SEMCONV_GENAI_REF`), not `main`, and flag:
+  - a field whose name, optionality, or value type diverges from the model — e.g. required where
+    the model says optional, or a field the model does not declare;
+  - a type added or edited without citing the model it mirrors;
+  - a type no instrumentation populates. Type surface that lands ahead of its producer cannot be
+    validated and drifts from the schema — it belongs in the PR that emits it.
 
 ## 3. API backwards compatibility
 
@@ -31,6 +41,14 @@ land the semconv change first.
   replacement (not `@deprecated` — unreliable).
 - Private modules and module-private objects start with `_`.
 - Default to internal (`_`-prefixed) unless instrumentations need it public.
+- Flag every `Any` in the public API (anything not under a `_`-prefixed module) — parameters,
+  return types, and dataclass fields alike. Require the narrowest type that fits: the semconv
+  model's type where one exists, `AttributeValue` for values that land on a span or log
+  attribute, or a union/`TypeAlias` of the shapes actually accepted.
+- "semconv leaves it unconstrained" does not justify `Any`, so flag that too. A tool call's
+  `arguments` or `response` is still serialized into a JSON attribute, so it is *any JSON value*
+  — a JSON value alias, not `Any`. Where semconv constrains the shape, require the narrower type:
+  a tool definition's `parameters` is a JSON Schema draft-07 document, so it is a JSON object.
 
 ## 4. Invocation shape
 

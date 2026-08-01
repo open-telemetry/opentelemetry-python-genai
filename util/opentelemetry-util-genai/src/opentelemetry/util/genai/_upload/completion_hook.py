@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -15,7 +16,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
 )
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
 from time import time
 from typing import Any, Callable, Final, Literal
@@ -28,10 +29,7 @@ from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import Span
 from opentelemetry.util.genai import types
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.utils import (
-    asdict_without_none,
-    gen_ai_json_dump,
-)
+from opentelemetry.util.genai.utils import gen_ai_json_dump
 
 GEN_AI_INPUT_MESSAGES_REF: Final = (
     gen_ai_attributes.GEN_AI_INPUT_MESSAGES + "_ref"
@@ -94,7 +92,10 @@ def hash_tool_definitions(
     if not tool_definitions:
         return None
     try:
-        tool_dicts = [asdict_without_none(t) for t in tool_definitions]
+        tool_dicts = [
+            {k: v for k, v in dataclasses.asdict(t).items() if v is not None}
+            for t in tool_definitions
+        ]
 
         encoded_tools = json.dumps(
             tool_dicts,
@@ -324,7 +325,7 @@ class UploadCompletionHook(CompletionHook):
             | list[types.MessagePart]
             | list[types.ToolDefinition],
         ) -> JsonEncodeable:
-            return [asdict_without_none(dc) for dc in dataclass_list]
+            return [asdict(dc) for dc in dataclass_list]
 
         references = [
             (ref_name, ref, ref_attr, contents_hashed_to_filename)

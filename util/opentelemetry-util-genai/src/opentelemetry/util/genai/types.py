@@ -237,13 +237,8 @@ MessagePart = Union[
 ]
 
 
-# System instructions are a narrower set of parts than message content.
-# Mirrors the `gen_ai.system_instructions` semconv schema (TextPart | GenericPart).
-SystemInstructionPart = Union[Text, GenericPart]
-
-
 FinishReason = Literal[
-    "content_filter", "error", "length", "stop", "tool_call", "compaction"
+    "content_filter", "error", "length", "stop", "tool_calls", "compaction"
 ]
 
 
@@ -251,7 +246,6 @@ FinishReason = Literal[
 class InputMessage:
     role: str
     parts: list[MessagePart]
-    name: str | None = None
 
 
 @dataclass()
@@ -259,33 +253,6 @@ class OutputMessage:
     role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason
-    name: str | None = None
-
-
-@dataclass()
-class MemoryRecord:
-    """Represents a single memory record exposed to or produced by the model.
-
-    This model is specified as part of semconv in `GenAI messages Python models - MemoryRecord
-    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
-    """
-
-    content: Any
-    id: str | None = None
-    metadata: dict[str, Any] | None = None
-    score: float | None = None
-
-
-@dataclass()
-class RetrievalDocument:
-    """Represents a document returned by a retrieval operation.
-
-    This model is specified as part of semconv in `GenAI messages Python models - RetrievalDocument
-    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
-    """
-
-    id: str | None = None
-    score: float | None = None
 
 
 # Callback an instrumentor may supply to derive the error.type attribute from a
