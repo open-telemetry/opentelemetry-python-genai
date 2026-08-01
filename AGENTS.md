@@ -167,6 +167,9 @@ Apply to packages under `instrumentation/`.
   `opentelemetry.util.genai._*` module.
 - Content capture, hooks, and configuration are owned by the util. Don't add instrumentation-local
   env vars or settings.
+- Models describing complex attributes are owned by `opentelemetry.util.genai.types`. Land new type
+  in utils when missing instead of defining it in instrumentation. If need to add ainstrumentation-specific properties,
+  extend it. Don't workaround with dicts or type check suppressions.
 
 #### Completion hook
 
@@ -259,17 +262,9 @@ Full transparency isn't always reachable — prefer the least intrusive option t
   of string literals.
 - Attributes whose value is a structured document (messages, tool definitions, system
   instructions, retrieval documents, …) have a **model** defined in
-  [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py)
-  and a generated JSON schema under `model/gen-ai/gen-ai-*.json`. Check the model before
-  adding or changing the corresponding type in `opentelemetry.util.genai.types`, and mirror its
-  field names, optionality, and value types. When the pinned registry
-  (`SEMCONV_GENAI_REF` in `versions.env`) is behind, check against the pinned ref, not `main`.
-- Build those values from the matching `opentelemetry.util.genai.types` dataclass — never a
-  hand-rolled dict — so the emitted shape stays tied to the schema. If the util type cannot
-  represent what the provider returns, extend it there rather than working around it locally.
-- Do not add a type to the util that no instrumentation populates. Type surface that lands ahead
-  of its producer cannot be validated and tends to drift from the schema — land it with the
-  instrumentation that emits it.
+  [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py) and a JSON schema under `model/gen-ai/gen-ai-*.json`. genai-util should have models
+  for them defined in `opentelemetry.util.genai.types`. Use these models, don't invent new types
+  or hand-rolls dicts. 
 
 ### README
 

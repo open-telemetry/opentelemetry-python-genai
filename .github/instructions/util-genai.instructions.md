@@ -43,12 +43,7 @@ land the semconv change first.
 - Default to internal (`_`-prefixed) unless instrumentations need it public.
 - Flag every `Any` in the public API (anything not under a `_`-prefixed module) — parameters,
   return types, and dataclass fields alike. Require the narrowest type that fits: the semconv
-  model's type where one exists, `AttributeValue` for values that land on a span or log
-  attribute, or a union/`TypeAlias` of the shapes actually accepted.
-- "semconv leaves it unconstrained" does not justify `Any`, so flag that too. A tool call's
-  `arguments` or `response` is still serialized into a JSON attribute, so it is *any JSON value*
-  — a JSON value alias, not `Any`. Where semconv constrains the shape, require the narrower type:
-  a tool definition's `parameters` is a JSON Schema draft-07 document, so it is a JSON object.
+  model's type where one exists, `AttributeValue`, or a union/`TypeAlias` of the shapes actually accepted.
 
 ## 4. Invocation shape
 
