@@ -48,7 +48,7 @@ metrics.set_meter_provider(
     )
 )
 
-# instrument OpenAI
+# instrument Groq
 GroqInstrumentor().instrument()
 
 

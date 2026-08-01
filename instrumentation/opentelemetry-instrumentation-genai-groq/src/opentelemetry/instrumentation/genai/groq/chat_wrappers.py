@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional, Any
+from typing import Any, Optional
 
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
@@ -87,8 +87,12 @@ class _ChatStreamMixin:
     def _set_usage(self, chunk: Any) -> None:
         usage = getattr(chunk, "x_groq", None)
         if usage and getattr(usage, "usage", None):
-            self._self_completion_tokens = getattr(usage.usage, "completion_tokens", None)
-            self._self_prompt_tokens = getattr(usage.usage, "prompt_tokens", None)
+            self._self_completion_tokens = getattr(
+                usage.usage, "completion_tokens", None
+            )
+            self._self_prompt_tokens = getattr(
+                usage.usage, "prompt_tokens", None
+            )
 
     def _process_chunk(self, chunk: Any) -> None:
         self._set_response_id(chunk)

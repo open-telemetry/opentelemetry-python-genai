@@ -8,14 +8,11 @@ from typing import Any, Iterable, List, Mapping
 from urllib.parse import urlparse
 
 import groq
-from httpx import URL
 from groq import NotGiven
+from httpx import URL
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
-)
-from opentelemetry.semconv._incubating.attributes import (
-    openai_attributes as OpenAIAttributes,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (

@@ -4,12 +4,6 @@
 
 import logging
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAIAttributes,
-)
-from opentelemetry.semconv._incubating.attributes import (
-    openai_attributes as OpenAIAttributes,
-)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
@@ -138,8 +132,12 @@ def _set_response_properties(
     elif getattr(result, "x_groq", None):
         usage = getattr(result.x_groq, "usage", None)
         if usage:
-            chat_invocation.input_tokens = getattr(usage, "prompt_tokens", None)
-            chat_invocation.output_tokens = getattr(usage, "completion_tokens", None)
+            chat_invocation.input_tokens = getattr(
+                usage, "prompt_tokens", None
+            )
+            chat_invocation.output_tokens = getattr(
+                usage, "completion_tokens", None
+            )
 
     if getattr(result, "system_fingerprint", None):
         chat_invocation.attributes.update(
