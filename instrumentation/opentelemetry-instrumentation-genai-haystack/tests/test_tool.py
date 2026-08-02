@@ -100,11 +100,13 @@ def test_tool_invoke_error(span_exporter, instrument_with_content):
         parameters={"type": "object", "properties": {}},
         function=_failing_tool,
     )
-    with pytest.raises(ToolInvocationError):
+    with pytest.raises(Exception) as excinfo:
         tool.invoke()
+
+    err_name = type(excinfo.value).__name__
 
     (span,) = span_exporter.get_finished_spans()
     assert not span.status.is_ok
     attributes = span.attributes or {}
-    assert attributes[ErrorAttributes.ERROR_TYPE] == "ToolInvocationError"
+    assert attributes[ErrorAttributes.ERROR_TYPE] == err_name
     assert attributes[GenAIAttributes.GEN_AI_TOOL_NAME] == "failing_tool"

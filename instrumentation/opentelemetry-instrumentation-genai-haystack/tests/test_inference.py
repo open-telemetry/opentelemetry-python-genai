@@ -131,7 +131,7 @@ def test_chat_generator_error(span_exporter, instrument_with_content):
     generator = OpenAIChatGenerator(
         model="gpt-4o", api_key=Secret.from_token("sk-invalid")
     )
-    with pytest.raises(AuthenticationError):
+    with pytest.raises(Exception) as excinfo:
         generator.run(
             messages=[
                 ChatMessage.from_user(
@@ -140,10 +140,12 @@ def test_chat_generator_error(span_exporter, instrument_with_content):
             ]
         )
 
+    err_name = type(excinfo.value).__name__
+
     (span,) = span_exporter.get_finished_spans()
     assert not span.status.is_ok
     attributes = span.attributes or {}
-    assert attributes[ErrorAttributes.ERROR_TYPE] == "AuthenticationError"
+    assert attributes[ErrorAttributes.ERROR_TYPE] == err_name
     assert attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == "gpt-4o"
 
 

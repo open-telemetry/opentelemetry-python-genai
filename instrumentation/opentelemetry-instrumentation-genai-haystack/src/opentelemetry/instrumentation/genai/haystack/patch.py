@@ -147,7 +147,7 @@ def pipeline_run_async_generator(
         except Exception as exc:
             invocation.fail(exc)
             raise
-        else:
+        finally:
             invocation.stop()
 
     return traced_method
