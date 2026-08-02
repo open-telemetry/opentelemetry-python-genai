@@ -58,6 +58,27 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), use `>=` specifiers and pin the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) rather than using `~=`.
 
 
+## Before adding a new instrumentation
+
+Before scaffolding a new instrumentation package, check whether the target library already
+provides its own GenAI telemetry, and get the user's acknowledgement before proceeding. Follow the
+[When to add an instrumentation here](CONTRIBUTING.md#when-to-add-an-instrumentation-here) policy.
+
+- **Check the library's dependencies.** A runtime dependency on `opentelemetry-api` (or other
+  `opentelemetry-*` packages) in the library's metadata (`pyproject.toml` / `setup.py` /
+  `setup.cfg` / lockfile) can indicate it ships native instrumentation or a first-party
+  OpenTelemetry integration — research it before writing any code. (A dev/test-only dependency,
+  e.g. for examples, doesn't count.)
+- **Check the library's public docs.** Look for an OpenTelemetry / observability / tracing
+  integration that ships as a first-party plugin, even in a separate package that isn't a hard
+  dependency.
+- **Report findings and stop for acknowledgement.** Summarize whether the library is natively
+  instrumented or has a first-party plugin, whether it's based on the OTel API, and how closely it
+  follows the GenAI semantic conventions; map that onto the policy's decision tree and present a
+  recommendation. **Do not scaffold or write instrumentation code until the user explicitly
+  acknowledges that instrumentation here is needed.**
+
+
 ## Adding a package to the workspace
 
 A new package under `instrumentation/<pkg>/` (where `<pkg>` is the full
@@ -203,6 +224,24 @@ Instance state must use the wrapt-proxy `_self_`-prefixed attribute convention (
 `self._self_invocation`) so it isn't forwarded to the wrapped stream. Don't reimplement iteration,
 finalization, or error handling in instrumentations — extend the wrapper instead, and if a hook
 isn't enough, add the capability here rather than working around it.
+
+#### Preserve the SDK's return contract
+
+Instrumentation observes; it should not change what a call returns or when its work happens.
+
+- **No new side effects.** Don't do work the SDK didn't — building telemetry must never consume,
+  materialize, or otherwise trigger the result early. Stay as lazy as the original.
+- **Don't change the returned type.** `isinstance` and `__class__` must still resolve to the
+  original type. A transparent proxy (e.g. `wrapt.ObjectProxy`) satisfies this; returning a
+  different or already-parsed type does not.
+- **Keep wrappers transparent.** A wrapper should be indistinguishable from what it wraps —
+  attributes and behavior forward unchanged, only telemetry is added.
+- **Decorate replacement functions with `@functools.wraps(original)`.** Whenever a function or bound
+  method is swapped for a stand-in (`obj.close = _close`, wrapt patches), so introspection and
+  `help()` still see the original. Not needed for proxy-class methods, which shadow rather than
+  replace.
+
+Full transparency isn't always reachable — prefer the least intrusive option that works.
 
 ### Exception handling
 

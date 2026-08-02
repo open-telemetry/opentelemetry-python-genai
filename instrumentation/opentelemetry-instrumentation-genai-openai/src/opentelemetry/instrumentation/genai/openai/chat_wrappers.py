@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
 
 from openai import AsyncStream, Stream
@@ -25,6 +26,8 @@ from opentelemetry.util.genai.types import (
 
 from .chat_buffers import ChoiceBuffer
 
+_logger = logging.getLogger(__name__)
+
 
 class _ChatStreamMixin:
     """Chat-specific hooks shared by sync and async stream wrappers."""
@@ -33,17 +36,18 @@ class _ChatStreamMixin:
     _self_capture_content: bool
     _self_choice_buffers: list[ChoiceBuffer]
     _self_response_id: Optional[str]
-    _self_response_model: Optional[str]
     _self_service_tier: Optional[str]
     _self_prompt_tokens: Optional[int]
     _self_completion_tokens: Optional[int]
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
-        if self._self_response_model:
+        # Set eagerly so the per-chunk streaming timing metrics carry
+        # gen_ai.response.model.
+        if self._self_invocation.response_model_name:
             return
 
         if chunk.model:
-            self._self_response_model = chunk.model
+            self._self_invocation.response_model_name = chunk.model
 
     def _set_response_id(self, chunk: ChatCompletionChunk) -> None:
         if self._self_response_id:
@@ -94,6 +98,14 @@ class _ChatStreamMixin:
             self._self_prompt_tokens = usage.prompt_tokens
 
     def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
+        if not isinstance(chunk, ChatCompletionChunk):
+            # raw-response stream can be parsed into a caller-defined chunk type.
+            _logger.debug(
+                "Skipping telemetry for unrecognized chat chunk type %s",
+                type(chunk).__name__,
+            )
+            return
+
         self._set_response_id(chunk)
         self._set_response_model(chunk)
         self._set_response_service_tier(chunk)
@@ -141,12 +153,7 @@ class _ChatStreamMixin:
     def _on_stream_error(self, error: BaseException) -> None:
         self._cleanup(error)
 
-    def parse(self) -> _ChatStreamMixin:
-        """Called when using with_raw_response with stream=True."""
-        return self
-
     def _cleanup(self, error: Optional[BaseException] = None) -> None:
-        self._self_invocation.response_model_name = self._self_response_model
         self._self_invocation.response_id = self._self_response_id
         self._self_invocation.input_tokens = self._self_prompt_tokens
         self._self_invocation.output_tokens = self._self_completion_tokens
@@ -182,12 +189,11 @@ class ChatStreamWrapper(
         invocation: InferenceInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None
-        self._self_response_model = None
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
@@ -203,12 +209,11 @@ class AsyncChatStreamWrapper(
         invocation: InferenceInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None
-        self._self_response_model = None
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None

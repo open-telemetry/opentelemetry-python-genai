@@ -160,7 +160,10 @@ async def test_async_embeddings_error_handling(
         latest_experimental_enabled,
         operation_name="embeddings",
     )
-    assert "NotFoundError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    assert (
+        "openai.NotFoundError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    )
 
 
 @pytest.mark.asyncio

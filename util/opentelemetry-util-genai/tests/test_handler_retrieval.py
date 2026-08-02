@@ -232,7 +232,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
     def test_fail_sets_error_status(self) -> None:
         invocation = self.handler.retrieval()
-        invocation.fail(Error(message="timeout", type=TimeoutError))
+        invocation.fail(Error(message="timeout", type="TimeoutError"))
 
         spans = self._get_finished_spans()
         self.assertEqual(spans[0].status.status_code, StatusCode.ERROR)
@@ -240,14 +240,14 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
     def test_fail_sets_error_type_attribute(self) -> None:
         invocation = self.handler.retrieval()
-        invocation.fail(Error(message="bad", type=ConnectionError))
+        invocation.fail(Error(message="bad", type="ConnectionError"))
 
         spans = self._get_finished_spans()
         self.assertEqual(spans[0].attributes["error.type"], "ConnectionError")
 
     def test_fail_sets_operation_name(self) -> None:
         invocation = self.handler.retrieval()
-        invocation.fail(Error(message="err", type=RuntimeError))
+        invocation.fail(Error(message="err", type="RuntimeError"))
 
         spans = self._get_finished_spans()
         self.assertEqual(

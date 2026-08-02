@@ -85,6 +85,24 @@ def should_capture_content_on_spans() -> bool:
     )
 
 
+def fq_exception_type(exception: BaseException) -> str:
+    """Return the fully qualified name of an exception's type.
+
+    Matches the ``exception.type`` value the exception event records, so
+    ``error.type`` and ``exception.type`` stay consistent. Builtins are returned
+    unqualified (e.g. ``ValueError``, not ``builtins.ValueError``).
+    """
+    # Mirrors the SDK's Span.record_exception so error.type matches the
+    # exception event's exception.type:
+    # https://github.com/open-telemetry/opentelemetry-python/blob/main/opentelemetry-sdk/src/opentelemetry/sdk/trace/__init__.py
+    exc_type = type(exception)
+    module = exc_type.__module__
+    qualname = exc_type.__qualname__
+    if module and module != "builtins":
+        return f"{module}.{qualname}"
+    return qualname
+
+
 class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
         if isinstance(o, bytes):

@@ -75,7 +75,7 @@ def main(base_instrumentation_path):
         "w",
         encoding="utf-8",
     ) as fh:
-        fh.write("\n".join(table))
+        fh.write("\n".join(table) + "\n")
 
 
 if __name__ == "__main__":
