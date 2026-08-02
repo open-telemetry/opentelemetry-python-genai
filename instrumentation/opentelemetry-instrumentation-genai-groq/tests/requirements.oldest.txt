@@ -20,3 +20,5 @@
 # factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
 # OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
+
+httpx==0.27.2
