@@ -103,7 +103,7 @@ def test_tool_invoke_error(span_exporter, instrument_with_content):
     with pytest.raises(Exception) as excinfo:
         tool.invoke()
 
-    err_name = type(excinfo.value).__name__
+    err_name = f"{type(excinfo.value).__module__}.{type(excinfo.value).__name__}"
 
     (span,) = span_exporter.get_finished_spans()
     assert not span.status.is_ok
