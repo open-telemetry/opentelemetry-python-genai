@@ -1,6 +1,8 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest import mock
+
 import pytest
 from groq import AsyncGroq, Groq
 
@@ -179,12 +181,11 @@ def test_chat_completions_stream_side_error_mid_iteration(
             messages=[{"role": "user", "content": "Tell me a long joke"}],
             stream=True,
         )
-        from unittest import mock
-        
+
         iterator_mock = mock.MagicMock()
         iterator_mock.__next__.side_effect = ConnectionError("Stream dropped")
         response._self_iterator = iterator_mock
-        
+
         with pytest.raises(ConnectionError, match="Stream dropped"):
             for _ in response:
                 pass
