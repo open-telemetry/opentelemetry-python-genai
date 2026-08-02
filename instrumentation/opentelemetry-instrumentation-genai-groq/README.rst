@@ -80,7 +80,7 @@ Install the ``upload`` extra to pull in ``fsspec``::
     pip install opentelemetry-util-genai[upload]
 
 See the `opentelemetry-util-genai
-<https://github.com/open-telemetry/opentelemetry-python-contrib/blob/main/util/opentelemetry-util-genai/README.rst>`_
+<https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/util/opentelemetry-util-genai/README.rst>`_
 for additional options.
 
 Enabling the latest experimental features
