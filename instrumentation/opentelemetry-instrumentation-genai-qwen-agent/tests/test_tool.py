@@ -170,7 +170,11 @@ def test_call_tool_error_re_raises(span_exporter, instrument_no_content):
     span = tool_spans[0]
     assert span.status.status_code == StatusCode.ERROR
     attrs = dict(span.attributes or {})
-    assert attrs[ErrorAttributes.ERROR_TYPE] == "ToolServiceError"
+    # Non-builtin exceptions are recorded with their fully qualified name.
+    assert (
+        attrs[ErrorAttributes.ERROR_TYPE]
+        == "qwen_agent.tools.base.ToolServiceError"
+    )
 
 
 def test_call_unknown_tool_records_span(span_exporter, instrument_no_content):

@@ -44,7 +44,10 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
         capture_content: bool,
     ) -> None:
         super().__init__(stream)
-        self._self_invocation = invocation
+        # Deliberately not passed to super().__init__: the base class would
+        # mark the invocation as streamed and record per-chunk LLM streaming
+        # metrics, which don't apply to a local invoke_agent invocation.
+        self._self_agent_invocation = invocation
         self._self_capture_content = capture_content
         self._self_last_response: Any = None
 
@@ -53,13 +56,13 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
 
     def _on_stream_end(self) -> None:
         if self._self_capture_content and self._self_last_response:
-            self._self_invocation.output_messages = (
+            self._self_agent_invocation.output_messages = (
                 convert_to_final_output_messages(self._self_last_response)
             )
-        self._self_invocation.stop()
+        self._self_agent_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._self_invocation.fail(error)
+        self._self_agent_invocation.fail(error)
 
 
 def wrap_agent_run(
