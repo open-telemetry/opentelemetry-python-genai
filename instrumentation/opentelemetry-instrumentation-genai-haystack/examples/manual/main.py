@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+
 from haystack.components.generators.chat.openai import OpenAIChatGenerator
 from haystack.dataclasses import ChatMessage
 
@@ -23,6 +24,7 @@ trace.set_tracer_provider(provider)
 os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "True"
 HaystackInstrumentor().instrument()
 
+
 # 3. Use Haystack
 def main():
     generator = OpenAIChatGenerator(model="gpt-4o-mini")
@@ -32,6 +34,7 @@ def main():
     response = generator.run(messages=messages)
     print("\nResponse:")
     print(response["replies"][0].text)
+
 
 if __name__ == "__main__":
     main()

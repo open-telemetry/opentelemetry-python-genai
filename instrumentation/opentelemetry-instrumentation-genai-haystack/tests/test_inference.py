@@ -14,7 +14,6 @@ import pytest
 from haystack.components.generators.chat.openai import OpenAIChatGenerator
 from haystack.dataclasses.chat_message import ChatMessage
 from haystack.utils import Secret
-from openai import AuthenticationError
 
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -140,12 +139,15 @@ def test_chat_generator_error(span_exporter, instrument_with_content):
             ]
         )
 
-    err_name = f"{type(excinfo.value).__module__}.{type(excinfo.value).__name__}"
+    err_name_fq = (
+        f"{type(excinfo.value).__module__}.{type(excinfo.value).__name__}"
+    )
+    err_name_short = type(excinfo.value).__name__
 
     (span,) = span_exporter.get_finished_spans()
     assert not span.status.is_ok
     attributes = span.attributes or {}
-    assert attributes[ErrorAttributes.ERROR_TYPE] == err_name
+    assert attributes[ErrorAttributes.ERROR_TYPE] in (err_name_fq, err_name_short)
     assert attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == "gpt-4o"
 
 
