@@ -14,6 +14,14 @@ For new instrumentations, consult upstream library docs and judge:
 - Is the library used widely enough to warrant a package in this repo?
 - Does it avoid unbounded in-memory accumulation or other side-effects?
 
+For a new instrumentation, check whether the instrumented library has a *runtime* dependency on
+`opentelemetry-api` (or other `opentelemetry-*` packages) in its `pyproject.toml` / lockfile (a
+dev/test-only dependency doesn't count), or documents a first-party OpenTelemetry plugin. If so,
+flag the PR and link to the
+[When to add an instrumentation here](../../CONTRIBUTING.md#when-to-add-an-instrumentation-here)
+policy — the library may already be natively instrumented or ship a first-party plugin that we
+should not duplicate here.
+
 For changes to existing instrumentations: prefer back-compat. Break users only for a real reason;
 prefer opt-in or additive. Breaking changes need explicit justification in the PR.
 
@@ -43,6 +51,11 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Adding attributes to invocations produced by the util is fine.
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers.
+- Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK
+  didn't do (materializing a result early to build telemetry — stay lazy); a changed return type
+  (`isinstance`/`__class__` should still resolve to the original; `wrapt.ObjectProxy` is the usual
+  way); and replacement functions missing `@functools.wraps(original)`. Full transparency isn't
+  always reachable — prefer the least intrusive option that works.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
 ## 3. Semantic conventions
@@ -55,6 +68,13 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   come from `opentelemetry.semconv._incubating.attributes.gen_ai_attributes`.
 - For attributes with a well-known value set in semconv, use the generated enum from the same
   module (e.g. `GenAiOutputTypeValues` for `gen_ai.output.type`) instead of string literals.
+- Flag `Any`, a dict, `TypedDict`, or other ad-hoc value built for an attribute that semconv models in
+  [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py)
+  (messages, tool definitions, system instructions, retrieval documents, …). These must be built
+  from the matching `opentelemetry.util.genai.types` dataclass.
+- Flag a local workaround for a util type that cannot represent what the provider returns —
+  dropping the data, stuffing it into an unrelated field, or bypassing the type. The util type
+  must be extended instead.
 - If a signal is not in semconv, wait until semconv lands.
 
 ## 4. Exception handling

@@ -1,0 +1,1 @@
+Align some dataclasses with the GenAI semconv schemas: `GenericPart.type` is now a required free-form string carrying the provider's own type name instead of the fixed literal `generic`, `Modality` gains `document`, and `FinishReason` gains `compaction`.

@@ -605,7 +605,7 @@ class TestAgentInvocationMetrics(TestBase):
             invocation = handler.invoke_local_agent(request_model="err-model")
         invocation.input_tokens = 11
 
-        error = Error(message="boom", type=ValueError)
+        error = Error(message="boom", type="ValueError")
         with patch("timeit.default_timer", return_value=2001.0):
             invocation.fail(error)
 

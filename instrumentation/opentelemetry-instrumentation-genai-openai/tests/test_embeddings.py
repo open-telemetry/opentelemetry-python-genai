@@ -249,7 +249,8 @@ def test_embeddings_bad_endpoint(
     )
     assert 4242 == spans[0].attributes[ServerAttributes.SERVER_PORT]
     assert (
-        "APIConnectionError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+        "openai.APIConnectionError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
     )
 
     # Verify metrics
@@ -271,7 +272,7 @@ def test_embeddings_bad_endpoint(
         duration_metric.data.data_points[0].attributes[
             ErrorAttributes.ERROR_TYPE
         ]
-        == "APIConnectionError"
+        == "openai.APIConnectionError"
     )
 
 
@@ -299,7 +300,10 @@ def test_embeddings_model_not_found(
         latest_experimental_enabled,
         operation_name="embeddings",
     )
-    assert "NotFoundError" == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    assert (
+        "openai.NotFoundError"
+        == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
+    )
 
     # Verify metrics
     metrics = metric_reader.get_metrics_data().resource_metrics
@@ -320,7 +324,7 @@ def test_embeddings_model_not_found(
         duration_metric.data.data_points[0].attributes[
             ErrorAttributes.ERROR_TYPE
         ]
-        == "NotFoundError"
+        == "openai.NotFoundError"
     )
 
 
