@@ -15,4 +15,5 @@ langchain>=1.3.14
 llama-index-core>=0.14.23
 openai>=2.52.0
 openai-agents>=0.18.3
+smolagents>=1.24.0
 weaviate-client>=4.22.0
