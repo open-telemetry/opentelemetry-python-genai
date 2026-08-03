@@ -13,6 +13,6 @@ claude-agent-sdk>=0.2.128
 google-genai>=2.14.0
 langchain>=1.3.14
 llama-index-core>=0.14.23
-openai>=2.45.0
+openai>=2.52.0
 openai-agents>=0.18.3
 weaviate-client>=4.22.0
