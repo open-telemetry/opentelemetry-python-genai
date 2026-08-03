@@ -58,7 +58,7 @@ def _spans_named(span_exporter, name):
 
 @pytest.mark.vcr()
 def test_agent_run(span_exporter, instrument_with_content):
-    """Assistant.run() produces an invoke_agent span with a child chat span."""
+    """Assistant.run() produces an invoke_agent span."""
     bot = Assistant(
         llm={"model": "qwen-max", "model_type": "qwen_dashscope"},
         name="TestAssistant",
@@ -97,16 +97,6 @@ def test_agent_run(span_exporter, instrument_with_content):
         {"content": "You are a helpful assistant.", "type": "text"}
     ]
 
-    chat_spans = [
-        s
-        for s in span_exporter.get_finished_spans()
-        if s.name.startswith("chat ")
-    ]
-    assert chat_spans
-    chat_span = chat_spans[0]
-    assert chat_span.parent is not None
-    assert chat_span.parent.span_id == agent_span.context.span_id
-
 
 @pytest.mark.vcr()
 def test_agent_run_nonstream(span_exporter, instrument_with_content):
@@ -128,7 +118,7 @@ def test_agent_run_nonstream(span_exporter, instrument_with_content):
 
 @pytest.mark.vcr()
 def test_multi_turn_conversation(span_exporter, instrument_with_content):
-    """History messages are all captured on the chat span input."""
+    """History messages are all captured on the invoke_agent span input."""
     bot = Assistant(
         llm={"model": "qwen-max", "model_type": "qwen_dashscope"},
         name="MultiTurnAssistant",
@@ -157,7 +147,7 @@ def test_multi_turn_conversation(span_exporter, instrument_with_content):
 )
 @pytest.mark.vcr()
 def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
-    """A tool-calling agent run nests chat and execute_tool spans."""
+    """A tool-calling agent run nests execute_tool spans."""
 
     @register_tool("get_current_weather_test", allow_overwrite=True)
     class _GetCurrentWeatherTool(BaseTool):
@@ -232,23 +222,6 @@ def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
     # The tool span is nested (transitively) under the invoke_agent span.
     assert tool_span.context.trace_id == agent_span.context.trace_id
     assert tool_span.parent is not None
-
-    chat_spans = [
-        s
-        for s in span_exporter.get_finished_spans()
-        if s.name.startswith("chat ")
-    ]
-    # A tool-calling run has at least two chat rounds.
-    assert len(chat_spans) >= 2
-    tool_call_finishes = [
-        s
-        for s in chat_spans
-        if dict(s.attributes or {}).get(
-            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-        )
-        == ("tool_calls",)
-    ]
-    assert tool_call_finishes
 
 
 def test_agent_run_error(span_exporter, instrument_no_content):
@@ -348,6 +321,53 @@ def test_agent_run_records_only_final_output_message(
     assert output_messages[0]["parts"] == [
         {"content": "Final verdict: continue.", "type": "text"}
     ]
+
+
+def test_agent_run_input_history_records_tool_call_parts(
+    span_exporter, instrument_with_content
+):
+    """Tool-call history in the run input round-trips onto the invoke_agent
+    span as ``tool_call`` and ``tool_call_response`` message parts."""
+    agent = _StubAgent.create(name="ToolPartsBot", llm=_StubLLM())
+
+    history = [
+        Message(role="user", content="What is the weather in Beijing?"),
+        Message(
+            role="assistant",
+            content="",
+            function_call=FunctionCall(
+                name="get_weather", arguments='{"city": "Beijing"}'
+            ),
+        ),
+        Message(
+            role="function",
+            name="get_weather",
+            content="Sunny, 22 degrees Celsius.",
+        ),
+    ]
+
+    def fake_run(messages, **kwargs):
+        yield [Message(role="assistant", content="It is sunny in Beijing.")]
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        list(agent.run(history))
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent ToolPartsBot")
+    assert len(agent_spans) == 1
+    attrs = dict(agent_spans[0].attributes or {})
+    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    parts = [part for message in input_messages for part in message["parts"]]
+
+    tool_calls = [part for part in parts if part["type"] == "tool_call"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["name"] == "get_weather"
+    assert tool_calls[0]["arguments"] == {"city": "Beijing"}
+
+    tool_call_responses = [
+        part for part in parts if part["type"] == "tool_call_response"
+    ]
+    assert len(tool_call_responses) == 1
+    assert tool_call_responses[0]["response"] == "Sunny, 22 degrees Celsius."
 
 
 def test_nested_agent_runs_produce_nested_spans(

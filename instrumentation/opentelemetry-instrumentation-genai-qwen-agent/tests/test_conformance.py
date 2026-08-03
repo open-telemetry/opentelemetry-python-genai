@@ -18,14 +18,12 @@ from opentelemetry.test_util_genai.conformance import (  # noqa: E402
     run_conformance,
 )
 
-from .conformance.inference import InferenceScenario
 from .conformance.invoke_agent import InvokeAgentScenario
 
 
 @pytest.mark.parametrize(
     "scenario",
     [
-        InferenceScenario(),
         InvokeAgentScenario(),
     ],
     ids=lambda s: type(s).__name__,

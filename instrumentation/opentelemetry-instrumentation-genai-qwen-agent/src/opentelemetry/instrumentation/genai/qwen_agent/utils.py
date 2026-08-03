@@ -10,16 +10,9 @@ import json
 import logging
 from typing import Any
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
-    InferenceInvocation,
-)
+from opentelemetry.util.genai.invocation import AgentInvocation
 from opentelemetry.util.genai.types import (
-    FunctionToolDefinition,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -29,39 +22,6 @@ from opentelemetry.util.genai.types import (
 )
 
 _logger = logging.getLogger(__name__)
-
-# DashScope is not part of the gen_ai.provider.name well-known values yet;
-# the attribute is an open enum so a custom string is allowed.
-_PROVIDER_DASHSCOPE = "dashscope"
-
-# Map qwen-agent model_type to a gen_ai.provider.name value.
-_MODEL_TYPE_PROVIDER_MAP = {
-    "qwen_dashscope": _PROVIDER_DASHSCOPE,
-    "qwenvl_dashscope": _PROVIDER_DASHSCOPE,
-    "qwenaudio_dashscope": _PROVIDER_DASHSCOPE,
-    "qwenvlo_dashscope": _PROVIDER_DASHSCOPE,
-    "oai": GenAI.GenAiProviderNameValues.OPENAI.value,
-    "azure": GenAI.GenAiProviderNameValues.AZURE_AI_OPENAI.value,
-    "qwenvl_oai": GenAI.GenAiProviderNameValues.OPENAI.value,
-    "qwenomni_oai": GenAI.GenAiProviderNameValues.OPENAI.value,
-}
-
-
-def _get_provider_name(llm_instance: Any) -> str:
-    """Infer the gen_ai.provider.name value for a qwen-agent LLM instance."""
-    model_type = getattr(llm_instance, "model_type", "")
-    if model_type in _MODEL_TYPE_PROVIDER_MAP:
-        return _MODEL_TYPE_PROVIDER_MAP[model_type]
-
-    class_name = type(llm_instance).__name__.lower()
-    if "dashscope" in class_name:
-        return _PROVIDER_DASHSCOPE
-    if "openai" in class_name or "oai" in class_name:
-        return GenAI.GenAiProviderNameValues.OPENAI.value
-    if "azure" in class_name:
-        return GenAI.GenAiProviderNameValues.AZURE_AI_OPENAI.value
-
-    return _PROVIDER_DASHSCOPE
 
 
 def _field_value(value: Any, *names: str) -> Any:
@@ -106,163 +66,6 @@ def _extract_content_text(content: Any) -> str:
                 texts.append(text)
         return "\n".join(texts)
     return str(content) if content else ""
-
-
-def _int_value(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _usage_token_values(usage: Any) -> dict[str, int]:
-    if usage is None:
-        return {}
-
-    input_tokens = _int_value(
-        _field_value(usage, "input_tokens", "prompt_tokens")
-    )
-    output_tokens = _int_value(
-        _field_value(usage, "output_tokens", "completion_tokens")
-    )
-    cache_read_tokens = _int_value(
-        _field_value(usage, "cache_read_input_tokens", "cached_prompt_tokens")
-    )
-    cache_creation_tokens = _int_value(
-        _field_value(usage, "cache_creation_input_tokens")
-    )
-
-    for detail_name in ("prompt_tokens_details", "input_tokens_details"):
-        details = _field_value(usage, detail_name)
-        if details is not None and cache_read_tokens is None:
-            cache_read_tokens = _int_value(
-                _field_value(details, "cached_tokens")
-            )
-
-    values: dict[str, int] = {}
-    if input_tokens is not None:
-        values["input_tokens"] = input_tokens
-    if output_tokens is not None:
-        values["output_tokens"] = output_tokens
-    if cache_read_tokens is not None and cache_read_tokens > 0:
-        values["cache_read_input_tokens"] = cache_read_tokens
-    if cache_creation_tokens is not None and cache_creation_tokens > 0:
-        values["cache_creation_input_tokens"] = cache_creation_tokens
-
-    return values
-
-
-def _usage_score(usage_values: dict[str, int]) -> int:
-    return (usage_values.get("input_tokens") or 0) + (
-        usage_values.get("output_tokens") or 0
-    )
-
-
-def _usage_sources(value: Any) -> list[Any]:
-    sources: list[Any] = []
-    usage = _field_value(value, "usage")
-    if usage is not None:
-        sources.append(usage)
-
-    extra = _field_value(value, "extra")
-    if extra is not None:
-        extra_usage = _field_value(extra, "usage", "usage_metadata")
-        if extra_usage is not None:
-            sources.append(extra_usage)
-
-        service_info = _field_value(extra, "model_service_info")
-        if service_info is not None:
-            sources.append(service_info)
-
-    service_info = _field_value(value, "model_service_info")
-    if service_info is not None:
-        sources.append(service_info)
-
-    return sources
-
-
-def _extract_usage_values(value: Any, depth: int = 0) -> dict[str, int]:
-    """Extract token usage from qwen-agent Message/extra/model_service_info."""
-    if value is None or depth > 4:
-        return {}
-
-    best_values: dict[str, int] = _usage_token_values(value)
-
-    if isinstance(value, (list, tuple)):
-        for item in reversed(value):
-            item_values = _extract_usage_values(item, depth + 1)
-            if _usage_score(item_values) > _usage_score(best_values):
-                best_values = item_values
-        return best_values
-
-    for source in _usage_sources(value):
-        source_values = _extract_usage_values(source, depth + 1)
-        if _usage_score(source_values) > _usage_score(best_values):
-            best_values = source_values
-
-    return best_values
-
-
-def apply_usage_to_inference(
-    invocation: InferenceInvocation, value: Any
-) -> None:
-    """Apply qwen-agent token usage metadata to an InferenceInvocation.
-
-    Qwen-Agent stores DashScope responses under
-    ``Message.extra["model_service_info"]`` for both streaming and
-    non-streaming calls. Streaming chunks carry cumulative usage, so an
-    existing value is only replaced when the candidate usage reports at
-    least as many tokens as already observed.
-    """
-    usage_values = _extract_usage_values(value)
-    if not usage_values:
-        return
-
-    current_score = (invocation.input_tokens or 0) + (
-        invocation.output_tokens or 0
-    )
-    if current_score and _usage_score(usage_values) < current_score:
-        return
-
-    if "input_tokens" in usage_values:
-        invocation.input_tokens = usage_values["input_tokens"]
-    if "output_tokens" in usage_values:
-        invocation.output_tokens = usage_values["output_tokens"]
-    if "cache_read_input_tokens" in usage_values:
-        invocation.cache_read_input_tokens = usage_values[
-            "cache_read_input_tokens"
-        ]
-    if "cache_creation_input_tokens" in usage_values:
-        invocation.cache_creation_input_tokens = usage_values[
-            "cache_creation_input_tokens"
-        ]
-
-
-def extract_response_id(response: Any) -> str | None:
-    """Extract the DashScope request id to use as ``gen_ai.response.id``.
-
-    Qwen-Agent stores the raw DashScope response under
-    ``Message.extra["model_service_info"]``, whose ``request_id``
-    identifies the completion.
-    """
-    if not isinstance(response, list):
-        response = [response] if response else []
-    for msg in reversed(response):
-        extra = _field_value(msg, "extra")
-        service_info = (
-            _field_value(extra, "model_service_info")
-            if extra is not None
-            else None
-        )
-        if service_info is None:
-            service_info = _field_value(msg, "model_service_info")
-        if service_info is not None:
-            request_id = _field_value(service_info, "request_id")
-            if request_id:
-                return str(request_id)
-    return None
 
 
 def find_tool_call_id(messages: Any, tool_name: str) -> str | None:
@@ -441,68 +244,6 @@ def convert_to_final_output_messages(messages: Any) -> list[OutputMessage]:
             continue
 
     return []
-
-
-def has_tool_call(messages: Any) -> bool:
-    """Whether any message in a qwen-agent response carries a function call."""
-    if not isinstance(messages, list):
-        messages = [messages] if messages else []
-    return any(_field_value(msg, "function_call") for msg in messages)
-
-
-def get_tool_definitions(
-    functions: Any,
-) -> list[FunctionToolDefinition] | None:
-    """Convert qwen-agent function dicts to FunctionToolDefinition objects."""
-    if not functions:
-        return None
-
-    tool_definitions: list[FunctionToolDefinition] = []
-    for func in functions:
-        if not isinstance(func, dict):
-            continue
-        name = func.get("name")
-        if not name:
-            continue
-        tool_definitions.append(
-            FunctionToolDefinition(
-                name=name,
-                description=func.get("description"),
-                parameters=func.get("parameters"),
-            )
-        )
-    return tool_definitions or None
-
-
-def create_inference_invocation(
-    handler: TelemetryHandler,
-    llm_instance: Any,
-    messages: Any,
-    functions: Any,
-    extra_generate_cfg: Any,
-) -> InferenceInvocation:
-    """Create and start an InferenceInvocation for BaseChatModel.chat()."""
-    invocation = handler.inference(
-        _get_provider_name(llm_instance),
-        request_model=getattr(llm_instance, "model", None),
-    )
-
-    if isinstance(extra_generate_cfg, dict):
-        max_tokens = extra_generate_cfg.get("max_tokens")
-        if max_tokens is not None:
-            invocation.max_tokens = max_tokens
-        temperature = extra_generate_cfg.get("temperature")
-        if temperature is not None:
-            invocation.temperature = temperature
-        top_p = extra_generate_cfg.get("top_p")
-        if top_p is not None:
-            invocation.top_p = top_p
-
-    if handler.should_capture_content():
-        invocation.input_messages = convert_to_input_messages(messages)
-        invocation.tool_definitions = get_tool_definitions(functions)
-
-    return invocation
 
 
 def create_agent_invocation(

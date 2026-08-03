@@ -45,7 +45,6 @@ from opentelemetry.instrumentation.genai.qwen_agent.package import (
 from opentelemetry.instrumentation.genai.qwen_agent.patch import (
     wrap_agent_call_tool,
     wrap_agent_run,
-    wrap_chat_model_chat,
 )
 from opentelemetry.instrumentation.genai.qwen_agent.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -56,7 +55,6 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 __all__ = ["QwenAgentInstrumentor", "__version__"]
 
 _AGENT_MODULE = "qwen_agent.agent"
-_LLM_MODULE = "qwen_agent.llm.base"
 
 
 def _with_handler(
@@ -82,8 +80,12 @@ class QwenAgentInstrumentor(BaseInstrumentor):
       ``Agent.run_nonstream()`` is not wrapped separately — it calls
       ``run()`` internally, so the ``invoke_agent`` span is created once
       by the ``run()`` wrapper.
-    - ``BaseChatModel.chat()``: LLM call spans (``chat``).
     - ``Agent._call_tool()``: tool execution spans (``execute_tool``).
+
+    LLM call spans (``chat``) are not emitted by this instrumentation;
+    enable the instrumentation of the underlying model client library
+    (e.g. ``opentelemetry-instrumentation-genai-openai`` for
+    OpenAI-compatible backends) to capture them without duplication.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -107,11 +109,6 @@ class QwenAgentInstrumentor(BaseInstrumentor):
             _with_handler(wrap_agent_run, handler),
         )
         wrap_function_wrapper(
-            _LLM_MODULE,
-            "BaseChatModel.chat",
-            _with_handler(wrap_chat_model_chat, handler),
-        )
-        wrap_function_wrapper(
             _AGENT_MODULE,
             "Agent._call_tool",
             _with_handler(wrap_agent_call_tool, handler),
@@ -120,8 +117,6 @@ class QwenAgentInstrumentor(BaseInstrumentor):
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Qwen-Agent instrumentation."""
         import qwen_agent.agent  # noqa: PLC0415
-        import qwen_agent.llm.base  # noqa: PLC0415
 
         unwrap(qwen_agent.agent.Agent, "run")
-        unwrap(qwen_agent.llm.base.BaseChatModel, "chat")
         unwrap(qwen_agent.agent.Agent, "_call_tool")

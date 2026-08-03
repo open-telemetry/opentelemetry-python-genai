@@ -6,15 +6,22 @@ OpenTelemetry Qwen-Agent Instrumentation
 .. |pypi| image:: https://badge.fury.io/py/opentelemetry-instrumentation-genai-qwen-agent.svg
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-qwen-agent/
 
-This library allows tracing agent runs, LLM requests, and tool executions
-made through the `Qwen-Agent framework <https://pypi.org/project/qwen-agent/>`_.
+This library allows tracing agent runs and tool executions made through the
+`Qwen-Agent framework <https://pypi.org/project/qwen-agent/>`_.
 
 It produces spans following the `GenAI semantic conventions
 <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_:
 
 - ``invoke_agent`` for ``Agent.run()``
-- ``chat`` for ``BaseChatModel.chat()``
 - ``execute_tool`` for ``Agent._call_tool()``
+
+LLM call (``chat``) spans are intentionally not emitted by this
+instrumentation: the model client libraries qwen-agent calls into have their
+own instrumentations, and emitting them here as well would duplicate the LLM
+spans. Enable the instrumentation of the underlying model client library
+(e.g. `opentelemetry-instrumentation-genai-openai
+<https://pypi.org/project/opentelemetry-instrumentation-genai-openai/>`_ for
+OpenAI-compatible backends) alongside this package to capture LLM calls.
 
 Installation
 ------------

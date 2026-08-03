@@ -6,9 +6,8 @@ OpenTelemetry SDK and Instrumentations manually.
 
 When `main.py <main.py>`_ is run, it exports traces, logs, and metrics to an
 OTLP compatible endpoint. Traces include details such as the model used and
-the duration of the agent run, chat request, and tool execution. Logs capture
-the chat request and the generated response, providing a comprehensive view
-of the performance and behavior of your Qwen-Agent application.
+the duration of the agent run and tool execution, providing a comprehensive
+view of the performance and behavior of your Qwen-Agent application.
 
 Note: `.env <.env>`_ file configures additional environment variables:
 

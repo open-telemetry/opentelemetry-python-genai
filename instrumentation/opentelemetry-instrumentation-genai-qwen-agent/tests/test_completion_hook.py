@@ -5,7 +5,7 @@
 
 from unittest.mock import MagicMock, patch, sentinel
 
-from qwen_agent.llm.base import BaseChatModel
+from qwen_agent.agent import Agent
 from qwen_agent.llm.schema import Message
 
 from opentelemetry.instrumentation.genai.qwen_agent import (
@@ -14,21 +14,21 @@ from opentelemetry.instrumentation.genai.qwen_agent import (
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
-class _StubChatModel(BaseChatModel):
-    """A minimal BaseChatModel subclass for tests without network access."""
+class _StubAgent(Agent):
+    """A minimal Agent subclass that skips the heavy Agent.__init__."""
 
-    def __init__(self, model="qwen-max", model_type="qwen_dashscope"):
-        super().__init__({"model": model, "model_type": model_type})
-        # Disable raw_api mode which requires stream-only and an API key.
-        self.use_raw_api = False
+    @classmethod
+    def create(cls):
+        obj = cls.__new__(cls)
+        obj.name = "HookBot"
+        obj.description = ""
+        obj.system_message = ""
+        obj.llm = None
+        obj.function_map = {}
+        obj.extra_generate_cfg = {}
+        return obj
 
-    def _chat_no_stream(self, messages, **kwargs):
-        raise NotImplementedError
-
-    def _chat_stream(self, messages, **kwargs):
-        raise NotImplementedError
-
-    def _chat_with_functions(self, messages, functions, **kwargs):
+    def _run(self, messages, **kwargs):
         raise NotImplementedError
 
 
@@ -81,9 +81,12 @@ def test_completion_hook_defaults_to_load_completion_hook(
 def test_completion_hook_invoked(
     tracer_provider, logger_provider, meter_provider
 ):
-    """The hook's on_completion is called after a chat completion."""
+    """The hook's on_completion is called after an agent run completes."""
     hook = MagicMock()
-    fake_response = [Message(role="assistant", content="Hello!")]
+
+    def fake_run(messages, **kwargs):
+        yield [Message(role="assistant", content="Hello!")]
+
     with (
         instrument(
             QwenAgentInstrumentor(),
@@ -92,14 +95,9 @@ def test_completion_hook_invoked(
             meter_provider=meter_provider,
             completion_hook=hook,
         ),
-        patch.object(
-            _StubChatModel, "_chat_no_stream", return_value=fake_response
-        ),
+        patch.object(_StubAgent, "_run", side_effect=fake_run),
     ):
-        _StubChatModel().chat(
-            messages=[Message(role="user", content="Hello")],
-            stream=False,
-        )
+        list(_StubAgent.create().run([Message(role="user", content="Hello")]))
 
     hook.on_completion.assert_called_once()
     assert hook.on_completion.call_args.kwargs["span"] is not None
