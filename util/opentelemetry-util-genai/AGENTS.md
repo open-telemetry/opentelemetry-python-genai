@@ -42,6 +42,7 @@ Factory methods on `TelemetryHandler` (`handler.py`):
 - `inference(provider, request_model, *, server_address, server_port)` → `InferenceInvocation`
 - `embedding(provider, request_model, *, server_address, server_port)` → `EmbeddingInvocation`
 - `retrieval(*, data_source_id, provider, request_model, server_address, server_port)` → `RetrievalInvocation`
+- `fetch_response(provider, *, response_id, server_address, server_port)` → `FetchResponseInvocation`
 - `tool(name, *, arguments, tool_call_id, tool_type, tool_description)` → `ToolInvocation`
 - `workflow(name)` → `WorkflowInvocation`
 

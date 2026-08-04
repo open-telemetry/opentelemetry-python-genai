@@ -265,6 +265,44 @@ def _finish_reason_from_status(status: str | None) -> str | None:
     return None
 
 
+# `incomplete_details.reason` values that map onto a cross-provider finish
+# reason; an unrecognized reason is reported as-is.
+_INCOMPLETE_REASON_TO_FINISH_REASON = {
+    "max_output_tokens": "length",
+    "content_filter": "content_filter",
+}
+
+
+def get_fetched_finish_reasons(response: "Response | None") -> list[str]:
+    """Return the finish reasons of the *original* generation of a fetched response.
+
+    Derived from the fetched response ``status`` as the OpenAI ``fetch_response``
+    semantic conventions require: a ``completed`` response maps to its stop
+    reason, an ``incomplete`` one to why it was cut short, and a ``failed`` or
+    ``cancelled`` one to ``error``.
+
+    Statuses that are not terminal (``queued``, ``in_progress``) have no finish
+    reason yet, and so do a missing or unrecognized status: the generation is
+    not known to have stopped, so reporting one would be wrong. The lifecycle
+    state is conveyed by ``gen_ai.response.status`` instead.
+    """
+    if Response is None or not isinstance(response, Response):
+        return []
+
+    status = response.status
+    if status == "completed":
+        return extract_finish_reasons(response) or ["stop"]
+    if status in {"failed", "cancelled"}:
+        return ["error"]
+    if status == "incomplete":
+        details = response.incomplete_details
+        reason = details.reason if details is not None else None
+        if reason is None:
+            return [status]
+        return [_INCOMPLETE_REASON_TO_FINISH_REASON.get(reason, reason)]
+    return []
+
+
 def _response_types_available() -> bool:
     return (
         Response is not None
@@ -402,6 +440,24 @@ def get_inference_creation_kwargs(
     return creation_kwargs
 
 
+def get_fetch_response_creation_kwargs(
+    response_id: str,
+    client_instance: object,
+) -> dict[str, object]:
+    """Return ``handler.fetch_response()`` kwargs for a ``responses.retrieve`` call."""
+    address, port = get_server_address_and_port(client_instance)
+
+    creation_kwargs: dict[str, object] = {
+        "provider": GenAIAttributes.GenAiProviderNameValues.OPENAI.value,
+        "response_id": response_id,
+    }
+    if address is not None:
+        creation_kwargs["server_address"] = address
+    if port is not None:
+        creation_kwargs["server_port"] = port
+    return creation_kwargs
+
+
 def apply_request_attributes(
     invocation,
     params: ResponseRequestParams,
@@ -490,3 +546,41 @@ def set_invocation_response_attributes(
         output_messages = get_output_messages_from_response(response)
         if output_messages:
             invocation.output_messages = output_messages
+
+
+def set_fetch_response_attributes(
+    invocation,
+    response: object,
+    capture_content: bool,
+) -> None:
+    """Record a fetched response on a ``fetch_response`` invocation.
+
+    Token usage is deliberately not recorded: the fetch performs no inference
+    and the counts on the fetched response belong to the original generation.
+    The original input messages are not part of the fetched response either, so
+    only the system instructions and output messages it carries are captured.
+    """
+    if Response is None or not isinstance(response, Response):
+        return
+
+    invocation.response_model_name = response.model
+    invocation.response_status = response.status
+    invocation.finish_reasons = get_fetched_finish_reasons(response) or None
+
+    # `service_tier` is absent from the Response model on some supported SDK
+    # versions, so keep this attribute access guarded.
+    service_tier = getattr(response, "service_tier", None)
+    if service_tier is not None:
+        invocation.attributes[
+            OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER
+        ] = service_tier
+
+    if capture_content:
+        invocation.system_instruction = get_system_instruction(
+            response.instructions
+            if isinstance(response.instructions, str)
+            else None
+        )
+        invocation.output_messages = get_output_messages_from_response(
+            response
+        )

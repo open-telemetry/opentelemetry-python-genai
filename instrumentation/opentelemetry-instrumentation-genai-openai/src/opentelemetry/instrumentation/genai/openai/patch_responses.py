@@ -3,26 +3,36 @@
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Union, cast
 
+from opentelemetry.semconv._incubating.attributes import (
+    openai_attributes as OpenAIAttributes,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import FetchResponseInvocation
 
-from ._raw_response import wrap_stream_result
+from ._raw_response import ParsableResponse, wrap_stream_result
 from .response_extractors import (
     apply_request_attributes,
     extract_params,
+    get_fetch_response_creation_kwargs,
     get_inference_creation_kwargs,
     get_response_error,
+    set_fetch_response_attributes,
     set_invocation_response_attributes,
 )
 from .response_wrappers import (
+    AsyncFetchResponseStreamWrapper,
     AsyncResponseStreamManagerWrapper,
     AsyncResponseStreamWrapper,
+    FetchResponseStreamWrapper,
     ResponseStreamManagerWrapper,
     ResponseStreamWrapper,
     responses_stream_context,
 )
-from .utils import is_streaming
+from .utils import is_streaming, value_is_set
 
 if TYPE_CHECKING:
     from openai import AsyncStream as OpenAIAsyncStream
@@ -44,6 +54,39 @@ ResponseStreamResult = Union["OpenAIStream[Any]", "ResponseStream[Any]"]
 AsyncResponseStreamResult = Union[
     "OpenAIAsyncStream[Any]", "AsyncResponseStream[Any]"
 ]
+
+# Set by the SDK's ``with_streaming_response`` helpers to mark a request whose
+# body the caller reads lazily.
+_RAW_RESPONSE_HEADER = "x-stainless-raw-response"
+
+
+def _is_streamed_raw_response(kwargs: dict[str, Any]) -> bool:
+    extra_headers = kwargs.get("extra_headers")
+    if not isinstance(extra_headers, Mapping):
+        return False
+    return any(
+        key.lower() == _RAW_RESPONSE_HEADER and value == "stream"
+        for key, value in extra_headers.items()
+    )
+
+
+def _parse_raw_response(result: object, kwargs: dict[str, Any]) -> object:
+    """Return the payload of a non-streaming ``with_raw_response`` result.
+
+    A non-streaming raw response has already read its body and the SDK memoizes
+    ``parse()``, so deserializing it here does not change what the caller sees.
+    On the async client ``parse()`` returns an awaitable, which the caller
+    awaits.
+
+    ``with_streaming_response`` hands back a raw response whose body has *not*
+    been read yet; parsing it would consume the body before the caller asks for
+    it, so those calls are left alone.
+    """
+    if _is_streamed_raw_response(kwargs) or not isinstance(
+        result, ParsableResponse
+    ):
+        return result
+    return result.parse()
 
 
 def responses_create(
@@ -187,6 +230,176 @@ def async_responses_create(
 
     return cast(
         'Callable[..., Awaitable[Union["ResponseResult", "AsyncResponseStreamResult", AsyncResponseStreamWrapper[Any]]]]',
+        traced_method,
+    )
+
+
+def _get_retrieve_response_id(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> str | None:
+    """Return the ``response_id`` a ``responses.retrieve`` call was made with."""
+    response_id = args[0] if args else kwargs.get("response_id")
+    return response_id if isinstance(response_id, str) else None
+
+
+def _get_stream_cursor(kwargs: dict[str, Any]) -> str | None:
+    """Return the ``starting_after`` cursor a streamed fetch resumes from."""
+    starting_after = kwargs.get("starting_after")
+    if not value_is_set(starting_after):
+        return None
+    return str(starting_after)
+
+
+def _start_fetch_response_invocation(
+    handler: TelemetryHandler,
+    instance: "Responses | AsyncResponses",
+    response_id: str,
+    kwargs: dict[str, Any],
+) -> FetchResponseInvocation:
+    invocation = handler.fetch_response(
+        **get_fetch_response_creation_kwargs(response_id, instance)
+    )
+    invocation.stream_cursor = _get_stream_cursor(kwargs)
+    invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
+        OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
+    return invocation
+
+
+def responses_retrieve(
+    handler: TelemetryHandler,
+) -> Callable[
+    ...,
+    Union[
+        ResponseResult,
+        ResponseStreamResult,
+        FetchResponseStreamWrapper[Any],
+    ],
+]:
+    """Wrap ``Responses.retrieve`` to trace fetching a stored response by id.
+
+    Traces :meth:`openai.resources.responses.responses.Responses.retrieve`.
+    Fetching a stored response performs no inference and consumes no tokens, so
+    it is reported as a ``fetch_response`` operation rather than as an
+    inference call.
+    """
+
+    capture_content = handler.should_capture_content()
+
+    def traced_method(
+        wrapped: Callable[..., Union[ResponseResult, ResponseStreamResult]],
+        instance: "Responses",
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Union[
+        ResponseResult,
+        ResponseStreamResult,
+        FetchResponseStreamWrapper[Any],
+    ]:
+        response_id = _get_retrieve_response_id(args, kwargs)
+        if response_id is None:
+            # gen_ai.response.id is required on a fetch_response span and the
+            # SDK rejects the call without it, so leave it untraced.
+            return wrapped(*args, **kwargs)
+
+        invocation = _start_fetch_response_invocation(
+            handler, instance, response_id, kwargs
+        )
+
+        try:
+            result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    FetchResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
+                )
+
+            set_fetch_response_attributes(
+                invocation,
+                _parse_raw_response(result, kwargs),
+                capture_content,
+            )
+            invocation.stop()
+            return result
+        except Exception as error:
+            invocation.fail(error)
+            raise
+
+    return cast(
+        'Callable[..., Union["ResponseResult", "ResponseStreamResult", FetchResponseStreamWrapper[Any]]]',
+        traced_method,
+    )
+
+
+def async_responses_retrieve(
+    handler: TelemetryHandler,
+) -> Callable[
+    ...,
+    Awaitable[
+        Union[
+            ResponseResult,
+            AsyncResponseStreamResult,
+            AsyncFetchResponseStreamWrapper[Any],
+        ]
+    ],
+]:
+    """Wrap ``AsyncResponses.retrieve`` to trace fetching a stored response by id.
+
+    Traces :meth:`openai.resources.responses.responses.AsyncResponses.retrieve`.
+    Fetching a stored response performs no inference and consumes no tokens, so
+    it is reported as a ``fetch_response`` operation rather than as an
+    inference call.
+    """
+
+    capture_content = handler.should_capture_content()
+
+    async def traced_method(
+        wrapped: Callable[
+            ...,
+            Awaitable[Union[ResponseResult, AsyncResponseStreamResult]],
+        ],
+        instance: "AsyncResponses",
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Union[
+        ResponseResult,
+        AsyncResponseStreamResult,
+        AsyncFetchResponseStreamWrapper[Any],
+    ]:
+        response_id = _get_retrieve_response_id(args, kwargs)
+        if response_id is None:
+            # gen_ai.response.id is required on a fetch_response span and the
+            # SDK rejects the call without it, so leave it untraced.
+            return await wrapped(*args, **kwargs)
+
+        invocation = _start_fetch_response_invocation(
+            handler, instance, response_id, kwargs
+        )
+
+        try:
+            result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    AsyncFetchResponseStreamWrapper,
+                    result,
+                    invocation,
+                    capture_content,
+                )
+
+            parsed = _parse_raw_response(result, kwargs)
+            if inspect.isawaitable(parsed):
+                parsed = await parsed
+            set_fetch_response_attributes(invocation, parsed, capture_content)
+            invocation.stop()
+            return result
+        except Exception as error:
+            invocation.fail(error)
+            raise
+
+    return cast(
+        'Callable[..., Awaitable[Union["ResponseResult", "AsyncResponseStreamResult", AsyncFetchResponseStreamWrapper[Any]]]]',
         traced_method,
     )
 

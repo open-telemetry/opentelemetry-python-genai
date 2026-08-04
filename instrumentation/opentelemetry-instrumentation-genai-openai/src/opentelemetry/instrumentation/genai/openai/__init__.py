@@ -79,8 +79,10 @@ from .patch import (
 )
 from .patch_responses import (
     async_responses_create,
+    async_responses_retrieve,
     async_responses_stream,
     responses_create,
+    responses_retrieve,
     responses_stream,
 )
 
@@ -188,20 +190,20 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 async_responses_stream(handler),
             )
 
-            # retrieve() fetches a stored response by id without going through
-            # create(), so wrap it separately. The result is a Response, so the
-            # create wrappers extract its telemetry correctly.
+            # retrieve() fetches a stored response by id. No inference happens
+            # and no tokens are consumed, so it is traced as a fetch_response
+            # operation rather than through the create wrappers.
             if hasattr(responses_module.Responses, "retrieve"):
                 wrap_function_wrapper(
                     "openai.resources.responses.responses",
                     "Responses.retrieve",
-                    responses_create(handler),
+                    responses_retrieve(handler),
                 )
             if hasattr(responses_module.AsyncResponses, "retrieve"):
                 wrap_function_wrapper(
                     "openai.resources.responses.responses",
                     "AsyncResponses.retrieve",
-                    async_responses_create(handler),
+                    async_responses_retrieve(handler),
                 )
 
     def _uninstrument(self, **kwargs):

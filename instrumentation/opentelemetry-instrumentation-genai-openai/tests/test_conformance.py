@@ -27,6 +27,7 @@ from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.responses_conversation import ResponsesConversationScenario
+from .conformance.responses_fetch import ResponsesFetchScenario
 from .conformance.responses_stream import ResponsesStreamScenario
 from .conformance.responses_streaming import ResponsesStreamingScenario
 from .conformance.tool_calling import ToolCallingScenario
@@ -40,6 +41,7 @@ from .conformance.tool_calling import ToolCallingScenario
         EmbeddingScenario(),
         ToolCallingScenario(),
         ResponsesConversationScenario(),
+        ResponsesFetchScenario(),
         ResponsesStreamScenario(),
         ResponsesStreamingScenario(),
     ],
