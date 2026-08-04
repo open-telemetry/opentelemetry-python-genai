@@ -139,6 +139,8 @@ run silently uses the previously installed versions.
 - `tox.ini` defines the test matrix - check it for available test environments.
 - Do not add `type: ignore` comments. If a type error arises, solve it properly or write a follow-up plan to address it in another PR.
 - Annotate function signatures (parameters and return types) and class attributes. Prefer `from __future__ import annotations` over runtime-quoted strings.
+- Avoid `Any` in the public API of `opentelemetry-util-genai` (anything not under a `_`-prefixed
+  module). Use the narrowest type that fits: the semconv model's type where one exists, union, `AttributeValues`.
 - When a file uses `from __future__ import annotations`, do not quote type annotations just to
   avoid forward references. Keep quotes only for expressions still evaluated at runtime, such as
   `typing.cast(...)`, unless the referenced type is imported at runtime.
@@ -165,6 +167,9 @@ Apply to packages under `instrumentation/`.
   `opentelemetry.util.genai._*` module.
 - Content capture, hooks, and configuration are owned by the util. Don't add instrumentation-local
   env vars or settings.
+- Models describing complex attributes are owned by `opentelemetry.util.genai.types`. Land new type
+  in utils when missing instead of defining it in instrumentation. If need to add ainstrumentation-specific properties,
+  extend it. Don't workaround with dicts or type check suppressions.
 
 #### Completion hook
 
@@ -255,6 +260,11 @@ Full transparency isn't always reachable — prefer the least intrusive option t
   attribute or metric name strings.
 - For attributes with a well-known value set, use the generated enum from the same module instead
   of string literals.
+- Attributes whose value is a structured document (messages, tool definitions, system
+  instructions, retrieval documents, …) have a **model** defined in
+  [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py) and a JSON schema under `model/gen-ai/gen-ai-*.json`. genai-util should have models
+  for them defined in `opentelemetry.util.genai.types`. Use these models, don't invent new types
+  or hand-rolls dicts. 
 
 ### README
 

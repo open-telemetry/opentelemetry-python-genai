@@ -1644,3 +1644,123 @@ def test_to_input_messages_includes_legacy_function_call():
         isinstance(p, ToolCallRequest) and p.name == "f"
         for p in messages[0].parts
     )
+
+
+# ---------------------------------------------------------------------------
+# on_llm_end – response model resolution (RAPI header + llm_output)
+# ---------------------------------------------------------------------------
+
+
+class TestOnLlmEndResponseModel:
+    def test_served_model_from_rapi_header(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hello",
+            response_metadata={
+                "headers": {"x-ms-served-model": "gpt-4.1-2025-04-14"}
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.response_model_name == "gpt-4.1-2025-04-14"
+
+    def test_served_model_header_case_insensitive(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hello",
+            response_metadata={
+                "headers": {"X-MS-Served-Model": "gpt-4.1-2025-04-14"}
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.response_model_name == "gpt-4.1-2025-04-14"
+
+    def test_served_model_overrides_llm_output_model_name(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hello",
+            response_metadata={
+                "headers": {"x-ms-served-model": "served-from-header"}
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(
+            generations=[[gen]],
+            llm_output={"model_name": "gpt-4.1-body", "id": "resp_123"},
+        )
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.response_model_name == "served-from-header"
+        assert llm_inv.response_id == "resp_123"
+
+    def test_llm_output_model_fallback(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="hello", response_metadata={})
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(
+            generations=[[gen]], llm_output={"model": "gpt-4.1-fallback"}
+        )
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.response_model_name == "gpt-4.1-fallback"
+
+    def test_unsupported_header_ignored(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        llm_inv.response_model_name = None
+
+        ai_msg = AIMessage(
+            content="hello",
+            response_metadata={"headers": {"x-request-id": "abc-123"}},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.response_model_name is None
+
+    def test_empty_header_value_ignored(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        llm_inv.response_model_name = None
+
+        ai_msg = AIMessage(
+            content="hello",
+            response_metadata={"headers": {"x-ms-served-model": ""}},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.response_model_name is None
