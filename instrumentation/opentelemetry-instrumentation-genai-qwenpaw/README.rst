@@ -34,7 +34,8 @@ Usage
 
 QwenPaw is started as its own app (CLI / process entrypoint). Use
 OpenTelemetry zero-code instrumentation (``opentelemetry-instrument qwenpaw
-app``), or — if you control an embedding process — instrument
+app``) — check out the `zero-code example <examples/zero-code>`_ for a quick
+start — or, if you control an embedding process, instrument
 programmatically:
 
 .. code-block:: python
@@ -44,6 +45,8 @@ programmatically:
     QwenPawInstrumentor().instrument()
     # ... run the QwenPaw app in this process ...
     QwenPawInstrumentor().uninstrument()
+
+Check out the `manual example <examples/manual>`_ for more details.
 
 Configuration
 -------------
@@ -76,6 +79,9 @@ A custom ``CompletionHook`` can also be passed programmatically, taking preceden
 environment variable::
 
     QwenPawInstrumentor().instrument(completion_hook=my_hook)
+
+See `examples/manual/custom_hook.py <examples/manual/custom_hook.py>`_ for a
+runnable custom-hook example.
 
 Conformance
 -----------

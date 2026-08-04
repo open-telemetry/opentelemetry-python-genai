@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import json
 from typing import Any
 
 from tests.harness import (
@@ -30,12 +29,14 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class InvokeAgentScenario(Scenario):
+    # The specific attribute values (agent id/name, conversation id, message
+    # content) are covered by unit tests; conformance only validates the
+    # telemetry shape against the semconv registry.
     expected_spans = {"invoke_agent": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
 
@@ -61,34 +62,6 @@ class InvokeAgentScenario(Scenario):
             ):
                 asyncio.run(_drive_one_turn(runner_module))
 
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        # The base validate() already asserts exactly one invoke_agent span.
-        (span,) = [
-            entry["span"]
-            for entry in report["samples"]
-            if "span" in entry
-            and _attr(entry["span"], "gen_ai.operation.name") == "invoke_agent"
-        ]
-        assert _attr(span, "gen_ai.agent.id") == "conformance-agent"
-        assert _attr(span, "gen_ai.conversation.id") == "sess-conformance"
-
-        # The conformance env installs qwenpaw, whose runner always exposes a
-        # display name (config value or the built-in fallback).
-        agent_name = _attr(span, "gen_ai.agent.name")
-        assert isinstance(agent_name, str) and agent_name, (
-            f"expected a non-empty gen_ai.agent.name, saw {agent_name!r}"
-        )
-
-        input_parts = _part_types(_attr(span, "gen_ai.input.messages"))
-        output_parts = _part_types(_attr(span, "gen_ai.output.messages"))
-        assert "text" in input_parts, (
-            f"expected a text part on an input message, saw {input_parts}"
-        )
-        assert "text" in output_parts, (
-            f"expected a text part on an output message, saw {output_parts}"
-        )
-
 
 async def _drive_one_turn(runner_module: Any) -> None:
     runner = runner_module.AgentRunner(agent_id="conformance-agent")
@@ -96,15 +69,3 @@ async def _drive_one_turn(runner_module: Any) -> None:
         user_command_msgs(), make_request(session_id="sess-conformance")
     ):
         pass
-
-
-def _attr(span: dict[str, Any], name: str) -> Any:
-    for attr in span["attributes"]:
-        if attr["name"] == name:
-            return attr["value"]
-    return None
-
-
-def _part_types(messages_json: str | None) -> list[str]:
-    messages = json.loads(messages_json) if messages_json else []
-    return [part["type"] for message in messages for part in message["parts"]]
