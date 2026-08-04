@@ -14,6 +14,7 @@ dependencies = [
   "opentelemetry-instrumentation-genai-agno[instruments]",
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
+  "opentelemetry-instrumentation-genai-crewai[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
   "opentelemetry-instrumentation-genai-llama-index[instruments]",
@@ -29,6 +30,15 @@ dependencies = [
 [tool.uv]
 package = false # https://docs.astral.sh/uv/reference/settings/#package
 required-version = ">=0.6.0"
+# crewai hard-pins the OpenTelemetry core stack to a narrow window
+# (opentelemetry-api/-sdk >=1.42,<1.43) that can't coexist with this
+# workspace's ~=1.43 floor. Override crewai's caps so the workspace lock
+# resolves against the versions the util packages require. This is the
+# lock-time analog of the conformance-only UV_OVERRIDE wired in tox.ini.
+override-dependencies = [
+  "opentelemetry-api ~= 1.43",
+  "opentelemetry-sdk ~= 1.43",
+]
 
 # https://docs.astral.sh/uv/reference/settings/#sources
 [tool.uv.sources]
@@ -37,6 +47,7 @@ opentelemetry-util-genai = { workspace = true }
 opentelemetry-instrumentation-genai-agno = { workspace = true }
 opentelemetry-instrumentation-genai-anthropic = { workspace = true }
 opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
+opentelemetry-instrumentation-genai-crewai = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }
 opentelemetry-instrumentation-genai-langchain = { workspace = true }
 opentelemetry-instrumentation-genai-llama-index = { workspace = true }
@@ -105,6 +116,7 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-agno",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
+  "instrumentation/opentelemetry-instrumentation-genai-crewai",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
@@ -122,6 +134,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-crewai/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-crewai/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index/tests/**/*.py",

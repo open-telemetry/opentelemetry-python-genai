@@ -4,6 +4,7 @@
 | [opentelemetry-instrumentation-genai-agno](./opentelemetry-instrumentation-genai-agno) | agno >= 2.0.0 | No | development
 | [opentelemetry-instrumentation-genai-anthropic](./opentelemetry-instrumentation-genai-anthropic) | anthropic >= 0.16.0 | No | development
 | [opentelemetry-instrumentation-genai-claude-agent-sdk](./opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14 | No | development
+| [opentelemetry-instrumentation-genai-crewai](./opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1 | No | development
 | [opentelemetry-instrumentation-genai-langchain](./opentelemetry-instrumentation-genai-langchain) | langchain >= 0.3.21 | No | development
 | [opentelemetry-instrumentation-genai-llama-index](./opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19 | No | development
 | [opentelemetry-instrumentation-genai-openai](./opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0 | Yes | development
