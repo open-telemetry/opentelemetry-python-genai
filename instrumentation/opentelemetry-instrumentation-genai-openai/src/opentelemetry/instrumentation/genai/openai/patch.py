@@ -169,7 +169,6 @@ def _set_response_properties(
         result = result.parse()
 
     served_model = get_served_model(getattr(result, "headers", None))
-    
     if served_model:
         chat_invocation.response_model_name = served_model
     elif getattr(result, "model", None):
