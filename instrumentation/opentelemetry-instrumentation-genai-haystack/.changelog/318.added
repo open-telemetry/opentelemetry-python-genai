@@ -1,0 +1,1 @@
+Add ``opentelemetry-instrumentation-genai-haystack``, migrated from ``openinference-instrumentation-haystack``, with support for pipeline, chat/embedding/retrieval, agent, and tool invocations built on ``opentelemetry-util-genai``.

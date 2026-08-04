@@ -79,3 +79,7 @@ MIGRATION_REPORT.md
 # dev sample projects
 dev/uv.lock
 
+# Local secrets (never commit)
+.env
+.env.*
+!.env.example
