@@ -10,7 +10,7 @@ from typing import Any
 
 from google.genai._api_client import BaseApiClient
 from google.genai.models import AsyncModels, Models
-from google.genai.types import EmbedContentResponse
+from google.genai.types import EmbedContentConfig, EmbedContentResponse
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.google_genai.client_info import (
@@ -23,6 +23,10 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
 )
+
+from .allowlist_util import AllowList
+from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
+from .dict_util import flatten_dict
 
 _RAW_RESPONSE_BODY: ContextVar[str | None] = ContextVar(
     "raw_response_body", default=None
@@ -89,8 +93,38 @@ def _apply_embedding_response_attributes(
             pass
 
 
+def _apply_embedding_request_attributes(
+    config: EmbedContentConfig | dict[str, Any] | None,
+    allow_list: AllowList,
+    invocation: EmbeddingInvocation,
+) -> None:
+    if config is None:
+        return
+    if isinstance(config, dict):
+        try:
+            config = EmbedContentConfig.model_validate(config)
+        except Exception:
+            return
+
+    attributes = flatten_dict(
+        config.model_dump(exclude_none=True),
+        key_prefix=GCP_GENAI_OPERATION_CONFIG,
+        # HTTP options can contain request headers and must not be copied into
+        # telemetry attributes.
+        exclude_keys={f"{GCP_GENAI_OPERATION_CONFIG}.http_options"},
+    )
+    invocation.attributes.update(
+        {
+            key: value
+            for key, value in attributes.items()
+            if allow_list.allowed(key)
+        }
+    )
+
+
 def _create_instrumented_embed_content(
     telemetry_handler: TelemetryHandler,
+    embed_content_config_key_allowlist: AllowList,
 ) -> Callable[
     [
         Callable[..., EmbedContentResponse],
@@ -116,6 +150,11 @@ def _create_instrumented_embed_content(
             request_model=kwargs.get("model"),
             server_address=server_address,
         ) as invocation:
+            _apply_embedding_request_attributes(
+                kwargs.get("config"),
+                embed_content_config_key_allowlist,
+                invocation,
+            )
             response = wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
             _RAW_RESPONSE_BODY.set(None)
@@ -126,6 +165,7 @@ def _create_instrumented_embed_content(
 
 def _create_instrumented_async_embed_content(
     telemetry_handler: TelemetryHandler,
+    embed_content_config_key_allowlist: AllowList,
 ) -> Callable[
     [
         Callable[..., Any],
@@ -151,6 +191,11 @@ def _create_instrumented_async_embed_content(
             request_model=kwargs.get("model"),
             server_address=server_address,
         ) as invocation:
+            _apply_embedding_request_attributes(
+                kwargs.get("config"),
+                embed_content_config_key_allowlist,
+                invocation,
+            )
             response = await wrapped(*args, **kwargs)
             _apply_embedding_response_attributes(response, invocation)
             _RAW_RESPONSE_BODY.set(None)
@@ -166,18 +211,23 @@ def uninstrument_embeddings(snapshot: object) -> None:
 
 def instrument_embeddings(
     telemetry_handler: TelemetryHandler,
+    embed_content_config_key_allowlist: AllowList,
 ) -> object:
     snapshot = _EmbeddingMethodsSnapshot()
 
     wrapped = wrap_function_wrapper(
         "google.genai.models",
         "Models.embed_content",
-        _create_instrumented_embed_content(telemetry_handler),
+        _create_instrumented_embed_content(
+            telemetry_handler, embed_content_config_key_allowlist
+        ),
     )
     wrapped2 = wrap_function_wrapper(
         "google.genai.models",
         "AsyncModels.embed_content",
-        _create_instrumented_async_embed_content(telemetry_handler),
+        _create_instrumented_async_embed_content(
+            telemetry_handler, embed_content_config_key_allowlist
+        ),
     )
     _set_co_filename(wrapped)
     _set_co_filename(wrapped2)
