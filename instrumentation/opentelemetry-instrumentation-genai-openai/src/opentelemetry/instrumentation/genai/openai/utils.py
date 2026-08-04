@@ -47,7 +47,8 @@ def get_served_model(headers: Any) -> str | None:
         if (
             isinstance(name, str)
             and name.lower() in SUPPORTED_RAPI_RESPONSE_HEADERS
-            and isinstance(value, str) and value.strip()
+            and isinstance(value, str)
+            and value.strip()
         ):
             return str(value)
     return None

@@ -353,7 +353,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                     isinstance(name, str)
                                     and name.lower()
                                     in SUPPORTED_RAPI_RESPONSE_HEADERS
-                                    and isinstance(value, str) and value.strip()
+                                    and isinstance(value, str)
+                                    and value.strip()
                                 ):
                                     served_model = str(value)
                                     break
