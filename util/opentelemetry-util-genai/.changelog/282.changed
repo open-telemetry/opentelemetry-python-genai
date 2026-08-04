@@ -1,0 +1,1 @@
+`Error.type` is now the `error.type` attribute value (a string) instead of the exception class; the originating exception moved to the new `Error.exception` field. When derived from an exception, `error.type` is its canonical, fully qualified name.

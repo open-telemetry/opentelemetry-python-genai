@@ -211,7 +211,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             "test-provider", request_model="error-model"
         )
         invocation.input_messages = [message]
-        error = Error(message="Test error occurred", type=TestError)
+        error = Error(message="Test error occurred", type="TestError")
         invocation.fail(error)
 
         # Check event was emitted
@@ -221,9 +221,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         attrs = log_record.attributes
 
         # Verify error attribute is present
-        self.assertEqual(
-            attrs[error_attributes.ERROR_TYPE], TestError.__qualname__
-        )
+        self.assertEqual(attrs[error_attributes.ERROR_TYPE], "TestError")
         self.assertEqual(attrs[GenAI.GEN_AI_OPERATION_NAME], "chat")
         self.assertEqual(attrs[GenAI.GEN_AI_REQUEST_MODEL], "error-model")
         # Verify event context matches span context

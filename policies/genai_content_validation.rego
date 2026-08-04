@@ -1,20 +1,21 @@
-# Validates the JSON payload of GenAI content attributes against the
-# semconv JSON schemas.  Schema constants (_schema_*) are defined in
-# _schemas.rego, which is generated at test-run time from the semconv
-# repository (docs/gen-ai/*.json) and placed alongside this file.
-# Weaver only loads .rego files from --advice-policies, so schemas are
-# inlined as Rego constants rather than loaded as OPA data documents.
+# Validates the JSON payload of GenAI content attributes against the semconv
+# JSON schemas. The schemas ship with the semconv-genai registry
+# (model/gen-ai/*.json) and are loaded into rego data by weaver's `--advice-data`
+# flag, keyed by the schema file's stem (e.g. gen-ai-input-messages.json ->
+# data["gen-ai-input-messages"]), so this policy references them as data
+# documents rather than inlining them.
 
 package live_check_advice
 
 import rego.v1
 
-_genai_content_schemas := {
-	"gen_ai.input.messages":      _schema_input_messages,
-	"gen_ai.output.messages":     _schema_output_messages,
-	"gen_ai.system_instructions": _schema_system_instructions,
-	"gen_ai.tool.definitions":    _schema_tool_definitions,
-	"gen_ai.retrieval.documents": _schema_retrieval_documents,
+# Content attribute name -> advice-data key (the schema file's stem).
+_genai_content_schema_keys := {
+	"gen_ai.input.messages":      "gen-ai-input-messages",
+	"gen_ai.output.messages":     "gen-ai-output-messages",
+	"gen_ai.system_instructions": "gen-ai-system-instructions",
+	"gen_ai.tool.definitions":    "gen-ai-tool-definitions",
+	"gen_ai.retrieval.documents": "gen-ai-retrieval-documents",
 }
 
 deny contains result if {
@@ -23,11 +24,11 @@ deny contains result if {
 	attr_value := input.sample.attribute.value
 	is_string(attr_value)
 
-	schema := _genai_content_schemas[attr_name]
-	# Skip when the schema constant isn't present in the pinned semconv
-	# version yet (the script emits `null` stubs for forward-looking
-	# attributes like `gen_ai.tool.definitions` until upstream catches up).
-	schema != null
+	key := _genai_content_schema_keys[attr_name]
+	# Undefined (so the rule skips this attribute) when the schema isn't loaded
+	# for the pinned semconv version yet — e.g. forward-looking attributes like
+	# `gen_ai.tool.definitions` before upstream ships the schema.
+	schema := data[key]
 
 	parsed := json.unmarshal(attr_value)
 

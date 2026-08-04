@@ -1,0 +1,34 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Oldest test-only dependency pins.
+#
+# The package's own declared deps (qwen-agent via the instruments extra, opentelemetry-api,
+# opentelemetry-instrumentation, opentelemetry-semantic-conventions, opentelemetry-util-genai)
+# are resolved to their pyproject.toml floors by UV_RESOLUTION=lowest-direct on the oldest tox
+# factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
+# OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
+# every oldest env installs. Pin here only test-only deps that nothing else already provides.
+
+# Drop this once opentelemetry-util-genai 1.1b0 is published.
+-e util/opentelemetry-util-genai
+
+# qwen-agent imports numpy, dateutil, and dotenv at import time but does
+# not declare them.
+numpy==1.26.4
+python-dateutil==2.9.0.post0
+python-dotenv==1.1.1
+# Exercise the oldest supported wrapt major (1.17 is the floor inherited
+# from opentelemetry-util-genai).
+wrapt==1.17.0
