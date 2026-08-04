@@ -461,6 +461,7 @@ def set_invocation_response_attributes(
     response: object,
     capture_content: bool,
 ) -> None:
+    served_model = get_served_model(getattr(response, "headers", None))
     if isinstance(response, ParsableResponse):
         # with_raw_response: safe to parse() here since this is the
         # non-streaming path, so it has no side effects on the caller's stream.
@@ -468,7 +469,6 @@ def set_invocation_response_attributes(
 
     if Response is None or not isinstance(response, Response):
         return
-    served_model = get_served_model(getattr(response, "headers", None))
     if served_model:
         invocation.response_model_name = served_model
     else:

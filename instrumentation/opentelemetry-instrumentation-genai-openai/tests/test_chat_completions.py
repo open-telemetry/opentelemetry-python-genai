@@ -23,6 +23,9 @@ try:
 except ImportError:
     not_given = NOT_GIVEN
 
+from opentelemetry.instrumentation.genai.openai.patch import (
+    _set_response_properties,
+)
 from opentelemetry.instrumentation.genai.openai.utils import get_served_model
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -37,6 +40,7 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
+from opentelemetry.util.genai.types import LLMInvocation
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
@@ -557,6 +561,34 @@ def test_chat_completion_with_raw_response(
 
 class _CustomChatCompletion(ChatCompletion):
     """Caller-defined response type passed to non-streaming parse(to=...)."""
+
+
+class _RawChatCompletionResponse:
+    def __init__(self):
+        self.headers = {"x-ms-served-model": "served-gpt-4o"}
+        self.parse_count = 0
+
+    def parse(self):
+        self.parse_count += 1
+        return ChatCompletion.model_validate(
+            {
+                "id": "chatcmpl_123",
+                "choices": [],
+                "created": 0,
+                "model": "body-gpt-4o",
+                "object": "chat.completion",
+            }
+        )
+
+
+def test_chat_completion_raw_response_prefers_served_model_header():
+    invocation = LLMInvocation(request_model=DEFAULT_MODEL)
+    raw_response = _RawChatCompletionResponse()
+
+    _set_response_properties(invocation, raw_response, capture_content=False)
+
+    assert raw_response.parse_count == 1
+    assert invocation.response_model_name == "served-gpt-4o"
 
 
 def test_chat_completion_with_raw_response_parse_to_custom_type(

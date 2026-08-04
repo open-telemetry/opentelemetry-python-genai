@@ -163,12 +163,12 @@ def async_embeddings_create(handler: TelemetryHandler):
 def _set_response_properties(
     chat_invocation: InferenceInvocation, result, capture_content: bool
 ) -> InferenceInvocation:
+    served_model = get_served_model(getattr(result, "headers", None))
     if isinstance(result, ParsableResponse):
         # with_raw_response: safe to parse() here since this is the
         # non-streaming path, so it has no side effects on the caller's stream.
         result = result.parse()
 
-    served_model = get_served_model(getattr(result, "headers", None))
     if served_model:
         chat_invocation.response_model_name = served_model
     elif getattr(result, "model", None):

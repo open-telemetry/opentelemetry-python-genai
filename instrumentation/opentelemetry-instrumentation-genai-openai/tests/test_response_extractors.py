@@ -60,6 +60,17 @@ def _make_response(output=None, **overrides):
     return Response.model_validate(payload)
 
 
+class _RawResponse:
+    def __init__(self, parsed_response):
+        self.headers = {"x-ms-served-model": "served-gpt-4.1"}
+        self.parsed_response = parsed_response
+        self.parse_count = 0
+
+    def parse(self):
+        self.parse_count += 1
+        return self.parsed_response
+
+
 def test_extract_system_instruction_returns_text_for_string(loaded_module):
     params = loaded_module.extract_params(instructions="Be concise")
     instructions = loaded_module.get_system_instruction(params.instructions)
@@ -327,6 +338,20 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
     assert invocation.attributes == {
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER: "scale",
     }
+
+
+def test_set_invocation_response_attributes_prefers_raw_served_model_header(
+    loaded_module,
+):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    raw_response = _RawResponse(_make_response(model="body-gpt-4.1"))
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, raw_response, capture_content=False
+    )
+
+    assert raw_response.parse_count == 1
+    assert invocation.response_model_name == "served-gpt-4.1"
 
 
 def test_set_invocation_response_attributes_populates_output_messages(
