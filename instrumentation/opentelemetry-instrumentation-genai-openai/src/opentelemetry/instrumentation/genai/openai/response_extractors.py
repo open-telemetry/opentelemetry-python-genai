@@ -18,6 +18,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from ._raw_response import ParsableResponse
 from .utils import (
     _openai_response_format_to_output_type,
+    get_property_value,
     get_server_address_and_port,
 )
 
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
         InputMessage,
         OutputMessage,
         Text,
+        ToolDefinition,
     )
 
 try:
@@ -60,6 +62,8 @@ except ImportError:
 try:
     from opentelemetry.util.genai.types import (
         Error,
+        FunctionToolDefinition,
+        GenericToolDefinition,
         InputMessage,
         OutputMessage,
         Reasoning,
@@ -70,6 +74,8 @@ try:
     )
 except ImportError:
     Error = None
+    FunctionToolDefinition = None
+    GenericToolDefinition = None
     InputMessage = None
     OutputMessage = None
     Reasoning = None
@@ -301,6 +307,53 @@ def get_fetched_finish_reasons(response: "Response | None") -> list[str]:
             return [status]
         return [_INCOMPLETE_REASON_TO_FINISH_REASON.get(reason, reason)]
     return []
+
+
+def get_tool_definitions_from_response(
+    response: "Response | None",
+) -> list["ToolDefinition"] | None:
+    """Return the tool definitions carried on a fetched response.
+
+    Responses API tools are flat -- a function tool holds ``name``,
+    ``description`` and ``parameters`` directly, unlike the Chat Completions
+    shape that nests them under ``function``. Built-in tools (``web_search``,
+    ``file_search``, ...) are identified by ``type`` alone and carry no name,
+    so they are reported as generic definitions keyed by their type.
+    """
+    if (
+        Response is None
+        or not isinstance(response, Response)
+        or FunctionToolDefinition is None
+        or GenericToolDefinition is None
+    ):
+        return None
+
+    tools = response.tools
+    if not tools:
+        return None
+
+    definitions: list["ToolDefinition"] = []
+    for tool in tools:
+        tool_type = get_property_value(tool, "type")
+        if not isinstance(tool_type, str):
+            continue
+        name = get_property_value(tool, "name")
+        if tool_type == "function":
+            definitions.append(
+                FunctionToolDefinition(
+                    name=name if isinstance(name, str) else "",
+                    description=get_property_value(tool, "description"),
+                    parameters=get_property_value(tool, "parameters"),
+                )
+            )
+        else:
+            definitions.append(
+                GenericToolDefinition(
+                    name=name if isinstance(name, str) else tool_type,
+                    type=tool_type,
+                )
+            )
+    return definitions or None
 
 
 def _response_types_available() -> bool:
@@ -582,5 +635,8 @@ def set_fetch_response_attributes(
             else None
         )
         invocation.output_messages = get_output_messages_from_response(
+            response
+        )
+        invocation.tool_definitions = get_tool_definitions_from_response(
             response
         )

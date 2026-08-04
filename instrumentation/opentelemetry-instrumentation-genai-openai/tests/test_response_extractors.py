@@ -10,7 +10,11 @@ from opentelemetry.instrumentation.genai.openai import response_extractors
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
-from opentelemetry.util.genai.types import LLMInvocation
+from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    GenericToolDefinition,
+    LLMInvocation,
+)
 
 try:
     # Responses types are not available in the oldest supported OpenAI SDK.
@@ -465,3 +469,104 @@ def test_set_fetch_response_attributes_tolerates_missing_service_tier():
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER
         not in invocation.attributes
     )
+
+
+def test_get_tool_definitions_from_response_maps_flat_responses_tools(
+    loaded_module,
+):
+    """Responses API tools are flat, unlike the nested Chat Completions shape."""
+    response = _make_response(
+        tools=[
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+                "strict": True,
+            }
+        ]
+    )
+
+    definitions = loaded_module.get_tool_definitions_from_response(response)
+
+    (definition,) = definitions
+    assert isinstance(definition, FunctionToolDefinition)
+    assert definition.type == "function"
+    assert definition.name == "get_weather"
+    assert definition.description == "Get the weather"
+    assert definition.parameters == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+    }
+
+
+def test_get_tool_definitions_from_response_maps_builtin_tools_by_type(
+    loaded_module,
+):
+    """Built-in tools carry no name, so their type identifies them."""
+    response = _make_response(
+        tools=[{"type": "web_search_preview"}],
+    )
+
+    definitions = loaded_module.get_tool_definitions_from_response(response)
+
+    (definition,) = definitions
+    assert isinstance(definition, GenericToolDefinition)
+    assert definition.type == "web_search_preview"
+    assert definition.name == "web_search_preview"
+
+
+def test_get_tool_definitions_from_response_returns_none_without_tools(
+    loaded_module,
+):
+    assert loaded_module.get_tool_definitions_from_response(None) is None
+    assert (
+        loaded_module.get_tool_definitions_from_response(_make_response())
+        is None
+    )
+
+
+def test_set_fetch_response_attributes_captures_tool_definitions(
+    loaded_module,
+):
+    """Tool definitions are captured only when content capture is enabled."""
+    response = _make_response(
+        status="completed",
+        tools=[
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": None,
+                "parameters": {"type": "object"},
+                "strict": True,
+            }
+        ],
+    )
+
+    def _make_invocation():
+        return SimpleNamespace(
+            response_model_name=None,
+            response_status=None,
+            finish_reasons=None,
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=None,
+            attributes={},
+        )
+
+    captured = _make_invocation()
+    loaded_module.set_fetch_response_attributes(
+        captured, response, capture_content=True
+    )
+    (definition,) = captured.tool_definitions
+    assert isinstance(definition, FunctionToolDefinition)
+    assert definition.name == "get_weather"
+
+    not_captured = _make_invocation()
+    loaded_module.set_fetch_response_attributes(
+        not_captured, response, capture_content=False
+    )
+    assert not_captured.tool_definitions is None
