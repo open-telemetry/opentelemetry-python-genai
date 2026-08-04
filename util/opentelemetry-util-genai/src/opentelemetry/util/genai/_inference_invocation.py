@@ -75,7 +75,7 @@ class InferenceInvocation(GenAIInvocation):
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
         self.system_instruction: list[MessagePart] = []
-        self.response_model_name: str | None = None
+        self._response_model_name: str | None = None
         self.response_id: str | None = None
         self.finish_reasons: list[str] | None = None
         self.input_tokens: int | None = None
@@ -94,7 +94,20 @@ class InferenceInvocation(GenAIInvocation):
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
+        # Rebuilt once per streaming chunk, so cache it and invalidate via
+        # _invalidate_metric_attributes whenever an input changes.
+        self._cached_metric_attributes: dict[str, AttributeValue] | None = None
         self._start(self._get_start_attributes())
+
+    @property
+    def response_model_name(self) -> str | None:
+        return self._response_model_name
+
+    @response_model_name.setter
+    def response_model_name(self, value: str | None) -> None:
+        if value != self._response_model_name:
+            self._response_model_name = value
+            self._invalidate_metric_attributes()
 
     def _get_message_attributes(
         self, *, for_span: bool
@@ -134,6 +147,7 @@ class InferenceInvocation(GenAIInvocation):
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
         optional_attrs = (
+            (GenAI.GEN_AI_REQUEST_STREAM, self._request_stream),
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
             (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
             (GenAI.GEN_AI_REQUEST_TOP_K, self.top_k),
@@ -161,16 +175,37 @@ class InferenceInvocation(GenAIInvocation):
                 GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
                 self.thinking_tokens,
             ),
+            (
+                GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+                self._ttfc_seconds,
+            ),
         )
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
+    def _invalidate_metric_attributes(self) -> None:
+        """Drop the cached metric attributes so the next read rebuilds them.
+
+        Call this from anywhere that changes an input to
+        ``_get_metric_attributes`` (response model, error type, ...).
+        """
+        self._cached_metric_attributes = None
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs = self._get_start_attributes()
-        if self.response_model_name is not None:
-            attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self.response_model_name
-        attrs.update(self.metric_attributes)
-        return attrs
+        # Cached because this is rebuilt once per streaming chunk. Any mutation
+        # of its inputs must call _invalidate_metric_attributes.
+        if self._cached_metric_attributes is None:
+            attrs = self._get_start_attributes()
+            if self._response_model_name is not None:
+                attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self._response_model_name
+            attrs.update(self.metric_attributes)
+            self._cached_metric_attributes = attrs
+        return self._cached_metric_attributes
+
+    def _apply_error_attributes(self, error: Error) -> None:
+        super()._apply_error_attributes(error)
+        # error.type was just added to metric_attributes.
+        self._invalidate_metric_attributes()
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}

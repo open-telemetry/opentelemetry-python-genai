@@ -1,0 +1,1 @@
+Instrument agent.run as a client side invoke agent span. Instrument agno function calls an execute tool span.

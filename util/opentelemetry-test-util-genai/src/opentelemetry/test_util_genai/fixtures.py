@@ -64,6 +64,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.test_util_genai._setup_weaver import (
+    advice_data_glob,
     policies_dir,
     semconv_registry,
     weaver_config_file,
@@ -207,12 +208,18 @@ def weaver_live_check() -> Iterator[Any]:
     try:
         policies = str(policies_dir())
         registry = str(semconv_registry())
+        advice_data = advice_data_glob()
     except (OSError, RuntimeError, ValueError, tarfile.TarError) as exc:
         pytest.skip(f"could not provision semantic-conventions: {exc}")
 
     with WeaverLiveCheck(
         registry=registry,
         policies_dir=policies,
-        extra_args=["--config", str(weaver_config_file())],
+        extra_args=[
+            "--config",
+            str(weaver_config_file()),
+            "--advice-data",
+            advice_data,
+        ],
     ) as weaver:
         yield weaver

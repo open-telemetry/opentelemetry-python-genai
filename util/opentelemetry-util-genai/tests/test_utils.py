@@ -809,7 +809,7 @@ class TestTelemetryHandler(unittest.TestCase):
                 GenAI.GEN_AI_RESPONSE_ID: "error-response",
                 GenAI.GEN_AI_USAGE_INPUT_TOKENS: 11,
                 GenAI.GEN_AI_USAGE_OUTPUT_TOKENS: 22,
-                error_attributes.ERROR_TYPE: BoomError.__qualname__,
+                error_attributes.ERROR_TYPE: f"{BoomError.__module__}.{BoomError.__qualname__}",
             },
         )
 
@@ -848,7 +848,7 @@ class TestTelemetryHandler(unittest.TestCase):
                 server_attributes.SERVER_ADDRESS: "embed.example.com",
                 server_attributes.SERVER_PORT: 443,
                 "custom_embed_attr": "value",
-                error_attributes.ERROR_TYPE: BoomError.__qualname__,
+                error_attributes.ERROR_TYPE: f"{BoomError.__module__}.{BoomError.__qualname__}",
             },
         )
 
@@ -911,7 +911,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert span.status.description == "boom"
         assert (
             _get_span_attributes(span)[error_attributes.ERROR_TYPE]
-            == BoomError.__qualname__
+            == f"{BoomError.__module__}.{BoomError.__qualname__}"
         )
 
     def test_inference_finish_does_not_duplicate_start_attributes(self):

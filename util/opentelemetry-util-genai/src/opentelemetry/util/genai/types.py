@@ -10,7 +10,6 @@ from typing import (
     Any,
     Callable,
     Literal,
-    Type,
     TypeAlias,
     Union,
 )
@@ -38,12 +37,16 @@ class ContentCapturingMode(Enum):
 @dataclass()
 class GenericPart:
     """Used for provider-specific message part types that don't match
-    the standard MessagePart types defined in semantic conventions. Wrap custom
-    types with GenericPart(value=...) to explicitly opt-in to non-standard types.
-    This will be removed in a future version when all instrumentations use core types."""
+    the standard MessagePart types defined in semantic conventions. Set ``type``
+    to the provider-specific type discriminator and carry the payload in
+    ``value`` to explicitly opt-in to non-standard types.
+    This will be removed in a future version when all instrumentations use core types.
 
+    Per the semconv message schema, ``type`` is a free-form string (the
+    provider's own type name), not a fixed literal."""
+
+    type: str
     value: Any
-    type: Literal["generic"] = "generic"
 
 
 @dataclass()
@@ -54,7 +57,7 @@ class ToolCallRequest:
     and metrics, use ToolInvocation instead.
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallRequestPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     arguments: Any
@@ -68,7 +71,7 @@ class ToolCallResponse:
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallResponsePart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     response: Any
@@ -85,7 +88,7 @@ class ServerToolCall:
     web_search) can have well-defined schemas defined by the respective providers.
 
     This model is specified as part of semconv in `GenAI messages Python models - ServerToolCallPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     name: str
@@ -103,7 +106,7 @@ class ServerToolCallResponse:
     defined by the respective providers.
 
     This model is specified as part of semconv in `GenAI messages Python models - ServerToolCallResponsePart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     server_tool_call_response: Any
@@ -116,7 +119,7 @@ class Text:
     """Represents text content sent to or received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - TextPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     content: str
@@ -128,7 +131,7 @@ class Reasoning:
     """Represents reasoning/thinking content received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - ReasoningPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     content: str
@@ -154,7 +157,7 @@ class CompactionPart:
     type: Literal["compaction"] = "compaction"
 
 
-Modality = Literal["image", "video", "audio"]
+Modality = Literal["image", "video", "audio", "document"]
 
 
 @dataclass()
@@ -162,7 +165,7 @@ class Blob:
     """Represents blob binary data sent inline to the model
 
     This model is specified as part of semconv in `GenAI messages Python models - BlobPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     mime_type: str | None
@@ -176,7 +179,7 @@ class File:
     """Represents an external referenced file sent to the model by file id
 
     This model is specified as part of semconv in `GenAI messages Python models - FilePart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     mime_type: str | None
@@ -190,7 +193,7 @@ class Uri:
     """Represents an external referenced file sent to the model by URI
 
     This model is specified as part of semconv in `GenAI messages Python models - UriPart
-    <https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/non-normative/models.ipynb>`__.
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
     """
 
     mime_type: str | None
@@ -235,7 +238,7 @@ MessagePart = Union[
 
 
 FinishReason = Literal[
-    "content_filter", "error", "length", "stop", "tool_calls"
+    "content_filter", "error", "length", "stop", "tool_calls", "compaction"
 ]
 
 
@@ -252,20 +255,40 @@ class OutputMessage:
     finish_reason: str | FinishReason
 
 
-@dataclass
-class Error:
-    message: str
-    type: Type[BaseException]
-    # Pre-resolved error.type value
-    # When set it takes precedence over error.type value derived from ``type``.
-    # Kept separate from ``type`` to stay backwards compatible.
-    type_str: str | None = None
-
-
 # Callback an instrumentor may supply to derive the error.type attribute from a
 # provider exception.
-# Returns None to fall back to the default derived from ``Error.type``.
+# Returns None to fall back to the exception's fully qualified type name.
 ErrorTypeResolver: TypeAlias = Callable[[BaseException], "str | None"]
+
+
+@dataclass
+class Error:
+    message: str | None
+    type: str
+    """The ``error.type`` attribute value. A short, low-cardinality string (an
+    exception type name, an error code, etc.) — not necessarily a Python
+    exception class."""
+    exception: BaseException | None = None
+    """The originating exception, when the error was produced from one; ``None``
+    when built from an explicit ``type``/``message``."""
+
+    @classmethod
+    def from_exception(
+        cls,
+        exception: BaseException,
+        type_resolver: ErrorTypeResolver | None = None,
+    ) -> Error:
+        """Build an ``Error`` from an exception, deriving ``type`` and ``message``."""
+        from opentelemetry.util.genai.utils import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            fq_exception_type,
+        )
+
+        error_type = type_resolver(exception) if type_resolver else None
+        return cls(
+            message=str(exception),
+            type=error_type or fq_exception_type(exception),
+            exception=exception,
+        )
 
 
 def __getattr__(name: str) -> object:

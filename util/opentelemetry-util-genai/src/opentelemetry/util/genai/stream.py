@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import timeit
 from abc import ABCMeta, abstractmethod
 from types import TracebackType
 from typing import (
@@ -17,6 +18,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.util.genai._invocation import GenAIInvocation
 
     class _ObjectProxy:
         def __init__(self, wrapped: object) -> None: ...
@@ -64,11 +66,20 @@ class SyncStreamWrapper(
     internally by the wrapper lifecycle and are not part of the public API.
     """
 
-    def __init__(self, stream: _SyncStream[ChunkT]):
+    def __init__(
+        self,
+        stream: _SyncStream[ChunkT],
+        invocation: GenAIInvocation | None = None,
+    ):
         super().__init__(stream)
         self._self_stream = stream
         self._self_iterator = iter(stream)
         self._self_finalized = False
+        # Marks the request as streamed (gen_ai.request.stream) and receives
+        # per-chunk timing via _on_stream_chunk.
+        self._self_invocation = invocation
+        if invocation is not None:
+            invocation._request_stream = True
 
     def __enter__(self):
         return self
@@ -116,7 +127,12 @@ class SyncStreamWrapper(
         except Exception as error:
             self._finalize_failure(error)
             raise
+        invocation = self._self_invocation
+        chunk_at = timeit.default_timer() if invocation is not None else None
         self._process_chunk(chunk)
+        # Record after _process_chunk so response.model is on the metrics.
+        if invocation is not None and chunk_at is not None:
+            invocation._on_stream_chunk(chunk_at)
         return chunk
 
     def _finalize_success(self) -> None:
@@ -163,11 +179,20 @@ class AsyncStreamWrapper(
     are owned by this base class.
     """
 
-    def __init__(self, stream: _AsyncStream[ChunkT]):
+    def __init__(
+        self,
+        stream: _AsyncStream[ChunkT],
+        invocation: GenAIInvocation | None = None,
+    ):
         super().__init__(stream)
         self._self_stream = stream
         self._self_aiter = aiter(stream)
         self._self_finalized = False
+        # Marks the request as streamed (gen_ai.request.stream) and receives
+        # per-chunk timing via _on_stream_chunk.
+        self._self_invocation = invocation
+        if invocation is not None:
+            invocation._request_stream = True
 
     async def __aenter__(self):
         return self
@@ -222,7 +247,12 @@ class AsyncStreamWrapper(
             self._finalize_failure(error)
             raise
 
+        invocation = self._self_invocation
+        chunk_at = timeit.default_timer() if invocation is not None else None
         self._process_chunk(chunk)
+        # Record after _process_chunk so response.model is on the metrics.
+        if invocation is not None and chunk_at is not None:
+            invocation._on_stream_chunk(chunk_at)
         return chunk
 
     def _finalize_success(self) -> None:
