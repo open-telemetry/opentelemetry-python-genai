@@ -29,7 +29,10 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    ExpectedViolation,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -38,7 +41,19 @@ class InvokeAgentScenario(Scenario):
     # content) are covered by unit tests; conformance only validates the
     # telemetry shape against the semconv registry.
     expected_spans = {"invoke_agent": 1}
-    expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.operation.time_to_first_chunk",
+    )
+    # The streamed turn records time_to_first_chunk, whose required
+    # gen_ai.provider.name cannot be set: QwenPaw delegates model calls to
+    # AgentScope, so no provider applies to the invoke_agent invocation.
+    expected_violations = (
+        ExpectedViolation(
+            advice_id="required_attribute_not_present",
+            message_substring="gen_ai.provider.name",
+        ),
+    )
 
     def run(
         self,
