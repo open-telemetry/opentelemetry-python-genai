@@ -9,5 +9,7 @@
 | [opentelemetry-instrumentation-genai-llama-index](./opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19 | No | development
 | [opentelemetry-instrumentation-genai-openai](./opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0 | Yes | development
 | [opentelemetry-instrumentation-genai-openai-agents](./opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3 | No | development
+| [opentelemetry-instrumentation-genai-qwen-agent](./opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20 | No | development
+| [opentelemetry-instrumentation-genai-smolagents](./opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0 | No | development
 | [opentelemetry-instrumentation-genai-weaviate-client](./opentelemetry-instrumentation-genai-weaviate-client) | weaviate-client >= 3.0.0,<5.0.0 | No | development
 | [opentelemetry-instrumentation-google-genai](./opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | No | development

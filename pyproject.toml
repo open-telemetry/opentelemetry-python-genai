@@ -20,6 +20,8 @@ dependencies = [
   "opentelemetry-instrumentation-genai-llama-index[instruments]",
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
+  "opentelemetry-instrumentation-genai-qwen-agent[instruments]",
+  "opentelemetry-instrumentation-genai-smolagents[instruments]",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
 ]
 
@@ -51,6 +53,8 @@ opentelemetry-instrumentation-genai-langchain = { workspace = true }
 opentelemetry-instrumentation-genai-llama-index = { workspace = true }
 opentelemetry-instrumentation-genai-openai = { workspace = true }
 opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
+opentelemetry-instrumentation-genai-qwen-agent = { workspace = true }
+opentelemetry-instrumentation-genai-smolagents = { workspace = true }
 opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
 
 

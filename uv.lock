@@ -24,6 +24,8 @@ members = [
     "opentelemetry-instrumentation-genai-llama-index",
     "opentelemetry-instrumentation-genai-openai",
     "opentelemetry-instrumentation-genai-openai-agents",
+    "opentelemetry-instrumentation-genai-qwen-agent",
+    "opentelemetry-instrumentation-genai-smolagents",
     "opentelemetry-instrumentation-genai-weaviate-client",
     "opentelemetry-instrumentation-google-genai",
     "opentelemetry-python-genai",
@@ -985,6 +987,25 @@ wheels = [
 ]
 
 [[package]]
+name = "dashscope"
+version = "1.26.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "requests" },
+    { name = "rich" },
+    { name = "typer" },
+    { name = "websocket-client" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/6b/054a5d451ff6bd05f388bfc4d65e69261d364e2592447de29e26d5fdee4d/dashscope-1.26.5-py3-none-any.whl", hash = "sha256:95b74d539b6243306401867cf4dfa78a1cf72c0f666572ac63e111d4960b4ef7", size = 1532012, upload-time = "2026-07-31T07:40:49.005Z" },
+]
+
+[[package]]
 name = "dataclasses-json"
 version = "0.6.7"
 source = { registry = "https://pypi.org/simple" }
@@ -1067,6 +1088,17 @@ wheels = [
 ]
 
 [[package]]
+name = "dotenv"
+version = "0.9.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dotenv" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/b7/545d2c10c1fc15e48653c91efde329a790f2eecfbbf2bd16003b5db2bab0/dotenv-0.9.9-py2.py3-none-any.whl", hash = "sha256:29cf74a087b31dafdb5a446b6d7e11cbce8ed2741540e2339c69fbef92c94ce9", size = 1892, upload-time = "2025-02-19T22:15:01.647Z" },
+]
+
+[[package]]
 name = "durationpy"
 version = "0.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1082,6 +1114,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
+]
+
+[[package]]
+name = "eval-type-backport"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/15/273a4baf8248d6d76220723c3caf039d283774b31a7c46ba686120145b76/eval_type_backport-0.4.0.tar.gz", hash = "sha256:8397d25e6524c2e67b9576bb0636be27dea2192017711220c534ec2de921e9b0", size = 10260, upload-time = "2026-06-02T13:22:06.059Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/a7/bb99bf5e6f78736ddb53480f2c3ff3702ffe2196a7c5e1661c03081d398e/eval_type_backport-0.4.0-py3-none-any.whl", hash = "sha256:ad5e2a8db71b6696a56eafb938b0f5a337d3217f256b8e158b469422b4772b20", size = 6432, upload-time = "2026-06-02T13:22:04.827Z" },
 ]
 
 [[package]]
@@ -1954,6 +1995,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/85/3d/bbe62f3d0c05a689c711cff57b2e3ac3d3e526380adb7c781989f075115c/json5-0.10.0.tar.gz", hash = "sha256:e66941c8f0a02026943c52c2eb34ebeb2a6f819a0be05920a6f5243cd30fd559", size = 48202, upload-time = "2024-11-26T19:56:37.823Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/42/797895b952b682c3dafe23b1834507ee7f02f4d6299b65aaa61425763278/json5-0.10.0-py3-none-any.whl", hash = "sha256:19b23410220a7271e8377f81ba8aacba2fdd56947fbb137ee5977cbe1f5e8dfa", size = 34049, upload-time = "2024-11-26T19:56:36.649Z" },
+]
+
+[[package]]
+name = "jsonlines"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/35/87/bcda8e46c88d0e34cad2f09ee2d0c7f5957bccdb9791b0b934ec84d84be4/jsonlines-4.0.0.tar.gz", hash = "sha256:0c6d2c09117550c089995247f605ae4cf77dd1533041d366351f6f298822ea74", size = 11359, upload-time = "2023-09-01T12:34:44.187Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl", hash = "sha256:185b334ff2ca5a91362993f42e83588a360cf95ce4b71a73548502bda52a7c55", size = 8701, upload-time = "2023-09-01T12:34:42.563Z" },
 ]
 
 [[package]]
@@ -3431,6 +3484,56 @@ requires-dist = [
 provides-extras = ["instruments"]
 
 [[package]]
+name = "opentelemetry-instrumentation-genai-qwen-agent"
+source = { editable = "instrumentation/opentelemetry-instrumentation-genai-qwen-agent" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-genai" },
+]
+
+[package.optional-dependencies]
+instruments = [
+    { name = "qwen-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "opentelemetry-api", specifier = "~=1.43" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
+    { name = "qwen-agent", marker = "extra == 'instruments'", specifier = ">=0.0.20" },
+]
+provides-extras = ["instruments"]
+
+[[package]]
+name = "opentelemetry-instrumentation-genai-smolagents"
+source = { editable = "instrumentation/opentelemetry-instrumentation-genai-smolagents" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-genai" },
+]
+
+[package.optional-dependencies]
+instruments = [
+    { name = "smolagents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "opentelemetry-api", specifier = "~=1.43" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
+    { name = "smolagents", marker = "extra == 'instruments'", specifier = ">=1.24.0" },
+]
+provides-extras = ["instruments"]
+
+[[package]]
 name = "opentelemetry-instrumentation-genai-weaviate-client"
 source = { editable = "instrumentation/opentelemetry-instrumentation-genai-weaviate-client" }
 dependencies = [
@@ -3507,6 +3610,8 @@ dependencies = [
     { name = "opentelemetry-instrumentation-genai-llama-index", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-openai", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-openai-agents", extra = ["instruments"] },
+    { name = "opentelemetry-instrumentation-genai-qwen-agent", extra = ["instruments"] },
+    { name = "opentelemetry-instrumentation-genai-smolagents", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-weaviate-client", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-google-genai", extra = ["instruments"] },
     { name = "opentelemetry-sdk" },
@@ -3538,6 +3643,8 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-genai-llama-index", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-llama-index" },
     { name = "opentelemetry-instrumentation-genai-openai", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-openai" },
     { name = "opentelemetry-instrumentation-genai-openai-agents", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-openai-agents" },
+    { name = "opentelemetry-instrumentation-genai-qwen-agent", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-qwen-agent" },
+    { name = "opentelemetry-instrumentation-genai-smolagents", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-smolagents" },
     { name = "opentelemetry-instrumentation-genai-weaviate-client", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-weaviate-client" },
     { name = "opentelemetry-instrumentation-google-genai", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-google-genai" },
     { name = "opentelemetry-sdk" },
@@ -4869,6 +4976,28 @@ wheels = [
 ]
 
 [[package]]
+name = "qwen-agent"
+version = "0.0.34"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dashscope" },
+    { name = "dotenv" },
+    { name = "eval-type-backport" },
+    { name = "json5" },
+    { name = "jsonlines" },
+    { name = "jsonschema" },
+    { name = "openai" },
+    { name = "pillow" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0a/e2/cfe83936675f4cf098c569d9aba037168393d8849ef08d4970770ef50ec5/qwen_agent-0.0.34.tar.gz", hash = "sha256:ee47a31bf0e75c3ed870fdd903c6d348d68b73ca6e2b9f3d99b55e792d0a4b2c", size = 7061049, upload-time = "2026-02-16T08:18:45.777Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/c6/2d1bb8c679dd89565a56f4edc99ecb690e2c770ccaf403f8872e3cede3f3/qwen_agent-0.0.34-py3-none-any.whl", hash = "sha256:195264f9c1880f60f23781805d69bb3ffadfe944b7b70358f7115a0dd4bc59b7", size = 7136923, upload-time = "2026-02-16T08:18:42.259Z" },
+]
+
+[[package]]
 name = "referencing"
 version = "0.37.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5341,6 +5470,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "smolagents"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "jinja2" },
+    { name = "pillow" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/85/3ca67bb57743434ac321821ea54cbdbf0d3dcc8d55f37199709e83141340/smolagents-1.26.0.tar.gz", hash = "sha256:4ec92313265f9cfbcabfc88e192b4bc4505f8475dc5f33dc872062fc567037bd", size = 239034, upload-time = "2026-05-29T05:08:44.732Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/8c/72bd5edc13288e3f27d4d9c1ef65adc0a68c950ee1fc6d3be270e1110f6c/smolagents-1.26.0-py3-none-any.whl", hash = "sha256:70e1cfb1576f782da93190ee31d9bb2659e5ca4bd84fda0c412e1f20498f28b6", size = 161466, upload-time = "2026-05-29T05:08:43.28Z" },
 ]
 
 [[package]]
