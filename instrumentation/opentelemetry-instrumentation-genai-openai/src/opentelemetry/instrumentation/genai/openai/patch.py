@@ -23,6 +23,7 @@ from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
     create_chat_invocation,
+    get_served_model,
     get_server_address_and_port,
     get_value,
     is_streaming,
@@ -167,7 +168,11 @@ def _set_response_properties(
         # non-streaming path, so it has no side effects on the caller's stream.
         result = result.parse()
 
-    if getattr(result, "model", None):
+    served_model = get_served_model(getattr(result, "headers", None))
+    
+    if served_model:
+        chat_invocation.response_model_name = served_model
+    elif getattr(result, "model", None):
         chat_invocation.response_model_name = result.model
 
     if getattr(result, "choices", None):
@@ -220,7 +225,10 @@ def _set_embeddings_response_properties(
     invocation: EmbeddingInvocation,
     result: CreateEmbeddingResponse,
 ) -> None:
-    if getattr(result, "model", None):
+    served_model = get_served_model(getattr(result, "headers", None))
+    if served_model:
+        invocation.response_model_name = served_model
+    elif getattr(result, "model", None):
         invocation.response_model_name = result.model
 
     # Set embeddings dimensions if we can determine it from the response
