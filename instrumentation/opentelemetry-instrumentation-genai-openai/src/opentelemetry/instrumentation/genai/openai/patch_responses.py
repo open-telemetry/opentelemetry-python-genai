@@ -3,9 +3,8 @@
 
 from __future__ import annotations
 
-import inspect
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Union, cast
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Union, cast
 
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
@@ -13,7 +12,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import FetchResponseInvocation
 
-from ._raw_response import ParsableResponse, wrap_stream_result
+from ._raw_response import wrap_stream_result
 from .response_extractors import (
     apply_request_attributes,
     extract_params,
@@ -54,39 +53,6 @@ ResponseStreamResult = Union["OpenAIStream[Any]", "ResponseStream[Any]"]
 AsyncResponseStreamResult = Union[
     "OpenAIAsyncStream[Any]", "AsyncResponseStream[Any]"
 ]
-
-# Set by the SDK's ``with_streaming_response`` helpers to mark a request whose
-# body the caller reads lazily.
-_RAW_RESPONSE_HEADER = "x-stainless-raw-response"
-
-
-def _is_streamed_raw_response(kwargs: dict[str, Any]) -> bool:
-    extra_headers = kwargs.get("extra_headers")
-    if not isinstance(extra_headers, Mapping):
-        return False
-    return any(
-        key.lower() == _RAW_RESPONSE_HEADER and value == "stream"
-        for key, value in extra_headers.items()
-    )
-
-
-def _parse_raw_response(result: object, kwargs: dict[str, Any]) -> object:
-    """Return the payload of a non-streaming ``with_raw_response`` result.
-
-    A non-streaming raw response has already read its body and the SDK memoizes
-    ``parse()``, so deserializing it here does not change what the caller sees.
-    On the async client ``parse()`` returns an awaitable, which the caller
-    awaits.
-
-    ``with_streaming_response`` hands back a raw response whose body has *not*
-    been read yet; parsing it would consume the body before the caller asks for
-    it, so those calls are left alone.
-    """
-    if _is_streamed_raw_response(kwargs) or not isinstance(
-        result, ParsableResponse
-    ):
-        return result
-    return result.parse()
 
 
 def responses_create(
@@ -133,7 +99,7 @@ def responses_create(
                 )
 
             set_invocation_response_attributes(
-                invocation, result, capture_content
+                invocation, result, capture_content, kwargs
             )
             error = get_response_error(result)
             if error is not None:
@@ -206,7 +172,7 @@ def async_responses_create(
                 )
 
             set_invocation_response_attributes(
-                invocation, result, capture_content
+                invocation, result, capture_content, kwargs
             )
             error = get_response_error(result)
             if error is not None:
@@ -308,8 +274,9 @@ def responses_retrieve(
 
             set_fetch_response_attributes(
                 invocation,
-                _parse_raw_response(result, kwargs),
+                result,
                 capture_content,
+                kwargs,
             )
             invocation.stop()
             return result
@@ -378,10 +345,9 @@ def async_responses_retrieve(
                     capture_content,
                 )
 
-            parsed = _parse_raw_response(result, kwargs)
-            if inspect.isawaitable(parsed):
-                parsed = await parsed
-            set_fetch_response_attributes(invocation, parsed, capture_content)
+            set_fetch_response_attributes(
+                invocation, result, capture_content, kwargs
+            )
             invocation.stop()
             return result
         except Exception as error:

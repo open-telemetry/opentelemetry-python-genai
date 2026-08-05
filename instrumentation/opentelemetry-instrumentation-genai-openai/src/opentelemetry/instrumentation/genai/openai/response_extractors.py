@@ -564,15 +564,42 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
     )
 
 
+_RAW_RESPONSE_HEADER = "x-stainless-raw-response"
+
+
+def _is_streamed_raw_response(
+    request_kwargs: dict[str, object] | None,
+) -> bool:
+    if request_kwargs is None:
+        return False
+    extra_headers = request_kwargs.get("extra_headers")
+    if not isinstance(extra_headers, Mapping):
+        return False
+    return any(
+        key.lower() == _RAW_RESPONSE_HEADER and value == "stream"
+        for key, value in extra_headers.items()
+    )
+
+
+def _parse_raw_response(
+    response: object,
+    request_kwargs: dict[str, object] | None,
+) -> object:
+    """Return the payload of a non-streaming ``with_raw_response`` result."""
+    if _is_streamed_raw_response(request_kwargs) or not isinstance(
+        response, ParsableResponse
+    ):
+        return response
+    return response.parse()
+
+
 def set_invocation_response_attributes(
     invocation,
     response: object,
     capture_content: bool,
+    request_kwargs: dict[str, object] | None = None,
 ) -> None:
-    if isinstance(response, ParsableResponse):
-        # with_raw_response: safe to parse() here since this is the
-        # non-streaming path, so it has no side effects on the caller's stream.
-        response = response.parse()
+    response = _parse_raw_response(response, request_kwargs)
 
     if Response is None or not isinstance(response, Response):
         return
@@ -605,6 +632,7 @@ def set_fetch_response_attributes(
     invocation,
     response: object,
     capture_content: bool,
+    request_kwargs: dict[str, object] | None = None,
 ) -> None:
     """Record a fetched response on a ``fetch_response`` invocation.
 
@@ -613,6 +641,8 @@ def set_fetch_response_attributes(
     The original input messages are not part of the fetched response either, so
     only the system instructions and output messages it carries are captured.
     """
+    response = _parse_raw_response(response, request_kwargs)
+
     if Response is None or not isinstance(response, Response):
         return
 
