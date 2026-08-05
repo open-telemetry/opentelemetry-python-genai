@@ -53,6 +53,8 @@ class FetchResponseInvocation(GenAIInvocation):
     - error.type: Error type when the fetch itself failed (Conditionally Required)
     - gen_ai.request.stream_cursor: Set from ``stream_cursor`` when the fetch
       resumes a streamed response from a prior position (Conditionally Required)
+    - gen_ai.request.stream: Set to true when the fetched response is streamed
+      (Conditionally Required)
     - server.port: Set only when ``server_port`` is provided (Conditionally Required)
     - gen_ai.response.finish_reasons: Outcome of the original generation
       (Recommended)
@@ -81,6 +83,7 @@ class FetchResponseInvocation(GenAIInvocation):
         provider: str,
         *,
         response_id: str,
+        request_stream: bool | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
@@ -100,6 +103,7 @@ class FetchResponseInvocation(GenAIInvocation):
         )
         self._provider: str = provider
         self._response_id: str = response_id
+        self._request_stream = request_stream
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
         self.response_model_name: str | None = None
@@ -126,6 +130,11 @@ class FetchResponseInvocation(GenAIInvocation):
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
             GenAI.GEN_AI_PROVIDER_NAME: self._provider,
             GenAI.GEN_AI_RESPONSE_ID: self._response_id,
+            **(
+                {GenAI.GEN_AI_REQUEST_STREAM: self._request_stream}
+                if self._request_stream is not None
+                else {}
+            ),
             **{k: v for k, v in optional_attrs if v is not None},
         }
 

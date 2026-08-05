@@ -123,6 +123,14 @@ class TelemetryHandlerFetchResponseTest(_FetchResponseTestBase):
         self.assertEqual(invocation.response_id, RESPONSE_ID)
         invocation.stop()
 
+    def test_request_stream_is_set_at_span_creation(self) -> None:
+        invocation = self._fetch_response(request_stream=True)
+
+        self.assertIs(
+            invocation.span.attributes[GenAI.GEN_AI_REQUEST_STREAM], True
+        )
+        invocation.stop()
+
     def test_stop_sets_server_address_and_port(self) -> None:
         self._fetch_response(
             server_address="api.openai.com", server_port=8080
@@ -169,6 +177,7 @@ class TelemetryHandlerFetchResponseTest(_FetchResponseTestBase):
         self.assertNotIn(GenAI.GEN_AI_RESPONSE_MODEL, attrs)
         self.assertNotIn(GEN_AI_RESPONSE_STATUS, attrs)
         self.assertNotIn(GenAI.GEN_AI_RESPONSE_FINISH_REASONS, attrs)
+        self.assertNotIn(GenAI.GEN_AI_REQUEST_STREAM, attrs)
         self.assertNotIn(GEN_AI_REQUEST_STREAM_CURSOR, attrs)
         self.assertNotIn(server_attributes.SERVER_ADDRESS, attrs)
         self.assertNotIn(server_attributes.SERVER_PORT, attrs)

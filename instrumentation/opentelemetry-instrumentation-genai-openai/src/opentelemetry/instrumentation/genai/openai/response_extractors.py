@@ -567,7 +567,7 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
 _RAW_RESPONSE_HEADER = "x-stainless-raw-response"
 
 
-def _is_streamed_raw_response(
+def is_streamed_raw_response(
     request_kwargs: dict[str, object] | None,
 ) -> bool:
     if request_kwargs is None:
@@ -586,7 +586,7 @@ def _parse_raw_response(
     request_kwargs: dict[str, object] | None,
 ) -> object:
     """Return the payload of a non-streaming ``with_raw_response`` result."""
-    if _is_streamed_raw_response(request_kwargs) or not isinstance(
+    if is_streamed_raw_response(request_kwargs) or not isinstance(
         response, ParsableResponse
     ):
         return response
