@@ -92,7 +92,7 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
-def _decode_base64(data: str) -> Optional[bytes]:
+def _decode_base64(data: str) -> bytes | None:
     # Skip the decode entirely when message content is not being captured;
     # the resulting bytes would never be emitted under ``NO_CONTENT``.
     if get_content_capturing_mode() is ContentCapturingMode.NO_CONTENT:
@@ -103,7 +103,7 @@ def _decode_base64(data: str) -> Optional[bytes]:
         return None
 
 
-def _media_part(item: dict[str, Any]) -> Optional[MessagePart]:
+def _media_part(item: dict[str, Any]) -> MessagePart | None:
     """Convert a LangChain multimodal image content block into a media part.
 
     Handles the two shapes LangChain chat models accept:
@@ -118,7 +118,7 @@ def _media_part(item: dict[str, Any]) -> Optional[MessagePart]:
     block_type = item.get("type")
     if block_type == "image_url":
         image_url = item.get("image_url")
-        url: Optional[str] = None
+        url: str | None = None
         if isinstance(image_url, str):
             url = image_url
         elif isinstance(image_url, dict):
@@ -154,7 +154,7 @@ def _media_part(item: dict[str, Any]) -> Optional[MessagePart]:
     return None
 
 
-def _image_from_url(url: str) -> Optional[MessagePart]:
+def _image_from_url(url: str) -> MessagePart | None:
     """Return a :class:`Blob` for a ``data:`` URL, else a :class:`Uri`."""
 
     if url.startswith("data:"):
