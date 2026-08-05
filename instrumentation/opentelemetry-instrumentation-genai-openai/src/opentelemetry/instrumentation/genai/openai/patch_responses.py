@@ -101,7 +101,7 @@ def responses_create(
             set_invocation_response_attributes(
                 invocation, result, capture_content, kwargs
             )
-            error = get_response_error(result)
+            error = get_response_error(result, kwargs)
             if error is not None:
                 invocation.fail(error)
             else:
@@ -174,7 +174,7 @@ def async_responses_create(
             set_invocation_response_attributes(
                 invocation, result, capture_content, kwargs
             )
-            error = get_response_error(result)
+            error = get_response_error(result, kwargs)
             if error is not None:
                 invocation.fail(error)
             else:

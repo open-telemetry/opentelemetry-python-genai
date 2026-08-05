@@ -227,6 +227,36 @@ def test_get_response_error_returns_error_for_failed_response(loaded_module):
     assert error.message == "boom"
 
 
+def test_get_response_error_parses_raw_response(loaded_module):
+    response = _make_response(
+        status="failed",
+        error={"code": "server_error", "message": "boom"},
+    )
+    raw_response = SimpleNamespace(parse=mock.Mock(return_value=response))
+
+    error = loaded_module.get_response_error(raw_response)
+
+    assert error is not None
+    assert error.type == "server_error"
+    raw_response.parse.assert_called_once_with()
+
+
+def test_get_response_error_keeps_streaming_raw_response_lazy(loaded_module):
+    raw_response = SimpleNamespace(parse=mock.Mock())
+
+    error = loaded_module.get_response_error(
+        raw_response,
+        {
+            "extra_headers": {
+                "X-Stainless-Raw-Response": "stream",
+            }
+        },
+    )
+
+    assert error is None
+    raw_response.parse.assert_not_called()
+
+
 def test_get_response_error_none_for_incomplete_response(loaded_module):
     # Incomplete is a finish reason, not an error.
     response = _make_response(

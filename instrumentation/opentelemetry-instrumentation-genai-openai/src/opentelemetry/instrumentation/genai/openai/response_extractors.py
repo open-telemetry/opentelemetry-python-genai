@@ -460,13 +460,18 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
     return list(dict.fromkeys(finish_reasons))
 
 
-def get_response_error(response: Response | None) -> Error | None:
+def get_response_error(
+    response: object,
+    request_kwargs: dict[str, object] | None = None,
+) -> Error | None:
     """Return an ``Error`` when the response failed, else ``None``.
 
     A failed response carries a ``ResponseError`` (``code`` + ``message``).
     Incomplete responses (``incomplete_details``) are *not* errors — they
     surface as a finish reason instead.
     """
+    response = _parse_raw_response(response, request_kwargs)
+
     if Response is None or Error is None or not isinstance(response, Response):
         return None
     error = response.error
