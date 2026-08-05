@@ -193,18 +193,16 @@ class OpenAIInstrumentor(BaseInstrumentor):
             # retrieve() fetches a stored response by id. No inference happens
             # and no tokens are consumed, so it is traced as a fetch_response
             # operation rather than through the create wrappers.
-            if hasattr(responses_module.Responses, "retrieve"):
-                wrap_function_wrapper(
-                    "openai.resources.responses.responses",
-                    "Responses.retrieve",
-                    responses_retrieve(handler),
-                )
-            if hasattr(responses_module.AsyncResponses, "retrieve"):
-                wrap_function_wrapper(
-                    "openai.resources.responses.responses",
-                    "AsyncResponses.retrieve",
-                    async_responses_retrieve(handler),
-                )
+            wrap_function_wrapper(
+                "openai.resources.responses.responses",
+                "Responses.retrieve",
+                responses_retrieve(handler),
+            )
+            wrap_function_wrapper(
+                "openai.resources.responses.responses",
+                "AsyncResponses.retrieve",
+                async_responses_retrieve(handler),
+            )
 
     def _uninstrument(self, **kwargs):
         import openai  # pylint: disable=import-outside-toplevel
@@ -222,10 +220,8 @@ class OpenAIInstrumentor(BaseInstrumentor):
             unwrap(responses_module.Responses, "stream")
             unwrap(responses_module.AsyncResponses, "create")
             unwrap(responses_module.AsyncResponses, "stream")
-            if hasattr(responses_module.Responses, "retrieve"):
-                unwrap(responses_module.Responses, "retrieve")
-            if hasattr(responses_module.AsyncResponses, "retrieve"):
-                unwrap(responses_module.AsyncResponses, "retrieve")
+            unwrap(responses_module.Responses, "retrieve")
+            unwrap(responses_module.AsyncResponses, "retrieve")
 
 
 def _get_responses_module():
