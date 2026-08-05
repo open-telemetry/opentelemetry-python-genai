@@ -289,8 +289,8 @@ def _finish_reason_from_status(
 
 
 def get_tool_definitions_from_response(
-    response: "Response | None",
-) -> list["ToolDefinition"] | None:
+    response: Response | None,
+) -> list[ToolDefinition] | None:
     """Return the tool definitions carried on a fetched response.
 
     Responses API tools are flat -- a function tool holds ``name``,
@@ -311,7 +311,7 @@ def get_tool_definitions_from_response(
     if not tools:
         return None
 
-    definitions: list["ToolDefinition"] = []
+    definitions: list[ToolDefinition] = []
     for tool in tools:
         tool_type = get_property_value(tool, "type")
         if not isinstance(tool_type, str):

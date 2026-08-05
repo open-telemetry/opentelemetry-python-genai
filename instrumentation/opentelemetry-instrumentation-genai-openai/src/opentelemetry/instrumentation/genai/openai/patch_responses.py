@@ -209,7 +209,7 @@ def _get_stream_cursor(kwargs: dict[str, Any]) -> str | None:
 
 def _start_fetch_response_invocation(
     handler: TelemetryHandler,
-    instance: "Responses | AsyncResponses",
+    instance: Responses | AsyncResponses,
     response_id: str,
     kwargs: dict[str, Any],
 ) -> FetchResponseInvocation:
@@ -250,7 +250,7 @@ def responses_retrieve(
 
     def traced_method(
         wrapped: Callable[..., Union[ResponseResult, ResponseStreamResult]],
-        instance: "Responses",
+        instance: Responses,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Union[
@@ -323,7 +323,7 @@ def async_responses_retrieve(
             ...,
             Awaitable[Union[ResponseResult, AsyncResponseStreamResult]],
         ],
-        instance: "AsyncResponses",
+        instance: AsyncResponses,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Union[

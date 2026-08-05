@@ -84,8 +84,8 @@ def _set_response_attributes(
 
 
 def _set_fetch_response_attributes(
-    invocation: "GenAIInvocation",
-    result: "ParsedResponse[TextFormatT] | Response | None",
+    invocation: GenAIInvocation,
+    result: ParsedResponse[TextFormatT] | Response | None,
     capture_content: bool,
 ) -> None:
     if set_fetch_response_attributes is None:
@@ -157,7 +157,7 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         self._self_response_telemetry_finalized = True
 
     def _apply_response_attributes(
-        self, result: "ParsedResponse[TextFormatT] | Response | None"
+        self, result: ParsedResponse[TextFormatT] | Response | None
     ) -> None:
         """Record the response on the invocation. Overridden per operation."""
         _set_response_attributes(
@@ -165,7 +165,7 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         )
 
     def _on_response_failed(
-        self, response: "ParsedResponse[TextFormatT] | Response | None"
+        self, response: ParsedResponse[TextFormatT] | Response | None
     ) -> None:
         """Handle a ``response.failed`` event. Overridden per operation."""
         self._apply_response_attributes(response)
@@ -282,18 +282,18 @@ class _FetchResponseStreamMixin(Generic[TextFormatT]):
     a failure of this fetch.
     """
 
-    _self_invocation: "GenAIInvocation"
+    _self_invocation: GenAIInvocation
     _self_capture_content: bool
 
     def _apply_response_attributes(
-        self, result: "ParsedResponse[TextFormatT] | Response | None"
+        self, result: ParsedResponse[TextFormatT] | Response | None
     ) -> None:
         _set_fetch_response_attributes(
             self._self_invocation, result, self._self_capture_content
         )
 
     def _on_response_failed(
-        self, response: "ParsedResponse[TextFormatT] | Response | None"
+        self, response: ParsedResponse[TextFormatT] | Response | None
     ) -> None:
         self._stop(response)
 
