@@ -7,11 +7,10 @@ from __future__ import annotations
 
 import functools
 import logging
+from collections.abc import Awaitable, Callable
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
     Protocol,
     Union,
     runtime_checkable,
@@ -172,7 +171,7 @@ class StreamWrapperFactory(Protocol):
 
 def wrap_stream_result(
     wrapper_cls: StreamWrapperFactory,
-    result: Union[RawResponseLike, AnyStream],
+    result: RawResponseLike | AnyStream,
     invocation: GenAIInvocation,
     capture_content: bool,
 ) -> object:

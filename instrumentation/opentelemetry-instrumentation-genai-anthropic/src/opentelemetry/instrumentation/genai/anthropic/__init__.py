@@ -12,7 +12,9 @@ Usage
 
 .. code-block:: python
 
-    from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
+    from opentelemetry.instrumentation.genai.anthropic import (
+        AnthropicInstrumentor,
+    )
     import anthropic
 
     # Enable instrumentation
@@ -23,7 +25,7 @@ Usage
     response = client.messages.create(
         model="claude-3-5-sonnet-20241022",
         max_tokens=1024,
-        messages=[{"role": "user", "content": "Hello!"}]
+        messages=[{"role": "user", "content": "Hello!"}],
     )
 
 Configuration
@@ -36,7 +38,8 @@ API
 ---
 """
 
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from wrapt import wrap_function_wrapper
 
@@ -61,7 +64,7 @@ def _is_parse_supported() -> bool:
     SDK release; create() and stream() are always present.
     """
     try:
-        from anthropic.resources.messages import (  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        from anthropic.resources.messages import (  # pylint: disable=import-outside-toplevel
             AsyncMessages,
             Messages,
         )
@@ -153,7 +156,7 @@ class AnthropicInstrumentor(BaseInstrumentor):
 
         This removes all patches applied during instrumentation.
         """
-        import anthropic  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        import anthropic  # pylint: disable=import-outside-toplevel
 
         unwrap(
             anthropic.resources.messages.Messages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]

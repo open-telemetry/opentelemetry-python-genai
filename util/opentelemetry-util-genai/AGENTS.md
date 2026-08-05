@@ -25,7 +25,9 @@ applicable ones.
 Every new operation type must follow this pattern:
 
 ```python
-invocation = handler.inference(provider, request_model, server_address=..., server_port=...)
+invocation = handler.inference(
+    provider, request_model, server_address=..., server_port=...
+)
 invocation.temperature = ...
 try:
     response = client.call(...)
@@ -87,9 +89,12 @@ class MyStreamWrapper(SyncStreamWrapper[Chunk]):
         self._self_invocation = invocation
         ...
 
-    def _process_chunk(self, chunk): ...      # accumulate state
-    def _on_stream_end(self): self._self_invocation.stop()
-    def _on_stream_error(self, error): self._self_invocation.fail(error)
+    def _process_chunk(self, chunk): ...  # accumulate state
+    def _on_stream_end(self):
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error):
+        self._self_invocation.fail(error)
 ```
 
 The hooks are called internally by the wrapper lifecycle.

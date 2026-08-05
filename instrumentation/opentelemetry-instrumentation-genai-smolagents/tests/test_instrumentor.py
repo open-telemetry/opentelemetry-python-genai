@@ -83,7 +83,7 @@ def test_uninstrument_without_instrument() -> None:
     # also be a no-op on its own: the rollback path in _instrument() calls it
     # after a partial patch.
     SmolagentsInstrumentor().uninstrument()
-    SmolagentsInstrumentor()._uninstrument()  # noqa: SLF001
+    SmolagentsInstrumentor()._uninstrument()
 
 
 def test_instrument_with_no_providers() -> None:

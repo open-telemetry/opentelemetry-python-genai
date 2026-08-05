@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Sequence, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Optional, cast
+from typing import Any, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -65,9 +65,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         inputs: dict[str, Any],
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
         operation = classify_chain_run(
@@ -151,7 +151,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         outputs: dict[str, Any],
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
@@ -174,7 +174,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
@@ -195,9 +195,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         messages: list[list[BaseMessage]],
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         if "invocation_params" in kwargs:
@@ -209,7 +209,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             params = kwargs
 
         # Resolve request_model from common provider-specific keys.
-        request_model: Optional[str] = None
+        request_model: str | None = None
         for model_tag in (
             "model_name",  # ChatOpenAI / ChatAnthropic
             "model_id",  # ChatBedrock
@@ -226,8 +226,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if request_model is None:
             return
 
-        if request_model.startswith("models/"):
-            request_model = request_model[7:]
+        request_model = request_model.removeprefix("models/")
 
         # Initialize variables with default values to avoid "possibly unbound" errors
         top_p = None
@@ -500,14 +499,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
     def on_tool_start(
         self,
-        serialized: Optional[dict[str, Any]],
+        serialized: dict[str, Any] | None,
         input_str: str,
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[dict[str, Any]] = None,
-        inputs: Optional[dict[str, Any]] = None,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         name = "unknown"
@@ -537,7 +536,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         output: Any,
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
+        parent_run_id: UUID | None = None,
         **_kwargs: Any,
     ) -> None:
         tool_invocation = self._invocation_manager.get_invocation(run_id)
@@ -554,7 +553,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
+        parent_run_id: UUID | None = None,
         **_: Any,
     ) -> None:
         tool_invocation = self._invocation_manager.get_invocation(run_id)
@@ -570,9 +569,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         query: str,
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
         meta = metadata or {}
@@ -591,7 +590,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         documents: Sequence[Document],
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
@@ -618,7 +617,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         error: BaseException,
         *,
         run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
+        parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
@@ -633,8 +632,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def _find_nearest_agent(
-        self, run_id: Optional[UUID]
-    ) -> Optional[AgentInvocation]:
+        self, run_id: UUID | None
+    ) -> AgentInvocation | None:
         current = run_id
         visited: set[UUID] = set()
         while current is not None and current not in visited:

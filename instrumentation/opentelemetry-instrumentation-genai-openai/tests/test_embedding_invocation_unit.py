@@ -227,7 +227,7 @@ def test_extraction_error_is_swallowed_and_does_not_break_wrapped_call(
         usage = SimpleNamespace(prompt_tokens=1)
 
         @property
-        def data(self) -> Any:  # noqa: D401
+        def data(self) -> Any:
             raise RuntimeError("unexpected SDK shape")
 
     bad_response = _BadResponse()

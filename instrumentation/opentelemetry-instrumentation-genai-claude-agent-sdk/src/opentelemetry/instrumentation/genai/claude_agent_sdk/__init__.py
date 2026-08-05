@@ -13,14 +13,23 @@ Usage
 
 .. code-block:: python
 
-    from opentelemetry.instrumentation.genai.claude_agent_sdk import ClaudeAgentSDKInstrumentor
-    from claude_agent_sdk import ClaudeAgentOptions, AgentDefinition, AssistantMessage, TextBlock, query
+    from opentelemetry.instrumentation.genai.claude_agent_sdk import (
+        ClaudeAgentSDKInstrumentor,
+    )
+    from claude_agent_sdk import (
+        ClaudeAgentOptions,
+        AgentDefinition,
+        AssistantMessage,
+        TextBlock,
+        query,
+    )
 
     # Enable instrumentation
     ClaudeAgentSDKInstrumentor().instrument()
 
     # Use Claude Agent SDK normally
     import anyio
+
 
     async def main():
         options = ClaudeAgentOptions(
@@ -40,6 +49,7 @@ Usage
                     if isinstance(block, TextBlock):
                         print(block.text)
 
+
     anyio.run(main)
 
 Configuration
@@ -52,7 +62,8 @@ API
 ---
 """
 
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from opentelemetry.instrumentation.genai.claude_agent_sdk.package import (
     _instruments,

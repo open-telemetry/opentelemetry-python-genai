@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from opentelemetry.instrumentation.genai.crewai.package import _instruments
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor

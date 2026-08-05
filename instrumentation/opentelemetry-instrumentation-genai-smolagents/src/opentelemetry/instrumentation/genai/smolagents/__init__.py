@@ -38,7 +38,8 @@ API
 
 from __future__ import annotations
 
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook

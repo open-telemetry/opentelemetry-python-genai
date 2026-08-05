@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import patch
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -315,7 +315,7 @@ class TelemetryHandlerMetricsTest(TestBase):
 
     def _harvest_metrics(
         self,
-    ) -> Dict[str, List[Any]]:
+    ) -> dict[str, list[Any]]:
         """Returns (metrics_by_name, resource_metrics).
 
         metrics_by_name maps metric name to list of data points.
@@ -323,7 +323,7 @@ class TelemetryHandlerMetricsTest(TestBase):
         assertions (e.g. schema_url).
         """
         metrics = self.get_sorted_metrics()
-        metrics_by_name: Dict[str, List[Any]] = {}
+        metrics_by_name: dict[str, list[Any]] = {}
         for metric in metrics or []:
             points = metric.data.data_points or []
             metrics_by_name.setdefault(metric.name, []).extend(points)
@@ -486,9 +486,9 @@ class TelemetryHandlerMetricsTest(TestBase):
 
 
 class TelemetryHandlerToolMetricsTest(TestBase):
-    def _harvest_metrics(self) -> Dict[str, List[Any]]:
+    def _harvest_metrics(self) -> dict[str, list[Any]]:
         metrics = self.get_sorted_metrics()
-        metrics_by_name: Dict[str, List[Any]] = {}
+        metrics_by_name: dict[str, list[Any]] = {}
         for metric in metrics or []:
             points = metric.data.data_points or []
             metrics_by_name.setdefault(metric.name, []).extend(points)
@@ -552,9 +552,9 @@ class TelemetryHandlerToolMetricsTest(TestBase):
 
 
 class TelemetryHandlerRetrievalMetricsTest(TestBase):
-    def _harvest_metrics(self) -> Dict[str, List[Any]]:
+    def _harvest_metrics(self) -> dict[str, list[Any]]:
         metrics = self.get_sorted_metrics()
-        metrics_by_name: Dict[str, List[Any]] = {}
+        metrics_by_name: dict[str, list[Any]] = {}
         for metric in metrics or []:
             points = metric.data.data_points or []
             metrics_by_name.setdefault(metric.name, []).extend(points)

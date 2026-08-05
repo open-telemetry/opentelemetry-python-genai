@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 from uuid import UUID
 
 from opentelemetry.util.genai.types import GenAIInvocation
@@ -12,9 +11,9 @@ __all__ = ["_InvocationManager"]
 
 @dataclass
 class _InvocationState:
-    invocation: Optional[GenAIInvocation]
-    children: List[UUID] = field(default_factory=lambda: list())
-    parent_run_id: Optional[UUID] = None
+    invocation: GenAIInvocation | None
+    children: list[UUID] = field(default_factory=lambda: list())
+    parent_run_id: UUID | None = None
     ended: bool = False
 
 
@@ -24,13 +23,13 @@ class _InvocationManager:
     ) -> None:
         # Map from run_id -> _InvocationState, to keep track of invocations and parent/child relationships
         # TODO: TTL cache to avoid memory leaks in long-running processes.
-        self._invocations: Dict[UUID, _InvocationState] = {}
+        self._invocations: dict[UUID, _InvocationState] = {}
 
     def add_invocation_state(
         self,
         run_id: UUID,
-        parent_run_id: Optional[UUID],
-        invocation: Optional[GenAIInvocation],
+        parent_run_id: UUID | None,
+        invocation: GenAIInvocation | None,
     ) -> None:
         invocation_state = _InvocationState(invocation=invocation)
 
@@ -42,11 +41,11 @@ class _InvocationManager:
 
         self._invocations[run_id] = invocation_state
 
-    def get_invocation(self, run_id: UUID) -> Optional[GenAIInvocation]:
+    def get_invocation(self, run_id: UUID) -> GenAIInvocation | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.invocation if invocation_state else None
 
-    def get_parent_run_id(self, run_id: UUID) -> Optional[UUID]:
+    def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.parent_run_id if invocation_state else None
 

@@ -4,7 +4,7 @@
 """Shared test utilities for OpenAI instrumentation tests."""
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
@@ -85,13 +85,13 @@ def assert_all_attributes(
     latest_experimental_enabled: bool,
     response_id: str = None,
     response_model: str = None,
-    input_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
     operation_name: str = "chat",
     server_address: str = "api.openai.com",
     server_port: int = 443,
-    request_service_tier: Optional[str] = None,
-    response_service_tier: Optional[str] = None,
+    request_service_tier: str | None = None,
+    response_service_tier: str | None = None,
 ):
     assert span.name == f"{operation_name} {request_model}"
     assert (
@@ -157,11 +157,11 @@ def assert_fetch_response_attributes(
     span: ReadableSpan,
     *,
     response_id: str,
-    response_model: Optional[str] = None,
-    response_status: Optional[str] = None,
-    finish_reasons: Optional[tuple] = None,
-    stream_cursor: Optional[str] = None,
-    response_service_tier: Optional[str] = None,
+    response_model: str | None = None,
+    response_status: str | None = None,
+    finish_reasons: tuple | None = None,
+    stream_cursor: str | None = None,
+    response_service_tier: str | None = None,
     server_address: str = "api.openai.com",
 ):
     """Assert a ``gen_ai.fetch_response.client`` span matches the semconv.

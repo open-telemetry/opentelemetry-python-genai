@@ -15,7 +15,7 @@ def instrument_claude_agent_sdk(
 ):
     """Fixture to instrument Claude Agent SDK with test providers."""
     # pylint: disable=import-outside-toplevel
-    from opentelemetry.instrumentation.genai.claude_agent_sdk import (  # noqa: PLC0415
+    from opentelemetry.instrumentation.genai.claude_agent_sdk import (
         ClaudeAgentSDKInstrumentor,
     )
 
@@ -34,7 +34,7 @@ def uninstrument_claude_agent_sdk():
     """Fixture to ensure Claude Agent SDK is uninstrumented after test."""
     yield
     # pylint: disable=import-outside-toplevel
-    from opentelemetry.instrumentation.genai.claude_agent_sdk import (  # noqa: PLC0415
+    from opentelemetry.instrumentation.genai.claude_agent_sdk import (
         ClaudeAgentSDKInstrumentor,
     )
 
