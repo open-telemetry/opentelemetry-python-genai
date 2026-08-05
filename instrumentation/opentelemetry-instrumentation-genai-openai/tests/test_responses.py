@@ -25,6 +25,9 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.semconv._incubating.attributes import (
+    openai_attributes as OpenAIAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
@@ -259,6 +262,10 @@ def test_responses_create_basic(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
+    )
+    assert (
+        span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
+        == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes

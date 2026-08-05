@@ -513,6 +513,9 @@ def apply_request_attributes(
     params: ResponseRequestParams,
     capture_content: bool,
 ) -> None:
+    invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
+        OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens
