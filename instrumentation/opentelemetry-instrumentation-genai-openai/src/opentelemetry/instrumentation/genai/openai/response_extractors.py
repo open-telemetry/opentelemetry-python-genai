@@ -263,14 +263,6 @@ def _extract_reasoning_parts(
     return parts
 
 
-def _finish_reason_from_status(status: str | None) -> str | None:
-    if status == "completed":
-        return "stop"
-    if status in {"failed", "cancelled", "incomplete"}:
-        return status
-    return None
-
-
 # `incomplete_details.reason` values that map onto a cross-provider finish
 # reason; an unrecognized reason is reported as-is.
 _INCOMPLETE_REASON_TO_FINISH_REASON = {
@@ -279,34 +271,21 @@ _INCOMPLETE_REASON_TO_FINISH_REASON = {
 }
 
 
-def get_fetched_finish_reasons(response: "Response | None") -> list[str]:
-    """Return the finish reasons of the *original* generation of a fetched response.
-
-    Derived from the fetched response ``status`` as the OpenAI ``fetch_response``
-    semantic conventions require: a ``completed`` response maps to its stop
-    reason, an ``incomplete`` one to why it was cut short, and a ``failed`` or
-    ``cancelled`` one to ``error``.
-
-    Statuses that are not terminal (``queued``, ``in_progress``) have no finish
-    reason yet, and so do a missing or unrecognized status: the generation is
-    not known to have stopped, so reporting one would be wrong. The lifecycle
-    state is conveyed by ``gen_ai.response.status`` instead.
-    """
-    if Response is None or not isinstance(response, Response):
-        return []
-
-    status = response.status
+def _finish_reason_from_status(
+    status: str | None,
+    incomplete_reason: str | None = None,
+) -> str | None:
     if status == "completed":
-        return extract_finish_reasons(response) or ["stop"]
+        return "stop"
     if status in {"failed", "cancelled"}:
-        return ["error"]
+        return "error"
     if status == "incomplete":
-        details = response.incomplete_details
-        reason = details.reason if details is not None else None
-        if reason is None:
-            return [status]
-        return [_INCOMPLETE_REASON_TO_FINISH_REASON.get(reason, reason)]
-    return []
+        if incomplete_reason is None:
+            return status
+        return _INCOMPLETE_REASON_TO_FINISH_REASON.get(
+            incomplete_reason, incomplete_reason
+        )
+    return None
 
 
 def get_tool_definitions_from_response(
@@ -443,6 +422,16 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
     ):
         return []
 
+    incomplete_details = response.incomplete_details
+    response_finish_reason = _finish_reason_from_status(
+        response.status,
+        incomplete_details.reason if incomplete_details is not None else None,
+    )
+    if response.status in {"failed", "cancelled", "incomplete"}:
+        return [response_finish_reason] if response_finish_reason else []
+    if response.status in {"queued", "in_progress"}:
+        return []
+
     finish_reasons: list[str] = []
     for item in response.output:
         if isinstance(item, ResponseFunctionToolCall) and item.status in {
@@ -457,7 +446,10 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
         finish_reason = _finish_reason_from_status(item.status)
         if finish_reason is not None:
             finish_reasons.append(finish_reason)
-    return list(dict.fromkeys(finish_reasons))
+    finish_reasons = list(dict.fromkeys(finish_reasons))
+    if finish_reasons:
+        return finish_reasons
+    return [response_finish_reason] if response_finish_reason else []
 
 
 def get_response_error(
@@ -653,7 +645,7 @@ def set_fetch_response_attributes(
 
     invocation.response_model_name = response.model
     invocation.response_status = response.status
-    invocation.finish_reasons = get_fetched_finish_reasons(response) or None
+    invocation.finish_reasons = extract_finish_reasons(response) or None
 
     # `service_tier` is absent from the Response model on some supported SDK
     # versions, so keep this attribute access guarded.

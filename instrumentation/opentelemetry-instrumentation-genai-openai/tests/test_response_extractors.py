@@ -460,12 +460,12 @@ def test_response_extractors_ignore_invalid_shapes_without_validation(
         ({}, []),
     ],
 )
-def test_get_fetched_finish_reasons_maps_status(
+def test_extract_finish_reasons_maps_response_status(
     loaded_module, overrides, expected
 ):
     response = _make_response(**overrides)
 
-    assert loaded_module.get_fetched_finish_reasons(response) == expected
+    assert loaded_module.extract_finish_reasons(response) == expected
 
 
 def test_set_fetch_response_attributes_tolerates_missing_service_tier():
