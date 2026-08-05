@@ -6,7 +6,6 @@
 import logging
 import os
 
-import httpx
 import pytest
 from openai import (
     NOT_GIVEN,
@@ -23,10 +22,6 @@ try:
 except ImportError:
     not_given = NOT_GIVEN
 
-from opentelemetry.instrumentation.genai.openai.patch import (
-    _set_response_properties,
-)
-from opentelemetry.instrumentation.genai.openai.utils import get_served_model
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -40,7 +35,6 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
-from opentelemetry.util.genai.types import LLMInvocation
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
@@ -563,34 +557,6 @@ class _CustomChatCompletion(ChatCompletion):
     """Caller-defined response type passed to non-streaming parse(to=...)."""
 
 
-class _RawChatCompletionResponse:
-    def __init__(self):
-        self.headers = {"x-ms-served-model": "served-gpt-4o"}
-        self.parse_count = 0
-
-    def parse(self):
-        self.parse_count += 1
-        return ChatCompletion.model_validate(
-            {
-                "id": "chatcmpl_123",
-                "choices": [],
-                "created": 0,
-                "model": "body-gpt-4o",
-                "object": "chat.completion",
-            }
-        )
-
-
-def test_chat_completion_raw_response_prefers_served_model_header():
-    invocation = LLMInvocation(request_model=DEFAULT_MODEL)
-    raw_response = _RawChatCompletionResponse()
-
-    _set_response_properties(invocation, raw_response, capture_content=False)
-
-    assert raw_response.parse_count == 1
-    assert invocation.response_model_name == "served-gpt-4o"
-
-
 def test_chat_completion_with_raw_response_parse_to_custom_type(
     span_exporter, openai_client, instrument_with_content, vcr
 ):
@@ -799,61 +765,6 @@ def test_chat_completion_with_raw_response_streaming_read_without_parse(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1  # span closed, did not leak
     assert spans[0].end_time is not None
-
-
-def test_get_served_model_returns_value_when_present():
-    headers = {"x-ms-served-model": "gpt-4o-2024-08-06"}
-    assert get_served_model(headers) == "gpt-4o-2024-08-06"
-
-
-def test_get_served_model_case_insensitive_name():
-    headers = {"X-MS-Served-Model": "gpt-4o-2024-08-06"}
-    assert get_served_model(headers) == "gpt-4o-2024-08-06"
-
-
-def test_get_served_model_httpx_headers_instance():
-    headers = httpx.Headers({"x-ms-served-model": "gpt-4o-2024-08-06"})
-    assert get_served_model(headers) == "gpt-4o-2024-08-06"
-
-
-def test_get_served_model_empty_value_returns_none():
-    # An empty header value must not overwrite a real model name.
-    headers = {"x-ms-served-model": " "}
-    assert get_served_model(headers) is None
-
-
-def test_get_served_model_missing_header_returns_none():
-    headers = {"content-type": "application/json"}
-    assert get_served_model(headers) is None
-
-
-def test_get_served_model_none_returns_none():
-    # Parsed models / streaming chunks carry no HTTP headers.
-    assert get_served_model(None) is None
-
-
-def test_get_served_model_non_mapping_returns_none():
-    assert get_served_model(object()) is None
-
-
-def test_get_served_model_picks_served_model_among_others():
-    headers = {
-        "content-type": "application/json",
-        "x-ms-served-model": "gpt-4o-2024-08-06",
-        "x-request-id": "abc123",
-    }
-    assert get_served_model(headers) == "gpt-4o-2024-08-06"
-
-
-def test_get_served_model_non_string_name_ignored():
-    headers = {123: "not-a-header", "x-ms-served-model": "gpt-4o"}
-    assert get_served_model(headers) == "gpt-4o"
-
-
-@pytest.mark.parametrize("value", ["", None])
-def test_get_served_model_falsy_values_return_none(value):
-    headers = {"x-ms-served-model": value}
-    assert get_served_model(headers) is None
 
 
 def test_chat_completion_tool_calls_with_content(

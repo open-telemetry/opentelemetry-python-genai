@@ -37,7 +37,7 @@ _OpenAIOmit = getattr(openai, "Omit", None)
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
 
 
-def get_served_model(headers: Any) -> str | None:
+def get_served_model(headers: Mapping[str, str] | None) -> str | None:
     """Responses API (RAPI) may include the served model in the
     response headers, which accurately returns the served
     model name for the request."""

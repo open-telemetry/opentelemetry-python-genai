@@ -26,6 +26,13 @@ except ImportError:
     get_response_error = None
     set_invocation_response_attributes = None
 
+try:
+    from opentelemetry.instrumentation.genai.openai.utils import (  # pylint: disable=no-name-in-module
+        get_served_model,
+    )
+except ImportError:
+    get_served_model = None
+
 if TYPE_CHECKING:
     from openai.lib.streaming.responses._events import (  # pylint: disable=no-name-in-module
         ResponseStreamEvent,
@@ -143,6 +150,16 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         _set_response_attributes(
             self._self_invocation, result, self._self_capture_content
         )
+        if get_served_model is not None:
+            stream = getattr(self, "stream", None)
+            if stream is not None:
+                underlying = _get_stream_response(stream)
+                served_model = get_served_model(
+                    getattr(underlying, "headers", None)
+                )
+                if served_model:
+                    self._self_invocation.response_model_name = served_model
+
         self._self_invocation.stop()
         self._self_response_telemetry_finalized = True
 

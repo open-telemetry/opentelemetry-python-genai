@@ -162,8 +162,9 @@ class _FakeAsyncResponse:
 
 
 class _FakeSyncResponse:
-    def __init__(self):
+    def __init__(self, headers=None):
         self.close_calls = 0
+        self.headers = headers or {}
 
     def close(self):
         self.close_calls += 1
@@ -602,6 +603,34 @@ def test_process_event_incomplete_is_not_an_error():
 
     assert calls["fail"] == []
     assert calls["stop"] == 1
+
+
+@_requires_responses_types
+def test_stop_prefers_served_model_header():
+    invocation, calls = _capturing_invocation()
+    stream = _FakeSyncStream(
+        response=_FakeSyncResponse(
+            headers={"x-ms-served-model": "served-gpt-4.1"}
+        )
+    )
+    wrapper = _make_stream_wrapper(stream, invocation=invocation)
+
+    wrapper._stop(_make_response(model="body-gpt-4.1"))
+
+    assert calls["stop"] == 1
+    assert invocation.response_model_name == "served-gpt-4.1"
+
+
+@_requires_responses_types
+def test_stop_falls_back_to_body_model_without_header():
+    invocation, calls = _capturing_invocation()
+    stream = _FakeSyncStream(response=_FakeSyncResponse(headers={}))
+    wrapper = _make_stream_wrapper(stream, invocation=invocation)
+
+    wrapper._stop(_make_response(model="body-gpt-4.1"))
+
+    assert calls["stop"] == 1
+    assert invocation.response_model_name == "body-gpt-4.1"
 
 
 @_requires_responses_types

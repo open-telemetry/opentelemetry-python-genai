@@ -7,6 +7,7 @@ from unittest import mock
 import pytest
 
 from opentelemetry.instrumentation.genai.openai import response_extractors
+from opentelemetry.instrumentation.genai.openai.utils import get_served_model
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
@@ -69,6 +70,12 @@ class _RawResponse:
     def parse(self):
         self.parse_count += 1
         return self.parsed_response
+
+
+class _RawResponseWithHeaders(_RawResponse):
+    def __init__(self, parsed_response, headers):
+        super().__init__(parsed_response)
+        self.headers = headers
 
 
 def test_extract_system_instruction_returns_text_for_string(loaded_module):
@@ -354,6 +361,40 @@ def test_set_invocation_response_attributes_prefers_raw_served_model_header(
     assert invocation.response_model_name == "served-gpt-4.1"
 
 
+def test_set_invocation_response_attributes_falls_back_to_body_model_when_header_empty(
+    loaded_module,
+):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    raw_response = _RawResponseWithHeaders(
+        _make_response(model="deployment-gpt-4.1"),
+        headers={"x-ms-served-model": "  "},
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, raw_response, capture_content=False
+    )
+
+    assert raw_response.parse_count == 1
+    assert invocation.response_model_name == "deployment-gpt-4.1"
+
+
+def test_set_invocation_response_attributes_falls_back_to_body_model_when_header_absent(
+    loaded_module,
+):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    raw_response = _RawResponseWithHeaders(
+        _make_response(model="deployment-gpt-4.1"),
+        headers={"content-type": "application/json"},
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, raw_response, capture_content=False
+    )
+
+    assert raw_response.parse_count == 1
+    assert invocation.response_model_name == "deployment-gpt-4.1"
+
+
 def test_set_invocation_response_attributes_populates_output_messages(
     loaded_module,
 ):
@@ -420,3 +461,58 @@ def test_response_extractors_ignore_invalid_shapes_without_validation(
     assert invocation.finish_reasons is None
     assert not invocation.output_messages
     assert not invocation.attributes
+
+
+def test_get_served_model_returns_value_when_present():
+    headers = {"x-ms-served-model": "gpt-4o-2024-08-06"}
+    assert get_served_model(headers) == "gpt-4o-2024-08-06"
+
+
+def test_get_served_model_case_insensitive_name():
+    headers = {"X-MS-Served-Model": "gpt-4o-2024-08-06"}
+    assert get_served_model(headers) == "gpt-4o-2024-08-06"
+
+
+def test_get_served_model_empty_value_returns_none():
+    # An empty header value must not overwrite a real model name.
+    headers = {"x-ms-served-model": " "}
+    assert get_served_model(headers) is None
+
+
+def test_get_served_model_missing_header_returns_none():
+    headers = {"content-type": "application/json"}
+    assert get_served_model(headers) is None
+
+
+def test_get_served_model_none_returns_none():
+    # Parsed models / streaming chunks carry no HTTP headers.
+    assert get_served_model(None) is None
+
+
+def test_get_served_model_non_mapping_returns_none():
+    assert get_served_model(object()) is None
+
+
+def test_get_served_model_picks_served_model_among_others():
+    headers = {
+        "content-type": "application/json",
+        "x-ms-served-model": "gpt-4o-2024-08-06",
+        "x-request-id": "abc123",
+    }
+    assert get_served_model(headers) == "gpt-4o-2024-08-06"
+
+
+def test_get_served_model_non_string_name_ignored():
+    headers = {123: "not-a-header", "x-ms-served-model": "gpt-4o"}
+    assert get_served_model(headers) == "gpt-4o"
+
+
+def test_get_served_model_empty_string():
+    headers = {123: "not-a-header", "x-ms-served-model": "  "}
+    assert get_served_model(headers) is None
+
+
+@pytest.mark.parametrize("value", ["", None])
+def test_get_served_model_falsy_values_return_none(value):
+    headers = {"x-ms-served-model": value}
+    assert get_served_model(headers) is None
