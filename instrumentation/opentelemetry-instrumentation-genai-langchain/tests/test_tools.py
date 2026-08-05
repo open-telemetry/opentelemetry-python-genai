@@ -438,6 +438,39 @@ def test_on_tool_start_and_end_creates_span(monkeypatch):
     )
 
 
+def test_on_tool_start_omits_description_without_content_capture(monkeypatch):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "NO_CONTENT"
+    )
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "multiply", "description": "Multiply two numbers"},
+        input_str="",
+        run_id=run_id,
+        inputs={"a": 3, "b": 4},
+    )
+
+    output = MagicMock()
+    output.content = "12"
+    output.tool_call_id = "call_abc"
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    # The tool description and call arguments are sensitive content and must
+    # not be emitted on the execute_tool span when content capture is off.
+    assert gen_ai_attributes.GEN_AI_TOOL_DESCRIPTION not in attrs
+    assert gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+
+
 def test_on_tool_start_with_string_input(monkeypatch):
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"

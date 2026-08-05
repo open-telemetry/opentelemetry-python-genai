@@ -261,14 +261,10 @@ def get_content_attributes(
         dicts = [asdict(item) for item in items]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
-    # Tool definitions are always captured, the sem conv recommends adding params / description only
-    # when the content capture mode is set..
+    # Tool definitions carry sensitive content (parameters / description) and
+    # are only recorded when the content capture mode is set.
     if mode not in allowed_modes:
-        return (
-            {GenAI.GEN_AI_TOOL_DEFINITIONS: serialize(tool_definitions)}
-            if tool_definitions
-            else {}
-        )
+        return {}
 
     optional_attrs = (
         (

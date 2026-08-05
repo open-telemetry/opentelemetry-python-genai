@@ -703,7 +703,10 @@ async def chat_completion_tool_call(
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
         if not expect_content:
-            pass
+            # Content capture disabled: tool definitions carry sensitive
+            # description / parameters and must not be emitted on the span.
+            assert "gen_ai.tool.definitions" not in spans[0].attributes
+            assert "gen_ai.tool.definitions" not in spans[1].attributes
         else:
             # first call
             assert_messages_attribute(
