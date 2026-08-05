@@ -391,7 +391,33 @@ class TestAgentInvocationContent(unittest.TestCase):
         assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
 
     @patch(
+<<<<<<< HEAD
         "opentelemetry.util.genai.handler.get_content_capturing_mode",
+=======
+        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        return_value=ContentCapturingMode.NO_CONTENT,
+    )
+    def test_tool_definitions_on_span_omit_sensitive_without_content_capture(
+        self, _mock_cap
+    ):
+        # Tool definitions carry sensitive content (``description`` /
+        # ``parameters``) and must not be emitted at all when content capture
+        # is off.
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather",
+            parameters={"type": "object", "properties": {}},
+        )
+        invocation = self.handler.invoke_local_agent()
+        invocation.tool_definitions = [tool]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_TOOL_DEFINITIONS not in attrs
+
+    @patch(
+        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+>>>>>>> a83158c4 (MArk gen_ai.tool.description and gen_ai.tool.definitions as sensitive attributes per [GenAI Spec](https://github.com/open-telemetry/semantic-conventions-genai/pull/431))
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_messages_on_span(self, _mock_cap):

@@ -21,7 +21,10 @@ from opentelemetry.instrumentation.genai.agno.utils import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
-from opentelemetry.util.genai.types import FunctionToolDefinition
+from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
+    FunctionToolDefinition,
+)
 
 
 def test_prepare_tool_definitions_returns_none_for_empty() -> None:
@@ -154,6 +157,10 @@ def test_agent_run_with_tools(
     mock_output = ModelResponse(content="The weather is sunny.")
 
     with (
+        patch(
+            "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+            return_value=ContentCapturingMode.SPAN_ONLY,
+        ),
         patch.object(Agent, "run", wraps=agent.run),
         patch("agno.models.base.Model.response", return_value=mock_output),
     ):
@@ -203,8 +210,14 @@ def test_agent_arun_with_tools(
     mock_output = ModelResponse(content="The weather is sunny.")
 
     async def _run_async() -> None:
-        with patch(
-            "agno.models.base.Model.aresponse", return_value=mock_output
+        with (
+            patch(
+                "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+                return_value=ContentCapturingMode.SPAN_ONLY,
+            ),
+            patch(
+                "agno.models.base.Model.aresponse", return_value=mock_output
+            ),
         ):
             res = await agent.arun("what is the weather in San Francisco?")
             assert res is not None
