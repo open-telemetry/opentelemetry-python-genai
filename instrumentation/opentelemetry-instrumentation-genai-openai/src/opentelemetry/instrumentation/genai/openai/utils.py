@@ -34,6 +34,25 @@ from opentelemetry.util.genai.types import (
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
+SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
+
+
+def get_served_model(headers: Mapping[str, str] | None) -> str | None:
+    """Responses API (RAPI) may include the served model in the
+    response headers, which accurately returns the served
+    model name for the request."""
+    if not isinstance(headers, Mapping):
+        return None
+    for name, value in headers.items():
+        if (
+            isinstance(name, str)
+            and name.lower() in SUPPORTED_RAPI_RESPONSE_HEADERS
+            and isinstance(value, str)
+            and value.strip()
+        ):
+            return str(value)
+    return None
+
 
 def get_property_value(obj, property_name):
     if isinstance(obj, dict):

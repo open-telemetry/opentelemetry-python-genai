@@ -7,9 +7,9 @@ fsspec>=2026.7.0
 wrapt>=2.2.2,<3.0.0
 
 # Required by instrumentation packages
-agno>=2.8.6
+agno>=2.8.7
 anthropic>=0.120.2
-claude-agent-sdk>=0.2.130
+claude-agent-sdk>=0.2.131
 google-genai>=2.16.0
 langchain>=1.3.14
 llama-index-core>=0.14.23

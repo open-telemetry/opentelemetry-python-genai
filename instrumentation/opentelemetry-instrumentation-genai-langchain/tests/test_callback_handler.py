@@ -1750,11 +1750,11 @@ class TestOnLlmEndResponseModel:
     def test_empty_header_value_ignored(self):
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-        llm_inv.response_model_name = None
+        llm_inv.response_model_name = "gpt-4o"
 
         ai_msg = AIMessage(
             content="hello",
-            response_metadata={"headers": {"x-ms-served-model": ""}},
+            response_metadata={"headers": {"x-ms-served-model": " "}},
         )
         gen = ChatGeneration(
             message=ai_msg, generation_info={"finish_reason": "stop"}
@@ -1763,4 +1763,4 @@ class TestOnLlmEndResponseModel:
 
         handler.on_llm_end(response=response, run_id=run_id)
 
-        assert llm_inv.response_model_name is None
+        assert llm_inv.response_model_name == "gpt-4o"
