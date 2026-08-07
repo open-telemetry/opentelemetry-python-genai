@@ -58,13 +58,13 @@ instruments: walk its wrappers (the step-6 mapping for a port) for which
 
 | Part `type` | util-genai type | Emitted when the library accepts… |
 |---|---|---|
-| `text` | `Text` | plain text (always) |
-| `tool_call` / `tool_call_response` | `ToolCallRequest` / `ToolCallResponse` | function/tool calling — covered by `tool_calling.py` |
-| `server_tool_call` / `server_tool_call_response` | `ServerToolCall` / `ServerToolCallResponse` | vendor server-side tools (web_search, code_interpreter, …) |
-| `reasoning` | `Reasoning` | reasoning / thinking items |
-| `blob` | `Blob` | inline image/audio/video **bytes** (`modality` distinguishes them) |
-| `uri` | `Uri` | an external media **URL** (`modality`) |
-| `file` | `File` | a **file reference** / id (`modality`) |
+| `text` | `TextPart` | plain text (always) |
+| `tool_call` / `tool_call_response` | `ToolCallRequestPart` / `ToolCallResponsePart` | function/tool calling — covered by `tool_calling.py` |
+| `server_tool_call` / `server_tool_call_response` | `ServerToolCallPart` / `ServerToolCallResponsePart` | vendor server-side tools (web_search, code_interpreter, …) |
+| `reasoning` | `ReasoningPart` | reasoning / thinking items |
+| `blob` | `BlobPart` | inline image/audio/video **bytes** (`modality` distinguishes them) |
+| `uri` | `UriPart` | an external media **URL** (`modality`) |
+| `file` | `FilePart` | a **file reference** / id (`modality`) |
 | `generic` | `GenericPart` | a provider item with no semconv mapping — flag, don't drop |
 
 Group by shared turn/cassette — typically one `multimodal.py` for the

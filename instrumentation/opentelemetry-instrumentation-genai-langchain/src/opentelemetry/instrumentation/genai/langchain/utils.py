@@ -81,8 +81,8 @@ def _content_to_parts(
     """Convert a LangChain message ``content`` payload into ``MessagePart`` s.
 
     Content may be a plain string or a list of provider-specific block dicts
-    (e.g. Anthropic structured content). We extract :class:`Text` and
-    :class:`Reasoning` parts; ``tool_use`` blocks are intentionally ignored
+    (e.g. Anthropic structured content). We extract :class:`TextPart` and
+    :class:`ReasoningPart` parts; ``tool_use`` blocks are intentionally ignored
     here because LangChain consolidates them into ``message.tool_calls`` which
     is read separately.
     """
@@ -115,7 +115,7 @@ def _content_to_parts(
 def _legacy_function_call_request(
     message: AIMessage,
 ) -> ToolCallRequestPart | None:
-    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
+    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequestPart`.
 
     Pre-tools OpenAI models return a single call under
     ``additional_kwargs['function_call']`` (``{"name", "arguments"}``) rather
@@ -143,7 +143,7 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
-    :class:`ToolCallRequest` for each entry in ``message.tool_calls``, plus a
+    :class:`ToolCallRequestPart` for each entry in ``message.tool_calls``, plus a
     legacy ``additional_kwargs['function_call']`` when present.
     """
     parts: list[MessagePart] = _content_to_parts(message.content)
@@ -294,7 +294,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
 
     When no ``messages`` key exists (common in LangGraph state dicts), the
     remaining state fields are serialized as JSON and emitted as a single
-    user-role :class:`Text` part.
+    user-role :class:`TextPart` part.
     """
     if not isinstance(data, dict):
         return []

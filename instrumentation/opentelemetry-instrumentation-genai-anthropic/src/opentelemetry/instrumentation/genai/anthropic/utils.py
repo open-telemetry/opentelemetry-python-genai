@@ -100,7 +100,7 @@ def _decode_base64(data: str) -> bytes | None:
 
 
 def _extract_base64_blob(source: object, modality: str) -> BlobPart | None:
-    """Extract a Blob from a base64-encoded source dict."""
+    """Extract a BlobPart from a base64-encoded source dict."""
     if not isinstance(source, dict):
         return None
     # source is a TypedDict (e.g. Base64ImageSourceParam) narrowed to dict;

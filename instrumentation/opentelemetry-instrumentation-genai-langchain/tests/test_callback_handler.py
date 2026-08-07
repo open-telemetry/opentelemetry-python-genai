@@ -1168,7 +1168,7 @@ def _make_handler_with_llm_invocation(
 
 class TestOnLlmEndToolCalls:
     def test_openai_tool_calls_finish_reason_produces_tool_call_request(self):
-        """finish_reason='tool_calls' (OpenAI) must produce ToolCallRequest parts."""
+        """finish_reason='tool_calls' (OpenAI) must produce ToolCallRequestPart parts."""
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
@@ -1198,7 +1198,7 @@ class TestOnLlmEndToolCalls:
         assert part.arguments == {"location": "Paris"}
 
     def test_bedrock_tool_use_finish_reason_produces_tool_call_request(self):
-        """finish_reason='tool_use' (Bedrock/Anthropic) must produce ToolCallRequest parts."""
+        """finish_reason='tool_use' (Bedrock/Anthropic) must produce ToolCallRequestPart parts."""
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
@@ -1561,7 +1561,7 @@ def test_extract_token_details_no_details_key():
     def test_legacy_function_call_finish_reason_produces_tool_call_request(
         self,
     ):
-        """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequest."""
+        """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequestPart."""
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
