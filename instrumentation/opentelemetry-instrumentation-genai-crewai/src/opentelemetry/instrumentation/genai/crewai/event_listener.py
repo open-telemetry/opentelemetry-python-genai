@@ -82,9 +82,7 @@ def _message_parts(message: Mapping[str, Any]) -> list[MessagePart]:
     if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, str):
         for tool_call in cast(Sequence[Any], tool_calls):
             if isinstance(tool_call, Mapping) and (
-                part := _tool_call_part(
-                    cast(Mapping[str, Any], tool_call)
-                )
+                part := _tool_call_part(cast(Mapping[str, Any], tool_call))
             ):
                 parts.append(part)
     return parts
@@ -198,7 +196,8 @@ def _set_request_attributes(
         getattr(event, "tools", None)
     )
     invocation.temperature = _first_not_none(
-        getattr(event, "temperature", None), getattr(source, "temperature", None)
+        getattr(event, "temperature", None),
+        getattr(source, "temperature", None),
     )
     invocation.top_p = _first_not_none(
         getattr(event, "top_p", None), getattr(source, "top_p", None)

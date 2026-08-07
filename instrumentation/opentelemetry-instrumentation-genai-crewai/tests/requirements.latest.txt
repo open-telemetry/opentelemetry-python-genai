@@ -1,8 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Exercise the latest supported CrewAI release with workspace instrumentation.
-crewai
-
+# Exercise the latest supported CrewAI release through the package's declared
+# instruments extra so the test environment cannot drift below its lower bound.
 -e util/opentelemetry-util-genai
--e instrumentation/opentelemetry-instrumentation-genai-crewai
+-e instrumentation/opentelemetry-instrumentation-genai-crewai[instruments]
