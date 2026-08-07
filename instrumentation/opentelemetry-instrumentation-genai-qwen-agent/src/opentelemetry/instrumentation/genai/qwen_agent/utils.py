@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import AgentInvocation
@@ -31,8 +31,9 @@ def _field_value(value: Any, *names: str) -> Any:
 
     for name in names:
         if isinstance(value, dict):
-            if name in value:
-                return value[name]
+            mapping = cast(dict[str, Any], value)
+            if name in mapping:
+                return mapping[name]
             continue
 
         attr_value = getattr(value, name, None)
@@ -60,7 +61,7 @@ def _extract_content_text(content: Any) -> str:
         return content
     if isinstance(content, list):
         texts: list[str] = []
-        for item in content:
+        for item in cast(list[Any], content):
             text = getattr(item, "text", None)
             if text is not None:
                 texts.append(text)
@@ -81,7 +82,7 @@ def find_tool_call_id(messages: Any, tool_name: str) -> str | None:
 
     responded: set[str] = set()
     pending: list[str] = []
-    for msg in messages:
+    for msg in cast(list[Any], messages):
         extra = _field_value(msg, "extra")
         function_id = (
             _field_value(extra, "function_id") if extra is not None else None
@@ -136,7 +137,7 @@ def convert_to_input_messages(messages: Any) -> list[InputMessage]:
         messages = [messages]
 
     input_messages: list[InputMessage] = []
-    for msg in messages:
+    for msg in cast(list[Any], messages):
         try:
             role = _field_value(msg, "role") or "user"
             content = _field_value(msg, "content") or ""
@@ -179,7 +180,7 @@ def convert_to_output_messages(messages: Any) -> list[OutputMessage]:
         messages = [messages]
 
     output_messages: list[OutputMessage] = []
-    for msg in messages:
+    for msg in cast(list[Any], messages):
         try:
             content = _field_value(msg, "content") or ""
             function_call = _field_value(msg, "function_call")
@@ -226,7 +227,7 @@ def convert_to_final_output_messages(messages: Any) -> list[OutputMessage]:
     if not isinstance(messages, list):
         messages = [messages]
 
-    for msg in reversed(messages):
+    for msg in reversed(cast(list[Any], messages)):
         try:
             role = _field_value(msg, "role") or "assistant"
             function_call = _field_value(msg, "function_call")
