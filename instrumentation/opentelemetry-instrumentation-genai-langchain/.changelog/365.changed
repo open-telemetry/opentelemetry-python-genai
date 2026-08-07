@@ -1,0 +1,1 @@
+Align message-part class names with semconv (*Part suffix). Rename Text/Blob/File/Uri/Reasoning/ToolCallRequest/ToolCallResponse/ServerToolCall/ServerToolCallResponse to their *Part forms to match semantic-conventions-genai models.
