@@ -151,7 +151,9 @@ def _set_invocation_input(
         if input_val is not None:
             content_str = _extract_input_content(input_val)
             invocation.input_messages = [
-                InputMessage(role="user", parts=[TextPart(content=content_str)])
+                InputMessage(
+                    role="user", parts=[TextPart(content=content_str)]
+                )
             ]
 
 

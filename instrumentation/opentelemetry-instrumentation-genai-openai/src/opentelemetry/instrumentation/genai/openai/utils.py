@@ -239,7 +239,9 @@ def extract_tool_calls_new(tool_calls) -> list[ToolCallRequestPart]:
 
         # TODO: support custom
         parts.append(
-            ToolCallRequestPart(id=call_id, name=func_name, arguments=arguments)
+            ToolCallRequestPart(
+                id=call_id, name=func_name, arguments=arguments
+            )
         )
     return parts
 

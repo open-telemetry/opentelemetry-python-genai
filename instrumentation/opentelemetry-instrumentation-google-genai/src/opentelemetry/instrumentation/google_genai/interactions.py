@@ -174,7 +174,9 @@ def _interactions_input_to_messages(
     if input_data is None:
         return []
     if isinstance(input_data, str):
-        return [InputMessage(role="user", parts=[TextPart(content=input_data)])]
+        return [
+            InputMessage(role="user", parts=[TextPart(content=input_data)])
+        ]
 
     if not isinstance(input_data, Sequence):
         input_data = [input_data]
@@ -406,7 +408,9 @@ def _start_interactions_invocation(
             kwargs.get("input")
         )
         if system_instruction := kwargs.get("system_instruction"):
-            invocation.system_instruction = [TextPart(content=system_instruction)]
+            invocation.system_instruction = [
+                TextPart(content=system_instruction)
+            ]
 
     return invocation
 

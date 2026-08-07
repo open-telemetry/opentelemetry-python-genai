@@ -145,7 +145,9 @@ def _convert_dict_block_to_part(
 
     if block_type in ("thinking", "redacted_thinking"):
         thinking = block.get("thinking") or block.get("data")
-        return ReasoningPart(content=str(thinking) if thinking is not None else "")
+        return ReasoningPart(
+            content=str(thinking) if thinking is not None else ""
+        )
 
     if block_type in ("image", "audio", "video", "document", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))

@@ -193,7 +193,9 @@ def get_input_messages(
         return []
 
     if isinstance(input_value, str):
-        return [InputMessage(role="user", parts=[TextPart(content=input_value)])]
+        return [
+            InputMessage(role="user", parts=[TextPart(content=input_value)])
+        ]
 
     messages: list[InputMessage] = []
     for item in _get_sequence(input_value):
