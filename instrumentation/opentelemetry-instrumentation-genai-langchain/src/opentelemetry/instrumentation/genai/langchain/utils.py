@@ -23,10 +23,10 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
-    Reasoning,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    ReasoningPart,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     ToolDefinition,
 )
 
@@ -89,18 +89,18 @@ def _content_to_parts(
     parts: list[MessagePart] = []
     if isinstance(content, str):
         if content:
-            parts.append(Text(content=content))
+            parts.append(TextPart(content=content))
         return parts
     for item in content:
         if isinstance(item, str):
             if item:
-                parts.append(Text(content=item))
+                parts.append(TextPart(content=item))
             continue
         block_type = item.get("type")
         if block_type == "text":
             text_value = item.get("text")
             if isinstance(text_value, str) and text_value:
-                parts.append(Text(content=text_value))
+                parts.append(TextPart(content=text_value))
         elif block_type in ("thinking", "reasoning"):
             reasoning_value = (
                 item.get("thinking")
@@ -108,13 +108,13 @@ def _content_to_parts(
                 or item.get("text")
             )
             if isinstance(reasoning_value, str) and reasoning_value:
-                parts.append(Reasoning(content=reasoning_value))
+                parts.append(ReasoningPart(content=reasoning_value))
     return parts
 
 
 def _legacy_function_call_request(
     message: AIMessage,
-) -> ToolCallRequest | None:
+) -> ToolCallRequestPart | None:
     """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
 
     Pre-tools OpenAI models return a single call under
@@ -136,7 +136,7 @@ def _legacy_function_call_request(
             arguments = json.loads(raw_arguments)
         except (json.JSONDecodeError, ValueError):
             arguments = raw_arguments
-    return ToolCallRequest(arguments=arguments, name=name, id=None)
+    return ToolCallRequestPart(arguments=arguments, name=name, id=None)
 
 
 def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
@@ -152,7 +152,7 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
         if not name:
             continue
         parts.append(
-            ToolCallRequest(
+            ToolCallRequestPart(
                 arguments=call["args"],
                 name=name,
                 id=call["id"],
@@ -169,7 +169,7 @@ def _tool_message_parts(message: ToolMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for a :class:`ToolMessage` (tool result)."""
     tool_call_id = getattr(message, "tool_call_id", None)
     return [
-        ToolCallResponse(
+        ToolCallResponsePart(
             response=message.content,
             id=tool_call_id if isinstance(tool_call_id, str) else None,
         )
@@ -318,7 +318,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
     if input_data:
         serialized = serialize(input_data)
         if serialized:
-            return [InputMessage(role="user", parts=[Text(serialized)])]
+            return [InputMessage(role="user", parts=[TextPart(serialized)])]
     return []
 
 

@@ -38,8 +38,8 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
-    Text,
-    ToolCallRequest,
+    TextPart,
+    ToolCallRequestPart,
 )
 
 # ---------------------------------------------------------------------------
@@ -645,7 +645,7 @@ class TestMakeInputMessage:
         assert isinstance(result[0], InputMessage)
         assert result[0].role == "user"
         assert len(result[0].parts) == 1
-        assert isinstance(result[0].parts[0], Text)
+        assert isinstance(result[0].parts[0], TextPart)
         assert result[0].parts[0].content == "Hello"
 
     def test_messages_key_skips_empty_content(self):
@@ -1192,7 +1192,7 @@ class TestOnLlmEndToolCalls:
         assert assigned[0].finish_reason == "tool_calls"
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
-        assert isinstance(part, ToolCallRequest)
+        assert isinstance(part, ToolCallRequestPart)
         assert part.name == "get_weather"
         assert part.id == "call_123"
         assert part.arguments == {"location": "Paris"}
@@ -1223,7 +1223,7 @@ class TestOnLlmEndToolCalls:
         assert assigned[0].finish_reason == "tool_use"
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
-        assert isinstance(part, ToolCallRequest)
+        assert isinstance(part, ToolCallRequestPart)
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
@@ -1586,7 +1586,7 @@ def test_extract_token_details_no_details_key():
         assert len(assigned) == 1
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
-        assert isinstance(part, ToolCallRequest)
+        assert isinstance(part, ToolCallRequestPart)
         assert part.name == "get_weather"
         assert part.arguments == {"city": "Paris"}
 
@@ -1607,7 +1607,7 @@ def test_legacy_function_call_dict_arguments():
         },
     )
     call = _legacy_function_call_request(message)
-    assert isinstance(call, ToolCallRequest)
+    assert isinstance(call, ToolCallRequestPart)
     assert call.name == "get_weather"
     assert call.arguments == {"city": "New York"}
 
@@ -1623,7 +1623,7 @@ def test_legacy_function_call_string_arguments_parsed():
         },
     )
     call = _legacy_function_call_request(message)
-    assert isinstance(call, ToolCallRequest)
+    assert isinstance(call, ToolCallRequestPart)
     assert call.arguments == {"city": "New York"}
 
 
@@ -1641,7 +1641,7 @@ def test_to_input_messages_includes_legacy_function_call():
     messages = to_input_messages([message])
     assert len(messages) == 1
     assert any(
-        isinstance(p, ToolCallRequest) and p.name == "f"
+        isinstance(p, ToolCallRequestPart) and p.name == "f"
         for p in messages[0].parts
     )
 
