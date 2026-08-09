@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, List, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 import openai
@@ -32,6 +33,25 @@ from opentelemetry.util.genai.types import (
 )
 
 _OpenAIOmit = getattr(openai, "Omit", None)
+
+SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
+
+
+def get_served_model(headers: Mapping[str, str] | None) -> str | None:
+    """Responses API (RAPI) may include the served model in the
+    response headers, which accurately returns the served
+    model name for the request."""
+    if not isinstance(headers, Mapping):
+        return None
+    for name, value in headers.items():
+        if (
+            isinstance(name, str)
+            and name.lower() in SUPPORTED_RAPI_RESPONSE_HEADERS
+            and isinstance(value, str)
+            and value.strip()
+        ):
+            return str(value)
+    return None
 
 
 def get_property_value(obj, property_name):
@@ -172,7 +192,7 @@ def _is_text_part(content: Any) -> bool:
     )
 
 
-def _prepare_input_messages(messages) -> List[InputMessage]:
+def _prepare_input_messages(messages) -> list[InputMessage]:
     chat_messages = []
     for message in messages:
         role = get_property_value(message, "role")
@@ -245,7 +265,7 @@ def _prepare_tool_definitions(tools) -> list[ToolDefinition] | None:
     return definitions
 
 
-def _prepare_output_messages(choices) -> List[OutputMessage]:
+def _prepare_output_messages(choices) -> list[OutputMessage]:
     output_messages = []
     for choice in choices:
         if choice.message:

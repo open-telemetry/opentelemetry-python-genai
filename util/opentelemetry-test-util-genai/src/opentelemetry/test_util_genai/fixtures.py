@@ -188,7 +188,7 @@ def weaver_live_check() -> Iterator[Any]:
     semantic-conventions registry can't be resolved.
     """
     try:
-        import opentelemetry.exporter.otlp.proto.grpc.trace_exporter  # noqa: F401, PLC0415
+        import opentelemetry.exporter.otlp.proto.grpc.trace_exporter  # noqa: F401
     except ImportError:
         pytest.skip("opentelemetry-exporter-otlp-proto-grpc not installed")
 
@@ -201,7 +201,7 @@ def weaver_live_check() -> Iterator[Any]:
 
     # WeaverLiveCheck transitively imports the OTLP/gRPC exporter, so it
     # stays inside the function body — the probe above is what gates this.
-    from opentelemetry.test.weaver_live_check import (  # noqa: PLC0415
+    from opentelemetry.test.weaver_live_check import (
         WeaverLiveCheck,
     )
 

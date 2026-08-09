@@ -18,6 +18,8 @@ from opentelemetry.semconv._incubating.attributes import (
 from ._raw_response import ParsableResponse
 from .utils import (
     _openai_response_format_to_output_type,
+    get_property_value,
+    get_served_model,
     get_server_address_and_port,
 )
 
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
         InputMessage,
         OutputMessage,
         Text,
+        ToolDefinition,
     )
 
 try:
@@ -60,6 +63,8 @@ except ImportError:
 try:
     from opentelemetry.util.genai.types import (
         Error,
+        FunctionToolDefinition,
+        GenericToolDefinition,
         InputMessage,
         OutputMessage,
         Reasoning,
@@ -70,6 +75,8 @@ try:
     )
 except ImportError:
     Error = None
+    FunctionToolDefinition = None
+    GenericToolDefinition = None
     InputMessage = None
     OutputMessage = None
     Reasoning = None
@@ -173,7 +180,7 @@ def extract_params(
     )
 
 
-def get_system_instruction(instructions: str | None) -> list["Text"]:
+def get_system_instruction(instructions: str | None) -> list[Text]:
     if Text is None or instructions is None:
         return []
     return [Text(content=instructions)]
@@ -181,7 +188,7 @@ def get_system_instruction(instructions: str | None) -> list["Text"]:
 
 def get_input_messages(
     input_value: str | Sequence[object] | None,
-) -> list["InputMessage"]:
+) -> list[InputMessage]:
     if InputMessage is None or Text is None:
         return []
 
@@ -212,7 +219,7 @@ def get_input_messages(
     return messages
 
 
-def _extract_output_parts(content_blocks: Sequence[object]) -> list["Text"]:
+def _extract_output_parts(content_blocks: Sequence[object]) -> list[Text]:
     if (
         Text is None
         or ResponseOutputText is None
@@ -240,8 +247,8 @@ def _parse_tool_call_arguments(arguments: str | None) -> object:
 
 
 def _extract_reasoning_parts(
-    item: "ResponseReasoningItem",
-) -> list["Reasoning"]:
+    item: ResponseReasoningItem,
+) -> list[Reasoning]:
     if Reasoning is None:
         return []
 
@@ -257,12 +264,76 @@ def _extract_reasoning_parts(
     return parts
 
 
-def _finish_reason_from_status(status: str | None) -> str | None:
+# `incomplete_details.reason` values that map onto a cross-provider finish
+# reason; an unrecognized reason is reported as-is.
+_INCOMPLETE_REASON_TO_FINISH_REASON = {
+    "max_output_tokens": "length",
+    "content_filter": "content_filter",
+}
+
+
+def _finish_reason_from_status(
+    status: str | None,
+    incomplete_reason: str | None = None,
+) -> str | None:
     if status == "completed":
         return "stop"
-    if status in {"failed", "cancelled", "incomplete"}:
-        return status
+    if status in {"failed", "cancelled"}:
+        return "error"
+    if status == "incomplete":
+        if incomplete_reason is None:
+            return status
+        return _INCOMPLETE_REASON_TO_FINISH_REASON.get(
+            incomplete_reason, incomplete_reason
+        )
     return None
+
+
+def get_tool_definitions_from_response(
+    response: Response | None,
+) -> list[ToolDefinition] | None:
+    """Return the tool definitions carried on a fetched response.
+
+    Responses API tools are flat -- a function tool holds ``name``,
+    ``description`` and ``parameters`` directly, unlike the Chat Completions
+    shape that nests them under ``function``. Built-in tools (``web_search``,
+    ``file_search``, ...) are identified by ``type`` alone and carry no name,
+    so they are reported as generic definitions keyed by their type.
+    """
+    if (
+        Response is None
+        or not isinstance(response, Response)
+        or FunctionToolDefinition is None
+        or GenericToolDefinition is None
+    ):
+        return None
+
+    tools = response.tools
+    if not tools:
+        return None
+
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        tool_type = get_property_value(tool, "type")
+        if not isinstance(tool_type, str):
+            continue
+        name = get_property_value(tool, "name")
+        if tool_type == "function":
+            definitions.append(
+                FunctionToolDefinition(
+                    name=name if isinstance(name, str) else "",
+                    description=get_property_value(tool, "description"),
+                    parameters=get_property_value(tool, "parameters"),
+                )
+            )
+        else:
+            definitions.append(
+                GenericToolDefinition(
+                    name=name if isinstance(name, str) else tool_type,
+                    type=tool_type,
+                )
+            )
+    return definitions or None
 
 
 def _response_types_available() -> bool:
@@ -275,8 +346,8 @@ def _response_types_available() -> bool:
 
 
 def get_output_messages_from_response(
-    response: "Response | None",
-) -> list["OutputMessage"]:
+    response: Response | None,
+) -> list[OutputMessage]:
     if (
         not _response_types_available()
         or not isinstance(response, Response)
@@ -343,13 +414,23 @@ def get_output_messages_from_response(
     return messages
 
 
-def extract_finish_reasons(response: "Response | None") -> list[str]:
+def extract_finish_reasons(response: Response | None) -> list[str]:
     if (
         Response is None
         or ResponseOutputMessage is None
         or ResponseFunctionToolCall is None
         or not isinstance(response, Response)
     ):
+        return []
+
+    incomplete_details = response.incomplete_details
+    response_finish_reason = _finish_reason_from_status(
+        response.status,
+        incomplete_details.reason if incomplete_details is not None else None,
+    )
+    if response.status in {"failed", "cancelled", "incomplete"}:
+        return [response_finish_reason] if response_finish_reason else []
+    if response.status in {"queued", "in_progress"}:
         return []
 
     finish_reasons: list[str] = []
@@ -366,16 +447,24 @@ def extract_finish_reasons(response: "Response | None") -> list[str]:
         finish_reason = _finish_reason_from_status(item.status)
         if finish_reason is not None:
             finish_reasons.append(finish_reason)
-    return list(dict.fromkeys(finish_reasons))
+    finish_reasons = list(dict.fromkeys(finish_reasons))
+    if finish_reasons:
+        return finish_reasons
+    return [response_finish_reason] if response_finish_reason else []
 
 
-def get_response_error(response: "Response | None") -> "Error | None":
+def get_response_error(
+    response: object,
+    request_kwargs: dict[str, object] | None = None,
+) -> Error | None:
     """Return an ``Error`` when the response failed, else ``None``.
 
     A failed response carries a ``ResponseError`` (``code`` + ``message``).
     Incomplete responses (``incomplete_details``) are *not* errors — they
     surface as a finish reason instead.
     """
+    response = _parse_raw_response(response, request_kwargs)
+
     if Response is None or Error is None or not isinstance(response, Response):
         return None
     error = response.error
@@ -402,11 +491,32 @@ def get_inference_creation_kwargs(
     return creation_kwargs
 
 
+def get_fetch_response_creation_kwargs(
+    response_id: str,
+    client_instance: object,
+) -> dict[str, object]:
+    """Return ``handler.fetch_response()`` kwargs for a ``responses.retrieve`` call."""
+    address, port = get_server_address_and_port(client_instance)
+
+    creation_kwargs: dict[str, object] = {
+        "provider": GenAIAttributes.GenAiProviderNameValues.OPENAI.value,
+        "response_id": response_id,
+    }
+    if address is not None:
+        creation_kwargs["server_address"] = address
+    if port is not None:
+        creation_kwargs["server_port"] = port
+    return creation_kwargs
+
+
 def apply_request_attributes(
     invocation,
     params: ResponseRequestParams,
     capture_content: bool,
 ) -> None:
+    invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
+        OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens
@@ -428,7 +538,7 @@ def apply_request_attributes(
         invocation.input_messages = get_input_messages(params.input)
 
 
-def extract_usage_tokens(usage: "ResponseUsage | None") -> UsageTokens:
+def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
     if (
         ResponseUsage is None
         or usage is None
@@ -455,20 +565,50 @@ def extract_usage_tokens(usage: "ResponseUsage | None") -> UsageTokens:
     )
 
 
+_RAW_RESPONSE_HEADER = "x-stainless-raw-response"
+
+
+def is_streamed_raw_response(
+    request_kwargs: dict[str, object] | None,
+) -> bool:
+    if request_kwargs is None:
+        return False
+    extra_headers = request_kwargs.get("extra_headers")
+    if not isinstance(extra_headers, Mapping):
+        return False
+    return any(
+        key.lower() == _RAW_RESPONSE_HEADER and value == "stream"
+        for key, value in extra_headers.items()
+    )
+
+
+def _parse_raw_response(
+    response: object,
+    request_kwargs: dict[str, object] | None,
+) -> object:
+    """Return the payload of a non-streaming ``with_raw_response`` result."""
+    if is_streamed_raw_response(request_kwargs) or not isinstance(
+        response, ParsableResponse
+    ):
+        return response
+    return response.parse()
+
+
 def set_invocation_response_attributes(
     invocation,
     response: object,
     capture_content: bool,
+    request_kwargs: dict[str, object] | None = None,
 ) -> None:
-    if isinstance(response, ParsableResponse):
-        # with_raw_response: safe to parse() here since this is the
-        # non-streaming path, so it has no side effects on the caller's stream.
-        response = response.parse()
+    served_model = get_served_model(getattr(response, "headers", None))
+    response = _parse_raw_response(response, request_kwargs)
 
     if Response is None or not isinstance(response, Response):
         return
-
-    invocation.response_model_name = response.model
+    if served_model:
+        invocation.response_model_name = served_model
+    else:
+        invocation.response_model_name = response.model
     invocation.response_id = response.id
 
     if response.service_tier is not None:
@@ -490,3 +630,48 @@ def set_invocation_response_attributes(
         output_messages = get_output_messages_from_response(response)
         if output_messages:
             invocation.output_messages = output_messages
+
+
+def set_fetch_response_attributes(
+    invocation,
+    response: object,
+    capture_content: bool,
+    request_kwargs: dict[str, object] | None = None,
+) -> None:
+    """Record a fetched response on a ``fetch_response`` invocation.
+
+    Token usage is deliberately not recorded: the fetch performs no inference
+    and the counts on the fetched response belong to the original generation.
+    The original input messages are not part of the fetched response either, so
+    only the system instructions and output messages it carries are captured.
+    """
+    served_model = get_served_model(getattr(response, "headers", None))
+    response = _parse_raw_response(response, request_kwargs)
+
+    if Response is None or not isinstance(response, Response):
+        return
+
+    invocation.response_model_name = served_model or response.model
+    invocation.response_status = response.status
+    invocation.finish_reasons = extract_finish_reasons(response) or None
+
+    # `service_tier` is absent from the Response model on some supported SDK
+    # versions, so keep this attribute access guarded.
+    service_tier = getattr(response, "service_tier", None)
+    if service_tier is not None:
+        invocation.attributes[
+            OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER
+        ] = service_tier
+
+    if capture_content:
+        invocation.system_instruction = get_system_instruction(
+            response.instructions
+            if isinstance(response.instructions, str)
+            else None
+        )
+        invocation.output_messages = get_output_messages_from_response(
+            response
+        )
+        invocation.tool_definitions = get_tool_definitions_from_response(
+            response
+        )

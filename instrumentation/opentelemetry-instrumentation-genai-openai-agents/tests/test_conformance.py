@@ -14,8 +14,8 @@ import pytest
 pytest.importorskip("opentelemetry.test.weaver_live_check")
 pytest.importorskip("opentelemetry.exporter.otlp.proto.grpc")
 
-from opentelemetry.test.weaver_live_check import WeaverLiveCheck  # noqa: E402
-from opentelemetry.test_util_genai.conformance import (  # noqa: E402
+from opentelemetry.test.weaver_live_check import WeaverLiveCheck
+from opentelemetry.test_util_genai.conformance import (
     Scenario,
     run_conformance,
 )

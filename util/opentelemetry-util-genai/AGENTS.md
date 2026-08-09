@@ -25,7 +25,9 @@ applicable ones.
 Every new operation type must follow this pattern:
 
 ```python
-invocation = handler.inference(provider, request_model, server_address=..., server_port=...)
+invocation = handler.inference(
+    provider, request_model, server_address=..., server_port=...
+)
 invocation.temperature = ...
 try:
     response = client.call(...)
@@ -42,6 +44,7 @@ Factory methods on `TelemetryHandler` (`handler.py`):
 - `inference(provider, request_model, *, server_address, server_port)` → `InferenceInvocation`
 - `embedding(provider, request_model, *, server_address, server_port)` → `EmbeddingInvocation`
 - `retrieval(*, data_source_id, provider, request_model, server_address, server_port)` → `RetrievalInvocation`
+- `fetch_response(provider, *, response_id, server_address, server_port)` → `FetchResponseInvocation`
 - `tool(name, *, arguments, tool_call_id, tool_type, tool_description)` → `ToolInvocation`
 - `workflow(name)` → `WorkflowInvocation`
 
@@ -86,9 +89,12 @@ class MyStreamWrapper(SyncStreamWrapper[Chunk]):
         self._self_invocation = invocation
         ...
 
-    def _process_chunk(self, chunk): ...      # accumulate state
-    def _on_stream_end(self): self._self_invocation.stop()
-    def _on_stream_error(self, error): self._self_invocation.fail(error)
+    def _process_chunk(self, chunk): ...  # accumulate state
+    def _on_stream_end(self):
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error):
+        self._self_invocation.fail(error)
 ```
 
 The hooks are called internally by the wrapper lifecycle.

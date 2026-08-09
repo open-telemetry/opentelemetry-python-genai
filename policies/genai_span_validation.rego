@@ -274,6 +274,7 @@ _known_operation_names := {
 	"generate_content",
 	"text_completion",
 	"embeddings",
+	"fetch_response",
 	"retrieval",
 	"create_agent",
 	"invoke_agent",

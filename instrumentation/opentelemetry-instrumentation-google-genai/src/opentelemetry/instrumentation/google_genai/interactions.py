@@ -512,7 +512,7 @@ def instrument_interactions(
     snapshot = _InteractionsMethodsSnapshot()
 
     try:
-        import google.genai._interactions.resources.interactions  # noqa: F401, PLC0415
+        import google.genai._interactions.resources.interactions  # noqa: F401
 
         module_path = "google.genai._interactions.resources.interactions"
         sync_class = "InteractionsResource"

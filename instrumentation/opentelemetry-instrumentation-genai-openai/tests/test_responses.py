@@ -25,17 +25,23 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.semconv._incubating.attributes import (
+    openai_attributes as OpenAIAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
+from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
     DEFAULT_MODEL,
+    GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     assert_all_attributes,
     assert_cache_attributes,
+    assert_fetch_response_attributes,
     assert_messages_attribute,
     format_simple_expected_output_message,
     get_responses_weather_tool_definition,
@@ -148,6 +154,15 @@ def _collect_completed_response(stream):
     return response
 
 
+def _collect_metrics(metric_reader):
+    metrics = {}
+    for rm in metric_reader.get_metrics_data().resource_metrics:
+        for scope in rm.scope_metrics:
+            for metric in scope.metrics:
+                metrics[metric.name] = metric
+    return metrics
+
+
 def assert_responses_streaming_timing_metrics(metric_reader):
     """Assert the streaming timing metrics are emitted through the real
     Responses stream wrapper path.
@@ -157,11 +172,7 @@ def assert_responses_streaming_timing_metrics(metric_reader):
     green but silently stop emitting TTFC and per-output-chunk metrics for the
     Responses streaming path.
     """
-    metrics = {}
-    for rm in metric_reader.get_metrics_data().resource_metrics:
-        for scope in rm.scope_metrics:
-            for metric in scope.metrics:
-                metrics[metric.name] = metric
+    metrics = _collect_metrics(metric_reader)
 
     ttfc = metrics.get(
         gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
@@ -252,8 +263,260 @@ def test_responses_create_basic(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
+    assert (
+        span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
+        == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+RETRIEVE_RESPONSE_ID = (
+    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237025"
+)
+RETRIEVE_INCOMPLETE_RESPONSE_ID = (
+    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237026"
+)
+RETRIEVE_FAILED_RESPONSE_ID = (
+    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237027"
+)
+RETRIEVE_STREAM_RESPONSE_ID = (
+    "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237028"
+)
+RETRIEVE_MISSING_RESPONSE_ID = (
+    "resp_doesnotexist0000000000000000000000000000000000"
+)
+RETRIEVE_STREAM_CURSOR = 3
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_basic(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    response = openai_client.responses.retrieve(RETRIEVE_RESPONSE_ID)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_fetch_response_attributes(
+        span,
+        response_id=response.id,
+        response_model=response.model,
+        response_status="completed",
+        finish_reasons=("stop",),
+        response_service_tier=response.service_tier,
+    )
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_captures_content(
+    span_exporter, log_exporter, openai_client, instrument_with_content
+):
+    _skip_if_not_latest()
+
+    response = openai_client.responses.retrieve(RETRIEVE_RESPONSE_ID)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        format_simple_expected_output_message(response.output_text),
+    )
+    assert (
+        json.loads(span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS])
+        == EXPECTED_SYSTEM_INSTRUCTIONS
+    )
+    # A fetched response does not carry the original input messages.
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert len(log_exporter.get_finished_logs()) == 0
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_incomplete(
+    span_exporter, openai_client, instrument_no_content
+):
+    """An incomplete stored response surfaces via status and finish reasons."""
+    _skip_if_not_latest()
+
+    response = openai_client.responses.retrieve(
+        RETRIEVE_INCOMPLETE_RESPONSE_ID
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_fetch_response_attributes(
+        span,
+        response_id=response.id,
+        response_model=response.model,
+        response_status="incomplete",
+        finish_reasons=("length",),
+        response_service_tier=response.service_tier,
+    )
+    assert span.status.status_code is StatusCode.UNSET
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_failed_generation_is_not_a_fetch_error(
+    span_exporter, openai_client, instrument_no_content
+):
+    """A stored response whose generation failed is not a failure of the fetch."""
+    _skip_if_not_latest()
+
+    response = openai_client.responses.retrieve(RETRIEVE_FAILED_RESPONSE_ID)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_fetch_response_attributes(
+        span,
+        response_id=response.id,
+        response_model=response.model,
+        response_status="failed",
+        finish_reasons=("error",),
+        response_service_tier=response.service_tier,
+    )
+    assert span.status.status_code is StatusCode.UNSET
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_streaming(
+    span_exporter, openai_client, instrument_with_content
+):
+    """A streamed replay finalizes only once the caller drains the stream."""
+    _skip_if_not_latest()
+
+    stream = openai_client.responses.retrieve(
+        RETRIEVE_STREAM_RESPONSE_ID,
+        stream=True,
+        starting_after=RETRIEVE_STREAM_CURSOR,
+    )
+    assert isinstance(stream, Stream)
+    assert span_exporter.get_finished_spans() == ()
+
+    response = _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_fetch_response_attributes(
+        span,
+        response_id=RETRIEVE_STREAM_RESPONSE_ID,
+        response_model=response.model,
+        response_status="completed",
+        finish_reasons=("stop",),
+        request_stream=True,
+        stream_cursor=str(RETRIEVE_STREAM_CURSOR),
+        response_service_tier=response.service_tier,
+    )
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        format_simple_expected_output_message(response.output_text),
+    )
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_raw_response(
+    span_exporter, openai_client, instrument_no_content
+):
+    """``with_raw_response`` keeps returning the raw response, still traced."""
+    _skip_if_not_latest()
+
+    raw_response = openai_client.responses.with_raw_response.retrieve(
+        RETRIEVE_RESPONSE_ID
+    )
+    response = raw_response.parse()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_fetch_response_attributes(
+        span,
+        response_id=response.id,
+        response_model=response.model,
+        response_status="completed",
+        finish_reasons=("stop",),
+        response_service_tier=response.service_tier,
+    )
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_with_streaming_response_stays_lazy(
+    span_exporter, openai_client, instrument_no_content
+):
+    """``with_streaming_response`` must not have its body read by telemetry."""
+    _skip_if_not_latest()
+
+    with openai_client.responses.with_streaming_response.retrieve(
+        RETRIEVE_RESPONSE_ID
+    ) as raw_response:
+        # Building telemetry must not consume or close the body before the
+        # caller reads it.
+        assert not raw_response.http_response.is_stream_consumed
+        assert not raw_response.http_response.is_closed
+        response = raw_response.parse()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "fetch_response"
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "fetch_response"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == RETRIEVE_RESPONSE_ID
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    assert response.id == RETRIEVE_RESPONSE_ID
+
+
+@pytest.mark.vcr()
+def test_responses_retrieve_api_error(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with pytest.raises(NotFoundError) as exc_info:
+        openai_client.responses.retrieve(RETRIEVE_MISSING_RESPONSE_ID)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "fetch_response"
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "fetch_response"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == RETRIEVE_MISSING_RESPONSE_ID
+    )
+    assert span.status.status_code is StatusCode.ERROR
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == f"openai.{type(exc_info.value).__name__}"
+    )
+    # The fetch failed before any response existed to describe.
+    assert GEN_AI_RESPONSE_STATUS not in span.attributes
+
+
+def test_responses_retrieve_does_not_record_token_usage_metric(
+    span_exporter, metric_reader, openai_client, instrument_no_content, vcr
+):
+    """A fetch consumes no tokens, so only the duration metric is recorded."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette("test_responses_retrieve_basic[content_mode0].yaml"):
+        openai_client.responses.retrieve(RETRIEVE_RESPONSE_ID)
+
+    metrics = _collect_metrics(metric_reader)
+    assert gen_ai_metrics.GEN_AI_CLIENT_TOKEN_USAGE not in metrics
+
+    duration = metrics[gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION]
+    (point,) = duration.data.data_points
+    assert (
+        point.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "fetch_response"
+    )
+    assert (
+        point.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "gpt-4o-mini-2024-07-18"
+    )
+    # The response id is high cardinality and must stay off metrics.
+    assert GenAIAttributes.GEN_AI_RESPONSE_ID not in point.attributes
 
 
 @pytest.mark.vcr()

@@ -4,7 +4,7 @@
 import json
 import os
 from collections.abc import AsyncIterable, Callable, Iterable
-from typing import Any, Optional, Union
+from typing import Any
 
 from google.genai.models import AsyncModels, Models
 from google.genai.models import t as transformers
@@ -139,24 +139,24 @@ def _guess_genai_system_from_env():
     return gen_ai_attributes.GenAiSystemValues.GEMINI.name.lower()
 
 
-def _get_is_vertexai(models_object: Union[Models, AsyncModels]):
+def _get_is_vertexai(models_object: Models | AsyncModels):
     # Since commit 8e561de04965bb8766db87ad8eea7c57c1040442 of "googleapis/python-genai",
     # it is possible to obtain the information using a documented property.
     if hasattr(models_object, "vertexai"):
-        vertexai_attr = getattr(models_object, "vertexai")
+        vertexai_attr = models_object.vertexai
         if vertexai_attr is not None:
             return vertexai_attr
     # For earlier revisions, it is necessary to deeply inspect the internals.
     if hasattr(models_object, "_api_client"):
-        client = getattr(models_object, "_api_client")
+        client = models_object._api_client
         if not client:
             return None
         if hasattr(client, "vertexai"):
-            return getattr(client, "vertexai")
+            return client.vertexai
     return None
 
 
-def _determine_genai_system(models_object: Union[Models, AsyncModels]):
+def _determine_genai_system(models_object: Models | AsyncModels):
     vertexai_attr = _get_is_vertexai(models_object)
     if vertexai_attr is None:
         return _guess_genai_system_from_env()
@@ -459,8 +459,8 @@ def _create_instrumented_generate_content(
     ):
         def _execute(
             model: str,
-            contents: Union[ContentListUnion, ContentListUnionDict],
-            config: Optional[GenerateContentConfigOrDict] = None,
+            contents: ContentListUnion | ContentListUnionDict,
+            config: GenerateContentConfigOrDict | None = None,
             *_args,
             **_kwargs,
         ):
@@ -619,8 +619,8 @@ def _create_instrumented_generate_content_stream(
     ):
         def _execute(
             model: str,
-            contents: Union[ContentListUnion, ContentListUnionDict],
-            config: Optional[GenerateContentConfigOrDict] = None,
+            contents: ContentListUnion | ContentListUnionDict,
+            config: GenerateContentConfigOrDict | None = None,
             *_args,
             **_kwargs,
         ):
@@ -690,8 +690,8 @@ def _create_instrumented_async_generate_content(
     ):
         async def _execute(
             model: str,
-            contents: Union[ContentListUnion, ContentListUnionDict],
-            config: Optional[GenerateContentConfigOrDict] = None,
+            contents: ContentListUnion | ContentListUnionDict,
+            config: GenerateContentConfigOrDict | None = None,
             *_args,
             **_kwargs,
         ):
@@ -774,8 +774,8 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
     ):
         async def _execute(
             model: str,
-            contents: Union[ContentListUnion, ContentListUnionDict],
-            config: Optional[GenerateContentConfigOrDict] = None,
+            contents: ContentListUnion | ContentListUnionDict,
+            config: GenerateContentConfigOrDict | None = None,
             *_args,
             **_kwargs,
         ):

@@ -25,7 +25,8 @@ API
 ---
 """
 
-from typing import Any, Callable, Collection
+from collections.abc import Callable, Collection
+from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 from wrapt import wrap_function_wrapper

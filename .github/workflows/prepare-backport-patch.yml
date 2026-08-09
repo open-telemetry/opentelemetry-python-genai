@@ -11,6 +11,7 @@ on:
         - opentelemetry-instrumentation-genai-langchain
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-instrumentation-genai-qwen-agent
         - opentelemetry-util-genai
         description: 'Package to prepare for patch release'
         required: true

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -47,7 +47,7 @@ _PROVIDER_NAME_OVERRIDES: dict[str, str] = {
 }
 
 
-def normalize_provider(metadata: Optional[dict[str, Any]]) -> Optional[str]:
+def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
     """Return the spec ``gen_ai.provider.name`` value derived from metadata.
 
     Returns ``None`` when no provider can be determined; callers decide how
@@ -114,7 +114,7 @@ def _content_to_parts(
 
 def _legacy_function_call_request(
     message: AIMessage,
-) -> Optional[ToolCallRequest]:
+) -> ToolCallRequest | None:
     """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
 
     Pre-tools OpenAI models return a single call under
@@ -356,7 +356,7 @@ def make_last_output_message(data: Any) -> list[OutputMessage]:
     return []
 
 
-def serialize(obj: Any) -> Optional[str]:
+def serialize(obj: Any) -> str | None:
     """Serialize object to JSON string.
 
     Uses default=str to handle non-JSON-serializable objects (like LangChain

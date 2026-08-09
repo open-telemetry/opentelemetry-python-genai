@@ -17,8 +17,8 @@ import pytest
 # Skip collection when weaver_live_check isn't installed (non-conformance envs).
 pytest.importorskip("opentelemetry.test.weaver_live_check")
 
-from opentelemetry.test.weaver_live_check import WeaverLiveCheck  # noqa: E402
-from opentelemetry.test_util_genai.conformance import (  # noqa: E402
+from opentelemetry.test.weaver_live_check import WeaverLiveCheck
+from opentelemetry.test_util_genai.conformance import (
     Scenario,
     run_conformance,
 )
@@ -27,6 +27,7 @@ from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.responses_conversation import ResponsesConversationScenario
+from .conformance.responses_fetch import ResponsesFetchScenario
 from .conformance.responses_stream import ResponsesStreamScenario
 from .conformance.responses_streaming import ResponsesStreamingScenario
 from .conformance.tool_calling import ToolCallingScenario
@@ -40,6 +41,7 @@ from .conformance.tool_calling import ToolCallingScenario
         EmbeddingScenario(),
         ToolCallingScenario(),
         ResponsesConversationScenario(),
+        ResponsesFetchScenario(),
         ResponsesStreamScenario(),
         ResponsesStreamingScenario(),
     ],

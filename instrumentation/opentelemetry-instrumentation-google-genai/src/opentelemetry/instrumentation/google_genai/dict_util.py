@@ -5,8 +5,6 @@ import json
 import logging
 from typing import (
     Any,
-    Dict,
-    Set,
     Union,
 )
 
@@ -17,7 +15,7 @@ IntList = list[int]
 FloatList = list[float]
 HomogenousPrimitiveList = Union[BoolList, StringList, IntList, FloatList]
 FlattenedValue = Union[Primitive, HomogenousPrimitiveList]
-FlattenedDict = Dict[str, FlattenedValue]
+FlattenedDict = dict[str, FlattenedValue]
 
 
 _logger = logging.getLogger(__name__)
@@ -38,7 +36,7 @@ def _is_homogenous_primitive_list(v):
 def _flatten_compound_value_using_json(
     key: str,
     value: Any,
-    exclude_keys: Set[str],
+    exclude_keys: set[str],
     _from_json=False,
 ) -> FlattenedDict:
     if _from_json:
@@ -69,7 +67,7 @@ def _flatten_compound_value_using_json(
 def _flatten_compound_value(
     key: str,
     value: Any,
-    exclude_keys: Set[str],
+    exclude_keys: set[str],
     _from_json=False,
 ) -> FlattenedDict:
     if isinstance(value, dict):
@@ -94,7 +92,7 @@ def _flatten_compound_value(
 def _flatten_value(
     key: str,
     value: Any,
-    exclude_keys: Set[str],
+    exclude_keys: set[str],
     _from_json=False,
 ) -> FlattenedDict:
     if value is None or key in exclude_keys:
@@ -105,9 +103,9 @@ def _flatten_value(
 
 
 def flatten_dict(
-    d: Dict[str, Any],
+    d: dict[str, Any],
     key_prefix: str,
-    exclude_keys: Set[str],
+    exclude_keys: set[str],
 ) -> FlattenedDict:
     result = {}
     for key, value in d.items():

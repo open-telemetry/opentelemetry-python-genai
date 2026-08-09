@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Union, cast
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from anthropic._streaming import Stream as AnthropicStream
 from anthropic.types import Message as AnthropicMessage
@@ -55,11 +56,9 @@ def messages_create(
     handler: TelemetryHandler,
 ) -> Callable[
     ...,
-    Union[
-        AnthropicMessage,
-        AnthropicStream[RawMessageStreamEvent],
-        MessagesStreamWrapper[None],
-    ],
+    AnthropicMessage
+    | AnthropicStream[RawMessageStreamEvent]
+    | MessagesStreamWrapper[None],
 ]:
     """Wrap the `create` method of the `Messages` class to trace it."""
     capture_content = handler.should_capture_content()
@@ -67,19 +66,16 @@ def messages_create(
     def traced_method(
         wrapped: Callable[
             ...,
-            Union[
-                AnthropicMessage,
-                AnthropicStream[RawMessageStreamEvent],
-            ],
+            AnthropicMessage | AnthropicStream[RawMessageStreamEvent],
         ],
         instance: Messages,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Union[
-        AnthropicMessage,
-        AnthropicStream[RawMessageStreamEvent],
-        MessagesStreamWrapper[None],
-    ]:
+    ) -> (
+        AnthropicMessage
+        | AnthropicStream[RawMessageStreamEvent]
+        | MessagesStreamWrapper[None]
+    ):
         invocation = _create_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -99,7 +95,7 @@ def messages_create(
             raise
 
     return cast(
-        'Callable[..., Union["AnthropicMessage", "AnthropicStream[RawMessageStreamEvent]", MessagesStreamWrapper[None]]]',
+        'Callable[..., "AnthropicMessage" | "AnthropicStream[RawMessageStreamEvent]" | MessagesStreamWrapper[None]]',
         traced_method,
     )
 
@@ -108,11 +104,9 @@ def async_messages_create(
     handler: TelemetryHandler,
 ) -> Callable[
     ...,
-    Union[
-        AnthropicMessage,
-        AnthropicAsyncStream[RawMessageStreamEvent],
-        AsyncMessagesStreamWrapper[None],
-    ],
+    AnthropicMessage
+    | AnthropicAsyncStream[RawMessageStreamEvent]
+    | AsyncMessagesStreamWrapper[None],
 ]:
     """Wrap the async `create` method of the `AsyncMessages` class."""
     capture_content = handler.should_capture_content()
@@ -121,20 +115,17 @@ def async_messages_create(
         wrapped: Callable[
             ...,
             Awaitable[
-                Union[
-                    AnthropicMessage,
-                    AnthropicAsyncStream[RawMessageStreamEvent],
-                ]
+                AnthropicMessage | AnthropicAsyncStream[RawMessageStreamEvent]
             ],
         ],
         instance: AsyncMessages,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Union[
-        AnthropicMessage,
-        AnthropicAsyncStream[RawMessageStreamEvent],
-        AsyncMessagesStreamWrapper[None],
-    ]:
+    ) -> (
+        AnthropicMessage
+        | AnthropicAsyncStream[RawMessageStreamEvent]
+        | AsyncMessagesStreamWrapper[None]
+    ):
         invocation = _create_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -162,7 +153,7 @@ def async_messages_create(
             raise
 
     return cast(
-        'Callable[..., Union["AnthropicMessage", "AnthropicAsyncStream[RawMessageStreamEvent]", AsyncMessagesStreamWrapper[None]]]',
+        'Callable[..., "AnthropicMessage" | "AnthropicAsyncStream[RawMessageStreamEvent]" | AsyncMessagesStreamWrapper[None]]',
         traced_method,
     )
 

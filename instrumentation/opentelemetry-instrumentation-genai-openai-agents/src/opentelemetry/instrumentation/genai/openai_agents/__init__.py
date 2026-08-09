@@ -33,7 +33,8 @@ Usage
 from __future__ import annotations
 
 import logging
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from agents.tracing import (
     add_trace_processor,

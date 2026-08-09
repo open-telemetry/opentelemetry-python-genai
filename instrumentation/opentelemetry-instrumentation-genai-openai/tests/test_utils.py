@@ -4,7 +4,7 @@
 """Shared test utilities for OpenAI instrumentation tests."""
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
@@ -16,9 +16,16 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.trace import SpanKind
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
+# TODO: use the semconv constants once these attributes are released in
+# opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
+# in https://github.com/open-telemetry/semantic-conventions-genai/pull/353.
+GEN_AI_REQUEST_STREAM_CURSOR = "gen_ai.request.stream_cursor"
+GEN_AI_RESPONSE_STATUS = "gen_ai.response.status"
 GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
     "gen_ai.usage.cache_creation.input_tokens"
 )
@@ -78,13 +85,13 @@ def assert_all_attributes(
     latest_experimental_enabled: bool,
     response_id: str = None,
     response_model: str = None,
-    input_tokens: Optional[int] = None,
-    output_tokens: Optional[int] = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
     operation_name: str = "chat",
     server_address: str = "api.openai.com",
     server_port: int = 443,
-    request_service_tier: Optional[str] = None,
-    response_service_tier: Optional[str] = None,
+    request_service_tier: str | None = None,
+    response_service_tier: str | None = None,
 ):
     assert span.name == f"{operation_name} {request_model}"
     assert (
@@ -142,6 +149,67 @@ def assert_all_attributes(
     _assert_optional_attribute(
         span,
         response_service_tier_attr_name,
+        response_service_tier,
+    )
+
+
+def assert_fetch_response_attributes(
+    span: ReadableSpan,
+    *,
+    response_id: str,
+    response_model: str | None = None,
+    response_status: str | None = None,
+    finish_reasons: tuple | None = None,
+    request_stream: bool | None = None,
+    stream_cursor: str | None = None,
+    response_service_tier: str | None = None,
+    server_address: str = "api.openai.com",
+):
+    """Assert a ``gen_ai.fetch_response.client`` span matches the semconv.
+
+    Fetching a stored response performs no inference, so the span must carry
+    neither request-side attributes nor any token usage from the fetched
+    response — those counts belong to the original generation.
+    """
+    # The response id is high cardinality, so it stays out of the span name.
+    assert span.name == FETCH_RESPONSE_OPERATION_NAME
+    assert span.kind is SpanKind.CLIENT
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == FETCH_RESPONSE_OPERATION_NAME
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME]
+        == GenAIAttributes.GenAiProviderNameValues.OPENAI.value
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == response_id
+    assert (
+        span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
+        == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
+    assert span.attributes[ServerAttributes.SERVER_ADDRESS] == server_address
+
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+    assert GenAIAttributes.GEN_AI_REQUEST_MODEL not in span.attributes
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+
+    _assert_optional_attribute(
+        span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response_model
+    )
+    _assert_optional_attribute(span, GEN_AI_RESPONSE_STATUS, response_status)
+    _assert_optional_attribute(
+        span, GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons
+    )
+    _assert_optional_attribute(
+        span, GenAIAttributes.GEN_AI_REQUEST_STREAM, request_stream
+    )
+    _assert_optional_attribute(
+        span, GEN_AI_REQUEST_STREAM_CURSOR, stream_cursor
+    )
+    _assert_optional_attribute(
+        span,
+        OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER,
         response_service_tier,
     )
 

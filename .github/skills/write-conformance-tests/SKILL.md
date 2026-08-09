@@ -77,20 +77,24 @@ returning `(type, modality)` tuples (defined alongside `_part_types` in
 [Lib-specific assertions](#lib-specific-assertions)):
 
 ```python
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        chat_spans = [
-            entry["span"] for entry in report["samples"]
-            if "span" in entry
-            and _attr(entry["span"], "gen_ai.operation.name") == "chat"
-        ]
-        input_parts = {
-            (t, m) for span in chat_spans
-            for t, m in _part_fields(_attr(span, "gen_ai.input.messages"))
-        }
-        # e.g. an inline image + an audio URL were sent
-        assert ("blob", "image") in input_parts, f"no image blob, saw {input_parts}"
-        assert ("uri", "audio") in input_parts, f"no audio uri, saw {input_parts}"
+def validate(self, report: LiveCheckReport) -> None:
+    super().validate(report)
+    chat_spans = [
+        entry["span"]
+        for entry in report["samples"]
+        if "span" in entry
+        and _attr(entry["span"], "gen_ai.operation.name") == "chat"
+    ]
+    input_parts = {
+        (t, m)
+        for span in chat_spans
+        for t, m in _part_fields(_attr(span, "gen_ai.input.messages"))
+    }
+    # e.g. an inline image + an audio URL were sent
+    assert ("blob", "image") in input_parts, (
+        f"no image blob, saw {input_parts}"
+    )
+    assert ("uri", "audio") in input_parts, f"no audio uri, saw {input_parts}"
 ```
 
 If a part type the library accepts can't round-trip yet (a util-genai/semconv
@@ -228,8 +232,9 @@ class ToolCallingScenario(Scenario):
     expected_spans = {"chat": 2}  # initial turn + follow-up with tool results
     expected_metrics = ("gen_ai.client.operation.duration",)
 
-    def run(self, *, tracer_provider, meter_provider, logger_provider, vcr) -> None:
-        ...  # drive a tool-calling turn — see "Scenario modules" above
+    def run(
+        self, *, tracer_provider, meter_provider, logger_provider, vcr
+    ) -> None: ...  # drive a tool-calling turn — see "Scenario modules" above
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)  # keep the expected_spans / _metrics checks
@@ -247,11 +252,13 @@ class ToolCallingScenario(Scenario):
         assert chat_spans, "no chat span emitted"
 
         output_part_types = {
-            t for span in chat_spans
+            t
+            for span in chat_spans
             for t in _part_types(_attr(span, "gen_ai.output.messages"))
         }
         input_part_types = {
-            t for span in chat_spans
+            t
+            for span in chat_spans
             for t in _part_types(_attr(span, "gen_ai.input.messages"))
         }
         assert "tool_call" in output_part_types, (

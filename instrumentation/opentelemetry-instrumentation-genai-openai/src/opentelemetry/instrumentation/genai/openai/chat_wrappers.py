@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
 
 from openai import AsyncStream, Stream
 from openai.types.chat import ChatCompletionChunk
@@ -35,10 +34,10 @@ class _ChatStreamMixin:
     _self_invocation: InferenceInvocation
     _self_capture_content: bool
     _self_choice_buffers: list[ChoiceBuffer]
-    _self_response_id: Optional[str]
-    _self_service_tier: Optional[str]
-    _self_prompt_tokens: Optional[int]
-    _self_completion_tokens: Optional[int]
+    _self_response_id: str | None
+    _self_service_tier: str | None
+    _self_prompt_tokens: int | None
+    _self_completion_tokens: int | None
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
         # Set eagerly so the per-chunk streaming timing metrics carry
@@ -153,7 +152,7 @@ class _ChatStreamMixin:
     def _on_stream_error(self, error: BaseException) -> None:
         self._cleanup(error)
 
-    def _cleanup(self, error: Optional[BaseException] = None) -> None:
+    def _cleanup(self, error: BaseException | None = None) -> None:
         self._self_invocation.response_id = self._self_response_id
         self._self_invocation.input_tokens = self._self_prompt_tokens
         self._self_invocation.output_tokens = self._self_completion_tokens

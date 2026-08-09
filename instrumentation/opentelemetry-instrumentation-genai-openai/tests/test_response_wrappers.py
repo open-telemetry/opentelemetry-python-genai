@@ -8,6 +8,7 @@ import pytest
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
     AsyncResponseStreamManagerWrapper,
     AsyncResponseStreamWrapper,
+    FetchResponseStreamWrapper,
     ResponseStreamManagerWrapper,
     ResponseStreamWrapper,
 )
@@ -162,8 +163,9 @@ class _FakeAsyncResponse:
 
 
 class _FakeSyncResponse:
-    def __init__(self):
+    def __init__(self, headers=None):
         self.close_calls = 0
+        self.headers = headers or {}
 
     def close(self):
         self.close_calls += 1
@@ -605,6 +607,34 @@ def test_process_event_incomplete_is_not_an_error():
 
 
 @_requires_responses_types
+def test_stop_prefers_served_model_header():
+    invocation, calls = _capturing_invocation()
+    stream = _FakeSyncStream(
+        response=_FakeSyncResponse(
+            headers={"x-ms-served-model": "served-gpt-4.1"}
+        )
+    )
+    wrapper = _make_stream_wrapper(stream, invocation=invocation)
+
+    wrapper._stop(_make_response(model="body-gpt-4.1"))
+
+    assert calls["stop"] == 1
+    assert invocation.response_model_name == "served-gpt-4.1"
+
+
+@_requires_responses_types
+def test_stop_falls_back_to_body_model_without_header():
+    invocation, calls = _capturing_invocation()
+    stream = _FakeSyncStream(response=_FakeSyncResponse(headers={}))
+    wrapper = _make_stream_wrapper(stream, invocation=invocation)
+
+    wrapper._stop(_make_response(model="body-gpt-4.1"))
+
+    assert calls["stop"] == 1
+    assert invocation.response_model_name == "body-gpt-4.1"
+
+
+@_requires_responses_types
 def test_process_event_error_event_records_error():
     invocation, calls = _capturing_invocation()
     wrapper = _make_stream_wrapper(_FakeSyncStream(), invocation=invocation)
@@ -621,3 +651,91 @@ def test_process_event_error_event_records_error():
     (error,) = calls["fail"]
     assert error.type == "rate_limit_exceeded"
     assert error.message == "slow down"
+
+
+def _make_fetch_stream_wrapper(stream, invocation):
+    return FetchResponseStreamWrapper(
+        stream=stream,
+        invocation=invocation,
+        capture_content=False,
+    )
+
+
+def _capturing_fetch_invocation():
+    calls = {"stop": 0, "fail": []}
+    invocation = SimpleNamespace(
+        response_model_name=None,
+        response_status=None,
+        finish_reasons=None,
+        stream_cursor=None,
+        output_messages=[],
+        system_instruction=[],
+        tool_definitions=None,
+        attributes={},
+    )
+    invocation.stop = lambda: calls.__setitem__("stop", calls["stop"] + 1)
+    invocation.fail = lambda error: calls["fail"].append(error)
+    return invocation, calls
+
+
+@_requires_responses_types
+def test_fetch_stream_completed_records_fetch_response_attributes():
+    invocation, calls = _capturing_fetch_invocation()
+    wrapper = _make_fetch_stream_wrapper(
+        _FakeSyncStream(), invocation=invocation
+    )
+    event = SimpleNamespace(
+        type="response.completed",
+        response=_make_response(status="completed"),
+    )
+
+    wrapper.process_event(event)
+
+    assert calls["stop"] == 1
+    assert calls["fail"] == []
+    assert invocation.response_status == "completed"
+    assert invocation.finish_reasons == ["stop"]
+
+
+@_requires_responses_types
+def test_fetch_stream_replayed_failure_is_not_an_error_of_the_fetch():
+    """A replayed ``response.failed`` describes the original generation."""
+    invocation, calls = _capturing_fetch_invocation()
+    wrapper = _make_fetch_stream_wrapper(
+        _FakeSyncStream(), invocation=invocation
+    )
+    event = SimpleNamespace(
+        type="response.failed",
+        response=_make_response(
+            status="failed",
+            error={"code": "server_error", "message": "boom"},
+        ),
+    )
+
+    wrapper.process_event(event)
+
+    assert calls["fail"] == []
+    assert calls["stop"] == 1
+    assert invocation.response_status == "failed"
+    assert invocation.finish_reasons == ["error"]
+
+
+@_requires_responses_types
+def test_fetch_stream_transport_error_event_still_fails_the_fetch():
+    """An SSE ``error`` event is a failure of the fetch itself."""
+    invocation, calls = _capturing_fetch_invocation()
+    wrapper = _make_fetch_stream_wrapper(
+        _FakeSyncStream(), invocation=invocation
+    )
+    event = SimpleNamespace(
+        type="error",
+        code="rate_limit_exceeded",
+        message="slow down",
+        response=None,
+    )
+
+    wrapper.process_event(event)
+
+    assert calls["stop"] == 0
+    (error,) = calls["fail"]
+    assert error.type == "rate_limit_exceeded"

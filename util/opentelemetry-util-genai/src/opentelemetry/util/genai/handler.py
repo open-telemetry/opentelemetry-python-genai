@@ -57,6 +57,7 @@ from opentelemetry.util.genai.completion_hook import (
 )
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
+    FetchResponseInvocation,
     InferenceInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -361,6 +362,41 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+        )
+
+    def fetch_response(
+        self,
+        provider: str,
+        *,
+        response_id: str,
+        request_stream: bool | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+    ) -> FetchResponseInvocation:
+        """Returns a Fetch Response invocation. Starts span when called.
+
+        Describes fetching a previously generated model response by its
+        identifier. No inference is performed and no tokens are consumed, so
+        the fetched response's token counts must not be recorded here.
+
+        Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
+        to finalize the span upon exiting. If not used as a ContextManager, the caller is
+        responsible for calling `stop` or `fail` to finalize the span.
+
+        Only set data attributes on the invocation object, do not modify the span or context.
+        """
+        return FetchResponseInvocation(
+            self._tracer,
+            self._metrics_recorder,
+            self._logger,
+            self._completion_hook,
+            provider=provider,
+            response_id=response_id,
+            request_stream=request_stream,
+            server_address=server_address,
+            server_port=server_port,
+            error_type_resolver=error_type_resolver,
         )
 
     def tool(

@@ -189,7 +189,7 @@ def test_sync_stream_wrapper_exposes_wrapped_stream():
     stream = _FakeSyncStream()
     wrapper = _TestSyncStreamWrapper(stream)
 
-    assert getattr(wrapper, "__wrapped__") is stream
+    assert wrapper.__wrapped__ is stream
 
 
 def test_sync_stream_wrapper_magic_method_passthrough():
@@ -367,7 +367,7 @@ def test_async_stream_wrapper_exposes_wrapped_stream():
     stream = _FakeAsyncStream()
     wrapper = _TestAsyncStreamWrapper(stream)
 
-    assert getattr(wrapper, "__wrapped__") is stream
+    assert wrapper.__wrapped__ is stream
 
 
 def test_async_stream_wrapper_magic_method_passthrough():
