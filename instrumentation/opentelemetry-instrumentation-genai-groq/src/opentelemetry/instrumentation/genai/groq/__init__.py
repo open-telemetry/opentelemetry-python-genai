@@ -58,7 +58,7 @@ API
 ---
 """
 
-from typing import Collection
+from collections.abc import Collection
 
 from wrapt import wrap_function_wrapper
 
@@ -79,7 +79,7 @@ from .patch import (
 def _is_parse_supported():
     """Check if the parse() method is available on the Completions class."""
     try:
-        from groq.resources.chat.completions import (  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        from groq.resources.chat.completions import (  # pylint: disable=import-outside-toplevel
             Completions,
         )
 
@@ -137,7 +137,7 @@ class GroqInstrumentor(BaseInstrumentor):
             )
 
     def _uninstrument(self, **kwargs):
-        import groq  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        import groq  # pylint: disable=import-outside-toplevel
 
         unwrap(groq.resources.chat.completions.Completions, "create")
         unwrap(groq.resources.chat.completions.AsyncCompletions, "create")

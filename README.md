@@ -26,6 +26,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 | [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.0.0 | 1.1b0.dev | to be released |
 | [opentelemetry-instrumentation-genai-claude-agent-sdk](./instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14 | 1.0b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-crewai](./instrumentation/opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1 | 1.1b0.dev | skeleton |
+| [opentelemetry-instrumentation-genai-groq](./instrumentation/opentelemetry-instrumentation-genai-groq) | groq >= 0.6.0 | 1.0b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-llama-index](./instrumentation/opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19 | 1.1b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20 | 1.0b0.dev | to be released |
 | [opentelemetry-instrumentation-genai-smolagents](./instrumentation/opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0 | 1.1b0.dev | skeleton |
