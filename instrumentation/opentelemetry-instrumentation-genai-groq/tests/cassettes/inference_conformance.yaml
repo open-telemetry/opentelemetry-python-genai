@@ -1,0 +1,48 @@
+interactions:
+- request:
+    body: '{"messages":[{"role":"user","content":"Say this is a test"}],"model":"llama3-8b-8192","stream":false}'
+    headers:
+      authorization:
+      - Bearer test_groq_api_key
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.groq.com/openai/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-12345",
+          "object": "chat.completion",
+          "created": 1731368630,
+          "model": "llama3-8b-8192",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "This is a test."
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 14,
+            "total_tokens": 26
+          },
+          "x_groq": {
+            "usage": {
+              "prompt_tokens": 12,
+              "completion_tokens": 14
+            }
+          }
+        }
+    headers:
+      Content-Type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1
