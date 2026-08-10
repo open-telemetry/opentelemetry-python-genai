@@ -55,10 +55,11 @@ def image_from_url(
 ) -> MessagePart | None:
     """Return a media part for an image ``url``.
 
-    A ``data:<mime>;base64,<payload>`` URL is decoded into a :class:`Blob`;
-    a ``data:`` URL without base64 encoding keeps its raw payload bytes; any
-    other URL becomes a :class:`Uri`. Shared by instrumentations that parse
-    provider image blocks.
+    A ``data:<mime>;base64,<payload>`` URL is decoded into a
+    :class:`~opentelemetry.util.genai.types.Blob`; a ``data:`` URL without
+    base64 encoding keeps its raw payload bytes; any other URL becomes a
+    :class:`~opentelemetry.util.genai.types.Uri`. Shared by instrumentations
+    that parse provider image blocks.
     """
     if url.startswith("data:"):
         header, _, payload = url[len("data:") :].partition(",")
