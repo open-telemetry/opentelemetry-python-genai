@@ -264,9 +264,9 @@ def test_chat_openai_multimodal_image_llm_call(
         assert len(spans) == 1
         span = spans[0]
 
-        assert span.attributes.get(
-            gen_ai_attributes.GEN_AI_REQUEST_MODEL
-        ) == ("gpt-4o")
+        assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+            "gpt-4o"
+        )
 
         input_message = span.attributes.get(
             gen_ai_attributes.GEN_AI_INPUT_MESSAGES
@@ -504,9 +504,9 @@ def test_chat_anthropic_multimodal_image_llm_call(
         assert len(spans) == 1
         span = spans[0]
 
-        assert span.attributes.get(
-            gen_ai_attributes.GEN_AI_REQUEST_MODEL
-        ) == ("claude-sonnet-4-5")
+        assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+            "claude-sonnet-4-5"
+        )
 
         input_message = span.attributes.get(
             gen_ai_attributes.GEN_AI_INPUT_MESSAGES
