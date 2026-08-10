@@ -12,8 +12,9 @@ telemetry exactly once on success, error, or close.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator, Callable
 from types import TracebackType
-from typing import Any, AsyncGenerator, Callable, Literal, cast
+from typing import Any, Literal, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import AgentInvocation
@@ -105,7 +106,7 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
 
 def _build_invocation(
     handler: TelemetryHandler,
-    instance: Any,
+    instance: object,
     msgs: Any,
     request: Any,
 ) -> AgentInvocation:
@@ -131,7 +132,11 @@ def make_query_handler_wrapper(
 
     def query_handler_wrapper(
         wrapped: Callable[..., AsyncGenerator[Any, None]],
-        instance: Any,
+        # The runner is only attribute-probed via ``getattr`` (``agent_name``
+        # arrived during the 1.1.x line), and ``qwenpaw`` cannot be imported
+        # for typing on Python >= 3.14, so ``object`` is the narrowest
+        # honest annotation here.
+        instance: object,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:

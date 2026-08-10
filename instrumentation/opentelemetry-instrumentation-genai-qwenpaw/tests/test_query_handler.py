@@ -295,7 +295,7 @@ async def test_uninstrument_restores_query_handler(
     meter_provider,
     span_exporter,
 ):
-    from opentelemetry.instrumentation.genai.qwenpaw import (  # noqa: PLC0415
+    from opentelemetry.instrumentation.genai.qwenpaw import (
         QwenPawInstrumentor,
     )
 

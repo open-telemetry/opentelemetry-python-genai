@@ -44,7 +44,7 @@ def test_non_empty_str():
 
 def test_input_messages_from_agentscope_msg():
     pytest.importorskip("agentscope.message")
-    from agentscope.message import Msg, TextBlock  # noqa: PLC0415
+    from agentscope.message import Msg, TextBlock
 
     msg = Msg(
         name="u", role="user", content=[TextBlock(type="text", text="hi")]
@@ -63,7 +63,7 @@ def test_input_messages_skips_unmappable_entries():
 
 def test_output_message_from_yield_item():
     pytest.importorskip("agentscope.message")
-    from agentscope.message import Msg, TextBlock  # noqa: PLC0415
+    from agentscope.message import Msg, TextBlock
 
     assistant = Msg(
         name="Friday",

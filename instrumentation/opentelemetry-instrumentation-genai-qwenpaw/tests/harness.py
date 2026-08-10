@@ -10,14 +10,15 @@ generator, so no model, tool, or network access is involved.
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Callable, Iterator
+from typing import Any
 from unittest import mock
 
 
 def assistant_reply(text: str) -> Any:
-    from agentscope.message import Msg, TextBlock  # noqa: PLC0415
+    from agentscope.message import Msg, TextBlock
 
     return Msg(
         name="Friday",
@@ -27,7 +28,7 @@ def assistant_reply(text: str) -> Any:
 
 
 def user_command_msgs(text: str = "/stop") -> list[Any]:
-    from agentscope.message import Msg  # noqa: PLC0415
+    from agentscope.message import Msg
 
     return [Msg(name="user", role="user", content=text)]
 
