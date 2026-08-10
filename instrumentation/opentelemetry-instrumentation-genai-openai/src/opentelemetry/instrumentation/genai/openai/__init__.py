@@ -58,8 +58,8 @@ API
 ---
 """
 
+from collections.abc import Collection
 from importlib import import_module
-from typing import Collection
 
 from wrapt import wrap_function_wrapper
 
@@ -79,8 +79,10 @@ from .patch import (
 )
 from .patch_responses import (
     async_responses_create,
+    async_responses_retrieve,
     async_responses_stream,
     responses_create,
+    responses_retrieve,
     responses_stream,
 )
 
@@ -91,7 +93,7 @@ def _is_parse_supported():
     The parse() method for structured outputs was added in openai >= 1.40.0.
     """
     try:
-        from openai.resources.chat.completions import (  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        from openai.resources.chat.completions import (  # pylint: disable=import-outside-toplevel
             Completions,
         )
 
@@ -188,8 +190,22 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 async_responses_stream(handler),
             )
 
+            # retrieve() fetches a stored response by id. No inference happens
+            # and no tokens are consumed, so it is traced as a fetch_response
+            # operation rather than through the create wrappers.
+            wrap_function_wrapper(
+                "openai.resources.responses.responses",
+                "Responses.retrieve",
+                responses_retrieve(handler),
+            )
+            wrap_function_wrapper(
+                "openai.resources.responses.responses",
+                "AsyncResponses.retrieve",
+                async_responses_retrieve(handler),
+            )
+
     def _uninstrument(self, **kwargs):
-        import openai  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        import openai  # pylint: disable=import-outside-toplevel
 
         unwrap(openai.resources.chat.completions.Completions, "create")
         unwrap(openai.resources.chat.completions.AsyncCompletions, "create")
@@ -204,6 +220,8 @@ class OpenAIInstrumentor(BaseInstrumentor):
             unwrap(responses_module.Responses, "stream")
             unwrap(responses_module.AsyncResponses, "create")
             unwrap(responses_module.AsyncResponses, "stream")
+            unwrap(responses_module.Responses, "retrieve")
+            unwrap(responses_module.AsyncResponses, "retrieve")
 
 
 def _get_responses_module():

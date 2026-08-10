@@ -4,7 +4,8 @@
 import functools
 import inspect
 import json
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 from google.genai.types import (
     ToolListUnion,
@@ -117,9 +118,11 @@ def _wrap_tool_function(
 
 
 def wrapped_tool(
-    tool_or_tools: Optional[
-        Union[ToolFunction, ToolOrDict, ToolListUnion, ToolListUnionDict]
-    ],
+    tool_or_tools: ToolFunction
+    | ToolOrDict
+    | ToolListUnion
+    | ToolListUnionDict
+    | None,
     telemetry_handler: TelemetryHandler,
 ):
     if tool_or_tools is None:

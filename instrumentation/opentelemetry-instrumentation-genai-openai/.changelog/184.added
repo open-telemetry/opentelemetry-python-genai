@@ -1,0 +1,1 @@
+Add instrumentation for the OpenAI Responses ``retrieve`` API (sync and async), reported as a ``fetch_response`` operation with no token usage.

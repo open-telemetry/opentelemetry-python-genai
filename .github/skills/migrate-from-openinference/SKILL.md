@@ -367,9 +367,9 @@ from wrapt import wrap_function_wrapper
 from opentelemetry.instrumentation.utils import unwrap
 
 wrap_function_wrapper(
-    "openai.resources.chat.completions",   # module     (positional)
-    "Completions.create",                  # name       (positional)
-    chat_completions_wrapper,              # wrapper    (positional)
+    "openai.resources.chat.completions",  # module     (positional)
+    "Completions.create",  # name       (positional)
+    chat_completions_wrapper,  # wrapper    (positional)
 )
 ```
 

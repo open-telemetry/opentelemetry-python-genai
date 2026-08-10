@@ -13,7 +13,7 @@ workflows, and internal plumbing alike.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -64,9 +64,9 @@ _META_OTEL_TRACE = "otel_trace"
 
 def resolve_agent_name(
     serialized: dict[str, Any],
-    metadata: Optional[dict[str, Any]],
+    metadata: dict[str, Any] | None,
     kwargs: dict[str, Any],
-) -> Optional[str]:
+) -> str | None:
     """Derive the best-effort agent name from callback arguments.
 
     Checks (in priority order):
@@ -96,7 +96,7 @@ def resolve_agent_name(
     return None
 
 
-def _has_agent_signals(metadata: Optional[dict[str, Any]]) -> bool:
+def _has_agent_signals(metadata: dict[str, Any] | None) -> bool:
     """Return True when metadata contains any signal that the chain is an agent."""
     if not metadata:
         return False
@@ -109,8 +109,8 @@ def _has_agent_signals(metadata: Optional[dict[str, Any]]) -> bool:
 
 def _looks_like_workflow(
     serialized: dict[str, Any],
-    metadata: Optional[dict[str, Any]],
-    parent_run_id: Optional[UUID],
+    metadata: dict[str, Any] | None,
+    parent_run_id: UUID | None,
 ) -> bool:
     """Return True if the chain looks like a top-level workflow/graph."""
     if parent_run_id is not None:
@@ -145,8 +145,8 @@ def _looks_like_workflow(
 
 
 def _should_ignore_chain(
-    metadata: Optional[dict[str, Any]],
-    agent_name: Optional[str],
+    metadata: dict[str, Any] | None,
+    agent_name: str | None,
     kwargs: dict[str, Any],
 ) -> bool:
     """Return True if the chain callback should be silently suppressed.
@@ -187,10 +187,10 @@ def _should_ignore_chain(
 
 def classify_chain_run(
     serialized: dict[str, Any],
-    metadata: Optional[dict[str, Any]],
+    metadata: dict[str, Any] | None,
     kwargs: dict[str, Any],
-    parent_run_id: Optional[UUID] = None,
-) -> Optional[str]:
+    parent_run_id: UUID | None = None,
+) -> str | None:
     """Classify a ``on_chain_start`` callback into a semconv operation.
 
     Returns one of the :class:`OperationName` constants, or ``None`` when

@@ -18,7 +18,8 @@ duplicate LLM spans when both are enabled.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
     convert_to_final_output_messages,

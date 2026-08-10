@@ -13,7 +13,7 @@ pytest_plugins = [
 
 @pytest.fixture(scope="module")
 def vcr_config():
-    from opentelemetry.test_util_genai.vcr import (  # noqa: PLC0415
+    from opentelemetry.test_util_genai.vcr import (
         scrub_response_headers_overwrite,
     )
 

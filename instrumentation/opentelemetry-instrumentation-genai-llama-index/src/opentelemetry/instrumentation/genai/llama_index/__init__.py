@@ -31,7 +31,8 @@ Completion hook configuration is forwarded from
 
 from __future__ import annotations
 
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from opentelemetry.instrumentation.genai.llama_index.package import (
     _instruments,

@@ -23,6 +23,7 @@ This module hosts those bits once. Per-instrumentation conftests stay short:
         scrub_response_headers,
     )
 
+
     @pytest.fixture(scope="module")
     def vcr_config():
         return {

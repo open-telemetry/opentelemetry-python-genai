@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Literal,
     TypeAlias,
     Union,
@@ -169,7 +169,7 @@ class Blob:
     """
 
     mime_type: str | None
-    modality: Union[Modality, str]
+    modality: Modality | str
     content: bytes
     type: Literal["blob"] = "blob"
 
@@ -183,7 +183,7 @@ class File:
     """
 
     mime_type: str | None
-    modality: Union[Modality, str]
+    modality: Modality | str
     file_id: str
     type: Literal["file"] = "file"
 
@@ -197,7 +197,7 @@ class Uri:
     """
 
     mime_type: str | None
-    modality: Union[Modality, str]
+    modality: Modality | str
     uri: str
     type: Literal["uri"] = "uri"
 
@@ -279,7 +279,7 @@ class Error:
         type_resolver: ErrorTypeResolver | None = None,
     ) -> Error:
         """Build an ``Error`` from an exception, deriving ``type`` and ``message``."""
-        from opentelemetry.util.genai.utils import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+        from opentelemetry.util.genai.utils import (  # pylint: disable=import-outside-toplevel
             fq_exception_type,
         )
 
@@ -293,11 +293,11 @@ class Error:
 
 def __getattr__(name: str) -> object:
     if name == "GenAIInvocation":
-        import opentelemetry.util.genai.invocation as _inv  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+        import opentelemetry.util.genai.invocation as _inv  # pylint: disable=import-outside-toplevel
 
         return _inv.GenAIInvocation
     if name == "LLMInvocation":
-        from opentelemetry.util.genai._inference_invocation import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+        from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=import-outside-toplevel
             LLMInvocation,
         )
 

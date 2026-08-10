@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Awaitable, Callable, cast
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from wrapt import wrap_function_wrapper
 
@@ -64,14 +65,14 @@ def patch_agent(handler: TelemetryHandler) -> None:
 def unpatch_agent() -> None:
     """Remove patches from agno.agent.Agent class methods."""
     try:
-        import agno.agent  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        import agno.agent  # pylint: disable=import-outside-toplevel
 
         unwrap(agno.agent.Agent, "run")
         unwrap(agno.agent.Agent, "arun")
     except (ImportError, AttributeError):
         pass
     try:
-        import agno.tools.function  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+        import agno.tools.function  # pylint: disable=import-outside-toplevel
 
         unwrap(agno.tools.function.FunctionCall, "execute")
         unwrap(agno.tools.function.FunctionCall, "aexecute")

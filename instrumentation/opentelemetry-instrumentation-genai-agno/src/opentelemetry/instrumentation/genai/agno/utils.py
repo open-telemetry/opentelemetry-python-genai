@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, cast
+from collections.abc import Iterable
+from typing import Any, cast
 
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
@@ -110,7 +111,7 @@ def prepare_tool_definitions(
             )
         elif callable(tool):
             try:
-                import agno.tools.function  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
+                import agno.tools.function  # pylint: disable=import-outside-toplevel
 
                 fn_cls = _get_property_value(agno.tools.function, "Function")
                 func = fn_cls.from_callable(tool)

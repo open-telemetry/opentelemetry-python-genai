@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from anthropic.types import MessageDeltaUsage
 
@@ -210,7 +211,7 @@ def extract_params(  # pylint: disable=too-many-locals
 
 
 def get_server_address_and_port(
-    client_instance: "Messages | AsyncMessages",
+    client_instance: Messages | AsyncMessages,
 ) -> tuple[str | None, int | None]:
     base_url = client_instance._client.base_url
     port = base_url.port
@@ -221,7 +222,7 @@ def get_server_address_and_port(
 
 
 def get_llm_request_attributes(
-    params: MessageRequestParams, client_instance: "Messages | AsyncMessages"
+    params: MessageRequestParams, client_instance: Messages | AsyncMessages
 ) -> dict[str, AttributeValue]:
     attributes: dict[str, AttributeValue | None] = {
         GenAIAttributes.GEN_AI_OPERATION_NAME: GenAIAttributes.GenAiOperationNameValues.CHAT.value,

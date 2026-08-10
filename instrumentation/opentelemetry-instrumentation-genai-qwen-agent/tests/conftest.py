@@ -14,11 +14,11 @@ from vcr.stubs import VCRHTTPResponse
 if "DASHSCOPE_API_KEY" not in os.environ:
     os.environ["DASHSCOPE_API_KEY"] = "test_dashscope_api_key"
 
-from opentelemetry.instrumentation.genai.qwen_agent import (  # noqa: E402
+from opentelemetry.instrumentation.genai.qwen_agent import (
     QwenAgentInstrumentor,
 )
-from opentelemetry.test_util_genai.instrumentor import instrument  # noqa: E402
-from opentelemetry.test_util_genai.vcr import (  # noqa: E402
+from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.test_util_genai.vcr import (
     scrub_response_headers_overwrite,
 )
 

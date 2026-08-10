@@ -126,13 +126,13 @@ def _build_providers(
     # OTLP/gRPC exporters are only installed in the *-conformance tox envs
     # (see dev-requirements-conformance.txt). Import lazily so this module
     # stays importable in regular test envs that exclude conformance tests.
-    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # noqa: PLC0415
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
         OTLPLogExporter,
     )
-    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (  # noqa: PLC0415
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
         OTLPMetricExporter,
     )
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # noqa: PLC0415
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
         OTLPSpanExporter,
     )
 
@@ -181,7 +181,7 @@ def _seen_span_operations(report: LiveCheckReport) -> dict[str, int]:
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:
     out = Path("weaver_reports") / f"{type(scenario).__name__}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report._report, indent=2, sort_keys=True))  # noqa: SLF001
+    out.write_text(json.dumps(report._report, indent=2, sort_keys=True))
 
 
 def run_conformance(

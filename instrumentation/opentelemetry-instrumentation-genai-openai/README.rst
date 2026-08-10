@@ -62,8 +62,14 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace OpenAI operations including chat completions and embeddings.
+When using the instrumentor, all clients will automatically trace OpenAI operations including chat completions, the Responses API, and embeddings.
 You can also optionally capture prompts and completions as log events.
+
+Fetching a stored response with ``client.responses.retrieve(...)`` performs no
+inference, so it is reported as a ``fetch_response`` operation rather than as an
+inference call. Its span carries the fetched response's identifier, model,
+status, and finish reasons, but no token usage — those counts belong to the
+operation that originally generated the response.
 
 Make sure to configure OpenTelemetry tracing, logging, and events to capture all telemetry emitted by the instrumentation.
 
@@ -81,6 +87,14 @@ Make sure to configure OpenTelemetry tracing, logging, and events to capture all
             {"role": "user", "content": "Write a short poem on open telemetry."},
         ],
     )
+
+    # Responses API example, fetching a stored response back by its id
+    created = client.responses.create(
+        model="gpt-4o-mini",
+        input="Write a short poem on open telemetry.",
+        store=True,
+    )
+    fetched = client.responses.retrieve(created.id)
 
     # Embeddings example
     embedding_response = client.embeddings.create(

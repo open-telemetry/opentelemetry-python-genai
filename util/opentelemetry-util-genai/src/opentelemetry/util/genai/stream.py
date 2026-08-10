@@ -6,12 +6,11 @@ from __future__ import annotations
 import logging
 import timeit
 from abc import ABCMeta, abstractmethod
+from collections.abc import AsyncIterable, Iterable
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
-    AsyncIterable,
     Generic,
-    Iterable,
     Literal,
     Protocol,
     TypeVar,

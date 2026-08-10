@@ -35,7 +35,8 @@ API
 
 from __future__ import annotations
 
-from typing import Any, Callable, Collection
+from collections.abc import Callable, Collection
+from typing import Any
 
 from wrapt import wrap_function_wrapper
 
@@ -116,7 +117,7 @@ class QwenAgentInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Qwen-Agent instrumentation."""
-        import qwen_agent.agent  # noqa: PLC0415
+        import qwen_agent.agent
 
         unwrap(qwen_agent.agent.Agent, "run")
         unwrap(qwen_agent.agent.Agent, "_call_tool")
