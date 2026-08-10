@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from collections.abc import Iterable
 from typing import Any, cast
@@ -22,7 +21,6 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.types import (
     Blob,
-    ContentCapturingMode,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
@@ -32,9 +30,8 @@ from opentelemetry.util.genai.types import (
     ToolCallRequestPart,
     ToolCallResponsePart,
     ToolDefinition,
-    Uri,
 )
-from opentelemetry.util.genai.utils import get_content_capturing_mode
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 # Mapping from LangChain ``ls_provider`` metadata values to the well-known
 # ``gen_ai.provider.name`` values defined by the GenAI semantic conventions.
@@ -92,18 +89,9 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
-def _decode_base64(data: str) -> bytes | None:
-    # Skip the decode entirely when message content is not being captured;
-    # the resulting bytes would never be emitted under ``NO_CONTENT``.
-    if get_content_capturing_mode() is ContentCapturingMode.NO_CONTENT:
-        return None
-    try:
-        return base64.b64decode("".join(data.split()), validate=True)
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None
-
-
-def _media_part(item: dict[str, Any]) -> MessagePart | None:
+def _media_part(
+    item: dict[str, Any], capture_content: bool = False
+) -> MessagePart | None:
     """Convert a LangChain multimodal image content block into a media part.
 
     Handles the two shapes LangChain chat models accept:
@@ -127,7 +115,7 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
             url = raw_url if isinstance(raw_url, str) else None
         if not url:
             return None
-        return _image_from_url(url)
+        return image_from_url(url, capture_content=capture_content)
     if block_type == "image":
         source = item.get("source")
         if not isinstance(source, dict):
@@ -138,45 +126,29 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
             data = source_dict.get("data")
             if not isinstance(data, str):
                 return None
-            decoded = _decode_base64(data)
+            decoded = decode_base64(data, capture_content)
             if decoded is None:
                 return None
             media_type = source_dict.get("media_type")
             return Blob(
-                mime_type=media_type if isinstance(media_type, str) else None,
+                mime_type=(
+                    media_type if isinstance(media_type, str) else None
+                ),
                 modality="image",
                 content=decoded,
             )
         if source_type == "url":
             source_url = source_dict.get("url")
             if isinstance(source_url, str) and source_url:
-                return _image_from_url(source_url)
+                return image_from_url(
+                    source_url, capture_content=capture_content
+                )
     return None
-
-
-def _image_from_url(url: str) -> MessagePart | None:
-    """Return a :class:`Blob` for a ``data:`` URL, else a :class:`Uri`."""
-
-    if url.startswith("data:"):
-        header, _, payload = url[len("data:") :].partition(",")
-        mime_type = header.split(";", 1)[0] or None
-        if ";base64" in header:
-            decoded = _decode_base64(payload)
-            if decoded is None:
-                return None
-            content = decoded
-        else:
-            content = payload.encode("utf-8")
-        return Blob(
-            mime_type=mime_type,
-            modality="image",
-            content=content,
-        )
-    return Uri(mime_type=None, modality="image", uri=url)
 
 
 def _content_to_parts(
     content: str | list[str | dict[str, Any]],
+    capture_content: bool = False,
 ) -> list[MessagePart]:
     """Convert a LangChain message ``content`` payload into ``MessagePart`` s.
 
@@ -210,7 +182,7 @@ def _content_to_parts(
             if isinstance(reasoning_value, str) and reasoning_value:
                 parts.append(ReasoningPart(content=reasoning_value))
         elif block_type in ("image_url", "image"):
-            media = _media_part(item)
+            media = _media_part(item, capture_content)
             if media is not None:
                 parts.append(media)
     return parts
@@ -243,14 +215,18 @@ def _legacy_function_call_request(
     return ToolCallRequestPart(arguments=arguments, name=name, id=None)
 
 
-def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
+def _ai_message_parts(
+    message: AIMessage, capture_content: bool = False
+) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
     :class:`ToolCallRequestPart` for each entry in ``message.tool_calls``, plus a
     legacy ``additional_kwargs['function_call']`` when present.
     """
-    parts: list[MessagePart] = _content_to_parts(message.content)
+    parts: list[MessagePart] = _content_to_parts(
+        message.content, capture_content
+    )
     for call in message.tool_calls:
         name = call["name"]
         if not name:
@@ -280,16 +256,19 @@ def _tool_message_parts(message: ToolMessage) -> list[MessagePart]:
     ]
 
 
-def _message_parts(message: BaseMessage) -> list[MessagePart]:
+def _message_parts(
+    message: BaseMessage, capture_content: bool = False
+) -> list[MessagePart]:
     if isinstance(message, ToolMessage):
         return _tool_message_parts(message)
     if isinstance(message, AIMessage):
-        return _ai_message_parts(message)
-    return _content_to_parts(message.content)
+        return _ai_message_parts(message, capture_content)
+    return _content_to_parts(message.content, capture_content)
 
 
 def to_input_messages(
     messages: Iterable[Any],
+    capture_content: bool = False,
 ) -> list[InputMessage]:
     """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
     try:
@@ -302,7 +281,7 @@ def to_input_messages(
         ]
     result: list[InputMessage] = []
     for message in normalized_messages:
-        parts = _message_parts(message)
+        parts = _message_parts(message, capture_content)
         if not parts:
             continue
         result.append(InputMessage(role=_normalize_role(message), parts=parts))
@@ -313,6 +292,7 @@ def to_output_messages(
     messages: Iterable[BaseMessage],
     *,
     finish_reason: str = "",
+    capture_content: bool = False,
 ) -> list[OutputMessage]:
     """Convert LangChain ``AIMessage`` instances into ``OutputMessage`` s.
 
@@ -325,7 +305,7 @@ def to_output_messages(
     for message in messages:
         if not isinstance(message, AIMessage):
             continue
-        parts = _ai_message_parts(message)
+        parts = _ai_message_parts(message, capture_content)
         if not parts:
             continue
         result.append(
@@ -387,7 +367,9 @@ def prepare_tool_definitions(tools: list[Any]) -> list[ToolDefinition] | None:
     return definitions or None
 
 
-def make_input_message(data: Any) -> list[InputMessage]:
+def make_input_message(
+    data: Any, capture_content: bool = False
+) -> list[InputMessage]:
     """Build ``InputMessage`` s from a workflow/agent input mapping.
 
     When ``data['messages']`` is present, every LangChain ``BaseMessage`` in it
@@ -409,7 +391,10 @@ def make_input_message(data: Any) -> list[InputMessage]:
             messages, Iterable
         ):
             return []
-        return to_input_messages(cast(Iterable[BaseMessage], messages))
+        return to_input_messages(
+            cast(Iterable[BaseMessage], messages),
+            capture_content,
+        )
     # Fallback: serialize non-message state fields as input.
     # Common in LangGraph where nodes use structured state fields
     # (e.g., user_query) rather than a message list.
@@ -426,7 +411,9 @@ def make_input_message(data: Any) -> list[InputMessage]:
     return []
 
 
-def make_output_message(data: Any) -> list[OutputMessage]:
+def make_output_message(
+    data: Any, capture_content: bool = False
+) -> list[OutputMessage]:
     """Build ``OutputMessage`` s from a workflow/agent output mapping.
 
     Only ``AIMessage`` entries become outputs. ``finish_reason`` is left
@@ -444,17 +431,22 @@ def make_output_message(data: Any) -> list[OutputMessage]:
         or not isinstance(messages, Iterable)
     ):
         return []
-    return to_output_messages(cast(Iterable[BaseMessage], messages))
+    return to_output_messages(
+        cast(Iterable[BaseMessage], messages),
+        capture_content=capture_content,
+    )
 
 
-def make_last_output_message(data: Any) -> list[OutputMessage]:
+def make_last_output_message(
+    data: Any, capture_content: bool = False
+) -> list[OutputMessage]:
     """Extract only the last AI message as the output.
 
     For Workflow and AgentInvocation spans, the final AI message best represents
     the actual output. Intermediate AI messages (e.g., tool-call decisions) are
     already captured in child LLM invocation spans.
     """
-    all_messages = make_output_message(data)
+    all_messages = make_output_message(data, capture_content)
     if all_messages:
         return [all_messages[-1]]
     return []

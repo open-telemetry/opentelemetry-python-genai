@@ -4,7 +4,7 @@
 import json
 import logging
 import os
-from base64 import b64encode
+from base64 import b64decode, b64encode
 from functools import partial
 from typing import Any
 
@@ -12,7 +12,12 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
-from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.types import (
+    Blob,
+    ContentCapturingMode,
+    MessagePart,
+    Uri,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,43 @@ def get_content_capturing_mode() -> ContentCapturingMode:
             ", ".join(e.name for e in ContentCapturingMode),
         )
         return ContentCapturingMode.NO_CONTENT
+
+
+def decode_base64(data: str, capture_content: bool = False) -> bytes | None:
+    if not capture_content:
+        return
+    try:
+        return b64decode("".join(data.split()), validate=True)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def image_from_url(
+    url: str, *, modality: str = "image", capture_content: bool = False
+) -> MessagePart | None:
+    """Return a media part for an image ``url``.
+
+    A ``data:<mime>;base64,<payload>`` URL is decoded into a :class:`Blob`;
+    a ``data:`` URL without base64 encoding keeps its raw payload bytes; any
+    other URL becomes a :class:`Uri`. Shared by instrumentations that parse
+    provider image blocks.
+    """
+    if url.startswith("data:"):
+        header, _, payload = url[len("data:") :].partition(",")
+        mime_type = header.split(";", 1)[0] or None
+        if ";base64" in header:
+            decoded = decode_base64(payload, capture_content)
+            if decoded is None:
+                return None
+            content = decoded
+        else:
+            content = payload.encode("utf-8")
+        return Blob(
+            mime_type=mime_type,
+            modality=modality,
+            content=content,
+        )
+    return Uri(mime_type=None, modality=modality, uri=url)
 
 
 def is_experimental_mode() -> bool:
