@@ -31,7 +31,7 @@ from .utils import (
 _logger = logging.getLogger(__name__)
 
 
-class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
+class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
     """Proxy the ``query_handler`` async generator and finalize telemetry.
 
     ``AsyncStreamWrapper`` closes the wrapped stream through ``close()``,
@@ -42,7 +42,7 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
 
     def __init__(
         self,
-        stream: AsyncGenerator[Any, None],
+        stream: AsyncGenerator[object, None],
         invocation: AgentInvocation,
         capture_content: bool,
     ) -> None:
@@ -52,7 +52,7 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
         self._self_capture_content = capture_content
         self._self_output_message: OutputMessage | None = None
 
-    def _process_chunk(self, chunk: Any) -> None:
+    def _process_chunk(self, chunk: object) -> None:
         if not self._self_capture_content:
             return
         output_message = output_message_from_yield_item(chunk)
@@ -107,16 +107,16 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[Any]):
 def _build_invocation(
     handler: TelemetryHandler,
     instance: object,
-    msgs: Any,
-    request: Any,
+    msgs: object,
+    request: object,
 ) -> AgentInvocation:
     # `agent_name` (config display name with a built-in fallback) was added
     # during the 1.1.x line, so probe for it defensively.
     agent_name = non_empty_str(getattr(instance, "agent_name", None))
     invocation = handler.invoke_local_agent(agent_name=agent_name)
-    agent_id = non_empty_str(getattr(instance, "agent_id", None))
-    if agent_id is not None:
-        invocation.agent_id = agent_id
+    # The runner's `agent_id` is a local config key (e.g. "default"), not a
+    # provider-assigned stable identifier, so `gen_ai.agent.id` is not
+    # recorded per its semconv guidance.
     conversation_id = non_empty_str(getattr(request, "session_id", None))
     if conversation_id is not None:
         invocation.conversation_id = conversation_id
@@ -131,7 +131,7 @@ def make_query_handler_wrapper(
     """Factory for the ``wrapt`` wrapper bound to *handler*."""
 
     def query_handler_wrapper(
-        wrapped: Callable[..., AsyncGenerator[Any, None]],
+        wrapped: Callable[..., AsyncGenerator[object, None]],
         # The runner is only attribute-probed via ``getattr`` (``agent_name``
         # arrived during the 1.1.x line), and ``qwenpaw`` cannot be imported
         # for typing on Python >= 3.14, so ``object`` is the narrowest

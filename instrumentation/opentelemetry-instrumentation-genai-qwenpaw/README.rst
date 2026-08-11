@@ -10,10 +10,10 @@ This library traces user turns handled by `QwenPaw
 <https://github.com/agentscope-ai/QwenPaw>`_, a personal assistant
 application built on AgentScope. Each turn that goes through
 ``AgentRunner.query_handler`` produces one ``invoke_agent`` span following
-the OpenTelemetry GenAI semantic conventions, carrying the agent id
-(``gen_ai.agent.id``), the agent display name (``gen_ai.agent.name``, on
-versions that expose it), the session id (``gen_ai.conversation.id``), and
-— when content capture is enabled — the turn's input and output messages.
+the OpenTelemetry GenAI semantic conventions, carrying the agent display
+name (``gen_ai.agent.name``, on versions that expose it), the session id
+(``gen_ai.conversation.id``), and — when content capture is enabled — the
+turn's input and output messages.
 
 QwenPaw delegates model (LLM) and tool execution to AgentScope, so this
 package emits no ``chat`` or ``execute_tool`` spans and its conformance

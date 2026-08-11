@@ -10,7 +10,7 @@ from typing import Any, cast
 from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text
 
 
-def non_empty_str(value: Any) -> str | None:
+def non_empty_str(value: object) -> str | None:
     """Return ``str(value)`` stripped, or ``None`` when empty/absent."""
     if value is None:
         return None
@@ -21,10 +21,10 @@ def non_empty_str(value: Any) -> str | None:
 def parse_query_handler_call(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> tuple[Any, Any]:
+) -> tuple[object, object]:
     """Return ``(msgs, request)`` from ``query_handler`` positional/kwargs."""
-    msgs: Any = None
-    request: Any = None
+    msgs: object = None
+    request: object = None
     if args:
         msgs = args[0]
         if len(args) > 1:
@@ -36,22 +36,22 @@ def parse_query_handler_call(
     return msgs, request
 
 
-def _msg_text(msg: Any) -> str | None:
+def _msg_text(msg: object) -> str | None:
     """Return the AgentScope message's text content, or ``None``."""
-    get_text: Any = getattr(msg, "get_text_content", None)
+    get_text: object = getattr(msg, "get_text_content", None)
     if not callable(get_text):
         return None
-    text: Any = get_text()
+    text: object = get_text()
     return text if isinstance(text, str) and text else None
 
 
-def input_messages_from_msgs(msgs: Any) -> list[InputMessage]:
+def input_messages_from_msgs(msgs: object) -> list[InputMessage]:
     """Turn an AgentScope message (or list of them) into ``InputMessage`` entries."""
     if not msgs:
         return []
-    items: list[Any]
+    items: list[object]
     if isinstance(msgs, (list, tuple)):
-        items = [*cast("tuple[Any, ...]", msgs)]
+        items = [*cast("tuple[object, ...]", msgs)]
     else:
         items = [msgs]
     messages: list[InputMessage] = []
@@ -64,11 +64,11 @@ def input_messages_from_msgs(msgs: Any) -> list[InputMessage]:
     return messages
 
 
-def output_message_from_yield_item(item: Any) -> OutputMessage | None:
+def output_message_from_yield_item(item: object) -> OutputMessage | None:
     """Map a ``(Msg, last)`` yield item with assistant text to an ``OutputMessage``."""
     if not isinstance(item, tuple) or not item:
         return None
-    msg = cast("tuple[Any, ...]", item)[0]
+    msg = cast("tuple[object, ...]", item)[0]
     if msg is None:
         return None
     if getattr(msg, "role", None) != "assistant":

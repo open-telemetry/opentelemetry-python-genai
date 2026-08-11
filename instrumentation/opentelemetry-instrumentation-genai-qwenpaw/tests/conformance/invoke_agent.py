@@ -45,9 +45,14 @@ class InvokeAgentScenario(Scenario):
         "gen_ai.client.operation.duration",
         "gen_ai.client.operation.time_to_first_chunk",
     )
-    # The streamed turn records time_to_first_chunk, whose required
-    # gen_ai.provider.name cannot be set: QwenPaw delegates model calls to
-    # AgentScope, so no provider applies to the invoke_agent invocation.
+    # gen_ai.provider.name is no longer required on the invoke_agent span
+    # (nor on the operation.duration metric, both relaxed to
+    # conditionally-required), so no span violation applies. The streamed
+    # turn's time_to_first_chunk metric, however, still inherits
+    # gen_ai.provider.name as required from the registry's shared metric
+    # attribute group. QwenPaw delegates model calls to AgentScope, so no
+    # provider applies here — suppress that metric-only violation until the
+    # registry relaxes it there too.
     expected_violations = (
         ExpectedViolation(
             advice_id="required_attribute_not_present",

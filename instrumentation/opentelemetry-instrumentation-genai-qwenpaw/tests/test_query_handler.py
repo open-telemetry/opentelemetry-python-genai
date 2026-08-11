@@ -68,8 +68,10 @@ async def test_query_handler_emits_invoke_agent_span(
         attributes[GenAI.GEN_AI_OPERATION_NAME]
         == GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
     )
-    assert attributes[GenAI.GEN_AI_AGENT_ID] == "entry-agent"
-    assert isinstance(attributes[GenAI.GEN_AI_AGENT_ID], str)
+    # qwenpaw's `agent_id` is a local config key (e.g. "default"), not a
+    # provider-assigned stable identifier, so gen_ai.agent.id must not be
+    # recorded per its semconv guidance.
+    assert GenAI.GEN_AI_AGENT_ID not in attributes
     assert attributes[GenAI.GEN_AI_CONVERSATION_ID] == "sess-1"
     assert isinstance(attributes[GenAI.GEN_AI_CONVERSATION_ID], str)
 
@@ -121,7 +123,7 @@ async def test_query_handler_without_request_omits_conversation_id(
     (span,) = span_exporter.get_finished_spans()
     attributes = dict(span.attributes or {})
     assert GenAI.GEN_AI_CONVERSATION_ID not in attributes
-    assert attributes[GenAI.GEN_AI_AGENT_ID] == "entry-agent"
+    assert GenAI.GEN_AI_AGENT_ID not in attributes
 
 
 @pytest.mark.asyncio
