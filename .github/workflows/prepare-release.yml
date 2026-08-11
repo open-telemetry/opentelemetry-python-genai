@@ -13,6 +13,7 @@ on:
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-qwen-agent
+        - opentelemetry-instrumentation-genai-qwenpaw
         - opentelemetry-util-genai
         description: >
           Restrict to a single package. Leave empty to prepare every package
