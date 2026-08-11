@@ -58,7 +58,19 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   always reachable — prefer the least intrusive option that works.
 - If a capability is missing in `opentelemetry-util-genai`, land it in the util first.
 
-## 3. Semantic conventions
+## 3. Operation scope
+
+Investigate the library's real API and apply the litmus tests in
+[`instrumentation/AGENTS.md`](../../instrumentation/AGENTS.md).
+Flag, with a link to the rule:
+
+- An operation the library delegates to another instrumentable library (e.g. a framework calling
+  `openai`/`anthropic`/`google-genai` under the hood) — it belongs to that library, not here.
+- An operation the library has no concept of: inference/embeddings unless the library is itself the
+  model-call boundary; `invoke_agent` unless it models agents; `invoke_workflow` unless it models
+  workflows/graphs/complex agents.
+
+## 4. Semantic conventions
 
 - Attributes, spans, events, and metrics must match the
   [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai).
@@ -77,13 +89,13 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   must be extended instead.
 - If a signal is not in semconv, wait until semconv lands.
 
-## 4. Exception handling
+## 5. Exception handling
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the
   original exception unmodified.
 - Do not raise **new** exceptions in instrumentation/telemetry code.
 
-## 5. Tests
+## 6. Tests
 
 - For every public API instrumented, cover sync/async variants when both exist.
 - Cover streaming and non-streaming variants when both exist.
@@ -114,12 +126,12 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   `tests/test_conformance.py` that runs them via
   `opentelemetry.test_util_genai.conformance.run_conformance`.
 
-## 6. Examples
+## 7. Examples
 
 New instrumentations must ship a minimal example under the package's `examples/`, with both a
 `manual/` and a `zero-code/` (auto-instrumentation) variant.
 
-## 7. README
+## 8. README
 
 - Each package's `README.rst` is published as its PyPI long description. Flag PRs that make
   user-visible changes to the public API, configuration (env vars, `instrument()` keyword
@@ -127,12 +139,12 @@ New instrumentations must ship a minimal example under the package's `examples/`
   `README.rst` to match.
 - README claims must be accurate — reject documented options, span types, or metrics the code does not actually emit.
 
-## 8. PR description
+## 9. PR description
 
 - Cover which part of the GenAI semconv the change implements or follows (when applicable) and
   how instrumentations should consume it.
 
-## 9. Package naming and versioning
+## 10. Package naming and versioning
 
 - Instrumentation packages must be named `opentelemetry-instrumentation-genai-{lib}` and import
   as `opentelemetry.instrumentation.genai.{lib}` (`opentelemetry-instrumentation-google-genai`
@@ -140,7 +152,7 @@ New instrumentations must ship a minimal example under the package's `examples/`
 - Versions use the OpenTelemetry beta versioning format `MAJOR.MINORbN` (e.g. `1.0b0`);
   `version.py` carries a `.dev` suffix during development.
 
-## 10. Dependency versioning and compatibility
+## 11. Dependency versioning and compatibility
 
 - Reject dependency changes in `pyproject.toml` that unnecessarily pin versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`).
 - Prefer ranges that allow minor updates (e.g., `~= x.y` or `>= x.y.z, < (x+1)`).

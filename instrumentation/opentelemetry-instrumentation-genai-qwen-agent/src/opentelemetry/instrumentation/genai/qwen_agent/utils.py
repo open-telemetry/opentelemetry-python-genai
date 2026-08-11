@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import AgentInvocation
@@ -21,6 +21,15 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
 )
 
+if TYPE_CHECKING:
+    from qwen_agent.llm.schema import ContentItem, Message
+
+    # qwen-agent accepts a ``Message`` or a plain dict wherever a message or a
+    # content item is expected and normalizes them internally, so both shapes
+    # reach the instrumented methods.
+    QwenMessage = Message | dict[str, Any]
+    QwenContentItem = ContentItem | dict[str, Any]
+
 _logger = logging.getLogger(__name__)
 
 
@@ -31,8 +40,9 @@ def _field_value(value: Any, *names: str) -> Any:
 
     for name in names:
         if isinstance(value, dict):
-            if name in value:
-                return value[name]
+            mapping = cast(dict[str, Any], value)
+            if name in mapping:
+                return mapping[name]
             continue
 
         attr_value = getattr(value, name, None)
@@ -51,7 +61,7 @@ def _field_value(value: Any, *names: str) -> Any:
     return None
 
 
-def _extract_content_text(content: Any) -> str:
+def _extract_content_text(content: str | list[QwenContentItem] | None) -> str:
     """Extract text from a qwen-agent Message content field.
 
     Content can be a plain string or a list of ContentItem.
@@ -68,7 +78,9 @@ def _extract_content_text(content: Any) -> str:
     return str(content) if content else ""
 
 
-def find_tool_call_id(messages: Any, tool_name: str) -> str | None:
+def find_tool_call_id(
+    messages: list[QwenMessage] | None, tool_name: str
+) -> str | None:
     """Best-effort lookup of the current tool call's function id.
 
     ``FnCallAgent`` passes the message history to ``_call_tool``; the call
@@ -127,7 +139,9 @@ def _tool_call_response_id(msg: Any) -> str:
     return tool_call_id
 
 
-def convert_to_input_messages(messages: Any) -> list[InputMessage]:
+def convert_to_input_messages(
+    messages: QwenMessage | list[QwenMessage] | None,
+) -> list[InputMessage]:
     """Convert a qwen-agent Message list to GenAI InputMessage objects."""
     if not messages:
         return []
@@ -170,7 +184,9 @@ def convert_to_input_messages(messages: Any) -> list[InputMessage]:
     return input_messages
 
 
-def convert_to_output_messages(messages: Any) -> list[OutputMessage]:
+def convert_to_output_messages(
+    messages: QwenMessage | list[QwenMessage] | None,
+) -> list[OutputMessage]:
     """Convert qwen-agent response messages to GenAI OutputMessage objects."""
     if not messages:
         return []
@@ -213,7 +229,9 @@ def convert_to_output_messages(messages: Any) -> list[OutputMessage]:
     return output_messages
 
 
-def convert_to_final_output_messages(messages: Any) -> list[OutputMessage]:
+def convert_to_final_output_messages(
+    messages: QwenMessage | list[QwenMessage] | None,
+) -> list[OutputMessage]:
     """Convert only the final qwen-agent answer to OutputMessage objects.
 
     An agent run yields the full response history including intermediate
@@ -249,7 +267,7 @@ def convert_to_final_output_messages(messages: Any) -> list[OutputMessage]:
 def create_agent_invocation(
     handler: TelemetryHandler,
     agent_instance: Any,
-    messages: Any,
+    messages: QwenMessage | list[QwenMessage] | None,
 ) -> AgentInvocation:
     """Create and start an AgentInvocation for Agent.run()."""
     llm_instance = getattr(agent_instance, "llm", None)
