@@ -9,6 +9,7 @@ import asyncio
 import json
 from unittest.mock import patch
 
+import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.tools import Toolkit
@@ -269,3 +270,51 @@ def test_agent_run_without_tools(
     span = spans[0]
     assert span.name == "invoke_agent test-no-tools-agent"
     assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [ContentCapturingMode.NO_CONTENT, ContentCapturingMode.EVENT_ONLY],
+)
+def test_agent_run_omits_tool_definitions_without_span_content_capture(
+    instrument_agno,
+    span_exporter,
+    mode,
+) -> None:
+    """Tool definitions carry the (sensitive) description and parameters and
+    must not be emitted on the span when span content capture is disabled
+    (NO_CONTENT or EVENT_ONLY)."""
+
+    def sample_tool(location: str) -> str:
+        """Get weather for location."""
+        return "sunny"
+
+    agent = Agent(
+        name="test-tools-no-capture-agent",
+        model=MockModel(id="mock-model"),
+        tools=[sample_tool],
+    )
+    mock_output = ModelResponse(content="The weather is sunny.")
+
+    with (
+        patch(
+            "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+            return_value=mode,
+        ),
+        patch.object(Agent, "run", wraps=agent.run),
+        patch("agno.models.base.Model.response", return_value=mock_output),
+    ):
+        res = agent.run("what is the weather in Seattle?")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "invoke_agent test-tools-no-capture-agent"
+    # Neither the tool definitions nor the description they carry may appear
+    # on the span when span content capture is off.
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert all(
+        "Get weather for location." not in str(value)
+        for value in span.attributes.values()
+    )
