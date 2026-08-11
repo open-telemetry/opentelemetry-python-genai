@@ -140,8 +140,6 @@ class TestCase(unittest.TestCase):
         )
 
     def test_does_not_emit_description_without_content_capture(self):
-        # The tool description is sensitive content and must not be emitted
-        # on the execute_tool span unless content capture is enabled.
         def somefunction():
             """An example tool call function."""
 

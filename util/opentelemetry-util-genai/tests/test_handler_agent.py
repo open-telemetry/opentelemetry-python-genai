@@ -362,9 +362,6 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_tool_definitions_on_span_omit_sensitive_without_content_capture(
         self, _mock_cap
     ):
-        # Tool definitions carry sensitive content (``description`` /
-        # ``parameters``) and must not be emitted at all when content capture
-        # is off.
         tool = FunctionToolDefinition(
             name="get_weather",
             description="Get the weather",

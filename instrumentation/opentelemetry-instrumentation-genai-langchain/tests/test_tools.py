@@ -471,6 +471,81 @@ def test_on_tool_start_omits_description_without_content_capture(monkeypatch):
     assert gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
 
 
+@pytest.mark.parametrize("capture_mode", ["SPAN_ONLY", "SPAN_AND_EVENT"])
+def test_tool_description_and_definitions_emitted_with_span_capture(
+    monkeypatch, capture_mode
+):
+    """Both the (sensitive) tool description and tool definitions are emitted
+    on the span when content capture targets spans (SPAN_ONLY or
+    SPAN_AND_EVENT)."""
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_mode
+    )
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    # execute_tool span carries the tool description
+    tool_run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "multiply", "description": "Multiply two numbers"},
+        input_str="",
+        run_id=tool_run_id,
+        inputs={"a": 3, "b": 4},
+    )
+    tool_output = MagicMock()
+    tool_output.content = "12"
+    tool_output.tool_call_id = "call_abc"
+    handler.on_tool_end(output=tool_output, run_id=tool_run_id)
+
+    # chat span carries the tool definitions
+    chat_run_id = uuid4()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "multiply",
+                "description": "Multiply two numbers",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    handler.on_chat_model_start(
+        serialized=_OPENAI_SERIALIZED,
+        messages=[[HumanMessage(content="What is 3 * 4?")]],
+        run_id=chat_run_id,
+        metadata=_OPENAI_METADATA,
+        invocation_params={**_OPENAI_INVOCATION_PARAMS, "tools": tools},
+    )
+    ai_msg = AIMessage(content="12")
+    ai_msg.response_metadata = {"finish_reason": "stop"}
+    generation = ChatGeneration(message=ai_msg, text="12")
+    generation.generation_info = {"finish_reason": "stop"}
+    handler.on_llm_end(
+        response=LLMResult(generations=[[generation]]), run_id=chat_run_id
+    )
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = next(s for s in spans if s.name == "execute_tool multiply")
+    assert (
+        tool_span.attributes[gen_ai_attributes.GEN_AI_TOOL_DESCRIPTION]
+        == "Multiply two numbers"
+    )
+    chat_span = next(
+        s
+        for s in spans
+        if gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS in s.attributes
+    )
+    tool_definitions = chat_span.attributes[
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    ]
+    assert "multiply" in tool_definitions
+    assert "Multiply two numbers" in tool_definitions
+
+
 def test_on_tool_start_with_string_input(monkeypatch):
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"

@@ -390,8 +390,6 @@ class TestCase(CommonTestCaseBase):
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
     )
     def test_tool_definitions_omitted_without_content_capture(self) -> None:
-        # Tool definitions carry sensitive description / parameters and must
-        # not be emitted on the span when content capture is disabled.
         self.configure_valid_interaction()
         self.run_interaction(
             model="gemini-2.5-flash",

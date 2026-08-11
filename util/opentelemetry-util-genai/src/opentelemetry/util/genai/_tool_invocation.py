@@ -99,8 +99,6 @@ class ToolInvocation(GenAIInvocation):
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
-        # The tool description is treated as sensitive content and is only
-        # recorded when content capture is enabled.
         tool_description = (
             self._tool_description
             if self.should_capture_content_on_span
