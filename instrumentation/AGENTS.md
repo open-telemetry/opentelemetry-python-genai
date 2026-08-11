@@ -1,4 +1,4 @@
-## Decide what the library supports
+# Decide what the library supports
 
 An instrumentation emits telemetry only for operations the instrumented library itself performs. If
 library A delegates an operation to another (also instrumentable) library B, do **not** emit that
