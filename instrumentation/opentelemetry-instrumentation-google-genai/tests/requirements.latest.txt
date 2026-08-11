@@ -37,7 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-google-genai==2.16.0
+google-genai==2.17.0
 
 # Install locally from the folder. This path is relative to the
 # root directory, given invocation from "tox" at root level.
