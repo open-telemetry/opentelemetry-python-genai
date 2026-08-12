@@ -1,1 +1,0 @@
-Mark gen_ai.tool.definitions and gen_ai.tool.description as sensitive attributes per semconv (spec update)[open-telemetry/semantic-conventions-genai#431]
