@@ -1,10 +1,10 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 # Add scripts directory to sys.path to import version_utils
 repo_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -166,7 +166,8 @@ version={version}
         self.create_mock_package("pkg-a", "src/pkg_a/version.py", '__version__ = "1.1b0.dev"')
         self.create_mock_package("pkg-b", "src/pkg_b/version.py", '__version__ = "1.1b0.dev"')
 
-        from version_utils import get_repo_version, main as version_utils_main
+        from version_utils import get_repo_version
+        from version_utils import main as version_utils_main
 
         # Bump only pkg-a
         ret = version_utils_main(
@@ -192,7 +193,8 @@ version={version}
         self.create_mock_package("pkg-b", "src/pkg_b/version.py", '__version__ = "1.1b0.dev"')
         self.create_mock_package("pkg-c", None) # Ignored non-dynamically versioned package
 
-        from version_utils import get_repo_version, main as version_utils_main
+        from version_utils import get_repo_version
+        from version_utils import main as version_utils_main
 
         # Bump repo-wide to next minor dev version
         ret = version_utils_main(
