@@ -141,7 +141,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         run: |
-          uv run python ./scripts/version_utils.py bump --dev
+          uv run ./scripts/version_utils.py bump --dev
 
           if git diff --quiet; then
             echo "No version bump needed"

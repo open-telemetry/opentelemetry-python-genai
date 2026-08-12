@@ -63,12 +63,12 @@ runs:
     - name: Run bump-minor
       if: inputs.operation == 'bump-minor'
       shell: bash
-      run: uv run python ./scripts/version_utils.py bump --package "${{ inputs.package }}" --dev
+      run: uv run ./scripts/version_utils.py bump --package "${{ inputs.package }}" --dev
 
     - name: Run bump-major
       if: inputs.operation == 'bump-major'
       shell: bash
-      run: uv run python ./scripts/version_utils.py bump --package "${{ inputs.package }}" --major
+      run: uv run ./scripts/version_utils.py bump --package "${{ inputs.package }}" --major
 
     - name: Compute resulting version
       shell: bash

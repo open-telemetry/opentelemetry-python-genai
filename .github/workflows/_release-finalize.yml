@@ -149,7 +149,7 @@ jobs:
           git checkout main
           git pull origin main
 
-          uv run python ./scripts/version_utils.py bump --dev
+          uv run ./scripts/version_utils.py bump --dev
 
           if git diff --quiet; then
             echo "No version bump needed"

@@ -24,7 +24,7 @@ fi
 
 version="${version_dev%.dev}"
 
-uv run python ./scripts/version_utils.py bump --package "$package" --release
+uv run ./scripts/version_utils.py bump --package "$package" --release
 
 uv run tox -e generate
 uv run towncrier build --yes --version "$version" --dir "$(dirname "$changelog")"

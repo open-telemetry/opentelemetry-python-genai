@@ -14,7 +14,7 @@ if [[ ! -f "$changelog" ]]; then
   echo "missing ${changelog}"
   exit 1
 fi
-uv run python ./scripts/version_utils.py bump --package "$package" --patch
+uv run ./scripts/version_utils.py bump --package "$package" --patch
 
 next_version="$(./scripts/eachdist.py version --package "$package")"
 

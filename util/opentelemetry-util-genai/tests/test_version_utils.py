@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 # Add scripts directory to sys.path to import version_utils
@@ -55,7 +56,6 @@ class TestVersionUtils(unittest.TestCase):
 
 class TestVersionUtilsCheck(unittest.TestCase):
     def setUp(self):
-        import tempfile
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo_root = Path(self.temp_dir.name)
         self.ini_path = self.repo_root / "eachdist.ini"
@@ -129,7 +129,6 @@ version={version}
 
 class TestVersionUtilsBump(unittest.TestCase):
     def setUp(self):
-        import tempfile
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo_root = Path(self.temp_dir.name)
         self.ini_path = self.repo_root / "eachdist.ini"
@@ -211,3 +210,15 @@ version={version}
 
         pkg_b_content = self.get_version_file_content("pkg-b", "src/pkg_b/version.py")
         self.assertIn('__version__ = "1.2b0.dev"', pkg_b_content)
+
+    def test_bump_missing_version_file(self):
+        self.write_eachdist_ini("1.1b0.dev")
+        self.create_mock_package("pkg-a", "src/pkg_a/version.py", None)
+
+        from version_utils import main as version_utils_main
+
+        ret = version_utils_main(
+            argv=["bump", "--package", "pkg-a", "--patch"],
+            repo_root=self.repo_root
+        )
+        self.assertEqual(ret, 1)

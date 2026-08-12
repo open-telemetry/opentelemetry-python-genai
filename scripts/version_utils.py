@@ -229,6 +229,9 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
         if not version_file:
             print(f"Error: package '{args.package}' does not use dynamic versioning.", file=sys.stderr)
             return 1
+        if not version_file.exists():
+            print(f"Error: version file '{version_file}' does not exist.", file=sys.stderr)
+            return 1
         current_version = get_version_from_file(version_file)
     else:
         current_version = get_repo_version(ini_path)
