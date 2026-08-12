@@ -18,7 +18,9 @@ except ModuleNotFoundError:
 
 
 def find_package_dir(repo_root: Path, package_name: str) -> Path | None:
-    for path in sorted(repo_root.glob("instrumentation/*")) + sorted(repo_root.glob("util/*")):
+    for path in sorted(repo_root.glob("instrumentation/*")) + sorted(
+        repo_root.glob("util/*")
+    ):
         if path.is_dir() and path.name == package_name:
             return path
     return None
@@ -27,7 +29,12 @@ def find_package_dir(repo_root: Path, package_name: str) -> Path | None:
 def get_version_file_path(package_dir: Path) -> Path | None:
     pyproject_path = package_dir / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-    version_rel_path = pyproject.get("tool", {}).get("hatch", {}).get("version", {}).get("path")
+    version_rel_path = (
+        pyproject.get("tool", {})
+        .get("hatch", {})
+        .get("version", {})
+        .get("path")
+    )
     if not version_rel_path:
         return None
     return package_dir / version_rel_path
@@ -46,7 +53,7 @@ def set_version_in_file(file_path: Path, new_version: str) -> None:
     new_content = re.sub(
         r"(__version__\s*=\s*[\"']).*?([\"'])",
         rf"\g<1>{new_version}\g<2>",
-        content
+        content,
     )
     file_path.write_text(new_content, encoding="utf-8")
 
@@ -64,11 +71,11 @@ def set_repo_version(ini_path: Path, new_version: str) -> None:
     prerelease_pos = content.find("[prerelease]")
     if prerelease_pos == -1:
         raise ValueError("Could not find [prerelease] section in eachdist.ini")
-    
+
     version_match = re.search(r"version\s*=\s*(\S+)", content[prerelease_pos:])
     if not version_match:
         raise ValueError("Could not find version entry under [prerelease]")
-        
+
     old_line = version_match.group(0)
     new_line = f"version={new_version}"
     updated_section = content[prerelease_pos:].replace(old_line, new_line, 1)
@@ -127,7 +134,10 @@ def run_check(repo_root: Path, ini_path: Path) -> int:
         target_version = get_repo_version(ini_path)
         target_major, target_minor = parse_major_minor(target_version)
     except Exception as err:
-        print(f"Error reading/parsing target version from eachdist.ini: {err}", file=sys.stderr)
+        print(
+            f"Error reading/parsing target version from eachdist.ini: {err}",
+            file=sys.stderr,
+        )
         return 1
 
     pyprojects = sorted(
@@ -151,7 +161,9 @@ def run_check(repo_root: Path, ini_path: Path) -> int:
             continue
 
         if not version_file_path.exists():
-            errors.append(f"{version_file_path.relative_to(repo_root)} does not exist.")
+            errors.append(
+                f"{version_file_path.relative_to(repo_root)} does not exist."
+            )
             continue
 
         try:
@@ -163,7 +175,9 @@ def run_check(repo_root: Path, ini_path: Path) -> int:
                     f"Expected major.minor to be {target_major}.{target_minor} (defined in eachdist.ini)."
                 )
         except Exception as err:
-            errors.append(f"Error checking {version_file_path.relative_to(repo_root)}: {err}")
+            errors.append(
+                f"Error checking {version_file_path.relative_to(repo_root)}: {err}"
+            )
 
     if errors:
         print("Version major/minor alignment check failed:", file=sys.stderr)
@@ -171,19 +185,29 @@ def run_check(repo_root: Path, ini_path: Path) -> int:
             print(f"  [ERROR] {err}", file=sys.stderr)
         return 1
 
-    print(f"All version.py files are aligned with target major.minor ({target_major}.{target_minor}).")
+    print(
+        f"All version.py files are aligned with target major.minor ({target_major}.{target_minor})."
+    )
     return 0
 
 
 def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Version utility tool for checking and bumping package versions.")
-    subparsers = parser.add_subparsers(dest="command", required=True, help="Command to run")
+    parser = argparse.ArgumentParser(
+        description="Version utility tool for checking and bumping package versions."
+    )
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="Command to run"
+    )
 
     # 'check' subcommand
-    subparsers.add_parser("check", help="Check major/minor version alignment against config.")
-    
+    subparsers.add_parser(
+        "check", help="Check major/minor version alignment against config."
+    )
+
     # 'bump' subcommand
-    bump_parser = subparsers.add_parser("bump", help="Bump package or repository versions.")
+    bump_parser = subparsers.add_parser(
+        "bump", help="Bump package or repository versions."
+    )
     bump_parser.add_argument(
         "--package",
         help="Package to bump. If omitted, bumps the entire repository.",
@@ -223,14 +247,22 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
     if args.package:
         pkg_dir = find_package_dir(repo_root, args.package)
         if not pkg_dir:
-            print(f"Error: package '{args.package}' not found.", file=sys.stderr)
+            print(
+                f"Error: package '{args.package}' not found.", file=sys.stderr
+            )
             return 1
         version_file = get_version_file_path(pkg_dir)
         if not version_file:
-            print(f"Error: package '{args.package}' does not use dynamic versioning.", file=sys.stderr)
+            print(
+                f"Error: package '{args.package}' does not use dynamic versioning.",
+                file=sys.stderr,
+            )
             return 1
         if not version_file.exists():
-            print(f"Error: version file '{version_file}' does not exist.", file=sys.stderr)
+            print(
+                f"Error: version file '{version_file}' does not exist.",
+                file=sys.stderr,
+            )
             return 1
         current_version = get_version_from_file(version_file)
     else:
@@ -238,7 +270,10 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
 
     if args.release:
         if not current_version.endswith(".dev"):
-            print(f"Version {current_version} does not have .dev suffix. Nothing to do.", file=sys.stderr)
+            print(
+                f"Version {current_version} does not have .dev suffix. Nothing to do.",
+                file=sys.stderr,
+            )
             return 0
         next_version = current_version.removesuffix(".dev")
     elif args.dev:
@@ -249,12 +284,16 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
         next_version = bump_major(current_version)
 
     if args.package:
-        print(f"Updating package '{args.package}' version from {current_version} to {next_version}")
+        print(
+            f"Updating package '{args.package}' version from {current_version} to {next_version}"
+        )
         set_version_in_file(version_file, next_version)
     else:
-        print(f"Updating repository-wide version from {current_version} to {next_version}")
+        print(
+            f"Updating repository-wide version from {current_version} to {next_version}"
+        )
         set_repo_version(ini_path, next_version)
-        
+
         pyprojects = sorted(
             repo_root.glob("instrumentation/*/pyproject.toml"),
         ) + sorted(repo_root.glob("util/*/pyproject.toml"))
@@ -264,10 +303,15 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
                 pkg_version_file = get_version_file_path(pyproject_path.parent)
                 if pkg_version_file is None:
                     continue
-                print(f"Updating {pkg_version_file.relative_to(repo_root)} to {next_version}")
+                print(
+                    f"Updating {pkg_version_file.relative_to(repo_root)} to {next_version}"
+                )
                 set_version_in_file(pkg_version_file, next_version)
             except Exception as err:
-                print(f"Warning: failed to update {pyproject_path}: {err}", file=sys.stderr)
+                print(
+                    f"Warning: failed to update {pyproject_path}: {err}",
+                    file=sys.stderr,
+                )
 
     return 0
 
