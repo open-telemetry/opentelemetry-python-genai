@@ -139,6 +139,10 @@ class TestCase(unittest.TestCase):
             "An example tool call function.",
         )
 
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
+    )
     def test_does_not_emit_description_without_content_capture(self):
         def somefunction():
             """An example tool call function."""
