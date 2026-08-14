@@ -2,8 +2,8 @@
 
 ## 0. What not to flag
 
-CI already runs deterministic gates on every PR. Do **not** spend review comments on anything they
-decide. If a gate would catch it, the gate reports it, and a duplicate review comment is noise:
+CI already runs deterministic gates on every PR. If a gate would catch it, the gate reports it, 
+and a duplicate review comment is noise:
 
 | Gate | Covers |
 | --- | --- |
@@ -22,6 +22,8 @@ decide. If a gate would catch it, the gate reports it, and a duplicate review co
 Review the things a gate cannot decide: whether the change is correct, whether it matches the
 GenAI semantic conventions, whether it actually achieves what the PR claims, and whether it
 weakens or bypasses a gate. Style opinions that ruff does not enforce are not review comments.
+
+## 1. Shared configuration
 
 Repo-wide config is `tox.ini`, `pytest.ini`, root `pyproject.toml`, `.codespellrc`,
 `.pre-commit-config.yaml`, and `scripts/`. A change there affects every package, so:

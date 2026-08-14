@@ -1,5 +1,5 @@
 ---
-applyTo: "{tox.ini,pytest.ini,pyproject.toml,uv.lock,.codespellrc,.pre-commit-config.yaml,scripts/**,.github/workflows/**,.github/actions/**}"
+applyTo: "tox.ini,pytest.ini,pyproject.toml,uv.lock,.codespellrc,.pre-commit-config.yaml,scripts/**,.github/workflows/**,.github/actions/**"
 ---
 
 Review rules for PRs touching build, test-matrix, and CI configuration. Flag violations with a
