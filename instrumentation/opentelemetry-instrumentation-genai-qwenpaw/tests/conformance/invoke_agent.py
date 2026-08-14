@@ -29,10 +29,7 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import (
-    ExpectedViolation,
-    Scenario,
-)
+from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -41,24 +38,13 @@ class InvokeAgentScenario(Scenario):
     # content) are covered by unit tests; conformance only validates the
     # telemetry shape against the semconv registry.
     expected_spans = {"invoke_agent": 1}
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.operation.time_to_first_chunk",
-    )
-    # gen_ai.provider.name is no longer required on the invoke_agent span
-    # (nor on the operation.duration metric, both relaxed to
-    # conditionally-required), so no span violation applies. The streamed
-    # turn's time_to_first_chunk metric, however, still inherits
-    # gen_ai.provider.name as required from the registry's shared metric
-    # attribute group. QwenPaw delegates model calls to AgentScope, so no
-    # provider applies here — suppress that metric-only violation until the
-    # registry relaxes it there too.
-    expected_violations = (
-        ExpectedViolation(
-            advice_id="required_attribute_not_present",
-            message_substring="gen_ai.provider.name",
-        ),
-    )
+    # The invoke_agent span is an INTERNAL agent invocation, not a streamed
+    # client call, so it records only the operation duration — no
+    # streamed-call metrics (time_to_first_chunk and friends) apply.
+    # gen_ai.provider.name was relaxed to conditionally-required on both the
+    # span and the metric, and QwenPaw delegates model calls to AgentScope,
+    # so no violations are expected.
+    expected_metrics = ("gen_ai.client.operation.duration",)
 
     def run(
         self,

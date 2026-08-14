@@ -48,7 +48,12 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
     ) -> None:
         super().__init__(cast(Any, stream))
         self._self_gen = stream
-        self._self_invocation = invocation
+        # Kept off the base class's ``_self_invocation`` on purpose: the
+        # agent invocation is an INTERNAL span, not a streamed client call,
+        # so it must not opt into the streamed-call metrics
+        # (time_to_first_chunk / time_per_output_chunk) or the
+        # ``gen_ai.request.stream`` handling the base class drives.
+        self._self_agent_invocation = invocation
         self._self_capture_content = capture_content
         self._self_output_message: OutputMessage | None = None
 
@@ -60,12 +65,20 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
             self._self_output_message = output_message
 
     def _on_stream_end(self) -> None:
-        if self._self_output_message is not None:
-            self._self_invocation.output_messages = [self._self_output_message]
-        self._self_invocation.stop()
+        self._apply_output_message()
+        self._self_agent_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._self_invocation.fail(error)
+        # Keep content captured before the failure so a mid-stream error
+        # does not drop partial output already produced.
+        self._apply_output_message()
+        self._self_agent_invocation.fail(error)
+
+    def _apply_output_message(self) -> None:
+        if self._self_output_message is not None:
+            self._self_agent_invocation.output_messages = [
+                self._self_output_message
+            ]
 
     async def aclose(self) -> None:
         """Close the underlying async generator and finalize telemetry.

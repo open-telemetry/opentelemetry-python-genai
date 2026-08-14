@@ -193,6 +193,9 @@ async def test_stream_side_error_reraises_and_fails_span(
     attributes = dict(span.attributes or {})
     assert attributes[error_attributes.ERROR_TYPE] == "ConnectionError"
     assert isinstance(attributes[error_attributes.ERROR_TYPE], str)
+    # Output captured before the failure must survive on the error span.
+    output_messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    assert output_messages[0]["parts"][0]["content"] == "partial"
 
 
 @pytest.mark.asyncio
@@ -270,11 +273,21 @@ async def test_operation_duration_metric_recorded(
         await _drain(runner.query_handler(user_command_msgs(), make_request()))
 
     metrics_data = metric_reader.get_metrics_data()
-    duration_metrics = [
+    all_metrics = [
         metric
         for resource_metric in metrics_data.resource_metrics
         for scope_metric in resource_metric.scope_metrics
         for metric in scope_metric.metrics
+    ]
+    # The INTERNAL invoke_agent invocation is not a streamed client call,
+    # so only the operation duration is recorded — no streamed-call metrics
+    # such as time_to_first_chunk.
+    assert {metric.name for metric in all_metrics} == {
+        gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION
+    }
+    duration_metrics = [
+        metric
+        for metric in all_metrics
         if metric.name == gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION
     ]
     assert len(duration_metrics) == 1

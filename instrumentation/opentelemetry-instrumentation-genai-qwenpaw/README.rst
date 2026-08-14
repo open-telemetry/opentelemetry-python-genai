@@ -22,6 +22,15 @@ instrumentation. Pair this package with the instrumentations of AgentScope
 and the underlying model libraries so their calls appear as child spans
 under the ``invoke_agent`` span.
 
+Supported versions
+------------------
+
+QwenPaw 1.1.x only. The 2.x `runtime architecture upgrade
+<https://github.com/agentscope-ai/QwenPaw/blob/main/website/public/blog/runtime-architecture-upgrade.en.md>`_
+refactored away ``AgentRunner.query_handler``, the seam this package
+patches, so the dependency is capped at ``< 2.0.0`` and 2.x support will
+be added separately against the new runtime entry point.
+
 Installation
 ------------
 
