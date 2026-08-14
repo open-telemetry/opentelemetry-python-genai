@@ -149,19 +149,19 @@ jobs:
           git checkout main
           git pull origin main
 
-          ./scripts/bump_package_minor_version.sh "${PACKAGE_NAME}"
+          uv run ./scripts/version_utils.py bump --dev
 
           if git diff --quiet; then
             echo "No version bump needed"
             exit 0
           fi
 
-          message="Bump ${PACKAGE_NAME} to next dev version after v${VERSION}"
-          branch="otelbot/bump-${PACKAGE_NAME}-after-v${VERSION}"
+          message="Bump version to next dev version after releasing v${VERSION}"
+          branch="otelbot/bump-after-v${VERSION}"
 
           git commit -a -m "$message"
           git push origin HEAD:"$branch"
           gh pr create --title "$message" \
-                       --body "Bump \`${PACKAGE_NAME}\` to the next \`.dev\` version after releasing v\`${VERSION}\`." \
+                       --body "Bump versions to the next \`.dev\` version after releasing v\`${VERSION}\`." \
                        --head "$branch" \
                        --base main

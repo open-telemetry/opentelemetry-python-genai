@@ -10,10 +10,8 @@ inputs:
     required: true
   operation:
     description: >
-      One of "drop-dev" (drop the .dev suffix and run towncrier on main),
-      "bump-patch" (bump the beta patch component on a backport branch),
-      "bump-minor" (bump to next minor .dev on main), or "bump-major" (bump
-      to next major .dev on main).
+      One of "drop-dev" (drop the .dev suffix and run towncrier on main) or
+      "bump-patch" (bump the beta patch component on a backport branch).
     required: true
   otelbot-client-id:
     description: OTELBOT app client id used to open the pull request
@@ -29,7 +27,7 @@ runs:
       shell: bash
       run: |
         case "${{ inputs.operation }}" in
-          drop-dev|bump-minor|bump-major)
+          drop-dev)
             if [[ "$GITHUB_REF_NAME" != "main" ]]; then
               echo "operation '${{ inputs.operation }}' must run on main, got '$GITHUB_REF_NAME'"
               exit 1
@@ -59,16 +57,6 @@ runs:
       if: inputs.operation == 'bump-patch'
       shell: bash
       run: ./scripts/prepare_package_for_patch_release.sh "${{ inputs.package }}"
-
-    - name: Run bump-minor
-      if: inputs.operation == 'bump-minor'
-      shell: bash
-      run: ./scripts/bump_package_minor_version.sh "${{ inputs.package }}"
-
-    - name: Run bump-major
-      if: inputs.operation == 'bump-major'
-      shell: bash
-      run: ./scripts/bump_package_major_version.sh "${{ inputs.package }}"
 
     - name: Compute resulting version
       shell: bash
@@ -100,14 +88,6 @@ runs:
           bump-patch)
             title="Prepare patch release for ${PACKAGE_NAME} v${VERSION}"
             branch="otelbot/patch-${PACKAGE_NAME}-v${VERSION}"
-            ;;
-          bump-minor)
-            title="Bump ${PACKAGE_NAME} to next minor v${VERSION}"
-            branch="otelbot/bump-minor-${PACKAGE_NAME}-v${VERSION}"
-            ;;
-          bump-major)
-            title="Bump ${PACKAGE_NAME} to next major v${VERSION}"
-            branch="otelbot/bump-major-${PACKAGE_NAME}-v${VERSION}"
             ;;
         esac
 
