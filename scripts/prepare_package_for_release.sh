@@ -24,16 +24,7 @@ fi
 
 version="${version_dev%.dev}"
 
-version_file="$(find "$path" -type f -path "**/version.py")"
-file_count="$(echo "$version_file" | wc -l | tr -d ' ')"
-
-if [[ "$file_count" -ne 1 ]]; then
-  echo "Error: expected one version file, found ${file_count}"
-  echo "$version_file"
-  exit 1
-fi
-
-sed -i -E "s/__version__\\s*=\\s*\"${version}\\.dev\"/__version__ = \"${version}\"/g" "$version_file"
+uv run ./scripts/version_utils.py bump --package "$package" --release
 
 uv run tox -e generate
 uv run towncrier build --yes --version "$version" --dir "$(dirname "$changelog")"
