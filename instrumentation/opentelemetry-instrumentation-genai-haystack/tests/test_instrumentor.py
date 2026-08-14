@@ -5,8 +5,7 @@
 that instrument/uninstrument actually wrap and unwrap the methods this
 package documents."""
 
-from haystack.components.generators.chat.openai import OpenAIChatGenerator
-from haystack.core.component.component import _Component
+from haystack import Pipeline
 
 from opentelemetry.instrumentation.genai.haystack import HaystackInstrumentor
 from opentelemetry.util._importlib_metadata import entry_points
@@ -23,16 +22,23 @@ def test_entrypoint_for_opentelemetry_instrument():
 def test_instrument_and_uninstrument_wrap_and_unwrap_expected_methods(
     tracer_provider,
 ):
-    original_component_register = _Component._component
-    original_chat_generator_run = OpenAIChatGenerator.run
+    original_pipeline_run = Pipeline.run
+    original_pipeline_run_async = getattr(Pipeline, "run_async", None)
+    original_pipeline_run_async_generator = getattr(Pipeline, "run_async_generator", None)
 
     instrumentor = HaystackInstrumentor()
     instrumentor.instrument(tracer_provider=tracer_provider)
     try:
-        assert _Component._component is not original_component_register
-        assert OpenAIChatGenerator.run is not original_chat_generator_run
+        assert Pipeline.run is not original_pipeline_run
+        if original_pipeline_run_async:
+            assert getattr(Pipeline, "run_async") is not original_pipeline_run_async
+        if original_pipeline_run_async_generator:
+            assert getattr(Pipeline, "run_async_generator") is not original_pipeline_run_async_generator
     finally:
         instrumentor.uninstrument()
 
-    assert _Component._component == original_component_register
-    assert OpenAIChatGenerator.run == original_chat_generator_run
+    assert Pipeline.run == original_pipeline_run
+    if original_pipeline_run_async:
+        assert getattr(Pipeline, "run_async") == original_pipeline_run_async
+    if original_pipeline_run_async_generator:
+        assert getattr(Pipeline, "run_async_generator") == original_pipeline_run_async_generator

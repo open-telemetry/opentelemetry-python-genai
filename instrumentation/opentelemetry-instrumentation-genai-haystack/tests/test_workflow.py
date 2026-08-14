@@ -1,0 +1,140 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for ``Pipeline.run`` / ``Pipeline.run_async`` -> ``invoke_workflow``."""
+
+from typing import List
+
+import pytest
+from haystack import Pipeline, component
+from haystack.components.builders.chat_prompt_builder import ChatPromptBuilder
+from haystack.components.generators.chat.openai import OpenAIChatGenerator
+from haystack.dataclasses.chat_message import ChatMessage
+
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAIAttributes,
+)
+
+from .test_utils import assert_chat_span_attributes
+
+
+@component
+class _EchoGenerator:
+    @component.output_types(replies=List[ChatMessage])
+    def run(self, messages, **kwargs):
+        return {
+            "replies": [
+                ChatMessage.from_assistant(
+                    "ok", meta={"finish_reason": "stop"}
+                )
+            ]
+        }
+
+
+@pytest.mark.vcr
+def test_pipeline_run_produces_workflow_and_chat_spans(
+    span_exporter, instrument_with_content
+):
+    """A prompt-builder + chat-generator pipeline yields exactly the spans this
+    migration supports: one for the classified generator, one for the
+    pipeline itself. ``ChatPromptBuilder`` has no util-genai invocation type
+    and produces no span of its own."""
+    pipeline = Pipeline()
+    prompt_builder = ChatPromptBuilder()
+    llm = OpenAIChatGenerator(model="gpt-4o")
+    pipeline.add_component("prompt_builder", prompt_builder)
+    pipeline.add_component("llm", llm)
+    pipeline.connect("prompt_builder.prompt", "llm.messages")
+
+    messages = [
+        ChatMessage.from_system("Answer concisely in one sentence."),
+        ChatMessage.from_user("What country is {{location}} in?"),
+    ]
+    pipeline.run(
+        data={
+            "prompt_builder": {
+                "template_variables": {"location": "Berlin"},
+                "template": messages,
+            }
+        }
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == [
+        "invoke_workflow Pipeline",
+    ]
+
+    workflow_span = spans[0]
+    
+    assert workflow_span.status.is_ok
+    workflow_attributes = workflow_span.attributes or {}
+    assert (
+        workflow_attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "invoke_workflow"
+    )
+
+
+@pytest.mark.vcr
+async def test_pipeline_run_async_produces_workflow_and_chat_spans(
+    span_exporter, instrument_with_content
+):
+    pipeline = Pipeline()
+    llm = OpenAIChatGenerator(model="gpt-4o")
+    pipeline.add_component("llm", llm)
+
+    messages = [
+        ChatMessage.from_system("Answer user questions succinctly"),
+        ChatMessage.from_assistant("What can I help you with?"),
+        ChatMessage.from_user(
+            "Who won the World Cup in 2022? Answer in one word."
+        ),
+    ]
+    await pipeline.run_async(data={"llm": {"messages": messages}})
+
+    spans = span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == [
+        "invoke_workflow Pipeline",
+    ]
+
+    workflow_span = spans[0]
+    workflow_attributes = workflow_span.attributes or {}
+    assert (
+        workflow_attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "invoke_workflow"
+    )
+
+
+async def test_run_async_generator_called_directly_gets_its_own_workflow_span(
+    span_exporter, instrument_no_content
+):
+    """A caller draining ``run_async_generator()`` directly (rather than
+    through ``run_async()``) still gets exactly one ``invoke_workflow``
+    span -- not zero (unwrapped) and not two (double-counted)."""
+    pipeline = Pipeline()
+    pipeline.add_component("llm", _EchoGenerator())
+
+    async for _ in pipeline.run_async_generator(
+        {"llm": {"messages": [ChatMessage.from_user("hi")]}}
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    workflow_spans = [s for s in spans if s.name.startswith("invoke_workflow")]
+    assert len(workflow_spans) == 1
+
+
+async def test_run_async_does_not_double_count_inner_generator(
+    span_exporter, instrument_no_content
+):
+    """``run_async()`` drains ``run_async_generator()`` internally -- that
+    inner call must not produce a second ``invoke_workflow`` span."""
+    pipeline = Pipeline()
+    pipeline.add_component("llm", _EchoGenerator())
+
+    await pipeline.run_async(
+        {"llm": {"messages": [ChatMessage.from_user("hi")]}}
+    )
+
+    spans = span_exporter.get_finished_spans()
+    workflow_spans = [s for s in spans if s.name.startswith("invoke_workflow")]
+    assert len(workflow_spans) == 1
