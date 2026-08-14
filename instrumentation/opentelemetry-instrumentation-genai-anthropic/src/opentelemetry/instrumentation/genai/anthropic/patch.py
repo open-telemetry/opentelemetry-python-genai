@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, cast
 
-from anthropic._streaming import Stream as AnthropicStream
 from anthropic.types import Message as AnthropicMessage
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -26,6 +25,7 @@ from .messages_extractors import (
     get_server_address_and_port,
     get_system_instruction,
 )
+from .utils import is_anthropic_async_stream, is_anthropic_stream
 from .wrappers import (
     AsyncMessagesStreamManagerWrapper,
     AsyncMessagesStreamWrapper,
@@ -36,6 +36,7 @@ from .wrappers import (
 
 if TYPE_CHECKING:
     from anthropic._streaming import AsyncStream as AnthropicAsyncStream
+    from anthropic._streaming import Stream as AnthropicStream
     from anthropic.lib.streaming._messages import (  # pylint: disable=no-name-in-module
         AsyncMessageStreamManager,
         MessageStreamManager,
@@ -43,41 +44,20 @@ if TYPE_CHECKING:
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import RawMessageStreamEvent
 
-try:
-    from anthropic._streaming import AsyncStream as _AnthropicAsyncStream
-except ImportError:
-    _AnthropicAsyncStream = None
-
 
 _logger = logging.getLogger(__name__)
 ANTHROPIC = "anthropic"
 
 
-@runtime_checkable
-class _RawResponse(Protocol):
-    """A ``with_raw_response`` result whose ``Message`` is behind ``parse()``.
-
-    Mirrors the OpenAI sibling package's ``ParsableResponse``: the anthropic
-    SDK's raw-response classes (e.g. ``LegacyAPIResponse``) live in private
-    modules and expose the deserialized payload via ``parse()``, so we match on
-    shape rather than importing private names.
-    """
-
-    def parse(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
 def _is_raw_response(result: object) -> bool:
     """Whether ``result`` is a raw-response object to route through the proxy.
 
-    Both ``with_raw_response`` (``LegacyAPIResponse``) and
-    ``with_streaming_response`` (``APIResponse`` / ``AsyncAPIResponse``) expose
-    their payload behind ``parse()`` and carry the underlying httpx response;
-    the proxy needs both -- ``parse()`` to route on the parsed value and
+    Matched on shape rather than on the SDK's private response classes
+    (``LegacyAPIResponse``, ``APIResponse``, ``AsyncAPIResponse``). The proxy
+    needs both attributes: ``parse()`` to route on the parsed value and
     ``http_response`` to finalize the span for callers that never parse.
     """
-    return isinstance(result, _RawResponse) and hasattr(
-        result, "http_response"
-    )
+    return hasattr(result, "parse") and hasattr(result, "http_response")
 
 
 def messages_create(
@@ -108,23 +88,27 @@ def messages_create(
             handler, instance, args, kwargs, capture_content
         )
         try:
-            result = wrapped(*args, **kwargs)
-            if isinstance(result, AnthropicStream):
-                return MessagesStreamWrapper(
-                    result, invocation, capture_content
-                )
-            if _is_raw_response(result):
-                return wrap_raw_response(result, invocation, capture_content)
-
-            # Only a non-streaming ``Message`` remains here: the stream and
-            # raw-response results returned above, so no ``isinstance`` guard is
-            # needed (and pyright flags one as unnecessary).
-            MessageWrapper(result, capture_content).extract_into(invocation)
-            invocation.stop()
-            return result
+            # ``Any``: through ``with_raw_response`` / ``with_streaming_response``
+            # this returns a response object that ``create``'s annotations do
+            # not describe, so the checks below cannot be narrowed away.
+            result: Any = wrapped(*args, **kwargs)
         except Exception as exc:
             invocation.fail(exc)
             raise
+
+        if is_anthropic_stream(result):
+            return MessagesStreamWrapper(
+                cast("AnthropicStream[RawMessageStreamEvent]", result),
+                invocation,
+                capture_content,
+            )
+        if _is_raw_response(result):
+            return wrap_raw_response(result, invocation, capture_content)
+
+        if isinstance(result, AnthropicMessage):
+            MessageWrapper(result, capture_content).extract_into(invocation)
+        invocation.stop()
+        return result
 
     return cast(
         'Callable[..., "AnthropicMessage" | "AnthropicStream[RawMessageStreamEvent]" | MessagesStreamWrapper[None]]',
@@ -162,45 +146,29 @@ def async_messages_create(
             handler, instance, args, kwargs, capture_content
         )
         try:
-            result: (
-                AnthropicMessage | AnthropicAsyncStream[RawMessageStreamEvent]
-            ) = await wrapped(*args, **kwargs)
-            if _is_anthropic_async_stream(result):
-                return AsyncMessagesStreamWrapper(
-                    cast(
-                        "AnthropicAsyncStream[RawMessageStreamEvent]", result
-                    ),
-                    invocation,
-                    capture_content,
-                )
-            if _is_raw_response(result):
-                return wrap_raw_response(result, invocation, capture_content)
-
-            if isinstance(result, AnthropicMessage):
-                MessageWrapper(result, capture_content).extract_into(
-                    invocation
-                )
-            invocation.stop()
-            return result
+            # See ``messages_create`` on why this is Any.
+            result: Any = await wrapped(*args, **kwargs)
         except Exception as exc:
             invocation.fail(exc)
             raise
 
+        if is_anthropic_async_stream(result):
+            return AsyncMessagesStreamWrapper(
+                cast("AnthropicAsyncStream[RawMessageStreamEvent]", result),
+                invocation,
+                capture_content,
+            )
+        if _is_raw_response(result):
+            return wrap_raw_response(result, invocation, capture_content)
+
+        if isinstance(result, AnthropicMessage):
+            MessageWrapper(result, capture_content).extract_into(invocation)
+        invocation.stop()
+        return result
+
     return cast(
         'Callable[..., "AnthropicMessage" | "AnthropicAsyncStream[RawMessageStreamEvent]" | AsyncMessagesStreamWrapper[None]]',
         traced_method,
-    )
-
-
-def _is_anthropic_async_stream(result: object) -> bool:
-    if _AnthropicAsyncStream is not None and isinstance(
-        result, _AnthropicAsyncStream
-    ):
-        return True
-    return (
-        hasattr(result, "__anext__")
-        and callable(getattr(result, "close", None))
-        and hasattr(result, "response")
     )
 
 
