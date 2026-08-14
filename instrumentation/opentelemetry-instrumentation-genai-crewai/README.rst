@@ -1,9 +1,13 @@
 OpenTelemetry CrewAI Instrumentation
 ====================================
 
-This package provides the setup for instrumenting CrewAI with OpenTelemetry
-Generative AI semantic conventions. CrewAI operation instrumentation will be
-added in follow-up changes.
+This package instruments CrewAI-owned orchestration operations using the
+OpenTelemetry Generative AI semantic conventions. It emits ``invoke_workflow``
+spans for crew kickoffs and ``invoke_agent`` spans for agent executions.
+
+CrewAI delegates model calls to LLM client libraries. This instrumentation does
+not emit inference spans for those calls; instrument the underlying LLM client
+to capture model-call telemetry without duplicate spans.
 
 Installation
 ------------
