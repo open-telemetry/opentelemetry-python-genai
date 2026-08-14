@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from types import TracebackType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Generic,
     Protocol,
     TypeVar,
@@ -15,8 +13,12 @@ from typing import (
 )
 
 from opentelemetry.util.genai.stream import (
+    AsyncStreamManagerWrapper,
     AsyncStreamWrapper,
+    SyncStreamManagerWrapper,
     SyncStreamWrapper,
+    finalize_on_aclose,
+    finalize_on_close,
 )
 
 from .messages_extractors import set_invocation_response_attributes
@@ -29,6 +31,7 @@ except ImportError:
     _sdk_accumulate_event = None
 
 if TYPE_CHECKING:
+    import httpx
     from anthropic._streaming import AsyncStream, Stream
     from anthropic.lib.streaming._messages import (  # pylint: disable=no-name-in-module
         AsyncMessageStream,
@@ -48,7 +51,6 @@ if TYPE_CHECKING:
     from opentelemetry.util.genai.invocation import InferenceInvocation
 
 
-ResponseT = TypeVar("ResponseT")
 ResponseFormatT = TypeVar("ResponseFormatT")
 accumulate_event = cast("Callable[..., Message] | None", _sdk_accumulate_event)
 
@@ -64,36 +66,6 @@ def _set_response_attributes(
     capture_content: bool,
 ) -> None:
     set_invocation_response_attributes(invocation, result, capture_content)
-
-
-class _ResponseProxy(Generic[ResponseT]):
-    def __init__(self, response: ResponseT, finalize: Callable[[], None]):
-        self._response: Any = response
-        self._finalize = finalize
-
-    def close(self) -> None:
-        try:
-            self._response.close()
-        finally:
-            self._finalize()
-
-    def __getattr__(self, name: str):
-        return getattr(self._response, name)
-
-
-class _AsyncResponseProxy(Generic[ResponseT]):
-    def __init__(self, response: ResponseT, finalize: Callable[[], None]):
-        self._response: Any = response
-        self._finalize = finalize
-
-    async def aclose(self) -> None:
-        try:
-            await self._response.aclose()
-        finally:
-            self._finalize()
-
-    def __getattr__(self, name: str):
-        return getattr(self._response, name)
 
 
 class MessageWrapper:
@@ -190,8 +162,8 @@ class MessagesStreamWrapper(
         self._self_message_telemetry_finalized = False
 
     @property
-    def response(self) -> _ResponseProxy[object]:
-        return _ResponseProxy(self.stream.response, self._stop)
+    def response(self) -> httpx.Response:
+        return finalize_on_close(self.stream.response, self._stop)
 
     @property
     def stream(
@@ -204,9 +176,7 @@ class MessagesStreamWrapper(
         self,
         stream: Stream[RawMessageStreamEvent] | MessageStream[ResponseFormatT],
     ) -> None:
-        self.__wrapped__ = stream
-        self._self_stream = stream
-        self._self_iterator = iter(stream)
+        self._set_stream(stream)
 
 
 class AsyncMessagesStreamWrapper(
@@ -232,8 +202,8 @@ class AsyncMessagesStreamWrapper(
         self._self_message_telemetry_finalized = False
 
     @property
-    def response(self) -> Any:
-        return _AsyncResponseProxy(self.stream.response, self._stop)
+    def response(self) -> httpx.Response:
+        return finalize_on_aclose(self.stream.response, self._stop)
 
     @property
     def stream(
@@ -250,12 +220,17 @@ class AsyncMessagesStreamWrapper(
         stream: AsyncStream[RawMessageStreamEvent]
         | AsyncMessageStream[ResponseFormatT],
     ) -> None:
-        self.__wrapped__ = stream
-        self._self_stream = stream
-        self._self_aiter = aiter(stream)
+        self._set_stream(stream)
 
 
-class MessagesStreamManagerWrapper(Generic[ResponseFormatT]):
+class MessagesStreamManagerWrapper(
+    SyncStreamManagerWrapper[
+        "MessageStream[ResponseFormatT]",
+        "InferenceInvocation",
+        "MessagesStreamWrapper[ResponseFormatT]",
+    ],
+    Generic[ResponseFormatT],
+):
     """Wrapper for sync Anthropic stream managers."""
 
     def __init__(
@@ -264,131 +239,47 @@ class MessagesStreamManagerWrapper(Generic[ResponseFormatT]):
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
     ):
-        self._manager = manager
-        self._invocation_factory = invocation_factory
-        self._invocation: InferenceInvocation | None = None
-        self._capture_content = capture_content
-        self._stream_wrapper: MessagesStreamWrapper[ResponseFormatT] | None = (
-            None
-        )
+        super().__init__(manager, invocation_factory)
+        self._self_capture_content = capture_content
 
-    def __enter__(self) -> MessagesStreamWrapper[ResponseFormatT]:
-        invocation = self._invocation_factory()
-        self._invocation = invocation
-        try:
-            stream = self._manager.__enter__()
-        except Exception as exc:
-            invocation.fail(exc)
-            raise
-        self._stream_wrapper = MessagesStreamWrapper(
-            stream,
-            invocation,
-            self._capture_content,
-        )
-        return self._stream_wrapper
-
-    def __exit__(
+    def _wrap_stream(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> bool | None:
-        stream_wrapper = self._stream_wrapper
-        self._stream_wrapper = None
-        try:
-            suppressed = self._manager.__exit__(exc_type, exc_val, exc_tb)
-        except Exception as exc:
-            if stream_wrapper is not None:
-                stream_wrapper.__exit__(type(exc), exc, exc.__traceback__)
-            elif self._invocation is not None:
-                self._invocation.fail(exc)
-            raise
-        if stream_wrapper is not None:
-            if suppressed:
-                stream_wrapper.__exit__(None, None, None)
-            else:
-                stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
-        return suppressed
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._manager, name)
+        stream: MessageStream[ResponseFormatT],
+        invocation: InferenceInvocation,
+    ) -> MessagesStreamWrapper[ResponseFormatT]:
+        return MessagesStreamWrapper(
+            stream, invocation, self._self_capture_content
+        )
 
 
-class AsyncMessagesStreamManagerWrapper(Generic[ResponseFormatT]):
+class AsyncMessagesStreamManagerWrapper(
+    AsyncStreamManagerWrapper[
+        "AsyncMessageStream[ResponseFormatT]",
+        "InferenceInvocation",
+        "AsyncMessagesStreamWrapper[ResponseFormatT]",
+    ],
+    Generic[ResponseFormatT],
+):
     """Wrapper for AsyncMessageStreamManager that handles telemetry.
 
     Wraps AsyncMessageStreamManager from the Anthropic SDK:
     https://github.com/anthropics/anthropic-sdk-python/blob/05220bc1c1079fe01f5c4babc007ec7a990859d9/src/anthropic/lib/streaming/_messages.py#L294
     """
 
-    # When async Messages.stream() instrumentation is wired up, start the
-    # invocation lazily in __aenter__ to avoid opening spans for unentered
-    # managers.
-
     def __init__(
         self,
         manager: AsyncMessageStreamManager[ResponseFormatT],
-        invocation: InferenceInvocation | Callable[[], InferenceInvocation],
+        invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
     ):
-        self._manager = manager
-        if callable(invocation):
-            invocation_factory = invocation
-        else:
+        super().__init__(manager, invocation_factory)
+        self._self_capture_content = capture_content
 
-            def invocation_factory() -> InferenceInvocation:
-                return invocation
-
-        self._invocation_factory = invocation_factory
-        self._invocation: InferenceInvocation | None = None
-        self._capture_content = capture_content
-        self._stream_wrapper: (
-            AsyncMessagesStreamWrapper[ResponseFormatT] | None
-        ) = None
-
-    async def __aenter__(
+    def _wrap_stream(
         self,
+        stream: AsyncMessageStream[ResponseFormatT],
+        invocation: InferenceInvocation,
     ) -> AsyncMessagesStreamWrapper[ResponseFormatT]:
-        invocation = self._invocation_factory()
-        self._invocation = invocation
-        try:
-            msg_stream = await self._manager.__aenter__()
-        except Exception as exc:
-            invocation.fail(exc)
-            raise
-        self._stream_wrapper = AsyncMessagesStreamWrapper(
-            msg_stream,
-            invocation,
-            self._capture_content,
+        return AsyncMessagesStreamWrapper(
+            stream, invocation, self._self_capture_content
         )
-        return self._stream_wrapper
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> bool | None:
-        stream_wrapper = self._stream_wrapper
-        self._stream_wrapper = None
-        try:
-            suppressed = await self._manager.__aexit__(
-                exc_type, exc_val, exc_tb
-            )
-        except Exception as exc:
-            if stream_wrapper is not None:
-                await stream_wrapper.__aexit__(
-                    type(exc), exc, exc.__traceback__
-                )
-            elif self._invocation is not None:
-                self._invocation.fail(exc)
-            raise
-        if stream_wrapper is not None:
-            if suppressed:
-                await stream_wrapper.__aexit__(None, None, None)
-            else:
-                await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
-        return suppressed
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._manager, name)
