@@ -102,6 +102,18 @@ def test_server_address_and_port_from_client(handler, span_exporter):
     assert span.attributes[ServerAttributes.SERVER_PORT] == 8080
 
 
+def test_server_address_and_port_from_non_httpx_url(handler, span_exporter):
+    """Works with any URL object exposing .host/.port (e.g. httpx2.URL)."""
+    fake_url = SimpleNamespace(host="openrouter.ai", port=None)
+    client = _make_client(fake_url)
+    invocation = create_embedding_invocation(handler, {"model": "m"}, client)
+    invocation.stop()
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[ServerAttributes.SERVER_ADDRESS] == "openrouter.ai"
+    assert ServerAttributes.SERVER_PORT not in span.attributes
+
+
 # ─── create_embedding_invocation: dimensions / encoding_format ──────────────
 
 

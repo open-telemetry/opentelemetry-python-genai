@@ -11,11 +11,6 @@ from urllib.parse import urlparse
 import openai
 from openai import NotGiven
 
-try:
-    from httpx import URL
-except ImportError:
-    from httpx2 import URL
-
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -72,13 +67,11 @@ def get_server_address_and_port(
     base_url = getattr(base_client, "base_url", None)
     if not base_url:
         return None, None
-    address = None
-    port = None
-    if isinstance(base_url, URL):
-        address = base_url.host
-        port = base_url.port
-    elif isinstance(base_url, str):
-        url = urlparse(base_url)
+
+    address = getattr(base_url, "host", None)
+    port = getattr(base_url, "port", None)
+    if not address:
+        url = urlparse(str(base_url))
         address = url.hostname
         port = url.port
 

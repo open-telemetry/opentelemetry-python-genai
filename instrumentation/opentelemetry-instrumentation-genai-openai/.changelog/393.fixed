@@ -1,0 +1,1 @@
+Fix ``server.address`` and ``server.port`` not recorded when using openai v3 (httpx2 URL type).
