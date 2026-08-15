@@ -9,8 +9,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 import openai
-from httpx import URL
 from openai import NotGiven
+
+try:
+    from httpx import URL
+except ImportError:
+    from httpx2 import URL
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,

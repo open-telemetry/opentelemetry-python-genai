@@ -15,7 +15,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from httpx import URL
+
+try:
+    from httpx import URL
+except ImportError:
+    from httpx2 import URL
 
 from opentelemetry.instrumentation.genai.openai.patch import (
     _create_embedding_invocation as create_embedding_invocation,
