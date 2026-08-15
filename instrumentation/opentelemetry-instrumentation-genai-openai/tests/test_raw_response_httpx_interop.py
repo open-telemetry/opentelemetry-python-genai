@@ -27,7 +27,7 @@ HTTPXClientInstrumentor = pytest.importorskip(
     "opentelemetry.instrumentation.httpx"
 ).HTTPXClientInstrumentor
 
-import httpx  # noqa: E402
+import httpx
 
 _HTTPX_SPAN = "POST"
 _GENAI_SPAN = "chat gpt-4"
