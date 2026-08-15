@@ -68,6 +68,8 @@ def get_server_address_and_port(
     if not base_url:
         return None, None
 
+    # Use getattr rather than isinstance(base_url, httpx.URL): openai v1/v2
+    # uses httpx.URL while v3 uses httpx2.URL; both expose .host and .port.
     address = getattr(base_url, "host", None)
     port = getattr(base_url, "port", None)
     if not address:
