@@ -21,15 +21,13 @@ import json
 import pytest
 from openai import AsyncOpenAI, OpenAI
 
-# This module tests interop with opentelemetry-instrumentation-httpx, which
-# only applies when openai uses httpx (v1/v2). Skip the entire module when
-# httpx is not installed (e.g. openai v3+, which uses httpx2 instead).
-httpx = pytest.importorskip("httpx")
-
 # Only pinned in requirements.latest.txt; oldest envs skip this module.
+# When httpx is not installed (e.g. openai v3+), this import will also skip.
 HTTPXClientInstrumentor = pytest.importorskip(
     "opentelemetry.instrumentation.httpx"
 ).HTTPXClientInstrumentor
+
+import httpx  # noqa: E402
 
 _HTTPX_SPAN = "POST"
 _GENAI_SPAN = "chat gpt-4"
