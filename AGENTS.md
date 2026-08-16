@@ -26,7 +26,11 @@ comment for users on issue or pull request threads on their behalf as it is agai
 
 ## PR description
 
-Keep description short and focus on what is being changed and any gaps or concerns.
+Keep it short - prose under 200 words. Answer, in order:
+
+- What does this change do? 2 sentences max: fixes issue XYZ, adds feature ABC, adds instrumentation for library NMP, etc.
+- Why? Skip this for bug fixes.
+- Any known gaps or concerns.
 
 AI-generated analyses, long reports, or design dumps go in a relevant issue or a separate PR
 comment - not in the PR description.
@@ -145,6 +149,27 @@ run silently uses the previously installed versions.
   avoid forward references. Keep quotes only for expressions still evaluated at runtime, such as
   `typing.cast(...)`, unless the referenced type is imported at runtime.
 - Whenever applicable, all code changes should have tests that actually validate the changes.
+
+## Code comments
+
+Write for someone reading the code as it is now, with no knowledge of the change that produced it.
+
+- Comment only gotchas that can't be inferred from the code (protocol quirks, ordering
+  requirements, upstream bugs worked around). 1-2 sentences max.
+- Never restate what the code does, describe what it used to do, or justify a change - the last one
+  belongs in the PR description or a PR comment.
+
+## Self-review before opening a PR
+
+Once the change implementation is complete and tests pass, review the diff in a **new session**. Look for:
+
+- Test coverage gaps - sync/async variants, error paths, streaming, edge cases. Add the missing
+  tests.
+- Instrumentation of layers not owned by the target library (LLM spans reported by agentic framework).
+- Functional issues
+
+Fix the findings, keeping the PR scoped to the original change; for anything outside that scope,
+suggest an issue or a separate PR. Do not open a PR with unresolved major issues or test gaps.
 
 ## Changelog
 
