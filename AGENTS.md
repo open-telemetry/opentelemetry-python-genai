@@ -28,7 +28,7 @@ comment for users on issue or pull request threads on their behalf as it is agai
 
 Keep it short - prose under 200 words. Answer, in order:
 
-- What does this change do? 2 sentences max: fixes issue XYZ, adds feature ABC, adds instrumentation for library NMP, etc.
+- What does this change do? 2 sentences max: fixes issue XYZ, adds feature ABC, adds instrumentation for library Foo, etc.
 - Why? Skip this for bug fixes.
 - Any known gaps or concerns.
 
