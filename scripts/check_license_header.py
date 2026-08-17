@@ -16,7 +16,6 @@ SKIP_DIRS = (
     "target",
     ".tox",
     ".venv",
-    "test_env",
     "__pycache__",
     "node_modules",
 )
