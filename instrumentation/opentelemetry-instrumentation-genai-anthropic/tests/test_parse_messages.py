@@ -10,6 +10,11 @@ from anthropic import NotFoundError
 from anthropic.resources.messages import AsyncMessages, Messages
 from pydantic import BaseModel
 
+try:
+    from anthropic.types.parsed_message import ParsedMessage
+except ImportError:
+    ParsedMessage = None
+
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -110,6 +115,41 @@ def test_sync_messages_parse_basic(
         output_format=Greeting,
     )
 
+    _assert_parsed_response(response)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_parse_span(spans[0], model=model, response=response)
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_parse_basic")
+def test_sync_messages_parse_returns_the_sdk_object(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Messages.parse must hand back the SDK's own ParsedMessage.
+
+    ``Messages.parse`` is wrapped with the same patch as ``create``, which now
+    returns the call's result rather than a re-wrapped message and routes on
+    the result's type. ``ParsedMessage`` subclasses ``Message``, so it must
+    still be extracted from and returned with its ``parsed`` blocks intact.
+    """
+    model = "claude-haiku-4-5"
+
+    response = anthropic_client.messages.parse(
+        model=model,
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": "Return JSON with a greeting field set to hello.",
+            }
+        ],
+        output_format=Greeting,
+    )
+
+    # The SDK builds a generic-parametrized subclass, so match on the base.
+    assert isinstance(response, ParsedMessage)
     _assert_parsed_response(response)
 
     spans = span_exporter.get_finished_spans()

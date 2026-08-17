@@ -42,6 +42,33 @@ if TYPE_CHECKING:
     )
 
 
+def is_anthropic_stream(value: object) -> bool:
+    """Whether ``value`` is a sync SDK ``Stream`` we can drive.
+
+    Matched on shape rather than on ``anthropic._streaming.Stream``: its
+    metaclass answers ``isinstance`` ``True`` only for the exact class, so the
+    check would have to be duck-typed for subclasses anyway, and importing a
+    private SDK module would make a rename break instrumentation at import time.
+    """
+    return (
+        hasattr(value, "__next__")
+        and callable(getattr(value, "close", None))
+        and hasattr(value, "response")
+    )
+
+
+def is_anthropic_async_stream(value: object) -> bool:
+    """Whether ``value`` is an async SDK ``AsyncStream`` we can drive.
+
+    See ``is_anthropic_stream`` for why this is matched on shape.
+    """
+    return (
+        hasattr(value, "__anext__")
+        and callable(getattr(value, "close", None))
+        and hasattr(value, "response")
+    )
+
+
 @dataclass
 class StreamBlockState:
     type: str

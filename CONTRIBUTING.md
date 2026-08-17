@@ -200,6 +200,31 @@ The absence of compatible native instrumentation is just one factor. Whether we
 add an instrumentation here also depends on things like the library's popularity
 and whether it's actively maintained.
 
+## Which operations an instrumentation should emit
+
+An instrumentation emits telemetry only for the operations the library itself
+performs. Two principles:
+
+- **Don't re-emit another library's telemetry.** If the library delegates an
+  operation to another instrumentable library (for example a framework that
+  calls `openai`, `anthropic`, or `google-genai` under the hood), instrumentation
+  for that operation belongs to the underlying library, and the two correlate
+  through standard context propagation.
+- **Emit an operation only when the library has that concept.** Emit inference or
+  embeddings only when the library is itself the model-call boundary, an
+  `invoke_agent` span only when it models agents, an `invoke_workflow` span only
+  when it models workflows or graphs, `execute_tool` only when it runs the tool
+  itself, and so on. Calling the provider's REST API directly (with no separate
+  instrumentable client library in between) makes the library the model-call
+  boundary, so it is a valid reason to emit inference.
+
+Agent-framework instrumentation SHOULD NOT emit inference spans by default; the
+underlying LLM library owns them. The exception is a framework that issues the
+model call in a way no other instrumentable library can observe — it calls the
+REST API directly, embeds a vendored model library, or similar. In that case the
+framework is the only place the inference call is visible, so it SHOULD emit the
+span.
+
 ## Keep PRs small
 
 One logical change per PR. Don't bundle unrelated fixes, refactors, or

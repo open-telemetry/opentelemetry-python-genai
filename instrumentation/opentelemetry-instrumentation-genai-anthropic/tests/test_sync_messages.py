@@ -9,11 +9,27 @@ import json
 import os
 from pathlib import Path
 
+import httpx
 import pytest
 from anthropic import Anthropic, APIConnectionError, NotFoundError
+from anthropic._legacy_response import LegacyAPIResponse
+from anthropic._response import APIResponse
+from anthropic._streaming import Stream as AnthropicStream
 from anthropic.resources.messages import Messages as _Messages
+from anthropic.types import (
+    Message,
+    RawMessageStreamEvent,
+    TextBlock,
+    Usage,
+)
 
-from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
+from opentelemetry.instrumentation.genai.anthropic import (
+    AnthropicInstrumentor,
+    _raw_response,
+)
+from opentelemetry.instrumentation.genai.anthropic._raw_response import (
+    RawResponseProxy,
+)
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -27,6 +43,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
 # Detect whether the installed anthropic SDK supports tools / thinking params.
 # Older SDK versions (e.g. 0.16.0) do not accept these keyword arguments.
@@ -157,6 +174,195 @@ def test_sync_messages_create_basic(
         output_tokens=response.usage.output_tokens,
         finish_reasons=[normalize_stop_reason(response.stop_reason)],
     )
+
+
+@pytest.mark.vcr()
+def test_sync_messages_create_with_raw_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``with_raw_response.create`` must not crash and must still record a span.
+
+    Regression test: the instrumentation assumed the wrapped call always
+    returns a ``Message`` and read ``message.model`` off the raw-response object
+    (``LegacyAPIResponse``) that ``with_raw_response`` returns, raising
+    ``AttributeError`` into the caller *after* the API call had already
+    succeeded. The raw response must be returned to the caller untouched.
+    """
+    model = "claude-sonnet-4-20250514"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    )
+
+    # The caller still receives the raw response, with metadata and parse().
+    assert hasattr(raw_response, "headers")
+    message = raw_response.parse()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id=message.id,
+        response_model=message.model,
+        input_tokens=expected_input_tokens(message.usage),
+        output_tokens=message.usage.output_tokens,
+        finish_reasons=[normalize_stop_reason(message.stop_reason)],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_is_transparent(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """The proxy must be indistinguishable from the SDK's raw response."""
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    )
+
+    assert isinstance(raw_response, LegacyAPIResponse)
+    assert raw_response.__class__ is LegacyAPIResponse
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_streaming_response_is_transparent(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """The streaming proxy must also keep the SDK's type and its parsed stream."""
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as raw_response:
+        assert isinstance(raw_response, APIResponse)
+        assert raw_response.__class__ is APIResponse
+        stream = raw_response.parse()
+        # ``Stream``'s metaclass overrides ``__instancecheck__`` to reject
+        # anything but a ``MessageStream``, so transparency is asserted on
+        # ``__class__``, which the proxy forwards.
+        assert stream.__class__ is AnthropicStream
+        for _ in stream:
+            pass
+
+
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+@pytest.mark.vcr()
+def test_sync_messages_with_raw_response_never_parsed(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    )
+    assert raw_response.headers is not None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+
+class _CustomStream(AnthropicStream[RawMessageStreamEvent]):
+    """A caller-supplied cast target for ``parse(to=...)`` on an SSE body."""
+
+
+class _FakeHTTPResponse:
+    """Minimal stand-in for the httpx response behind a raw response."""
+
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+class _FakeInvocation:
+    """Records ``stop()`` calls in place of a real invocation."""
+
+    def __init__(self, stops):
+        self._stops = stops
+
+    def stop(self):
+        self._stops.append(True)
+
+
+def _build_message():
+    return Message(
+        id="msg_test",
+        type="message",
+        role="assistant",
+        model="claude-test",
+        content=[TextBlock(type="text", text="Hello.")],
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage=Usage(input_tokens=13, output_tokens=5),
+    )
+
+
+def test_raw_response_proxy_parse_error_propagates_and_finalizes_once():
+    """A caller ``parse()`` failure propagates unchanged and finalizes once.
+
+    When the SDK's own ``parse()`` raises (validation/deserialization failure),
+    that is the caller's own exception: telemetry must neither swallow it nor
+    replace it. The failing read may have already closed the body while the
+    close hook stood down, so the span has to be finalized right there -- and
+    never a second time (``stop()`` is not idempotent).
+    """
+    finalize_calls = []
+    http_response = _FakeHTTPResponse()
+
+    class _Raw:
+        def __init__(self):
+            self.http_response = http_response
+
+        def parse(self, *args, **kwargs):
+            raise ValueError("caller parse boom")
+
+    proxy = RawResponseProxy(_Raw(), _FakeInvocation(finalize_calls), False)
+
+    with pytest.raises(ValueError, match="caller parse boom"):
+        proxy.parse()
+
+    # A body read that fails after closing leaves nothing else to end the span.
+    assert finalize_calls == [True]
+
+    proxy.http_response.close()
+    assert finalize_calls == [True]
+    assert http_response.close_calls == 1
+
+
+def test_raw_response_proxy_hooks_stack_over_one_response():
+    """Two proxies over one httpx response each finalize their own invocation.
+
+    The proxy replaces the response's ``read``/``close``, so a second proxy must
+    chain to the hooks the first installed instead of dropping them.
+    """
+    first_stops = []
+    second_stops = []
+    http_response = _FakeHTTPResponse()
+
+    class _Raw:
+        def __init__(self):
+            self.http_response = http_response
+
+        def parse(self, *args, **kwargs):
+            return _build_message()
+
+    raw = _Raw()
+    first = RawResponseProxy(raw, _FakeInvocation(first_stops), False)
+    RawResponseProxy(raw, _FakeInvocation(second_stops), False)
+
+    first.http_response.close()
+
+    assert first_stops == [True]
+    assert second_stops == [True]
+    assert http_response.close_calls == 1
 
 
 @pytest.mark.vcr()
@@ -1159,3 +1365,779 @@ def test_sync_messages_create_event_only_no_content_in_span(
     assert len(logs) == 1
     log_record = logs[0].log_record
     assert log_record.event_name == "gen_ai.client.inference.operation.details"
+
+
+@pytest.mark.vcr()
+def test_sync_messages_create_streaming_with_raw_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Streaming ``with_raw_response.create`` defers parse() and records a full span.
+
+    Regression test: the raw response the SDK returns from
+    ``with_raw_response.create(stream=True)`` is a ``LegacyAPIResponse``, not a
+    ``Stream``, so it fell past the stream check and the span was ended
+    immediately with no response attributes, before the caller even called
+    ``parse()``. The proxy must defer finalization until the parsed stream is
+    drained and then populate the span with the response model, usage, and
+    finish reason.
+    """
+    model = "claude-sonnet-4-20250514"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    )
+
+    # Raw-response metadata still resolves natively off the proxy.
+    assert hasattr(raw_response, "headers")
+    assert raw_response.headers is not None
+
+    # Deferred: the span must not be finalized before the caller parses/drains.
+    assert span_exporter.get_finished_spans() == ()
+
+    stream = raw_response.parse()
+    response_text = ""
+    for chunk in stream:
+        if chunk.type == "content_block_delta":
+            delta = getattr(chunk, "delta", None)
+            if delta and hasattr(delta, "text"):
+                response_text += delta.text
+    assert response_text == "Hello."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    # The span is no longer a premature empty one: it carries response
+    # attributes accumulated from the drained stream.
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+@pytest.mark.vcr()
+def test_sync_messages_create_streaming_with_raw_response_never_parsed(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A never-parsed streaming raw response is finalized once when closed.
+
+    When the caller reads only metadata and never calls ``parse()``, the span
+    must still be finalized (so it does not leak) exactly once when the
+    underlying body is closed, since ``stop()`` is not idempotent.
+    """
+    model = "claude-sonnet-4-20250514"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    )
+
+    # Deferred: nothing finalized while the caller has not parsed or closed.
+    assert span_exporter.get_finished_spans() == ()
+
+    # Caller drains/closes the body without ever parsing it.
+    raw_response.http_response.close()
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+    # A second close must not finalize the span again.
+    raw_response.http_response.close()
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+@pytest.mark.vcr()
+def test_sync_messages_raw_response_read_without_close(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Reading the body of a streaming raw response finalizes the span.
+
+    Regression test: ``with_raw_response.create(stream=True)`` has no context
+    manager to close the body a second time, so finalization that waited for a
+    later close leaked the span. Reading is the last point at which the body is
+    available, so it has to finalize there.
+    """
+    model = "claude-sonnet-4-20250514"
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    )
+    assert span_exporter.get_finished_spans() == ()
+
+    raw_response.http_response.read()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    # An SSE body is not a Message, so only request attributes are recorded.
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+
+
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+@pytest.mark.vcr()
+def test_sync_messages_raw_response_read_without_parse(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Reading a non-SSE body without parsing still records response attributes."""
+    model = "claude-sonnet-4-20250514"
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        raw_response.read()
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert (
+            spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
+        )
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+@pytest.mark.vcr()
+def test_sync_messages_with_streaming_response_nonstreaming(
+    span_exporter, metric_reader, anthropic_client, instrument_no_content
+):
+    """Non-streaming ``with_streaming_response.create`` records response attrs.
+
+    Regression test for the routing bug: the SDK sets
+    ``x-stainless-raw-response: stream`` on *every* ``with_streaming_response``
+    call, so keying the stream proxy off that header routed this non-streaming
+    call (whose ``parse()`` returns a ``Message``) into the stream path and
+    finalized the span with request attributes only. Routing on what ``parse()``
+    returns instead extracts the message and records the response model, usage,
+    and finish reason.
+    """
+    model = "claude-sonnet-4-20250514"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as raw_response:
+        assert hasattr(raw_response, "headers")
+        message = raw_response.parse()
+
+    assert isinstance(message, Message)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    # The response attributes are now present (they were absent before the fix).
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS in span.attributes
+    assert_span_attributes(
+        span,
+        request_model=model,
+        response_id=message.id,
+        response_model=message.model,
+        input_tokens=expected_input_tokens(message.usage),
+        output_tokens=message.usage.output_tokens,
+        finish_reasons=[normalize_stop_reason(message.stop_reason)],
+    )
+
+    # The token-usage metric is recorded for this non-streaming path.
+    metrics = {
+        metric.name: metric
+        for rm in metric_reader.get_metrics_data().resource_metrics
+        for scope in rm.scope_metrics
+        for metric in scope.metrics
+    }
+    assert gen_ai_metrics.GEN_AI_CLIENT_TOKEN_USAGE in metrics
+
+
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+@pytest.mark.vcr()
+def test_sync_messages_with_streaming_response_streaming(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Streaming ``with_streaming_response.create`` defers and records a full span.
+
+    ``parse()`` yields a ``Stream``; draining it finalizes the span with the
+    response model, token usage, and finish reason accumulated from the stream.
+    """
+    model = "claude-sonnet-4-20250514"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    ) as raw_response:
+        assert hasattr(raw_response, "headers")
+        # Deferred: the span is not finalized before the stream is drained.
+        assert span_exporter.get_finished_spans() == ()
+
+        stream = raw_response.parse()
+        response_text = ""
+        for chunk in stream:
+            if chunk.type == "content_block_delta":
+                delta = getattr(chunk, "delta", None)
+                if delta and hasattr(delta, "text"):
+                    response_text += delta.text
+    assert response_text == "Hello."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_streaming_raw_response_abandoned(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Abandoning a parsed stream still finalizes the span.
+
+    Regression test: the close fallback used to bail out as soon as ``parse()``
+    had produced a stream wrapper, on the assumption that the wrapper owned
+    finalization. A caller that stops iterating early never drains the wrapper,
+    so closing the body has to drive the wrapper's own finalization instead.
+    """
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as raw_response:
+        for _ in raw_response.parse():
+            break
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_raw_response_parse_stream_twice(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Re-parsing a stream returns the same instrumented wrapper.
+
+    The parsed stream is the one value substituted for the SDK's, so it has to
+    be memoized: a second ``parse()`` returning the bare SDK stream would leave
+    the caller draining the same body uninstrumented.
+    """
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as raw_response:
+        first = raw_response.parse()
+        assert raw_response.parse() is first
+        for _ in first:
+            pass
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_parse_to_honors_cast_target(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``parse(to=...)`` returns the requested type, as the SDK does.
+
+    Regression test: the proxy memoized the first parse regardless of arguments,
+    so a later ``parse(to=...)`` handed back the previously parsed ``Message``
+    instead of the requested cast target.
+    """
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        raw_response.parse()
+        as_httpx = raw_response.parse(to=httpx.Response)
+
+    assert isinstance(as_httpx, httpx.Response)
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_read_before_parse(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Reading the body before ``parse()`` still records response telemetry.
+
+    Regression test: ``read()`` closes the body, which fired the close fallback
+    and finalized the span with request attributes only; the caller's later
+    ``parse()`` then wrote into an already-stopped invocation and its response
+    telemetry was lost.
+    """
+    model = "claude-sonnet-4-20250514"
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        raw_response.read()
+        message = raw_response.parse()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id=message.id,
+        response_model=message.model,
+        input_tokens=expected_input_tokens(message.usage),
+        output_tokens=message.usage.output_tokens,
+        finish_reasons=[normalize_stop_reason(message.stop_reason)],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_with_raw_response_does_not_parse_early(
+    span_exporter, anthropic_client, instrument_no_content, monkeypatch
+):
+    """Telemetry must not run the caller's deferred ``parse()``.
+
+    ``parse()`` applies the caller's cast target and post-parser and populates
+    the SDK's parse cache, so instrumentation reads the response body directly
+    instead of calling it.
+    """
+    parse_calls = []
+    original_parse = LegacyAPIResponse.parse
+
+    def counting_parse(self, *args, **kwargs):
+        parse_calls.append(1)
+        return original_parse(self, *args, **kwargs)
+
+    monkeypatch.setattr(LegacyAPIResponse, "parse", counting_parse)
+
+    model = "claude-sonnet-4-20250514"
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    )
+
+    # The span carries response telemetry even though nothing parsed yet.
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
+    assert not parse_calls
+
+    # The caller's own parse still works and is the first one to run.
+    assert raw_response.parse().model == model
+    assert len(parse_calls) == 1
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_raw_response_stream_wrap_failure_not_raised(
+    span_exporter, anthropic_client, instrument_no_content, monkeypatch
+):
+    """A stream-wrapper failure must not break the caller's ``parse()``."""
+
+    def boom(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(_raw_response, "_wrap_parsed_stream", boom)
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as raw_response:
+        stream = raw_response.parse()
+        chunks = list(stream)
+
+    assert chunks
+    # The stream is uninstrumented, but the span is still finalized once.
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.skip(
+    reason="Known gap, tracked in #389: the SDK's "
+    "ResponseContextManager.__exit__ discards the caller's exception before "
+    "closing the response, so the proxy never sees it and the span is "
+    "finalized as a success. Fixing it means instrumenting "
+    "MessagesWithStreamingResponse.create and wrapping the context manager "
+    "itself, which is a new patch target and out of scope here."
+)
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_with_streaming_response_user_exception(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error inside the ``with_streaming_response`` block fails the span.
+
+    Mirrors ``test_sync_messages_create_streaming_user_exception``: an exception
+    raised by the caller before the stream is drained must propagate unchanged
+    and finalize the span with the matching ``error.type``.
+    """
+    model = "claude-sonnet-4-20250514"
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        with anthropic_client.messages.with_streaming_response.create(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            stream=True,
+        ) as raw_response:
+            for _ in raw_response.parse():
+                raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_api_error")
+def test_sync_messages_with_raw_response_api_error(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """An API error raised through ``with_raw_response`` still fails the span."""
+    model = "invalid-model-name"
+
+    with pytest.raises(NotFoundError):
+        anthropic_client.messages.with_raw_response.create(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert "NotFoundError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_with_raw_response_captures_content(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """Content capture must work through the raw-response path too."""
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    )
+    message = raw_response.parse()
+
+    span = span_exporter.get_finished_spans()[0]
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["parts"][0]["content"] == "Say hello in one word."
+    assert output_messages[0]["parts"][0]["content"] == message.content[0].text
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_with_streaming_response_captures_content(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """Content capture must work through the streamed raw-response path too."""
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as raw_response:
+        for _ in raw_response.parse():
+            pass
+
+    span = span_exporter.get_finished_spans()[0]
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["parts"][0]["content"] == "Say hello in one word."
+    assert output_messages[0]["parts"][0]["content"] == "Hello."
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_with_streaming_response_parse_twice(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Repeated ``parse()`` calls share one span and one parsed message."""
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        first = raw_response.parse()
+        second = raw_response.parse()
+
+    assert isinstance(first, Message)
+    # The SDK caches per cast target, so both calls are the very same object.
+    assert first is second
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_parse_to_captures_content(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """Content capture must work on the cast-parse path too."""
+    message = None
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        message = raw_response.parse(to=Message)
+
+    span = span_exporter.get_finished_spans()[0]
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["parts"][0]["content"] == "Say hello in one word."
+    assert output_messages[0]["parts"][0]["content"] == message.content[0].text
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_parse_after_read_is_the_sdk_parse(
+    span_exporter, anthropic_client, instrument_no_content, monkeypatch
+):
+    """After a direct read, ``parse()`` must still run the SDK's own parse.
+
+    Regression test: telemetry deserialized the body itself and then handed
+    that Message back as the parse result, so the caller received an object the
+    SDK never produced -- built without its cast target, post-parser, or parse
+    cache. Only the instrumented stream wrapper may be substituted.
+    """
+    parse_calls = []
+    original_parse = APIResponse.parse
+
+    def counting_parse(self, *args, **kwargs):
+        parse_calls.append(1)
+        return original_parse(self, *args, **kwargs)
+
+    monkeypatch.setattr(APIResponse, "parse", counting_parse)
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        raw_response.read()
+        assert not parse_calls
+
+        message = raw_response.parse()
+        assert parse_calls
+        assert message is raw_response.parse()
+
+
+def _fail_after_first_chunk(iterator):
+    """Yield one chunk, then raise as a mid-stream transport error would."""
+    yield next(iterator)
+    raise ConnectionError("connection reset during stream")
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_raw_response_stream_propagation_error(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A mid-iteration stream error re-raises unchanged and fails the span."""
+    model = "claude-sonnet-4-20250514"
+
+    with pytest.raises(
+        ConnectionError, match="connection reset during stream"
+    ):
+        with anthropic_client.messages.with_streaming_response.create(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            stream=True,
+        ) as raw_response:
+            stream = raw_response.parse()
+            sdk_stream = stream.stream
+            sdk_stream._iterator = _fail_after_first_chunk(
+                sdk_stream._iterator
+            )
+            for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+def test_raw_response_body_with_unknown_fields_still_extracted():
+    """Response fields the installed SDK does not know must not drop telemetry.
+
+    The caller's own ``parse()`` deserializes non-strictly, so a newer API
+    shape -- an unrecognized content block, a new stop reason -- still yields a
+    usable ``Message``. Telemetry has to match that, or a server-side rollout
+    silently blanks the response attributes on every span.
+    """
+
+    class _Body:
+        @staticmethod
+        def json():
+            return {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "brand_new_block", "foo": 1}],
+                "stop_reason": "brand_new_reason",
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 13,
+                    "output_tokens": 5,
+                    "brand_new_token_bucket": 7,
+                },
+            }
+
+    message = _raw_response._message_from_read_body(_Body())
+
+    assert message is not None
+    assert message.id == "msg_1"
+    assert message.model == "claude-sonnet-4-20250514"
+    assert message.usage.input_tokens == 13
+    assert message.usage.output_tokens == 5
+
+
+def test_raw_response_body_that_is_not_a_message_is_skipped():
+    """A body that is not a ``Message`` yields no response telemetry."""
+
+    class _Body:
+        @staticmethod
+        def json():
+            return {"type": "error", "error": {"message": "nope"}}
+
+    assert _raw_response._message_from_read_body(_Body()) is None
+
+
+def test_raw_response_unreadable_body_is_skipped():
+    """A body that cannot be deserialized must not raise."""
+
+    class _Body:
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    assert _raw_response._message_from_read_body(_Body()) is None
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_only_parse_to_records_telemetry(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A cast ``parse(to=...)`` is the only parse and still records the response.
+
+    Regression test: the cast parse suppressed the read hook and dispatched
+    nothing of its own, so the span was finalized on close with request
+    attributes only, even though the body it read was a ``Message``.
+    """
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        message = raw_response.parse(to=Message)
+
+    assert isinstance(message, Message)
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id=message.id,
+        response_model=message.model,
+        input_tokens=expected_input_tokens(message.usage),
+        output_tokens=message.usage.output_tokens,
+        finish_reasons=[normalize_stop_reason(message.stop_reason)],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_raw_response_parse_to_on_a_stream_defers(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A cast parse that reads nothing must leave the span to the close hook.
+
+    ``parse(to=...)`` on an SSE body hands back the caller's own stream class
+    without reading, so settling telemetry there would end the span early with
+    nothing to record.
+    """
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        stream=True,
+    ) as raw_response:
+        stream = raw_response.parse(to=_CustomStream)
+        assert stream.__class__ is _CustomStream
+        assert span_exporter.get_finished_spans() == ()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_raw_response_parse_after_exit(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A parse after the block still works, and the span is already complete."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.with_streaming_response.create(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as raw_response:
+        raw_response.read()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
+
+    assert raw_response.parse().model == model

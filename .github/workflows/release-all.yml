@@ -137,35 +137,19 @@ jobs:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}
           private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
 
-      - name: Bump released packages to next dev versions
+      - name: Bump repository version to next dev version
         env:
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
-          PACKAGES_JSON: ${{ needs.enumerate.outputs.packages }}
         run: |
-          bumped=()
-          while IFS= read -r package; do
-            [[ -z "$package" ]] && continue
-            version=$(./scripts/eachdist.py version --package "$package")
-            tag="${package}==${version}"
-            if ! gh release view "$tag" >/dev/null 2>&1; then
-              echo "Skipping ${package}: release tag ${tag} not found"
-              continue
-            fi
-            if [[ "$version" == *.dev ]]; then
-              echo "Skipping ${package}: already bumped to ${version}"
-              continue
-            fi
-            ./scripts/bump_package_minor_version.sh "$package"
-            bumped+=("$package")
-          done < <(echo "$PACKAGES_JSON" | jq -r '.[]')
+          uv run ./scripts/version_utils.py bump --dev
 
-          if [[ ${#bumped[@]} -eq 0 ]]; then
-            echo "No packages to bump"
+          if git diff --quiet; then
+            echo "No version bump needed"
             exit 0
           fi
 
           message="Bump packages to next dev versions after release"
-          body="Bump packages to the next \`.dev\` version after release:\n\n$(printf '%s\n' "${bumped[@]}")"
+          body="Bump package versions in eachdist.ini and all package version.py files to the next \`.dev\` version."
           branch="otelbot/bump-after-release-all-$(date +%Y%m%d)"
 
           git commit -a -m "$message"
