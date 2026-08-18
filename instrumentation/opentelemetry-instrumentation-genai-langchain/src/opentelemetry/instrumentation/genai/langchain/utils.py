@@ -89,9 +89,7 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
-def _media_part(
-    item: dict[str, Any], capture_content: bool = False
-) -> MessagePart | None:
+def _media_part(item: dict[str, Any]) -> MessagePart | None:
     """Convert a LangChain multimodal image content block into a media part.
 
     Handles the two shapes LangChain chat models accept:
@@ -115,7 +113,7 @@ def _media_part(
             url = raw_url if isinstance(raw_url, str) else None
         if not url:
             return None
-        return image_from_url(url, capture_content=capture_content)
+        return image_from_url(url)
     if block_type == "image":
         source = item.get("source")
         if not isinstance(source, dict):
@@ -126,7 +124,7 @@ def _media_part(
             data = source_dict.get("data")
             if not isinstance(data, str):
                 return None
-            decoded = decode_base64(data, capture_content)
+            decoded = decode_base64(data)
             if decoded is None:
                 return None
             media_type = source_dict.get("media_type")
@@ -140,15 +138,12 @@ def _media_part(
         if source_type == "url":
             source_url = source_dict.get("url")
             if isinstance(source_url, str) and source_url:
-                return image_from_url(
-                    source_url, capture_content=capture_content
-                )
+                return image_from_url(source_url)
     return None
 
 
 def _content_to_parts(
     content: str | list[str | dict[str, Any]],
-    capture_content: bool = False,
 ) -> list[MessagePart]:
     """Convert a LangChain message ``content`` payload into ``MessagePart`` s.
 
@@ -182,7 +177,7 @@ def _content_to_parts(
             if isinstance(reasoning_value, str) and reasoning_value:
                 parts.append(ReasoningPart(content=reasoning_value))
         elif block_type in ("image_url", "image"):
-            media = _media_part(item, capture_content)
+            media = _media_part(item)
             if media is not None:
                 parts.append(media)
     return parts
@@ -215,18 +210,14 @@ def _legacy_function_call_request(
     return ToolCallRequestPart(arguments=arguments, name=name, id=None)
 
 
-def _ai_message_parts(
-    message: AIMessage, capture_content: bool = False
-) -> list[MessagePart]:
+def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
     :class:`ToolCallRequestPart` for each entry in ``message.tool_calls``, plus a
     legacy ``additional_kwargs['function_call']`` when present.
     """
-    parts: list[MessagePart] = _content_to_parts(
-        message.content, capture_content
-    )
+    parts: list[MessagePart] = _content_to_parts(message.content)
     for call in message.tool_calls:
         name = call["name"]
         if not name:
@@ -256,21 +247,22 @@ def _tool_message_parts(message: ToolMessage) -> list[MessagePart]:
     ]
 
 
-def _message_parts(
-    message: BaseMessage, capture_content: bool = False
-) -> list[MessagePart]:
+def _message_parts(message: BaseMessage) -> list[MessagePart]:
     if isinstance(message, ToolMessage):
         return _tool_message_parts(message)
     if isinstance(message, AIMessage):
-        return _ai_message_parts(message, capture_content)
-    return _content_to_parts(message.content, capture_content)
+        return _ai_message_parts(message)
+    return _content_to_parts(message.content)
 
 
 def to_input_messages(
     messages: Iterable[Any],
-    capture_content: bool = False,
 ) -> list[InputMessage]:
-    """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
+    """Convert LangChain messages into spec-conformant ``InputMessage`` s.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
+    """
     try:
         normalized_messages: Iterable[BaseMessage] = convert_to_messages(
             list(messages)
@@ -281,7 +273,7 @@ def to_input_messages(
         ]
     result: list[InputMessage] = []
     for message in normalized_messages:
-        parts = _message_parts(message, capture_content)
+        parts = _message_parts(message)
         if not parts:
             continue
         result.append(InputMessage(role=_normalize_role(message), parts=parts))
@@ -292,7 +284,6 @@ def to_output_messages(
     messages: Iterable[BaseMessage],
     *,
     finish_reason: str = "",
-    capture_content: bool = False,
 ) -> list[OutputMessage]:
     """Convert LangChain ``AIMessage`` instances into ``OutputMessage`` s.
 
@@ -300,12 +291,15 @@ def to_output_messages(
     as ``gen_ai.output.messages``. Tool execution results belong on the
     *input* side of the next inference call, not the output side of the
     previous one.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     result: list[OutputMessage] = []
     for message in messages:
         if not isinstance(message, AIMessage):
             continue
-        parts = _ai_message_parts(message, capture_content)
+        parts = _ai_message_parts(message)
         if not parts:
             continue
         result.append(
@@ -367,9 +361,7 @@ def prepare_tool_definitions(tools: list[Any]) -> list[ToolDefinition] | None:
     return definitions or None
 
 
-def make_input_message(
-    data: Any, capture_content: bool = False
-) -> list[InputMessage]:
+def make_input_message(data: Any) -> list[InputMessage]:
     """Build ``InputMessage`` s from a workflow/agent input mapping.
 
     When ``data['messages']`` is present, every LangChain ``BaseMessage`` in it
@@ -381,6 +373,9 @@ def make_input_message(
     When no ``messages`` key exists (common in LangGraph state dicts), the
     remaining state fields are serialized as JSON and emitted as a single
     user-role :class:`TextPart` part.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     if not isinstance(data, dict):
         return []
@@ -391,10 +386,7 @@ def make_input_message(
             messages, Iterable
         ):
             return []
-        return to_input_messages(
-            cast(Iterable[BaseMessage], messages),
-            capture_content,
-        )
+        return to_input_messages(cast(Iterable[BaseMessage], messages))
     # Fallback: serialize non-message state fields as input.
     # Common in LangGraph where nodes use structured state fields
     # (e.g., user_query) rather than a message list.
@@ -411,15 +403,16 @@ def make_input_message(
     return []
 
 
-def make_output_message(
-    data: Any, capture_content: bool = False
-) -> list[OutputMessage]:
+def make_output_message(data: Any) -> list[OutputMessage]:
     """Build ``OutputMessage`` s from a workflow/agent output mapping.
 
     Only ``AIMessage`` entries become outputs. ``finish_reason`` is left
     empty: the underlying per-LLM-call finish reasons are recorded on child
     inference spans, and util-genai filters empty values out of
     ``gen_ai.response.finish_reasons``.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     if not isinstance(data, dict):
         return []
@@ -431,22 +424,20 @@ def make_output_message(
         or not isinstance(messages, Iterable)
     ):
         return []
-    return to_output_messages(
-        cast(Iterable[BaseMessage], messages),
-        capture_content=capture_content,
-    )
+    return to_output_messages(cast(Iterable[BaseMessage], messages))
 
 
-def make_last_output_message(
-    data: Any, capture_content: bool = False
-) -> list[OutputMessage]:
+def make_last_output_message(data: Any) -> list[OutputMessage]:
     """Extract only the last AI message as the output.
 
     For Workflow and AgentInvocation spans, the final AI message best represents
     the actual output. Intermediate AI messages (e.g., tool-call decisions) are
     already captured in child LLM invocation spans.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
-    all_messages = make_output_message(data, capture_content)
+    all_messages = make_output_message(data)
     if all_messages:
         return [all_messages[-1]]
     return []

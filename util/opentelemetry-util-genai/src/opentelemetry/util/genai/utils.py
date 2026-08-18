@@ -41,18 +41,17 @@ def get_content_capturing_mode() -> ContentCapturingMode:
         return ContentCapturingMode.NO_CONTENT
 
 
-def decode_base64(data: str, capture_content: bool = False) -> bytes | None:
-    if not capture_content:
-        return
+def decode_base64(data: str) -> bytes | None:
+    """Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
+    """
     try:
         return b64decode("".join(data.split()), validate=True)
     except Exception:  # pylint: disable=broad-exception-caught
         return None
 
 
-def image_from_url(
-    url: str, *, modality: str = "image", capture_content: bool = False
-) -> MessagePart | None:
+def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
     """Return a media part for an image ``url``.
 
     A ``data:<mime>;base64,<payload>`` URL is decoded into a
@@ -60,12 +59,15 @@ def image_from_url(
     base64 encoding keeps its raw payload bytes; any other URL becomes a
     :class:`~opentelemetry.util.genai.types.Uri`. Shared by instrumentations
     that parse provider image blocks.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     if url.startswith("data:"):
         header, _, payload = url[len("data:") :].partition(",")
         mime_type = header.split(";", 1)[0] or None
         if ";base64" in header:
-            decoded = decode_base64(payload, capture_content)
+            decoded = decode_base64(payload)
             if decoded is None:
                 return None
             content = decoded

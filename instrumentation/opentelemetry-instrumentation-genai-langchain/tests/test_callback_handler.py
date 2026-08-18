@@ -45,7 +45,6 @@ from opentelemetry.util.genai.types import (
     ToolCallRequestPart,
     Uri,
 )
-from opentelemetry.util.genai.utils import decode_base64
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1889,7 +1888,7 @@ def test_media_part_anthropic_base64_source_returns_blob():
             "data": "R0lGODlh",
         },
     }
-    part = _media_part(item, capture_content=True)
+    part = _media_part(item)
     assert isinstance(part, Blob)
     assert part.mime_type == "image/png"
     assert part.content == b"GIF89a"
@@ -1900,13 +1899,13 @@ def test_media_part_anthropic_base64_source_without_media_type():
         "type": "image",
         "source": {"type": "base64", "data": "QUJD"},
     }
-    part = _media_part(item, capture_content=True)
+    part = _media_part(item)
     assert isinstance(part, Blob)
     assert part.mime_type is None
     assert part.content == b"ABC"
 
 
-def test_media_part_base64_source_skips_decode_when_content_disabled():
+def test_media_part_base64_source_decodes_real_png():
     item = {
         "type": "image",
         "source": {
@@ -1915,33 +1914,7 @@ def test_media_part_base64_source_skips_decode_when_content_disabled():
             "data": _REAL_PNG_B64,
         },
     }
-    with mock.patch(
-        "opentelemetry.instrumentation.genai.langchain.utils.decode_base64",
-        wraps=decode_base64,
-    ) as mock_decode:
-        part = _media_part(item, capture_content=False)
-    # The content-capture flag is passed into ``decode_base64`` itself, so the
-    # call still happens but gates internally: it returns ``None`` (no bytes
-    # decoded) and thus no media part is emitted.
-    mock_decode.assert_called_once_with(_REAL_PNG_B64, False)
-    assert part is None
-
-
-def test_media_part_base64_source_decodes_when_content_enabled():
-    item = {
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": "image/png",
-            "data": _REAL_PNG_B64,
-        },
-    }
-    with mock.patch(
-        "opentelemetry.instrumentation.genai.langchain.utils.decode_base64",
-        wraps=decode_base64,
-    ) as mock_decode:
-        part = _media_part(item, capture_content=True)
-    mock_decode.assert_called_once()
+    part = _media_part(item)
     assert isinstance(part, Blob)
     assert part.content == _REAL_PNG_BYTES
 
@@ -1982,7 +1955,7 @@ def test_media_part_malformed_base64_returns_none():
             "data": "not!valid!base64!",
         },
     }
-    assert _media_part(item, capture_content=True) is None
+    assert _media_part(item) is None
 
 
 def test_media_part_openai_real_png_data_uri_returns_blob():
@@ -1990,7 +1963,7 @@ def test_media_part_openai_real_png_data_uri_returns_blob():
         "type": "image_url",
         "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
     }
-    part = _media_part(item, capture_content=True)
+    part = _media_part(item)
     assert isinstance(part, Blob)
     assert part.mime_type == "image/png"
     assert part.content == _REAL_PNG_BYTES
@@ -2005,7 +1978,7 @@ def test_media_part_anthropic_real_png_source_returns_blob():
             "data": _REAL_PNG_B64,
         },
     }
-    part = _media_part(item, capture_content=True)
+    part = _media_part(item)
     assert isinstance(part, Blob)
     assert part.mime_type == "image/png"
     assert part.content == _REAL_PNG_BYTES
@@ -2021,7 +1994,7 @@ def test_media_part_anthropic_real_png_corrupted_base64_returns_none():
             "data": corrupted,
         },
     }
-    assert _media_part(item, capture_content=True) is None
+    assert _media_part(item) is None
 
 
 def test_media_part_real_png_url_source_returns_uri():
@@ -2043,9 +2016,7 @@ def test_to_input_messages_extracts_image_part():
         {"type": "text", "text": "What's in this image?"},
         {"type": "image_url", "image_url": {"url": image_url}},
     ]
-    messages = to_input_messages(
-        [HumanMessage(content=content)], capture_content=True
-    )
+    messages = to_input_messages([HumanMessage(content=content)])
     assert len(messages) == 1
     parts = messages[0].parts
 
@@ -2055,21 +2026,49 @@ def test_to_input_messages_extracts_image_part():
     assert blob.content == b"ABC"
 
 
-def test_to_input_messages_skips_image_decode_when_content_disabled():
-    image_url = f"data:image/png;base64,{_REAL_PNG_B64}"
+def test_on_chat_model_start_skips_input_messages_when_content_disabled():
+    """Gating happens in the callback handler, not inside the utils."""
+    run_id = _run_id()
+    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+    telemetry.should_capture_content.return_value = False
+
     content = [
         {"type": "text", "text": "What's in this image?"},
-        {"type": "image_url", "image_url": {"url": image_url}},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+        },
     ]
-    with mock.patch(
-        "opentelemetry.instrumentation.genai.langchain.utils.decode_base64",
-        wraps=decode_base64,
-    ) as mock_decode:
-        messages = to_input_messages(
-            [HumanMessage(content=content)], capture_content=False
-        )
-    mock_decode.assert_not_called()
-    assert len(messages) == 1
-    parts = messages[0].parts
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content=content)]],
+        run_id=_run_id(),
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    assert llm_inv.input_messages == []
+
+
+def test_on_chat_model_start_captures_input_messages_when_content_enabled():
+    run_id = _run_id()
+    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+    telemetry.should_capture_content.return_value = True
+
+    content = [
+        {"type": "text", "text": "What's in this image?"},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+        },
+    ]
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content=content)]],
+        run_id=_run_id(),
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    parts = llm_inv.input_messages[0].parts
     assert any(isinstance(p, Text) for p in parts)
-    assert not any(isinstance(p, Blob) for p in parts)
+    blob = next(p for p in parts if isinstance(p, Blob))
+    assert blob.content == _REAL_PNG_BYTES
