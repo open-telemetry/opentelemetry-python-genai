@@ -1,0 +1,1 @@
+Add ``chat`` instrumentation for the in-process smolagents model classes (``TransformersModel``, ``VLLMModel``, ``MLXModel``).
