@@ -31,7 +31,7 @@ jobs:
 
   lint:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     strategy:
       fail-fast: false

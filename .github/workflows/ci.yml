@@ -20,7 +20,7 @@ jobs:
   # new tox env automatically extends CI without editing workflow YAML.
   prepare:
     name: prepare-matrix
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 10
     outputs:
       test_matrix: ${{ steps.gen.outputs.test_matrix }}
@@ -62,7 +62,7 @@ jobs:
       - misc
       - lint
       - tests
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     steps:
       - if: |
           needs.prepare.result != 'success' ||
