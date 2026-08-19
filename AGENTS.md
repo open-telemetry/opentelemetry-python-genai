@@ -91,6 +91,7 @@ Copy the shape from an existing package — paths in `tox.ini` are repo-root-rel
 
 - **uv workspace**: auto-included via the `instrumentation/*` glob in root
   `pyproject.toml [tool.uv.workspace] members` — no edit needed.
+- **`CHANGELOG.md`**: copy from an existing package (e.g. `instrumentation/opentelemetry-instrumentation-genai-anthropic/CHANGELOG.md`).
 - **`tox.ini`**:
   - `envlist`: add `py3{…}-test-instrumentation-genai-<lib>-{oldest,latest}`, the
     `py3{…}-…-<lib>-conformance` entry, and `lint-instrumentation-genai-<lib>`.

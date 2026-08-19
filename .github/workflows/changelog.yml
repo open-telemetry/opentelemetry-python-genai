@@ -90,11 +90,4 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Preview changelogs
-        run: |
-          set -eu
-          for pkg in instrumentation/* util/opentelemetry-util-genai; do
-            [ -f "$pkg/pyproject.toml" ] || continue
-            grep -q "tool.towncrier" "$pkg/pyproject.toml" || continue
-            echo "=== $pkg ==="
-            (cd "$pkg" && uvx --from towncrier==25.8.0 towncrier build --draft --version Unreleased)
-          done
+        run: uv run tox -e changelog-preview
