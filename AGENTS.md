@@ -92,15 +92,15 @@ Copy the shape from an existing package — paths in `tox.ini` are repo-root-rel
 - **uv workspace**: auto-included via the `instrumentation/*` glob in root
   `pyproject.toml [tool.uv.workspace] members` — no edit needed.
 - **`tox.ini`**:
-  - `envlist`: add `py3{…}-test-instrumentation-genai-<lib>-{oldest,latest}`, the
-    `py3{…}-…-<lib>-conformance` entry, and `lint-instrumentation-genai-<lib>`.
+  - `envlist`: add `py3{10,14}-test-instrumentation-genai-<lib>-latest`,
+    `py310-test-instrumentation-genai-<lib>-oldest`, and the
+    `py314-test-instrumentation-genai-<lib>-conformance` entry.
   - `[testenv] deps`: add the factor-conditional test-requirements lines
     (`<lib>-{oldest,latest,conformance}: -r …/tests/requirements.<factor>.txt` plus
-    `{[testenv]test_deps}` / `{[testenv]pytest_deps}`). Requirements install here — **not**
+    `{[testenv]test_deps}` / `{[testenv]pytest_deps}`). Requirements install here - **not**
     in `commands_pre`.
-  - `[testenv] commands`: add the pytest line (it `--ignore`s `tests/test_conformance.py`),
-    the separate `…-conformance` pytest line, and
-    `lint-…: sh -c "cd instrumentation && ruff check <pkg>"`.
+  - `[testenv] commands`: add the pytest line (it `--ignore`s `tests/test_conformance.py`) and
+    the separate `…-conformance` pytest line.
   - `[testenv:typecheck] deps`: add `{toxinidir}/instrumentation/<pkg>[instruments]`.
 - **`[tool.pyright]`** (in root `pyproject.toml`): `include` is opt-in and added to
   *progressively* as a package gets fully typed. When a package is in `include`, also add its

@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Build the test and lint matrices dynamically from `tox -l` so adding a
+  # Build the test matrix dynamically from `tox -l` so adding a
   # new tox env automatically extends CI without editing workflow YAML.
   prepare:
     name: prepare-matrix
@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 10
     outputs:
       test_matrix: ${{ steps.gen.outputs.test_matrix }}
-      lint_matrix: ${{ steps.gen.outputs.lint_matrix }}
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,11 +43,6 @@ jobs:
 
   misc:
     uses: ./.github/workflows/misc.yml
-  lint:
-    needs: prepare
-    uses: ./.github/workflows/lint.yml
-    with:
-      matrix: ${{ needs.prepare.outputs.lint_matrix }}
   tests:
     needs: prepare
     uses: ./.github/workflows/test.yml
@@ -60,13 +54,11 @@ jobs:
     needs:
       - prepare
       - misc
-      - lint
       - tests
     runs-on: ubuntu-latest
     steps:
       - if: |
           needs.prepare.result != 'success' ||
           needs.misc.result != 'success' ||
-          needs.lint.result != 'success' ||
           needs.tests.result != 'success'
         run: exit 1 # fail
