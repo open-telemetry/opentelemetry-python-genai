@@ -28,6 +28,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 def _openai_cassette_name(model, base: str) -> str:
@@ -77,28 +78,32 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
     span_exporter,
     metric_reader,
     log_exporter,
-    start_instrumentation,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
     chat_openai_gpt_3_5_turbo_model,
-    monkeypatch,
     capture_content,
     vcr,
 ):
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
-    )
-
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    with vcr.use_cassette(
-        _openai_cassette_name(
-            chat_openai_gpt_3_5_turbo_model,
-            "test_chat_openai_gpt_3_5_turbo_model_llm_call",
-        )
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture=capture_content,
     ):
-        response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
+        with vcr.use_cassette(
+            _openai_cassette_name(
+                chat_openai_gpt_3_5_turbo_model,
+                "test_chat_openai_gpt_3_5_turbo_model_llm_call",
+            )
+        ):
+            response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
     assert response.content == "The capital of France is Paris."
 
     # verify spans
@@ -147,33 +152,37 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     span_exporter,
     metric_reader,
     log_exporter,
-    start_instrumentation,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
     chat_openai_gpt_3_5_turbo_model,
-    monkeypatch,
     capture_content,
     vcr,
 ):
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
-    )
-
     messages = [
         SystemMessage(content="You are a helpful assistant!"),
         HumanMessage(content="What is the capital of France?"),
     ]
 
     response = None
-    try:
-        with vcr.use_cassette(
-            _openai_cassette_name(
-                chat_openai_gpt_3_5_turbo_model,
-                "test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error",
-            )
-        ):
-            response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
-    except Exception as e:
-        # For this test, to get error, cassettes were recorded with no OPENAI_API_KEY, so an error is expected here.
-        assert isinstance(e, AuthenticationError)
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture=capture_content,
+    ):
+        try:
+            with vcr.use_cassette(
+                _openai_cassette_name(
+                    chat_openai_gpt_3_5_turbo_model,
+                    "test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error",
+                )
+            ):
+                response = chat_openai_gpt_3_5_turbo_model.invoke(messages)
+        except Exception as e:
+            # For this test, to get error, cassettes were recorded with no OPENAI_API_KEY, so an error is expected here.
+            assert isinstance(e, AuthenticationError)
         # langchain-openai >= 1.6 raises its own AuthenticationError subclass.
         error_type = f"{type(e).__module__}.{type(e).__qualname__}"
 
