@@ -38,12 +38,13 @@
 # the newest supported version of external dependencies.
 
 qwen-agent==0.0.34
-# qwen-agent imports numpy, soundfile, and dateutil at import time but
+# qwen-agent imports numpy, soundfile, dateutil, and tqdm at import time but
 # does not declare them. numpy is left unpinned because the newest numpy
 # requires Python >= 3.11 while this env also runs on 3.10.
 numpy
 soundfile==0.13.1
 python-dateutil==2.9.0.post0
+tqdm==4.70.0
 wrapt==2.2.2
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
