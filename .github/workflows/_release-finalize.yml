@@ -103,6 +103,9 @@ jobs:
       - name: Regenerate instrumentations README
         run: python ./scripts/generate_instrumentation_readme.py
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
       - name: Use CLA approved github bot
         run: .github/scripts/use-cla-approved-github-bot.sh
 
@@ -150,6 +153,7 @@ jobs:
           git pull origin main
 
           uv run ./scripts/version_utils.py bump --dev
+          uv run tox -e generate
 
           if git diff --quiet; then
             echo "No version bump needed"
@@ -163,5 +167,6 @@ jobs:
           git push origin HEAD:"$branch"
           gh pr create --title "$message" \
                        --body "Bump versions to the next \`.dev\` version after releasing v\`${VERSION}\`." \
+                       --label "Skip Changelog" \
                        --head "$branch" \
                        --base main
