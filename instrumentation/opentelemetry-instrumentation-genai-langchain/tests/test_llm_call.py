@@ -372,7 +372,7 @@ def test_chat_openai_legacy_function_call(
     assert '"location"' in tool_definitions
 
 
-def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
+def test_chat_openai_legacy_function_call_no_content_tool_definitions_required_only(
     span_exporter,
     start_instrumentation,
     chat_openai_legacy_functions,
@@ -420,9 +420,16 @@ def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
+
+    tool_definitions = span.attributes.get(
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    )
     # Tool definitions carry sensitive description / parameters and must not
     # be emitted on the span when content capture is disabled.
-    assert gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert tool_definitions is not None
+    assert '"name":"get_current_weather"' in tool_definitions
+    assert '"description"' not in tool_definitions
+    assert '"location"' not in tool_definitions
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py

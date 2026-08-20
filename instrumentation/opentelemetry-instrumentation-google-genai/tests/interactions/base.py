@@ -389,7 +389,9 @@ class TestCase(CommonTestCaseBase):
         "os.environ",
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
     )
-    def test_tool_definitions_omitted_without_content_capture(self) -> None:
+    def test_tool_definitions_omit_optional_properties_without_content_capture(
+        self,
+    ) -> None:
         self.configure_valid_interaction()
         self.run_interaction(
             model="gemini-2.5-flash",
@@ -403,7 +405,10 @@ class TestCase(CommonTestCaseBase):
             ],
         )
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
-        self.assertNotIn("gen_ai.tool.definitions", span.attributes)
+        self.assertEqual(
+            span.attributes["gen_ai.tool.definitions"],
+            '[{"name":"dict_tool","type":"function"}]',
+        )
 
     def test_interaction_with_builtin_tools_records_definitions(
         self,

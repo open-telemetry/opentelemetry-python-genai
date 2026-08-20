@@ -123,27 +123,37 @@ class NonStreamingTestCase(TestCase):
                 "type": "google_maps",
             },
         )
+        # Without content capture only the properties the semconv schema marks
+        # as required are recorded.
+        self.base_tools_definition_required_only = (
+            {
+                "name": "_mock_callable_tool",
+                "type": "function",
+            },
+            {
+                "name": "mock_tool",
+                "type": "function",
+            },
+            {
+                "name": "google_maps",
+                "type": "google_maps",
+            },
+        )
         if _is_mcp_imported:
-            self.mcp_tools_no_content = (
+            self.mcp_tools_required_only = (
                 (
                     {
                         "name": "mcp_tool",
-                        "description": "A standalone mcp tool",
-                        "parameters": None,
                         "type": "function",
                     },
                 ),
                 (
                     {
                         "name": "mcp_tool",
-                        "description": "Tool from session",
-                        "parameters": None,
                         "type": "function",
                     },
                     {
                         "name": "mcp_tool",
-                        "description": "A standalone mcp tool",
-                        "parameters": None,
                         "type": "function",
                     },
                 ),
@@ -414,7 +424,19 @@ class NonStreamingTestCase(TestCase):
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
             event.attributes,
         )
-        self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, event.attributes)
+        if _is_mcp_imported:
+            self.assertIn(
+                event.attributes[GEN_AI_TOOL_DEFINITIONS],
+                [
+                    self.base_tools_definition_required_only + mcp_var
+                    for mcp_var in self.mcp_tools_required_only
+                ],
+            )
+        else:
+            self.assertEqual(
+                event.attributes[GEN_AI_TOOL_DEFINITIONS],
+                self.base_tools_definition_required_only,
+            )
 
     @patch.dict(
         "os.environ",
@@ -541,7 +563,19 @@ class NonStreamingTestCase(TestCase):
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
         ):
             self.assertNotIn(attribute, span.attributes)
-        self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, span.attributes)
+        if _is_mcp_imported:
+            self.assertIn(
+                span.attributes[GEN_AI_TOOL_DEFINITIONS],
+                [
+                    '[{"name":"_mock_callable_tool","type":"function"},{"name":"mock_tool","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","type":"function"},{"name":"mcp_tool","type":"function"}]',
+                    '[{"name":"_mock_callable_tool","type":"function"},{"name":"mock_tool","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","type":"function"}]',
+                ],
+            )
+        else:
+            self.assertEqual(
+                span.attributes[GEN_AI_TOOL_DEFINITIONS],
+                '[{"name":"_mock_callable_tool","type":"function"},{"name":"mock_tool","type":"function"},{"name":"google_maps","type":"google_maps"}]',
+            )
 
     @patch.dict(
         "os.environ",

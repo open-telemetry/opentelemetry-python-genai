@@ -125,33 +125,13 @@ class TestCase(unittest.TestCase):
         self.otel.assert_does_not_have_span_named("execute_tool somefunction")
         somefunction()
         self.otel.assert_does_not_have_span_named("execute_tool somefunction")
-        with patch.dict(
-            "os.environ",
-            {
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
-            },
-        ):
-            wrapped_somefunction()
+        wrapped_somefunction()
         self.otel.assert_has_span_named("execute_tool somefunction")
         span = self.otel.get_span_named("execute_tool somefunction")
         self.assertEqual(
             span.attributes["gen_ai.tool.description"],
             "An example tool call function.",
         )
-
-    @patch.dict(
-        "os.environ",
-        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
-    )
-    def test_does_not_emit_description_without_content_capture(self):
-        def somefunction():
-            """An example tool call function."""
-
-        wrapped_somefunction = self.wrap(somefunction)
-        wrapped_somefunction()
-        self.otel.assert_has_span_named("execute_tool somefunction")
-        span = self.otel.get_span_named("execute_tool somefunction")
-        self.assertNotIn("gen_ai.tool.description", span.attributes)
 
     # Capture content must be enabled to get arguments
     @patch.dict(

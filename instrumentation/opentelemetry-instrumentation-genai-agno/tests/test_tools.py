@@ -9,7 +9,6 @@ import asyncio
 import json
 from unittest.mock import patch
 
-import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.tools import Toolkit
@@ -22,10 +21,7 @@ from opentelemetry.instrumentation.genai.agno.utils import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
-from opentelemetry.util.genai.types import (
-    ContentCapturingMode,
-    FunctionToolDefinition,
-)
+from opentelemetry.util.genai.types import FunctionToolDefinition
 
 
 def test_prepare_tool_definitions_returns_none_for_empty() -> None:
@@ -141,7 +137,7 @@ def test_prepare_tool_definitions_deduplication() -> None:
 
 
 def test_agent_run_with_tools(
-    instrument_agno,
+    instrument_agno_with_content,
     span_exporter,
 ) -> None:
     """Test that Agent.run emits gen_ai.tool.definitions when tools are present."""
@@ -158,10 +154,6 @@ def test_agent_run_with_tools(
     mock_output = ModelResponse(content="The weather is sunny.")
 
     with (
-        patch(
-            "opentelemetry.util.genai._invocation.get_content_capturing_mode",
-            return_value=ContentCapturingMode.SPAN_ONLY,
-        ),
         patch.object(Agent, "run", wraps=agent.run),
         patch("agno.models.base.Model.response", return_value=mock_output),
     ):
@@ -194,7 +186,7 @@ def test_agent_run_with_tools(
 
 
 def test_agent_arun_with_tools(
-    instrument_agno,
+    instrument_agno_with_content,
     span_exporter,
 ) -> None:
     """Test that Agent.arun emits gen_ai.tool.definitions when tools are present."""
@@ -211,14 +203,8 @@ def test_agent_arun_with_tools(
     mock_output = ModelResponse(content="The weather is sunny.")
 
     async def _run_async() -> None:
-        with (
-            patch(
-                "opentelemetry.util.genai._invocation.get_content_capturing_mode",
-                return_value=ContentCapturingMode.SPAN_ONLY,
-            ),
-            patch(
-                "agno.models.base.Model.aresponse", return_value=mock_output
-            ),
+        with patch(
+            "agno.models.base.Model.aresponse", return_value=mock_output
         ):
             res = await agent.arun("what is the weather in San Francisco?")
             assert res is not None
@@ -272,14 +258,9 @@ def test_agent_run_without_tools(
     assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [ContentCapturingMode.NO_CONTENT, ContentCapturingMode.EVENT_ONLY],
-)
-def test_agent_run_omits_tool_definitions_without_span_content_capture(
+def test_agent_run_tool_definitions_omit_optional_properties_without_content_capture(
     instrument_agno,
     span_exporter,
-    mode,
 ) -> None:
     """Tool definitions carry the (sensitive) description and parameters and
     must not be emitted on the span when span content capture is disabled
@@ -297,10 +278,6 @@ def test_agent_run_omits_tool_definitions_without_span_content_capture(
     mock_output = ModelResponse(content="The weather is sunny.")
 
     with (
-        patch(
-            "opentelemetry.util.genai._invocation.get_content_capturing_mode",
-            return_value=mode,
-        ),
         patch.object(Agent, "run", wraps=agent.run),
         patch("agno.models.base.Model.response", return_value=mock_output),
     ):
@@ -311,10 +288,8 @@ def test_agent_run_omits_tool_definitions_without_span_content_capture(
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_agent test-tools-no-capture-agent"
-    # Neither the tool definitions nor the description they carry may appear
-    # on the span when span content capture is off.
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
-    assert all(
-        "Get weather for location." not in str(value)
-        for value in span.attributes.values()
+
+    tool_defs = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
     )
+    assert tool_defs == [{"name": "sample_tool", "type": "function"}]

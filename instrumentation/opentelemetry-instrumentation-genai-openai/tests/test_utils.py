@@ -284,6 +284,15 @@ EXPECTED_TOOL_DEFINITIONS = [
     }
 ]
 
+# Without content capture only the properties the semconv schema marks as
+# required are recorded.
+EXPECTED_TOOL_DEFINITIONS_NO_CONTENT = [
+    {
+        "type": "function",
+        "name": "get_current_weather",
+    }
+]
+
 
 def remove_none_values(body):
     """Remove None values from a dictionary recursively"""

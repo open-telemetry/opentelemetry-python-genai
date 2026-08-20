@@ -359,7 +359,7 @@ class TestAgentInvocationContent(unittest.TestCase):
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
         return_value=ContentCapturingMode.NO_CONTENT,
     )
-    def test_tool_definitions_on_span_omit_sensitive_without_content_capture(
+    def test_tool_definitions_on_span_omit_optional_properties_without_content_capture(
         self, _mock_cap
     ):
         tool = FunctionToolDefinition(
@@ -372,7 +372,10 @@ class TestAgentInvocationContent(unittest.TestCase):
         invocation.stop()
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
-        assert GenAI.GEN_AI_TOOL_DEFINITIONS not in attrs
+        assert (
+            attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]
+            == '[{"name":"get_weather","type":"function"}]'
+        )
 
     @patch(
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
