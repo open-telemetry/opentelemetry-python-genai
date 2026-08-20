@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 from anthropic import Anthropic, APIConnectionError, NotFoundError
 from anthropic._legacy_response import LegacyAPIResponse
@@ -1670,9 +1670,9 @@ def test_sync_messages_raw_response_parse_to_honors_cast_target(
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
         raw_response.parse()
-        as_httpx = raw_response.parse(to=httpx.Response)
+        as_httpx = raw_response.parse(to=httpx2.Response)
 
-    assert isinstance(as_httpx, httpx.Response)
+    assert isinstance(as_httpx, httpx2.Response)
 
 
 @pytest.mark.vcr()

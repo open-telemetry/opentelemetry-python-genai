@@ -11,7 +11,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
-import httpx
+import httpx2
 from anthropic._models import construct_type
 from anthropic.types import Message as AnthropicMessage
 
@@ -429,7 +429,7 @@ def _body_was_read(http_response: Any) -> bool:
         return False
     try:
         http_response.content  # pylint: disable=pointless-statement
-    except httpx.ResponseNotRead:
+    except httpx2.ResponseNotRead:
         return False
     return True
 

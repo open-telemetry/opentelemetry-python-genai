@@ -6,7 +6,7 @@
 import inspect
 import json
 
-import httpx
+import httpx2
 import pytest
 from anthropic import APIConnectionError, AsyncAnthropic, NotFoundError
 from anthropic._legacy_response import LegacyAPIResponse
@@ -1488,9 +1488,9 @@ async def test_async_messages_raw_response_parse_to_honors_cast_target(
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
         await raw_response.parse()
-        as_httpx = await raw_response.parse(to=httpx.Response)
+        as_httpx = await raw_response.parse(to=httpx2.Response)
 
-    assert isinstance(as_httpx, httpx.Response)
+    assert isinstance(as_httpx, httpx2.Response)
 
 
 @pytest.mark.cassette("test_async_messages_create_with_raw_response")

@@ -31,10 +31,8 @@ except ImportError:
     _sdk_accumulate_event = None
 
 if TYPE_CHECKING:
-    try:
-        import httpx2 as httpx
-    except ImportError:
-        import httpx
+    
+    import httpx2
     from anthropic._streaming import AsyncStream, Stream
     from anthropic.lib.streaming._messages import (  # pylint: disable=no-name-in-module
         AsyncMessageStream,
@@ -165,7 +163,7 @@ class MessagesStreamWrapper(
         self._self_message_telemetry_finalized = False
 
     @property
-    def response(self) -> httpx.Response:
+    def response(self) -> httpx2.Response:
         return finalize_on_close(self.stream.response, self._stop)
 
     @property
@@ -205,7 +203,7 @@ class AsyncMessagesStreamWrapper(
         self._self_message_telemetry_finalized = False
 
     @property
-    def response(self) -> httpx.Response:
+    def response(self) -> httpx2.Response:
         return finalize_on_aclose(self.stream.response, self._stop)
 
     @property
