@@ -15,7 +15,7 @@ and a duplicate review comment is noise:
 | `docs` | Docs build |
 | `generate` | The generated instrumentation README table being up to date |
 | `lint-license-header-check` | Missing license headers |
-| `oldest-deps-check` | Redundant pins in `tests/requirements.oldest.txt`, packages missing an `oldest` requirements file |
+| `deps-check` | Package.py _instruments matching pyproject.toml, redundant pins in `tests/requirements.oldest.txt`, packages missing an `oldest` requirements file |
 | `changelog` workflow | Direct edits to `CHANGELOG.md`, changelog fragment presence |
 | `test` matrix | Test failures across the `oldest`/`latest`/`conformance` envs |
 

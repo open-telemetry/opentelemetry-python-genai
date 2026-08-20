@@ -1,1 +1,0 @@
-Set the `gen_ai.workflow.name` span attribute on workflow invocations when the workflow name is known.

@@ -32,7 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 instruments = [
-  "weaviate-client >= 3.0",
+  "weaviate-client >= 3.0.0, <5.0.0",
 ]
 
 [project.urls]

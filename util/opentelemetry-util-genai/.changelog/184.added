@@ -1,1 +1,0 @@
-Add ``TelemetryHandler.fetch_response()`` and ``FetchResponseInvocation`` for the ``fetch_response`` operation, which fetches a previously generated response by id without performing inference.

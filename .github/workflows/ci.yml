@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-    - 'main'
   pull_request:
   merge_group:
     types: [checks_requested]
@@ -12,19 +9,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Build the test and lint matrices dynamically from `tox -l` so adding a
+  # Build the test matrix dynamically from `tox -l` so adding a
   # new tox env automatically extends CI without editing workflow YAML.
   prepare:
     name: prepare-matrix
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 10
     outputs:
       test_matrix: ${{ steps.gen.outputs.test_matrix }}
-      lint_matrix: ${{ steps.gen.outputs.lint_matrix }}
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,7 +31,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Generate matrix JSON from tox -l
         id: gen
@@ -44,11 +40,6 @@ jobs:
 
   misc:
     uses: ./.github/workflows/misc.yml
-  lint:
-    needs: prepare
-    uses: ./.github/workflows/lint.yml
-    with:
-      matrix: ${{ needs.prepare.outputs.lint_matrix }}
   tests:
     needs: prepare
     uses: ./.github/workflows/test.yml
@@ -60,13 +51,11 @@ jobs:
     needs:
       - prepare
       - misc
-      - lint
       - tests
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     steps:
       - if: |
           needs.prepare.result != 'success' ||
           needs.misc.result != 'success' ||
-          needs.lint.result != 'success' ||
           needs.tests.result != 'success'
         run: exit 1 # fail

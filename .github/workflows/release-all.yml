@@ -16,7 +16,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true &&
        contains(github.event.pull_request.labels.*.name, 'release'))
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     outputs:
       packages: ${{ steps.enumerate.outputs.packages }}
       ref: ${{ steps.release_ref.outputs.ref }}
@@ -81,7 +81,7 @@ jobs:
 
   publish:
     needs: [enumerate, build]
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     strategy:
       fail-fast: false
       matrix:
@@ -122,11 +122,14 @@ jobs:
     if: always() && needs.enumerate.result == 'success'
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Use CLA approved github bot
         run: .github/scripts/use-cla-approved-github-bot.sh
@@ -142,6 +145,7 @@ jobs:
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         run: |
           uv run ./scripts/version_utils.py bump --dev
+          uv run tox -e generate
 
           if git diff --quiet; then
             echo "No version bump needed"
@@ -156,5 +160,6 @@ jobs:
           git push origin HEAD:"$branch"
           gh pr create --title "$message" \
                        --body "$body" \
+                       --label "Skip Changelog" \
                        --head "$branch" \
                        --base main

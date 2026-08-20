@@ -1,1 +1,0 @@
-Responses that fail now record the actual error type (`error` event code or the response's error code) instead of a generic `RuntimeError`, for both streaming and non-streaming calls. Responses that finish as incomplete (`max_output_tokens`/`content_filter`) are recorded as a finish reason rather than an error.

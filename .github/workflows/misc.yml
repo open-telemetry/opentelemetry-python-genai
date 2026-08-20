@@ -23,7 +23,7 @@ jobs:
 
   spellcheck:
     name: spellcheck
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -35,14 +35,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Run spellcheck
         run: uvx --with tox-uv tox -e spellcheck
 
   docs:
     name: docs
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     if: |
       github.event.pull_request.user.login != 'otelbot[bot]' && github.event_name == 'pull_request'
@@ -56,14 +56,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Build docs
         run: uvx --with tox-uv tox -e docs
 
   generate:
     name: generate
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -75,7 +75,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Run generate
         run: uvx --with tox-uv tox -e generate
@@ -85,7 +85,7 @@ jobs:
 
   readme:
     name: readme
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -97,14 +97,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Check READMEs render on PyPI
         run: uvx --with tox-uv tox -e readme
 
   shellcheck:
     name: shellcheck
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -116,14 +116,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Run shellcheck
         run: uvx --with tox-uv tox -e shellcheck
 
   precommit:
     name: precommit
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -135,15 +135,53 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Run pre-commit
         run: uvx --with tox-uv tox -e precommit
 
   typecheck:
     name: typecheck
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     timeout-minutes: 30
+    steps:
+      - name: Checkout repo @ SHA - ${{ github.sha }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Run typecheck
+        run: uvx --with tox-uv tox -e typecheck
+
+  deps-check:
+    name: deps-check
+    runs-on: cncf-ubuntu-2-8-x86
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repo @ SHA - ${{ github.sha }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Run dependency check
+        run: uv run --with packaging scripts/check_deps.py
+
+  license-header-check:
+    name: license-header-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,18 +194,18 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
-      - name: Run typecheck
-        run: uvx --with tox-uv tox -e typecheck
+      - name: Check license headers
+        run: uvx --with tox-uv tox -e license-header-check
 
-  oldest-deps-check:
-    name: oldest-deps-check
+  check-versions:
+    name: check-versions
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.14
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
@@ -175,6 +213,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
-      - name: Run oldest dependency check
-        run: uv run --with packaging scripts/check_oldest_deps.py
+      - name: Check versions
+        run: uvx --with tox-uv tox -e check-versions
+
 

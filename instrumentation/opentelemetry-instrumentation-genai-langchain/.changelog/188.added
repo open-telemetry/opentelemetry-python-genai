@@ -1,2 +1,0 @@
-Add ChatAnthropic tool-calling test coverage and fix finish_reason extraction for 
-Anthropic responses in LangChain instrumentation.

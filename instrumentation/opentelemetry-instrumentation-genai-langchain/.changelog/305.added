@@ -1,1 +1,0 @@
-Populate gen_ai.response.model from responses API when the response body includes the served model header

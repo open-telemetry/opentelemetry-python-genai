@@ -15,6 +15,28 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b0 (2026-08-20)
+
+### Added
+
+- Emit streaming timing metrics (time-to-first-chunk and time-per-output-chunk)
+  for streaming messages.
+  ([#269](https://github.com/open-telemetry/opentelemetry-python-genai/pull/269))
+- Forward the configured ``CompletionHook``
+  (``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` or the
+  ``instrument(completion_hook=...)`` argument) to the telemetry handler.
+  ([#302](https://github.com/open-telemetry/opentelemetry-python-genai/pull/302))
+
+### Fixed
+
+- Stop raising ``AttributeError`` into the caller when ``Messages.create`` is
+  invoked through ``with_raw_response``; the raw response is returned untouched
+  and telemetry is extracted from the parsed message. Streaming
+  ``with_raw_response``/``with_streaming_response`` results are now wrapped in
+  a deferred proxy so the span is finalized when the parsed stream is drained
+  instead of being ended prematurely with no response attributes.
+  ([#381](https://github.com/open-telemetry/opentelemetry-python-genai/pull/381))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added

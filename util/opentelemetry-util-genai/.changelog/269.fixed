@@ -1,1 +1,0 @@
-Raise the minimum ``wrapt`` to 1.14.0, the first release with the async ``ObjectProxy`` support the stream wrappers require.

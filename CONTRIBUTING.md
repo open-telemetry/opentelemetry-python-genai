@@ -24,11 +24,13 @@ project.
 │   └── opentelemetry-instrumentation-genai-<name>/  # one package per GenAI library
 │       ├── src/opentelemetry/instrumentation/genai/<name>/
 │       ├── tests/
+│       ├── CHANGELOG.md
 │       └── pyproject.toml
 └── util/
     └── opentelemetry-util-genai/              # shared GenAI utilities
         ├── src/opentelemetry/util/genai/
         ├── tests/
+        ├── CHANGELOG.md
         └── pyproject.toml
 ```
 

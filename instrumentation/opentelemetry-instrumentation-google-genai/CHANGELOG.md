@@ -15,6 +15,30 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b0 (2026-08-20)
+
+### Added
+
+- Add response.id semantic convention attribute to interactions telemetry.
+  ([#233](https://github.com/open-telemetry/opentelemetry-python-genai/pull/233))
+- Add tool definitions attribute to interactions API spans/events. Use invoke
+  remote agent span instead of inference span when an agent is specified.
+  ([#271](https://github.com/open-telemetry/opentelemetry-python-genai/pull/271))
+- Surface the HTTP status code (e.g. ``429``) as ``error.type`` on failed
+  ``generate_content`` and ``interactions.create`` inference spans and metrics,
+  instead of collapsing every ``google.genai`` error into ``ClientError`` /
+  ``ServerError``.
+  ([#304](https://github.com/open-telemetry/opentelemetry-python-genai/pull/304))
+
+### Fixed
+
+- Include reasoning/thinking tokens in `gen_ai.usage.output_tokens` on both the
+  span and the token-usage metric (candidates_token_count excludes thoughts).
+  ([#283](https://github.com/open-telemetry/opentelemetry-python-genai/pull/283))
+- Finalize the span successfully when an async `generate_content_stream` is
+  closed before being drained, instead of recording it as an error
+  ([#390](https://github.com/open-telemetry/opentelemetry-python-genai/pull/390))
+
 ## Version 1.0b1 (2026-07-13)
 
 ### Added

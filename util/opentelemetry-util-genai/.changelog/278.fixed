@@ -1,2 +1,0 @@
-Make invocation `stop()` / `fail()` idempotent: finishing an invocation twice no longer re-records
-finish telemetry or ends the span a second time.

@@ -15,6 +15,15 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b0 (2026-08-20)
+
+### Fixed
+
+- Honor ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` by falling back to
+  ``load_completion_hook()``
+  when no ``completion_hook`` is passed to ``instrument()``.
+  ([#302](https://github.com/open-telemetry/opentelemetry-python-genai/pull/302))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added
