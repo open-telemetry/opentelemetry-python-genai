@@ -20,6 +20,7 @@ from opentelemetry.test_util_genai.conformance import (
     run_conformance,
 )
 
+from .conformance.agent import AgentScenario
 from .conformance.inference import (
     ChatScenario,
     StreamedChatScenario,
@@ -31,6 +32,7 @@ from .conformance.multimodal import MultimodalScenario
 @pytest.mark.parametrize(
     "scenario",
     [
+        pytest.param(AgentScenario()),
         pytest.param(ChatScenario()),
         pytest.param(StreamedChatScenario()),
         pytest.param(ToolDefinitionsScenario()),

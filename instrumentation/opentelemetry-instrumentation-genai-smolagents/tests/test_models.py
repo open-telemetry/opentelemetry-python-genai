@@ -20,7 +20,6 @@ from typing import Any
 import pytest
 from smolagents.models import ChatMessage, MessageRole
 
-from opentelemetry.context import Context
 from opentelemetry.instrumentation.genai.smolagents import (
     patch as patch_module,
 )
@@ -36,7 +35,6 @@ from opentelemetry.instrumentation.genai.smolagents.patch import (
 from opentelemetry.instrumentation.genai.smolagents.provider import (
     resolve_provider,
 )
-from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -200,37 +198,6 @@ def test_runtime_error_is_recorded_and_reraised(
     assert span.status.status_code == StatusCode.ERROR
     assert attr(span, error_attributes.ERROR_TYPE) == "RuntimeError"
     assert attr(span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) is None
-
-
-class _LifecycleRecorder(SpanProcessor):
-    """Records span starts and ends.
-
-    The exporter only sees a span once it ends, so an unfinished span reads
-    there as no span at all.
-    """
-
-    def __init__(self) -> None:
-        self.started: list[str] = []
-        self.ended: list[str] = []
-
-    def on_start(
-        self, span: Span, parent_context: Context | None = None
-    ) -> None:
-        self.started.append(span.name)
-
-    def on_end(self, span: ReadableSpan) -> None:
-        self.ended.append(span.name)
-
-    @property
-    def leaked(self) -> list[str]:
-        return self.started[len(self.ended) :]
-
-
-@pytest.fixture
-def lifecycle(tracer_provider) -> _LifecycleRecorder:
-    recorder = _LifecycleRecorder()
-    tracer_provider.add_span_processor(recorder)
-    return recorder
 
 
 def test_lifecycle_recorder_sees_the_happy_path(

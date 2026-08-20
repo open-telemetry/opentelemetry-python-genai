@@ -1,0 +1,1 @@
+Add ``invoke_agent`` and ``execute_tool`` instrumentation for smolagents agent runs and tool calls.

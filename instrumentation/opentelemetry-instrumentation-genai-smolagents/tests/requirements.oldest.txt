@@ -22,7 +22,11 @@
 # come transitively from opentelemetry-test-util-genai.
 #
 # The instrumented model classes run inference in this process and the tests stub their
-# runtimes, so there is no model backend to pin here.
+# runtimes, so there is no backend to pin for them. openai is the model backend the VCR
+# agent test instantiates. It is test-only, and neither pyproject.toml nor the
+# instruments extra declares it. The pin is the version smolagents 1.24.0 declares in
+# its own openai extra.
+openai>=1.58.1
 
 # The declared opentelemetry-util-genai floor carries the streaming metrics and the
 # gen_ai.request.stream attribute, which are not in a published release yet.

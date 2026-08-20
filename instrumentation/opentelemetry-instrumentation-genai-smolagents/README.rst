@@ -7,13 +7,14 @@ OpenTelemetry smolagents Instrumentation
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-smolagents/
 
 This library provides OpenTelemetry instrumentation for `smolagents
-<https://github.com/huggingface/smolagents>`_. It wraps the model classes that
-run inference in your own process and emits a GenAI semantic-convention ``chat``
-span and the matching metrics through ``opentelemetry-util-genai``:
+<https://github.com/huggingface/smolagents>`_. It emits GenAI
+semantic-convention spans and the matching metrics through
+``opentelemetry-util-genai``:
 
-* ``TransformersModel``
-* ``VLLMModel``
-* ``MLXModel``
+* ``invoke_agent`` for ``MultiStepAgent.run()``, streaming and non-streaming
+* ``execute_tool`` for a tool call
+* ``chat`` for a call to a model class that runs inference in your own process:
+  ``TransformersModel``, ``VLLMModel`` and ``MLXModel``
 
 The API-backed model classes are not instrumented here. Each one calls a client
 library that carries its own instrumentation. Emitting a span at the smolagents
@@ -36,9 +37,10 @@ for the client library instead:
      - the instrumentation or built-in telemetry of the client library the model
        calls (``huggingface_hub``, ``litellm``)
 
-Agent runs (``invoke_agent``) and tool calls (``execute_tool``) are not
-instrumented yet. A model call made inside an agent run still gets a ``chat``
-span, but no agent span sits above it.
+A ``CodeAgent`` with ``executor_type="local"`` passes generated code to
+smolagents' ``local_python_executor.timeout()``, which runs it in a worker
+thread. This package wraps ``timeout()`` so that a tool span started in that
+thread stays nested under the agent span.
 
 ``TransformersModel`` is the only instrumented class with a ``generate_stream``.
 A streamed call gets a ``chat`` span that stays open until the caller drains the
@@ -57,6 +59,26 @@ Known gaps:
   ``gen_ai.response.model``, no ``gen_ai.response.finish_reasons`` and no
   ``server.address``. A runtime in this process returns the generated text and
   the token counts, nothing more. It also listens on no socket.
+* ``InferenceClientModel`` calls ``huggingface_hub``, which has no
+  instrumentation to enable. An agent running it reports no model call and no
+  token usage.
+* There is no span for an individual agent step, so ``execute_tool`` spans nest
+  directly under ``invoke_agent``. The GenAI semantic conventions define no
+  operation for one iteration of a reason-and-act loop. ``invoke_workflow`` is
+  the closest name, but both the OpenAI Agents and LangChain instrumentations
+  use it for the outermost orchestration, above ``invoke_agent``. A dedicated
+  span is proposed in
+  `semantic-conventions-genai#81
+  <https://github.com/open-telemetry/semantic-conventions-genai/issues/81>`_.
+* The agent's step budget (``max_steps``) is not recorded. The GenAI semantic
+  conventions define no attribute for it, and a run that uses the budget up
+  already reports ``gen_ai.response.finish_reasons`` as ``length`` on the
+  ``invoke_agent`` span.
+* ``gen_ai.tool.call.id`` is omitted when a single step calls the *same* tool
+  more than once. ``Tool.__call__`` receives only the argument values, so this
+  instrumentation matches a call to its id by tool name, and two calls to one
+  tool in the same step have no unambiguous match. A ``CodeAgent`` has no tool
+  call ids at all: its model writes code rather than tool calls.
 
 Installation
 ------------
@@ -73,21 +95,13 @@ Usage
     from opentelemetry.instrumentation.genai.smolagents import (
         SmolagentsInstrumentor,
     )
-    from smolagents import TransformersModel
+    from smolagents import CodeAgent, TransformersModel
 
     SmolagentsInstrumentor().instrument()
 
     model = TransformersModel(model_id="HuggingFaceTB/SmolLM2-135M-Instruct")
-    model.generate(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "How many seconds are in a week?"}
-                ],
-            }
-        ]
-    )
+    agent = CodeAgent(tools=[], model=model)
+    agent.run("How many seconds are in a week?")
 
 Configuration
 -------------
@@ -131,6 +145,11 @@ environment variable:
     )
 
     SmolagentsInstrumentor().instrument(completion_hook=my_hook)
+
+Check out the `manual example <examples/manual>`_ for a runnable script that
+configures the SDK in code, and its ``custom_hook.py`` for the completion hook.
+The `zero-code example <examples/zero-code>`_ does the same through
+``opentelemetry-instrument``.
 
 Conformance
 -----------

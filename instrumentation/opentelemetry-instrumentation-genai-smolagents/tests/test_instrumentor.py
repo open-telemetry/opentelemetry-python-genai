@@ -10,11 +10,13 @@ from unittest.mock import patch
 
 import pytest
 import smolagents
+from smolagents.tools import PipelineTool
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.smolagents import (
     SmolagentsInstrumentor,
     _model_classes_defining,
+    _tool_classes_defining_call,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util._importlib_metadata import entry_points
@@ -54,6 +56,13 @@ def test_instrument_uninstrument_restores_originals(
     original_generate = smolagents.TransformersModel.generate
     original_mlx_generate = smolagents.MLXModel.generate
     original_generate_stream = smolagents.TransformersModel.generate_stream
+    original_run = smolagents.MultiStepAgent.run
+    original_tool_call = smolagents.Tool.__call__
+    original_pipeline_call = PipelineTool.__dict__["__call__"]
+    original_process_tool_calls = smolagents.ToolCallingAgent.__dict__[
+        "process_tool_calls"
+    ]
+    original_timeout = smolagents.local_python_executor.timeout
 
     instrumentor = SmolagentsInstrumentor()
     instrumentor.instrument(
@@ -68,6 +77,13 @@ def test_instrument_uninstrument_restores_originals(
         smolagents.TransformersModel.generate_stream
         is not original_generate_stream
     )
+    assert smolagents.MultiStepAgent.run is not original_run
+    assert PipelineTool.__dict__["__call__"] is not original_pipeline_call
+    assert (
+        smolagents.ToolCallingAgent.__dict__["process_tool_calls"]
+        is not original_process_tool_calls
+    )
+    assert smolagents.local_python_executor.timeout is not original_timeout
 
     instrumentor.uninstrument()
 
@@ -77,6 +93,14 @@ def test_instrument_uninstrument_restores_originals(
         smolagents.TransformersModel.generate_stream
         is original_generate_stream
     )
+    assert smolagents.MultiStepAgent.run is original_run
+    assert smolagents.Tool.__call__ is original_tool_call
+    assert PipelineTool.__dict__["__call__"] is original_pipeline_call
+    assert (
+        smolagents.ToolCallingAgent.__dict__["process_tool_calls"]
+        is original_process_tool_calls
+    )
+    assert smolagents.local_python_executor.timeout is original_timeout
 
 
 @pytest.mark.parametrize(
@@ -122,6 +146,8 @@ def test_uninstrument_through_a_new_constructor_call(
     # .uninstrument() form must restore everything even though the second
     # constructor call re-runs __init__ on the live instance.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
+    original_timeout = smolagents.local_python_executor.timeout
 
     SmolagentsInstrumentor().instrument(
         tracer_provider=tracer_provider,
@@ -131,6 +157,8 @@ def test_uninstrument_through_a_new_constructor_call(
     SmolagentsInstrumentor().uninstrument()
 
     assert smolagents.TransformersModel.generate is original_generate
+    assert smolagents.MultiStepAgent.run is original_run
+    assert smolagents.local_python_executor.timeout is original_timeout
 
 
 @pytest.mark.parametrize("method", ["generate", "generate_stream"])
@@ -157,12 +185,30 @@ def test_only_transformers_defines_generate_stream() -> None:
     ]
 
 
+def test_tool_classes_defining_call() -> None:
+    classes = _tool_classes_defining_call()
+
+    assert len(classes) == len(set(classes))
+    for tool_cls in classes:
+        assert "__call__" in tool_cls.__dict__
+    # PipelineTool overrides Tool.__call__ and calls forward directly instead of
+    # delegating, so both classes need patching. smolagents doesn't export
+    # PipelineTool, so it is reached through the MRO of SpeechToTextTool.
+    assert set(classes) == {smolagents.Tool, PipelineTool}
+    # A tool that only inherits __call__ is covered by the class it inherits it
+    # from, and must not be wrapped again.
+    assert smolagents.FinalAnswerTool not in classes
+    assert smolagents.SpeechToTextTool not in classes
+
+
 def test_repeated_instrument_uninstrument(
     tracer_provider, logger_provider, meter_provider
 ) -> None:
     # BaseInstrumentor returns a per-class singleton, so the wrapped-class
     # bookkeeping has to survive being filled and drained more than once.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
+    original_tool_call = smolagents.Tool.__call__
 
     instrumentor = SmolagentsInstrumentor()
     for _ in range(2):
@@ -172,8 +218,12 @@ def test_repeated_instrument_uninstrument(
             meter_provider=meter_provider,
         )
         assert smolagents.TransformersModel.generate is not original_generate
+        assert smolagents.MultiStepAgent.run is not original_run
+        assert smolagents.Tool.__call__ is not original_tool_call
         instrumentor.uninstrument()
         assert smolagents.TransformersModel.generate is original_generate
+        assert smolagents.MultiStepAgent.run is original_run
+        assert smolagents.Tool.__call__ is original_tool_call
 
 
 def test_uninstrument_without_instrument() -> None:
@@ -181,60 +231,93 @@ def test_uninstrument_without_instrument() -> None:
     # also be a no-op on unpatched attributes: the rollback in _instrument()
     # calls it after a partial patch.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
+    original_tool_call = smolagents.Tool.__call__
+    original_timeout = smolagents.local_python_executor.timeout
 
     SmolagentsInstrumentor().uninstrument()
     SmolagentsInstrumentor()._uninstrument()
 
     assert smolagents.TransformersModel.generate is original_generate
+    assert smolagents.MultiStepAgent.run is original_run
+    assert smolagents.Tool.__call__ is original_tool_call
+    assert smolagents.local_python_executor.timeout is original_timeout
 
 
 def test_instrument_with_no_providers() -> None:
     # Without providers the handler falls back to the globals; instrumenting
     # must not require a caller to pass them.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
 
     instrumentor = SmolagentsInstrumentor()
     instrumentor.instrument()
     try:
         assert smolagents.TransformersModel.generate is not original_generate
+        assert smolagents.MultiStepAgent.run is not original_run
     finally:
         instrumentor.uninstrument()
 
     assert smolagents.TransformersModel.generate is original_generate
+    assert smolagents.MultiStepAgent.run is original_run
 
 
-def test_failed_instrument_rolls_back_partial_patches(
-    tracer_provider, logger_provider, meter_provider
-) -> None:
-    # A failure part-way through must leave no class patched, because
-    # uninstrument() cannot clean up after a failed _instrument().
-    model_classes = _model_classes_defining("generate")
-    assert len(model_classes) > 1, (
-        "the rollback needs more than one class to patch"
+def _originals() -> dict[tuple[type, str], Any]:
+    """Every attribute ``_instrument`` patches, before it is patched."""
+    patched: dict[tuple[type, str], Any] = {
+        (model_cls, "generate"): model_cls.__dict__["generate"]
+        for model_cls in _model_classes_defining("generate")
+    }
+    patched.update(
+        {
+            (model_cls, "generate_stream"): model_cls.__dict__[
+                "generate_stream"
+            ]
+            for model_cls in _model_classes_defining("generate_stream")
+        }
     )
-    originals = {
-        model_cls: model_cls.__dict__["generate"]
-        for model_cls in model_classes
-    }
-    stream_classes = _model_classes_defining("generate_stream")
-    stream_originals = {
-        model_cls: model_cls.__dict__["generate_stream"]
-        for model_cls in stream_classes
-    }
+    patched.update(
+        {
+            (tool_cls, "__call__"): tool_cls.__dict__["__call__"]
+            for tool_cls in _tool_classes_defining_call()
+        }
+    )
+    patched[(smolagents.MultiStepAgent, "run")] = (
+        smolagents.MultiStepAgent.__dict__["run"]
+    )
+    patched[(smolagents.ToolCallingAgent, "process_tool_calls")] = (
+        smolagents.ToolCallingAgent.__dict__["process_tool_calls"]
+    )
+    return patched
+
+
+@pytest.mark.parametrize("fail_on_call", [2, None])
+def test_failed_instrument_rolls_back_partial_patches(
+    tracer_provider, logger_provider, meter_provider, fail_on_call: int | None
+) -> None:
+    # A failure part-way through must leave nothing patched, because
+    # uninstrument() cannot clean up after a failed _instrument(). fail_on_call=2
+    # fails after the first patch, None fails on the last one (timeout), so the
+    # rollback is exercised from both ends.
+    originals = _originals()
+    assert len(originals) > 1, "the rollback needs more than one patch"
+    original_timeout = smolagents.local_python_executor.timeout
 
     real_wrap = wrap_function_wrapper
     calls = 0
 
-    def fail_on_the_second_class(target: Any, name: str, wrapper: Any) -> None:
+    def failing_wrap(target: Any, name: str, wrapper: Any) -> None:
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == fail_on_call or (
+            fail_on_call is None and name == "timeout"
+        ):
             raise RuntimeError("boom")
         real_wrap(target, name, wrapper)
 
     with patch(
         "opentelemetry.instrumentation.genai.smolagents.wrap_function_wrapper",
-        fail_on_the_second_class,
+        failing_wrap,
     ):
         with pytest.raises(RuntimeError, match="boom"):
             SmolagentsInstrumentor().instrument(
@@ -243,11 +326,12 @@ def test_failed_instrument_rolls_back_partial_patches(
                 meter_provider=meter_provider,
             )
 
-    assert calls == 2, "the first class was expected to be patched"
-    for model_cls, original in originals.items():
-        assert model_cls.__dict__["generate"] is original
-    for model_cls, original in stream_originals.items():
-        assert model_cls.__dict__["generate_stream"] is original
+    assert calls > 1, "at least one attribute was expected to be patched"
+    for (target, name), original in originals.items():
+        assert target.__dict__[name] is original, (
+            f"{target.__name__}.{name} was not restored"
+        )
+    assert smolagents.local_python_executor.timeout is original_timeout
 
 
 def test_a_user_subclass_inherits_the_patched_generate(

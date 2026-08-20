@@ -1,10 +1,12 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert smolagents message and tool shapes into util-genai GenAI types.
+"""Convert smolagents message, agent and tool shapes into util-genai GenAI types.
 
 smolagents passes ``generate(messages=...)`` a list of ``ChatMessage`` objects
-or plain dicts, and returns a ``ChatMessage``. This module maps those, and the
+or plain dicts, and returns a ``ChatMessage``. ``MultiStepAgent.run`` takes a
+task string and optional images, and returns a final answer. A tool takes
+argument values and returns a result. This module maps those values, and the
 ``tools_to_call_from`` tool objects, onto the types in
 ``opentelemetry.util.genai.types``. util-genai then serializes them into
 ``gen_ai.input.messages``, ``gen_ai.output.messages``, and
@@ -16,9 +18,11 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+from collections.abc import Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
+from PIL.Image import Image
 from smolagents.models import get_tool_json_schema
 from smolagents.utils import encode_image_base64
 
@@ -32,9 +36,11 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     Uri,
 )
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
+from opentelemetry.util.types import AnyValue
 
 if TYPE_CHECKING:
-    from PIL.Image import Image
+    from smolagents.agents import MultiStepAgent
     from smolagents.models import ChatMessage, MessageRole
     from smolagents.tools import Tool
 
@@ -45,6 +51,11 @@ _logger = logging.getLogger(__name__)
 # element have mixed types, a ``str`` under ``text``, a nested dict under
 # ``image_url``, and a PIL image under ``image``.
 _ContentElement: TypeAlias = dict[str, Any]
+
+# Something the model can call. A managed agent is one too: the manager sets its
+# ``inputs`` and ``output_type`` and passes it in ``tools_to_call_from``
+# alongside the real tools (``agents.py``).
+_ModelCallable: TypeAlias = "Tool | MultiStepAgent"
 
 _DEFAULT_IMAGE_MIME_TYPE = "image/png"
 _DATA_URL_PREFIX = "data:"
@@ -202,16 +213,21 @@ def to_output_message(output_message: ChatMessage) -> OutputMessage:
     return OutputMessage(role=role, parts=parts, finish_reason="")
 
 
-def _tool_parameters(tool: Tool) -> dict[str, Any] | None:
+def _tool_parameters(tool: _ModelCallable) -> dict[str, Any] | None:
     """Return the JSON Schema ``parameters`` object for a smolagents tool.
 
     A tool's ``inputs`` map is not a JSON Schema on its own: smolagents wraps it
     in an object schema, derives ``required`` from ``nullable``, and rewrites its
     non-JSON-Schema ``"any"`` type. ``get_tool_json_schema`` builds exactly the
     schema the provider receives.
+
+    It is annotated as taking a ``Tool``, but it reads only ``name``,
+    ``description`` and ``inputs``, and smolagents calls it with managed agents
+    too: ``ToolCallingAgent.tools_and_managed_agents`` feeds
+    ``tools_to_call_from`` (``agents.py``). Hence the cast.
     """
     try:
-        schema = get_tool_json_schema(tool)
+        schema = get_tool_json_schema(cast("Tool", tool))
         parameters = schema["function"]["parameters"]
     except Exception:  # pylint: disable=broad-except
         _logger.debug(
@@ -224,21 +240,88 @@ def _tool_parameters(tool: Tool) -> dict[str, Any] | None:
 
 
 def to_tool_definitions(
-    tools: list[Tool] | None,
+    tools: Sequence[_ModelCallable] | None,
 ) -> list[ToolDefinition] | None:
     """Map smolagents tool objects to function tool definitions.
 
     ``Tool.validate_arguments`` runs on every instantiation and requires a
-    non-empty ``name`` and a ``description``, so both are read directly.
+    non-empty ``name`` and a ``description``, so both are read directly. A
+    managed agent carries both too, and ``MultiStepAgent`` rejects a name that
+    is not a valid identifier, so an unnamed one is not a managed agent.
     """
     if not tools:
         return None
-    definitions: list[ToolDefinition] = [
-        FunctionToolDefinition(
-            name=tool.name,
-            description=tool.description,
-            parameters=_tool_parameters(tool),
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        name = tool.name
+        if not name:
+            continue
+        definitions.append(
+            FunctionToolDefinition(
+                name=name,
+                description=tool.description,
+                parameters=_tool_parameters(tool),
+            )
         )
-        for tool in tools
-    ]
-    return definitions
+    return definitions or None
+
+
+def to_text(value: object) -> str:
+    """Stringify a value without running smolagents' side-effecting ``__str__``.
+
+    ``AgentText`` and ``AgentAudio`` subclass ``str`` but override ``__str__``
+    (``agent_types.py``), and ``AgentAudio.to_string()`` writes a ``.wav`` file
+    to a temp directory. Reading the underlying ``str`` avoids that.
+    """
+    if isinstance(value, str):
+        return str.__str__(value)
+    return str(value)
+
+
+def to_content_value(value: object) -> AnyValue:
+    """Return a value safe to hand to util-genai as span content.
+
+    util-genai serializes tool results as JSON and falls back to ``str(value)``.
+    For an image tool that fallback records a heap address, and for an
+    ``AgentImage`` it saves a PNG into a fresh temp directory and mutates the
+    object the caller still holds. Values JSON can't represent are recorded as
+    their type name instead.
+    """
+    if value is None or isinstance(value, (bool, int, float, bytes)):
+        return value
+    if isinstance(value, str):
+        return to_text(value)
+    try:
+        return gen_ai_json_dumps(value)
+    except (TypeError, ValueError):
+        return type(value).__name__
+
+
+def final_answer_parts(output: object) -> list[MessagePart]:
+    """Map an agent's final answer onto output message parts.
+
+    ``MultiStepAgent`` wraps the answer in ``handle_agent_output_types``, so an
+    image-producing run returns an ``AgentImage``, which subclasses a PIL image.
+    Recording it as a ``Blob`` keeps the content and matches how input images
+    are recorded; stringifying it would write the image to disk and record the
+    path instead.
+    """
+    if isinstance(output, Image):
+        blob = _image_blob(output)
+        return [blob] if blob is not None else []
+    return [Text(content=to_text(output))]
+
+
+def task_to_input_message(
+    task: str | None, images: list[Image | str] | None
+) -> InputMessage:
+    """Build the agent-run input message from the task string and images."""
+    parts: list[MessagePart] = []
+    if task:
+        parts.append(Text(content=task))
+    if isinstance(images, list):
+        for image in images:
+            blob = _image_blob(image)
+            if blob is not None:
+                parts.append(blob)
+    return InputMessage(role="user", parts=parts)

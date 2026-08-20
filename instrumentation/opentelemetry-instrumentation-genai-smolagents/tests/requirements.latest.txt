@@ -27,8 +27,9 @@
 # supported version of external dependencies.
 
 # The instrumented model classes run inference in this process and the tests stub
-# their runtimes, so no model backend extra is installed.
-smolagents
+# their runtimes. openai is the model backend the VCR agent test runs against; it
+# is test-only, so pyproject.toml does not declare it.
+smolagents[openai]
 wrapt>=2.2.2
 
 -e util/opentelemetry-util-genai
