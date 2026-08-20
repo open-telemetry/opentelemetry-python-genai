@@ -140,10 +140,10 @@ jobs:
           fi
 
           if [[ -n "$PRIOR_VERSION_WHEN_PATCH" ]]; then
-            message="[chore] Finalize patch release for ${PACKAGE_NAME} v${VERSION}"
+            message="Finalize patch release for ${PACKAGE_NAME} v${VERSION}"
             body="Copy patch changelog updates to main and regenerate instrumentation README for \`${PACKAGE_NAME}\` v\`${VERSION}\`."
           else
-            message="[chore] Finalize release for ${PACKAGE_NAME} v${VERSION}"
+            message="Finalize release for ${PACKAGE_NAME} v${VERSION}"
             body="Regenerate instrumentation README and bump package version for \`${PACKAGE_NAME}\` to next dev version after releasing v\`${VERSION}\`."
           fi
           branch="otelbot/finalize-${PACKAGE_NAME}-${VERSION}"
@@ -153,4 +153,5 @@ jobs:
           gh pr create --title "$message" \
                        --body "$body" \
                        --head "$branch" \
-                       --base main
+                       --base main \
+                       --label "Skip Changelog"

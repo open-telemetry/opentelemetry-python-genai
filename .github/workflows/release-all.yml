@@ -156,7 +156,7 @@ jobs:
             exit 0
           fi
 
-          message="[chore] Post-release version bump and updates"
+          message="Post-release version bump and updates"
           body="Regenerate instrumentation README and bump package versions in eachdist.ini and all package version.py files to the next \`.dev\` version."
           branch="otelbot/bump-after-release-all-$(date +%Y%m%d)"
 
@@ -165,4 +165,5 @@ jobs:
           gh pr create --title "$message" \
                        --body "$body" \
                        --head "$branch" \
-                       --base main
+                       --base main \
+                       --label "Skip Changelog"
