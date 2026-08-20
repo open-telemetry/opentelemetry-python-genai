@@ -15,7 +15,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from httpx import URL
+
+try:
+    from httpx import URL
+except ImportError:
+    from httpx2 import URL
 
 from opentelemetry.instrumentation.genai.openai.patch import (
     _create_embedding_invocation as create_embedding_invocation,
@@ -96,6 +100,18 @@ def test_server_address_and_port_from_client(handler, span_exporter):
     span = span_exporter.get_finished_spans()[0]
     assert span.attributes[ServerAttributes.SERVER_ADDRESS] == "localhost"
     assert span.attributes[ServerAttributes.SERVER_PORT] == 8080
+
+
+def test_server_address_and_port_from_non_httpx_url(handler, span_exporter):
+    """Works with any URL object exposing .host/.port (e.g. httpx2.URL)."""
+    fake_url = SimpleNamespace(host="openrouter.ai", port=None)
+    client = _make_client(fake_url)
+    invocation = create_embedding_invocation(handler, {"model": "m"}, client)
+    invocation.stop()
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[ServerAttributes.SERVER_ADDRESS] == "openrouter.ai"
+    assert ServerAttributes.SERVER_PORT not in span.attributes
 
 
 # ─── create_embedding_invocation: dimensions / encoding_format ──────────────

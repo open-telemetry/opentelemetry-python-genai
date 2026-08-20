@@ -10,8 +10,13 @@
   "pip_requirements": {
     // Default pip_requirements fileMatch only allows [\w-]* between
     // "requirements" and ".txt", so per-instrumentation
-    // requirements.latest.txt files are skipped without this.
-    "managerFilePatterns": ["/(^|/)requirements\\.txt$/", "/(^|/)requirements\\.latest\\.txt$/"]
+    // requirements.latest.txt and requirements.<lib>-v<N>.txt files are
+    // skipped without this.
+    "managerFilePatterns": [
+      "/(^|/)requirements\\.txt$/",
+      "/(^|/)requirements\\.latest\\.txt$/",
+      "/(^|/)requirements\\.[\\w-]+-v\\d+\\.txt$/"
+    ]
   },
   // Manage WEAVER_VERSION and SEMCONV_GENAI_REF in versions.env via their
   // `# renovate:` annotations.
@@ -64,6 +69,14 @@
       // removed from the matrix.
       "matchPackageNames": ["pydantic"],
       "allowedVersions": "<2.13"
+    },
+    {
+      // requirements.<lib>-v<N>.txt tests the newest release of an older
+      // major of <lib>, so <lib> itself must stay on that major while the
+      // rest of the file keeps updating. Add one rule per such file.
+      "matchFileNames": ["**/requirements.openai-v2.txt"],
+      "matchPackageNames": ["openai"],
+      "allowedVersions": "<3"
     },
     {
       "matchUpdateTypes": ["minor", "major"],

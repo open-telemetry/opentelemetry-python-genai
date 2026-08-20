@@ -15,7 +15,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 | --------------- | ----------------- | ------- |
 | [opentelemetry-instrumentation-genai-anthropic](./instrumentation/opentelemetry-instrumentation-genai-anthropic) | anthropic >= 0.16.0 | [1.0b0](https://pypi.org/project/opentelemetry-instrumentation-genai-anthropic/) |
 | [opentelemetry-instrumentation-genai-langchain](./instrumentation/opentelemetry-instrumentation-genai-langchain) | langchain >= 0.3.21 | [1.0b0](https://pypi.org/project/opentelemetry-instrumentation-genai-langchain/) |
-| [opentelemetry-instrumentation-genai-openai](./instrumentation/opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0 | [1.0b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai/) |
+| [opentelemetry-instrumentation-genai-openai](./instrumentation/opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0, < 4 | [1.0b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai/) |
 | [opentelemetry-instrumentation-genai-openai-agents](./instrumentation/opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3 | [1.0b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai-agents/) |
 | [opentelemetry-instrumentation-google-genai](./instrumentation/opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | [1.0b1](https://pypi.org/project/opentelemetry-instrumentation-google-genai/) |
 
