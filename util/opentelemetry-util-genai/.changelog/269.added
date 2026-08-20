@@ -1,1 +1,0 @@
-Add streaming timing metrics (`gen_ai.client.operation.time_to_first_chunk`, `gen_ai.client.operation.time_per_output_chunk`), the `gen_ai.response.time_to_first_chunk` span attribute, and the `gen_ai.request.stream` span attribute, set by the shared stream wrappers.

@@ -1,1 +1,0 @@
-Simplify the CI test matrix to Python 3.10 and 3.14. PyPy is no longer tested.

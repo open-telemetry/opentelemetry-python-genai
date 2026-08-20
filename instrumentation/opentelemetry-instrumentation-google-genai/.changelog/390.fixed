@@ -1,1 +1,0 @@
-Finalize the span successfully when an async `generate_content_stream` is closed before being drained, instead of recording it as an error

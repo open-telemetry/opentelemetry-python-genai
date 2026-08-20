@@ -1,1 +1,0 @@
-Add guard for the response header value to avoid passing in empty model name

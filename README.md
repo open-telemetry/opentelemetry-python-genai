@@ -23,12 +23,12 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 
 | Instrumentation | Supported Package | Version | Status |
 | --------------- | ----------------- | ------- | ------ |
-| [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.0.0 | 1.1b0.dev | to be released |
+| [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.0.0 | 1.1b0 | to be released |
 | [opentelemetry-instrumentation-genai-claude-agent-sdk](./instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14 | 1.1b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-crewai](./instrumentation/opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1 | 1.1b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-llama-index](./instrumentation/opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19 | 1.1b0.dev | skeleton |
-| [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20 | 1.1b0.dev | to be released |
-| [opentelemetry-instrumentation-genai-smolagents](./instrumentation/opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0 | 1.1b0.dev | to be released |
+| [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20 | 1.1b0 | to be released |
+| [opentelemetry-instrumentation-genai-smolagents](./instrumentation/opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0 | 1.1b0 | to be released |
 | [opentelemetry-instrumentation-genai-weaviate-client](./instrumentation/opentelemetry-instrumentation-genai-weaviate-client) | weaviate-client >= 3.0.0, <5.0.0 | 1.1b0.dev | skeleton |
 <!-- end -->
 

@@ -1,1 +1,0 @@
-Emit ``execute_tool`` spans with ``INTERNAL`` span kind instead of ``CLIENT``.

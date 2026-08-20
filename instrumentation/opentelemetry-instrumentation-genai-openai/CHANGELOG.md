@@ -15,6 +15,47 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b0 (2026-08-20)
+
+### Added
+
+- Add instrumentation for the OpenAI Responses ``retrieve`` API (sync and
+  async), reported as a ``fetch_response`` operation with no token usage.
+  ([#184](https://github.com/open-telemetry/opentelemetry-python-genai/pull/184))
+- Emit streaming timing metrics (time-to-first-chunk and time-per-output-chunk)
+  for streaming chat completions.
+  ([#269](https://github.com/open-telemetry/opentelemetry-python-genai/pull/269))
+- Populate gen_ai.response.model from responses API when the response body
+  includes the served model header
+  ([#355](https://github.com/open-telemetry/opentelemetry-python-genai/pull/355))
+
+### Changed
+
+- Extend supported version range for the openai library to include v3.
+  ([#393](https://github.com/open-telemetry/opentelemetry-python-genai/pull/393))
+- Simplify the CI test matrix to Python 3.10 and 3.14. PyPy is no longer
+  tested.
+  ([#411](https://github.com/open-telemetry/opentelemetry-python-genai/pull/411))
+
+### Fixed
+
+- Expose raw-response attributes (headers, request_id, ...) on streaming
+  ``with_raw_response`` responses for chat completions and the Responses API,
+  keep the caller's stream working unchanged when the raw response is parsed
+  into a custom type (``parse(to=...)``), and finalize the span when a
+  streaming raw response is drained off the underlying httpx response without
+  calling ``parse()`` so the span no longer leaks open.
+  ([#278](https://github.com/open-telemetry/opentelemetry-python-genai/pull/278))
+- Responses that fail now record the actual error type (`error` event code or
+  the response's error code) instead of a generic `RuntimeError`, for both
+  streaming and non-streaming calls. Responses that finish as incomplete
+  (`max_output_tokens`/`content_filter`) are recorded as a finish reason rather
+  than an error.
+  ([#282](https://github.com/open-telemetry/opentelemetry-python-genai/pull/282))
+- Fix ``server.address`` and ``server.port`` not recorded when using openai v3
+  (httpx2 URL type).
+  ([#393](https://github.com/open-telemetry/opentelemetry-python-genai/pull/393))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added

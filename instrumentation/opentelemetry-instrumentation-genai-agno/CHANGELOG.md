@@ -14,3 +14,14 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 -->
 
 <!-- changelog start -->
+
+## Version 1.1b0 (2026-08-20)
+
+### Added
+
+- Add skeleton and boilerplate for Agno instrumentation package
+  (``opentelemetry-instrumentation-genai-agno``).
+  ([#301](https://github.com/open-telemetry/opentelemetry-python-genai/pull/301))
+- Instrument agent.run as a client side invoke agent span. Instrument agno
+  function calls an execute tool span.
+  ([#328](https://github.com/open-telemetry/opentelemetry-python-genai/pull/328))
