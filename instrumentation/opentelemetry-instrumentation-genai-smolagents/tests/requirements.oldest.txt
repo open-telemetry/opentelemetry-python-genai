@@ -24,7 +24,4 @@
 # The instrumented model classes run inference in this process and the tests stub their
 # runtimes, so there is no model backend to pin here.
 
-# The declared opentelemetry-util-genai floor carries the streaming metrics and the
-# gen_ai.request.stream attribute, which are not in a published release yet.
-# Drop this once opentelemetry-util-genai 1.1b0 is published.
--e util/opentelemetry-util-genai
+
