@@ -1,0 +1,1 @@
+Add `SyncStreamManagerWrapper` / `AsyncStreamManagerWrapper` bases and `finalize_on_close` / `finalize_on_aclose` helpers to `opentelemetry.util.genai.stream`

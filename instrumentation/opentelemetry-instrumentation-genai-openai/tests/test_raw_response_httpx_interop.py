@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import json
 
-import httpx
 import pytest
 from openai import AsyncOpenAI, OpenAI
 
-# Only pinned in requirements.latest.txt; oldest envs skip this module.
+# Only pinned in requirements.openai-v2.txt; other envs (openai v3+ uses
+# httpx2, oldest has no httpx instrumentation) skip this module.
+httpx = pytest.importorskip("httpx")
 HTTPXClientInstrumentor = pytest.importorskip(
     "opentelemetry.instrumentation.httpx"
 ).HTTPXClientInstrumentor
