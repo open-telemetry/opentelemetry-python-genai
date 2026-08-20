@@ -101,7 +101,7 @@ jobs:
           packages-dir: dist/
           skip-existing: true
 
-  github-release:
+  github_release:
     needs: [enumerate, publish]
     permissions:
       contents: write
@@ -119,8 +119,8 @@ jobs:
     secrets: inherit
 
   finalize:
-    needs: [enumerate, publish, github-release]
-    if: always() && needs.enumerate.result == 'success' && needs.publish.result == 'success'
+    needs: [enumerate, publish, github_release]
+    if: always() && needs.enumerate.result == 'success' && needs.publish.result == 'success' && needs.github_release.result == 'success'
     permissions:
       contents: write
     runs-on: cncf-ubuntu-2-8-x86

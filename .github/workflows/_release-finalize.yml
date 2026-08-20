@@ -116,7 +116,7 @@ jobs:
 
       - name: Bump package version on main after release
         if: inputs.sync_main && inputs.bump_after_release && steps.target.outputs.on_main == 'true'
-        run: uv run ./scripts/version_utils.py bump --package "${PACKAGE_NAME}" --dev
+        run: uv run ./scripts/version_utils.py bump --dev
 
       - name: Use CLA approved github bot
         if: inputs.sync_main
@@ -144,7 +144,7 @@ jobs:
             body="Copy patch changelog updates to main and regenerate instrumentation README for \`${PACKAGE_NAME}\` v\`${VERSION}\`."
           else
             message="Finalize release for ${PACKAGE_NAME} v${VERSION}"
-            body="Regenerate instrumentation README and bump package version for \`${PACKAGE_NAME}\` to next dev version after releasing v\`${VERSION}\`."
+            body="Regenerate instrumentation README and bump package versions to next dev version after releasing \`${PACKAGE_NAME}\` v\`${VERSION}\`."
           fi
           branch="otelbot/finalize-${PACKAGE_NAME}-${VERSION}"
 
