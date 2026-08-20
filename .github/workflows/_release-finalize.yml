@@ -110,13 +110,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/merge_changelog_to_main.sh
 
-      - name: Regenerate instrumentations README
-        if: inputs.sync_main
-        run: python ./scripts/generate_instrumentation_readme.py
-
       - name: Bump package version on main after release
         if: inputs.sync_main && inputs.bump_after_release && steps.target.outputs.on_main == 'true'
         run: uv run ./scripts/version_utils.py bump --dev
+
+      - name: Regenerate instrumentations README
+        if: inputs.sync_main
+        run: python ./scripts/generate_instrumentation_readme.py
 
       - name: Use CLA approved github bot
         if: inputs.sync_main

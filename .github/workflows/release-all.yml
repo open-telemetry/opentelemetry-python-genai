@@ -132,11 +132,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
-      - name: Regenerate instrumentations README
-        run: python ./scripts/generate_instrumentation_readme.py
-
       - name: Bump repository version to next dev version
         run: uv run ./scripts/version_utils.py bump --dev
+
+      - name: Regenerate instrumentations README
+        run: python ./scripts/generate_instrumentation_readme.py
 
       - name: Use CLA approved github bot
         run: .github/scripts/use-cla-approved-github-bot.sh
