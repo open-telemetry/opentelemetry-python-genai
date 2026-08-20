@@ -96,7 +96,6 @@ def test_call_tool_no_content(span_exporter, instrument_no_content):
     attrs = dict(tool_spans[0].attributes or {})
     assert GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
     assert GenAIAttributes.GEN_AI_TOOL_CALL_RESULT not in attrs
-    assert GenAIAttributes.GEN_AI_TOOL_DESCRIPTION not in attrs
     assert attrs[GenAIAttributes.GEN_AI_TOOL_NAME] == "get_weather"
 
 

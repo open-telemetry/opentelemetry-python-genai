@@ -696,7 +696,162 @@ def test_chat_openai_responses_api_input_image_llm_call(
     assert _REAL_PNG_B64 in input_message
 
 
-def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
+@pytest.mark.vcr()
+def test_chat_anthropic_multimodal_image_llm_call(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    chat_anthropic_claude_sonnet,
+):
+    """End-to-end: an Anthropic ``image`` content block is captured as an
+    image ``Blob`` part in ``gen_ai.input.messages``."""
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _REAL_PNG_B64,
+                    },
+                },
+            ]
+        ),
+    ]
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+        "claude-sonnet-4-5"
+    )
+
+    input_message = span.attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"role":"user"' in input_message
+    assert '"type":"text"' in input_message
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_file_ref_image_llm_call(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    chat_anthropic_claude_sonnet,
+):
+    """End-to-end: a provider-hosted Anthropic image is captured as a ``file``
+    part carrying the file id, rather than dropped."""
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "file",
+                        "file_id": _ANTHROPIC_FILE_ID,
+                    },
+                },
+            ]
+        ),
+    ]
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    input_message = spans[0].attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"file"' in input_message
+    assert '"modality":"image"' in input_message
+    assert f'"file_id":"{_ANTHROPIC_FILE_ID}"' in input_message
+
+
+@pytest.mark.skipif(
+    not _supports_responses_api,
+    reason="langchain-openai < 1.3 does not support the Responses API",
+)
+def test_chat_openai_responses_api_input_image_llm_call(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    chat_openai_responses_vision,
+    vcr,
+):
+    """End-to-end: Responses API ``input_text``/``input_image`` blocks, which
+    langchain-openai forwards verbatim, are captured as text and blob parts."""
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{_REAL_PNG_B64}",
+                },
+            ]
+        ),
+    ]
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with vcr.use_cassette(
+            "test_chat_openai_responses_input_image_llm_call.yaml"
+        ):
+            chat_openai_responses_vision.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    input_message = spans[0].attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
+
+
+def test_chat_openai_legacy_function_call_no_content_tool_definitions_required_only(
     span_exporter,
     start_instrumentation,
     chat_openai_legacy_functions,
@@ -744,9 +899,16 @@ def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
+
+    tool_definitions = span.attributes.get(
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    )
     # Tool definitions carry sensitive description / parameters and must not
     # be emitted on the span when content capture is disabled.
-    assert gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert tool_definitions is not None
+    assert '"name":"get_current_weather"' in tool_definitions
+    assert '"description"' not in tool_definitions
+    assert '"location"' not in tool_definitions
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
