@@ -1193,7 +1193,10 @@ def test_apply_request_attributes_captures_tool_definitions(loaded_module):
 def test_set_fetch_response_attributes_captures_tool_definitions(
     loaded_module,
 ):
-    """Tool definitions are captured only when content capture is enabled."""
+    """Tool definitions are captured regardless of content capture.
+
+    util-genai keeps only the semconv-required fields when capture is off.
+    """
     response = _make_response(
         status="completed",
         tools=[
@@ -1230,7 +1233,9 @@ def test_set_fetch_response_attributes_captures_tool_definitions(
     loaded_module.set_fetch_response_attributes(
         not_captured, response, capture_content=False
     )
-    assert not_captured.tool_definitions is None
+    (definition,) = not_captured.tool_definitions
+    assert isinstance(definition, FunctionToolDefinition)
+    assert definition.name == "get_weather"
 
 
 def test_set_fetch_response_attributes_prefers_raw_served_model_header(
