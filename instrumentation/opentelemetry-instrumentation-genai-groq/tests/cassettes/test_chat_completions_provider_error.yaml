@@ -1,0 +1,93 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Tell me a joke"
+          }
+        ],
+        "model": "non-existent-model"
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_groq_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '86'
+      content-type:
+      - application/json
+      host:
+      - api.groq.com
+      user-agent:
+      - Groq/Python 1.6.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 1.6.0
+      x-stainless-read-timeout:
+      - '60'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+    method: POST
+    uri: https://api.groq.com/openai/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Invalid API Key",
+            "type": "invalid_request_error",
+            "code": "invalid_api_key"
+          }
+        }
+    headers:
+      alt-svc:
+      - h3=":443"; ma=86400
+      cache-control:
+      - private, max-age=0, no-store, no-cache, must-revalidate
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a2471c7b281cb1c5-BOM
+      connection:
+      - keep-alive
+      content-length:
+      - '96'
+      content-type:
+      - application/json
+      date:
+      - Sat, 01 Aug 2026 19:04:54 GMT
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=15552000
+      vary:
+      - Origin
+      via:
+      - 1.1 google
+      x-groq-region:
+      - bom
+      x-request-id:
+      - req_01kyzbe28dfpt959zxf99vxag3
+    status:
+      code: 401
+      message: Unauthorized
+version: 1
