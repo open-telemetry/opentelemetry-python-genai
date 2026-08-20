@@ -12,6 +12,7 @@ on:
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-qwen-agent
+        - opentelemetry-instrumentation-genai-smolagents
         - opentelemetry-util-genai
         description: 'Package to release'
         required: true
@@ -29,7 +30,7 @@ jobs:
 
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     environment: pypi
     permissions:
       id-token: write

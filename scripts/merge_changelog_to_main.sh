@@ -49,3 +49,19 @@ else
     # update the real CHANGELOG.md
     cp /tmp/CHANGELOG.md ${CHANGELOG}
 fi
+
+# remove any changelog fragments on main that were included in this release section
+changelog_dir="$(dirname "${CHANGELOG}")/.changelog"
+if [[ -d "$changelog_dir" && -f /tmp/CHANGELOG_SECTION.md ]]; then
+    for fragment in "$changelog_dir"/*; do
+        if [[ -f "$fragment" ]]; then
+            frag_name=$(basename "$fragment")
+            if [[ "$frag_name" != .* ]]; then
+                pr_num="${frag_name%%.*}"
+                if grep -Fq "[#${pr_num}]" /tmp/CHANGELOG_SECTION.md; then
+                    rm -f -- "$fragment"
+                fi
+            fi
+        fi
+    done
+fi

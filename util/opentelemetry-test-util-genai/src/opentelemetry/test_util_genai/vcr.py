@@ -119,6 +119,26 @@ class PrettyPrintJSONBody:
         return yaml.load(cassette_string, Loader=yaml.Loader)
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "cassette(name): replay the named cassette instead of one named after "
+        "the test, for tests that exercise a different code path over the same "
+        "request",
+    )
+
+
+@pytest.fixture
+def vcr_cassette_name(request: pytest.FixtureRequest) -> str:
+    """Cassette name, overridable per test with ``@pytest.mark.cassette``.
+
+    Overrides ``pytest-recording``'s default so several tests can replay one
+    recorded request instead of each shipping an identical cassette.
+    """
+    marker = request.node.get_closest_marker("cassette")
+    return marker.args[0] if marker else request.node.name
+
+
 @pytest.fixture(scope="module", autouse=True)
 def fixture_vcr(vcr: Any) -> Any:
     """Autouse fixture registering ``PrettyPrintJSONBody`` with ``pytest-vcr``.

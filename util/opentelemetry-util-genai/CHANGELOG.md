@@ -15,6 +15,73 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b0 (2026-08-20)
+
+### Added
+
+- Add ``TelemetryHandler.fetch_response()`` and ``FetchResponseInvocation`` for
+  the ``fetch_response`` operation, which fetches a previously generated
+  response by id without performing inference.
+  ([#184](https://github.com/open-telemetry/opentelemetry-python-genai/pull/184))
+- Add streaming timing metrics (`gen_ai.client.operation.time_to_first_chunk`,
+  `gen_ai.client.operation.time_per_output_chunk`), the
+  `gen_ai.response.time_to_first_chunk` span attribute, and the
+  `gen_ai.request.stream` span attribute, set by the shared stream wrappers.
+  ([#269](https://github.com/open-telemetry/opentelemetry-python-genai/pull/269))
+- Add ``CompactionPart`` message part type, mirroring the semconv model
+  (``type``, ``id``, ``content``) for representing server-side context
+  compaction events.
+  ([#289](https://github.com/open-telemetry/opentelemetry-python-genai/pull/289))
+- Add an optional ``error_type_resolver`` callback to
+  ``TelemetryHandler.inference()`` and ``InferenceInvocation`` so instrumentors
+  can derive the ``error.type`` attribute from the raw exception.
+  ([#304](https://github.com/open-telemetry/opentelemetry-python-genai/pull/304))
+- Add `SyncStreamManagerWrapper` / `AsyncStreamManagerWrapper` bases and
+  `finalize_on_close` / `finalize_on_aclose` helpers to
+  `opentelemetry.util.genai.stream`
+  ([#390](https://github.com/open-telemetry/opentelemetry-python-genai/pull/390))
+
+### Changed
+
+- Restricted start-time sampling attributes to invocation construction time so
+  they are not settable after start, and prevented duplicating them on
+  finishing.
+  ([#150](https://github.com/open-telemetry/opentelemetry-python-genai/pull/150))
+- `Error.type` is now the `error.type` attribute value (a string) instead of
+  the exception class; the originating exception moved to the new
+  `Error.exception` field. When derived from an exception, `error.type` is its
+  canonical, fully qualified name.
+  ([#282](https://github.com/open-telemetry/opentelemetry-python-genai/pull/282))
+- `gen_ai.usage.output_tokens` is now taken directly from
+  `invocation.output_tokens`; `thinking_tokens` is no longer auto-added into
+  it.
+  Instrumentations must include reasoning/thinking tokens in `output_tokens`
+  when their underlying library API does not do it.
+  ([#283](https://github.com/open-telemetry/opentelemetry-python-genai/pull/283))
+- Align some dataclasses with the GenAI semconv schemas: `GenericPart.type` is
+  now a required free-form string carrying the provider's own type name instead
+  of the fixed literal `generic`, `Modality` gains `document`, and
+  `FinishReason` gains `compaction`.
+  ([#284](https://github.com/open-telemetry/opentelemetry-python-genai/pull/284))
+- Finalize stream telemetry for streams that expose `aclose` instead of `close`
+  ([#390](https://github.com/open-telemetry/opentelemetry-python-genai/pull/390))
+
+### Fixed
+
+- Raise the minimum ``wrapt`` to 1.14.0, the first release with the async
+  ``ObjectProxy`` support the stream wrappers require.
+  ([#269](https://github.com/open-telemetry/opentelemetry-python-genai/pull/269))
+- Emit ``execute_tool`` spans with ``INTERNAL`` span kind instead of
+  ``CLIENT``.
+  ([#274](https://github.com/open-telemetry/opentelemetry-python-genai/pull/274))
+- Set the `gen_ai.workflow.name` span attribute on workflow invocations when
+  the workflow name is known.
+  ([#275](https://github.com/open-telemetry/opentelemetry-python-genai/pull/275))
+- Make invocation `stop()` / `fail()` idempotent: finishing an invocation twice
+  no longer re-records
+  finish telemetry or ends the span a second time.
+  ([#278](https://github.com/open-telemetry/opentelemetry-python-genai/pull/278))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added

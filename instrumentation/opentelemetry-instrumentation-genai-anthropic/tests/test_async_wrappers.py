@@ -151,24 +151,6 @@ class _FakeAsyncManager:
         return self._suppressed
 
 
-class _FakeStreamWrapper:
-    def __init__(self):
-        self.exit_args = None
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.exit_args = (exc_type, exc_val, exc_tb)
-        return False
-
-
-class _FakeAsyncStreamWrapper:
-    def __init__(self):
-        self.exit_args = None
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.exit_args = (exc_type, exc_val, exc_tb)
-        return False
-
-
 class _FakeSyncResponse:
     def __init__(self):
         self.request_id = "req_sync"
@@ -322,7 +304,6 @@ def test_sync_manager_enter_constructs_stream_wrapper():
     with wrapper as result:
         assert isinstance(result, MessagesStreamWrapper)
         assert result.stream is stream
-        assert wrapper._stream_wrapper is result
 
 
 def test_sync_manager_does_not_create_invocation_until_enter():
@@ -342,84 +323,6 @@ def test_sync_manager_does_not_create_invocation_until_enter():
         pass
 
     assert factory_calls == [True]
-
-
-def test_sync_manager_enter_fails_invocation_when_manager_raises():
-    error = RuntimeError("manager enter failure")
-    failures = []
-    invocation = _make_invocation()
-    invocation.fail = failures.append
-    wrapper = MessagesStreamManagerWrapper(
-        manager=_FakeSyncManager(
-            stream=SimpleNamespace(),
-            enter_error=error,
-        ),
-        invocation_factory=lambda: invocation,
-        capture_content=False,
-    )
-
-    with pytest.raises(RuntimeError, match="manager enter failure"):
-        with wrapper:
-            pass
-
-    assert failures == [error]
-
-
-def test_sync_manager_exit_forwards_exception_to_stream_wrapper():
-    wrapper = MessagesStreamManagerWrapper(
-        manager=_FakeSyncManager(stream=SimpleNamespace(), suppressed=False),
-        invocation_factory=_make_invocation,
-        capture_content=False,
-    )
-    stream_wrapper = _FakeStreamWrapper()
-    wrapper._stream_wrapper = stream_wrapper
-
-    error = ValueError("boom")
-    result = wrapper.__exit__(ValueError, error, None)
-
-    assert result is False
-    assert wrapper._manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args == (ValueError, error, None)
-
-
-def test_sync_manager_exit_uses_none_exception_when_manager_suppresses():
-    wrapper = MessagesStreamManagerWrapper(
-        manager=_FakeSyncManager(stream=SimpleNamespace(), suppressed=True),
-        invocation_factory=_make_invocation,
-        capture_content=False,
-    )
-    stream_wrapper = _FakeStreamWrapper()
-    wrapper._stream_wrapper = stream_wrapper
-
-    error = RuntimeError("ignored")
-    result = wrapper.__exit__(RuntimeError, error, None)
-
-    assert result is True
-    assert wrapper._manager.exit_args == (RuntimeError, error, None)
-    assert stream_wrapper.exit_args == (None, None, None)
-
-
-def test_sync_manager_exit_still_finalizes_stream_wrapper_when_manager_raises():
-    manager_error = RuntimeError("manager failure")
-    wrapper = MessagesStreamManagerWrapper(
-        manager=_FakeSyncManager(
-            stream=SimpleNamespace(),
-            suppressed=False,
-            exit_error=manager_error,
-        ),
-        invocation_factory=_make_invocation,
-        capture_content=False,
-    )
-    stream_wrapper = _FakeStreamWrapper()
-    wrapper._stream_wrapper = stream_wrapper
-
-    error = ValueError("outer")
-    with pytest.raises(RuntimeError, match="manager failure"):
-        wrapper.__exit__(ValueError, error, None)
-
-    assert wrapper._manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args[:2] == (RuntimeError, manager_error)
-    assert stream_wrapper.exit_args[2] is not None
 
 
 @pytest.mark.asyncio
@@ -572,93 +475,10 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
     stream = _FakeAsyncStream()
     wrapper = AsyncMessagesStreamManagerWrapper(
         manager=_FakeAsyncManager(stream=stream),
-        invocation=_make_invocation(),
+        invocation_factory=_make_invocation,
         capture_content=False,
     )
 
     async with wrapper as result:
         assert isinstance(result, AsyncMessagesStreamWrapper)
         assert result.stream is stream
-        assert wrapper._stream_wrapper is result
-
-
-@pytest.mark.asyncio
-async def test_async_manager_enter_fails_invocation_when_manager_raises():
-    error = RuntimeError("manager enter failure")
-    failures = []
-    invocation = _make_invocation()
-    invocation.fail = failures.append
-    wrapper = AsyncMessagesStreamManagerWrapper(
-        manager=_FakeAsyncManager(
-            stream=SimpleNamespace(),
-            enter_error=error,
-        ),
-        invocation=invocation,
-        capture_content=False,
-    )
-
-    with pytest.raises(RuntimeError, match="manager enter failure"):
-        async with wrapper:
-            pass
-
-    assert failures == [error]
-
-
-@pytest.mark.asyncio
-async def test_async_manager_exit_forwards_exception_to_stream_wrapper():
-    wrapper = AsyncMessagesStreamManagerWrapper(
-        manager=_FakeAsyncManager(stream=SimpleNamespace(), suppressed=False),
-        invocation=_make_invocation(),
-        capture_content=False,
-    )
-    stream_wrapper = _FakeAsyncStreamWrapper()
-    wrapper._stream_wrapper = stream_wrapper
-
-    error = ValueError("boom")
-    result = await wrapper.__aexit__(ValueError, error, None)
-
-    assert result is False
-    assert wrapper._manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args == (ValueError, error, None)
-
-
-@pytest.mark.asyncio
-async def test_async_manager_exit_uses_none_exception_when_manager_suppresses():
-    wrapper = AsyncMessagesStreamManagerWrapper(
-        manager=_FakeAsyncManager(stream=SimpleNamespace(), suppressed=True),
-        invocation=_make_invocation(),
-        capture_content=False,
-    )
-    stream_wrapper = _FakeAsyncStreamWrapper()
-    wrapper._stream_wrapper = stream_wrapper
-
-    error = RuntimeError("ignored")
-    result = await wrapper.__aexit__(RuntimeError, error, None)
-
-    assert result is True
-    assert wrapper._manager.exit_args == (RuntimeError, error, None)
-    assert stream_wrapper.exit_args == (None, None, None)
-
-
-@pytest.mark.asyncio
-async def test_async_manager_exit_still_finalizes_stream_wrapper_when_manager_raises():
-    manager_error = RuntimeError("manager failure")
-    wrapper = AsyncMessagesStreamManagerWrapper(
-        manager=_FakeAsyncManager(
-            stream=SimpleNamespace(),
-            suppressed=False,
-            exit_error=manager_error,
-        ),
-        invocation=_make_invocation(),
-        capture_content=False,
-    )
-    stream_wrapper = _FakeAsyncStreamWrapper()
-    wrapper._stream_wrapper = stream_wrapper
-
-    error = ValueError("outer")
-    with pytest.raises(RuntimeError, match="manager failure"):
-        await wrapper.__aexit__(ValueError, error, None)
-
-    assert wrapper._manager.exit_args == (ValueError, error, None)
-    assert stream_wrapper.exit_args[:2] == (RuntimeError, manager_error)
-    assert stream_wrapper.exit_args[2] is not None

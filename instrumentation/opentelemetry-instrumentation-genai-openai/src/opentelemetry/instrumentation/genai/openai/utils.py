@@ -9,7 +9,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import openai
-from httpx import URL
 from openai import NotGiven
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -68,13 +67,13 @@ def get_server_address_and_port(
     base_url = getattr(base_client, "base_url", None)
     if not base_url:
         return None, None
-    address = None
-    port = None
-    if isinstance(base_url, URL):
-        address = base_url.host
-        port = base_url.port
-    elif isinstance(base_url, str):
-        url = urlparse(base_url)
+
+    # Use getattr rather than isinstance(base_url, httpx.URL): openai v1/v2
+    # uses httpx.URL while v3 uses httpx2.URL; both expose .host and .port.
+    address = getattr(base_url, "host", None)
+    port = getattr(base_url, "port", None)
+    if not address:
+        url = urlparse(str(base_url))
         address = url.hostname
         port = url.port
 

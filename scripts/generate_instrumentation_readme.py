@@ -133,11 +133,11 @@ def main(base_instrumentation_path):
             else:
                 unreleased_status = "skeleton"
             unreleased_rows.append(
-                f"| [{instrumentation}](./instrumentation/{instrumentation}) | {','.join(instruments_all)} | {local_version} | {unreleased_status} |"
+                f"| [{instrumentation}](./instrumentation/{instrumentation}) | {', '.join(instruments_all)} | {local_version} | {unreleased_status} |"
             )
         else:
             released_rows.append(
-                f"| [{instrumentation}](./instrumentation/{instrumentation}) | {','.join(instruments_all)} | {status} |"
+                f"| [{instrumentation}](./instrumentation/{instrumentation}) | {', '.join(instruments_all)} | {status} |"
             )
 
     generated_content = []

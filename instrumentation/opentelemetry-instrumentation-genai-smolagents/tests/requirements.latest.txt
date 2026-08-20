@@ -26,7 +26,10 @@
 # This variant of the requirements aims to test the system using the newest
 # supported version of external dependencies.
 
+# The instrumented model classes run inference in this process and the tests stub
+# their runtimes, so no model backend extra is installed.
 smolagents
+wrapt>=2.2.2
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-smolagents

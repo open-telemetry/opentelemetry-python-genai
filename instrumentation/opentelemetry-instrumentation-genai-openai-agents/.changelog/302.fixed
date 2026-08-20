@@ -1,2 +1,0 @@
-Honor ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` by falling back to ``load_completion_hook()``
-when no ``completion_hook`` is passed to ``instrument()``.

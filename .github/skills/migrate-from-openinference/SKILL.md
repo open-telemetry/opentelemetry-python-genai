@@ -248,14 +248,15 @@ OpenInference **only** what you actually reuse:
 mkdir -p instrumentation/<target>/src/opentelemetry/instrumentation/genai/<lib>
 mkdir -p instrumentation/<target>/tests/conformance instrumentation/<target>/tests/cassettes
 cp <source-path>/LICENSE instrumentation/<target>/LICENSE
+cp instrumentation/opentelemetry-instrumentation-genai-anthropic/CHANGELOG.md instrumentation/<target>/CHANGELOG.md
 ```
 
-Do **not** carry over `examples/`, OpenInference's `README.md`, or its
-`CHANGELOG.md` (per-package changelogs are towncrier-generated at release
-time).
+Do **not** carry over `examples/`, OpenInference's `README.md`, or OpenInference's
+`CHANGELOG.md` (copy the boilerplate `CHANGELOG.md` from an existing package instead —
+per-package changelogs are towncrier-generated at release time).
 
 (If you do `cp -R` instead, clean it up afterwards:
-`rm -rf .pytest_cache .tox .venv venv .vscode .DS_Store .claude .ruff_cache CHANGELOG.md`
+`rm -rf .pytest_cache .tox .venv venv .vscode .DS_Store .claude .ruff_cache CHANGELOG.md && cp instrumentation/opentelemetry-instrumentation-genai-anthropic/CHANGELOG.md instrumentation/<target>/CHANGELOG.md`
 and `find . -name __pycache__ -type d -exec rm -rf {} +`.)
 
 ### 2. Rename the Python module

@@ -16,7 +16,10 @@ from typing import (
     runtime_checkable,
 )
 
-import httpx
+try:
+    import httpx as _http_lib
+except ImportError:
+    import httpx2 as _http_lib
 from openai import AsyncStream, Stream
 from wrapt import ObjectProxy
 
@@ -51,7 +54,7 @@ class RawResponseLike(ParsableResponse, Protocol):
     finalize the span when the caller never calls ``parse()``.
     """
 
-    http_response: httpx.Response
+    http_response: _http_lib.Response
 
 
 class RawResponseStreamProxy(ObjectProxy):

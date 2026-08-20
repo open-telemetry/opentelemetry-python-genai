@@ -1,29 +1,24 @@
 name: check-links
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - '**/*.md'
-      - '**/*.rst'
-      - '.github/workflows/check-links.yml'
-      - '.github/workflows/check_links_config.json'
   pull_request:
     paths:
       - '**/*.md'
       - '**/*.rst'
       - '.github/workflows/check-links.yml'
       - '.github/workflows/check_links_config.json'
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   check-links:
-    runs-on: ubuntu-latest
+    runs-on: cncf-ubuntu-2-8-x86
     if: ${{ github.actor != 'dependabot[bot]' && github.actor != 'otelbot[bot]' }}
     timeout-minutes: 15
     steps:
@@ -44,8 +39,8 @@ jobs:
         if: steps.changed-files.outputs.any_changed == 'true'
         run: npm install -g markdown-link-check@v3.12.2
 
-      - name: Check links on push to main
-        if: steps.changed-files.outputs.any_changed == 'true' && github.event_name == 'push'
+      - name: Check links in merge queue
+        if: steps.changed-files.outputs.any_changed == 'true' && github.event_name == 'merge_group'
         run: |
           markdown-link-check \
             --verbose \
@@ -59,7 +54,7 @@ jobs:
           # Extract URLs only from added lines in the diff to avoid
           # rate limiting when checking all links in large files like
           # CHANGELOG.md. Only new/changed links are checked on PRs;
-          # pushes to main still check all links in changed files.
+          # merge-queue runs still check all links in changed files.
           git diff "origin/${{ github.base_ref }}...HEAD" -- \
             ${{ steps.changed-files.outputs.all_changed_files }} \
             | grep '^+' | grep -v '^+++' \

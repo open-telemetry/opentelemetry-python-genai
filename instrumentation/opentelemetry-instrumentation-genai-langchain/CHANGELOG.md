@@ -15,6 +15,48 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b0 (2026-08-20)
+
+### Added
+
+- Added retrieval span support.
+  ([#124](https://github.com/open-telemetry/opentelemetry-python-genai/pull/124))
+- Add ChatAnthropic tool-calling test coverage and fix finish_reason extraction
+  for
+  Anthropic responses in LangChain instrumentation.
+  ([#188](https://github.com/open-telemetry/opentelemetry-python-genai/pull/188))
+- (Openinference Migration: Langchain) - Add support for cache and reasoning
+  token counts
+  ([#272](https://github.com/open-telemetry/opentelemetry-python-genai/pull/272))
+- Capture legacy OpenAI ``function_call`` responses
+  (``additional_kwargs['function_call']``) as tool-call requests in input and
+  output messages, matching the modern ``tool_calls`` path.
+  ([#281](https://github.com/open-telemetry/opentelemetry-python-genai/pull/281))
+- Forward the configured ``CompletionHook``
+  (``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` or the
+  ``instrument(completion_hook=...)`` argument) to the telemetry handler.
+  ([#302](https://github.com/open-telemetry/opentelemetry-python-genai/pull/302))
+- Populate gen_ai.response.model from responses API when the response body
+  includes the served model header
+  ([#305](https://github.com/open-telemetry/opentelemetry-python-genai/pull/305))
+- Surface legacy OpenAI function calls in gen_ai.tool.definitions
+  ([#334](https://github.com/open-telemetry/opentelemetry-python-genai/pull/334))
+
+### Changed
+
+- Support raw LangChain message inputs (`("role", content)` tuples, dicts, and
+  strings) in input messages, so the prompt is recorded and duplicate
+  `invoke_agent` spans are avoided.
+  ([#261](https://github.com/open-telemetry/opentelemetry-python-genai/pull/261))
+
+### Fixed
+
+- Strip ``models/`` prefix from the request model attribute name when populated
+  by certain providers.
+  ([#254](https://github.com/open-telemetry/opentelemetry-python-genai/pull/254))
+- Add guard for the response header value to avoid passing in empty model name
+  ([#355](https://github.com/open-telemetry/opentelemetry-python-genai/pull/355))
+
 ## Version 1.0b0 (2026-07-09)
 
 ### Added
