@@ -1,0 +1,1 @@
+Anthropic version 1.0.0 depends on httpx2 instead of httpx. Modified the imports to support the updated dependencies.
