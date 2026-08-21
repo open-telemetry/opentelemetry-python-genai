@@ -24,7 +24,7 @@ def test_instrumentation_dependencies() -> None:
 
     assert dependencies is not None
     assert len(dependencies) > 0
-    assert "agno >= 2.0.0" in dependencies
+    assert "agno >= 2.0.0, < 3" in dependencies
 
 
 def test_instrument_uninstrument_cycle(

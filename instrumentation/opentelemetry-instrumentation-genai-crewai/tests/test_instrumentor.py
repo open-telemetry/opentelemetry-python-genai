@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace import TracerProvider
 
 def test_instrumentation_dependencies() -> None:
     assert CrewAIInstrumentor().instrumentation_dependencies() == (
-        "crewai >= 1.10.1",
+        "crewai >= 1.10.1, < 2",
     )
 
 

@@ -17,7 +17,8 @@
 2. Package runtime dependency specifier invariant:
    Instrumentation packages declare their target library dependencies in [project.optional-dependencies]
    `instruments` in pyproject.toml, and expose them at runtime via `_instruments` in `package.py`.
-   These two must match to ensure runtime instrumentor compatibility checks and package metadata stay in sync.
+   These two must match, and each dependency must declare both lower and upper bounds (e.g., `>= x.y.z, < (x+1)`)
+   to ensure version compatibility and prevent unbounded dependencies.
 """
 
 from __future__ import annotations
@@ -161,6 +162,22 @@ def check_instruments_match(pkg_dir: Path, pyproject: dict) -> list[str]:
             f"{pkg_dir.name}: package.py _instruments ({list(pkg_instruments_raw)}) "
             f"does not match pyproject.toml instruments extra ({pyproject_instruments_raw})."
         )
+
+    for req in pyproject_reqs:
+        has_lower = any(
+            s.operator in (">=", ">", "~=", "==") for s in req.specifier
+        )
+        has_upper = any(
+            s.operator in ("<", "<=", "~=", "==") for s in req.specifier
+        )
+        if not has_lower:
+            errors.append(
+                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing a lower bound (e.g. '>= x.y.z')."
+            )
+        if not has_upper:
+            errors.append(
+                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing an upper bound (e.g. '< (x+1)')."
+            )
 
     return errors
 

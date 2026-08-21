@@ -64,7 +64,7 @@ def test_instrumentation_dependencies():
 
     assert dependencies is not None
     assert len(dependencies) > 0
-    assert "anthropic >= 0.51.0" in dependencies
+    assert "anthropic >= 0.51.0, < 2" in dependencies
 
 
 def test_instrument_uninstrument_cycle(
