@@ -56,7 +56,9 @@ def patch_portkey(handler: TelemetryHandler) -> None:
 def unpatch_portkey() -> None:
     """Remove patches from Portkey AI completion methods."""
     try:
-        import portkey_ai.api_resources.apis.chat_complete as chat_complete  # pylint: disable=import-outside-toplevel
+        from portkey_ai.api_resources.apis import (
+            chat_complete,  # pylint: disable=import-outside-toplevel
+        )
 
         unwrap(chat_complete.Completions, "create")
         unwrap(chat_complete.AsyncCompletions, "create")
@@ -64,7 +66,9 @@ def unpatch_portkey() -> None:
         pass
 
     try:
-        import portkey_ai.api_resources.apis.generation as generation  # pylint: disable=import-outside-toplevel
+        from portkey_ai.api_resources.apis import (
+            generation,  # pylint: disable=import-outside-toplevel
+        )
 
         unwrap(generation.Completions, "create")
         unwrap(generation.AsyncCompletions, "create")
