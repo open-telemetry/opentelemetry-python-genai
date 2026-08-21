@@ -67,6 +67,15 @@ class ToolCallRequestPart:
 
 
 @dataclass()
+class ToolCallRequest(ToolCallRequestPart):
+    """Represents a tool call requested by the model (message part only).
+
+    .. deprecated:: 1.2b0
+        Use ``ToolCallRequestPart`` instead.
+    """
+
+
+@dataclass()
 class ToolCallResponsePart:
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
@@ -77,6 +86,15 @@ class ToolCallResponsePart:
     response: Any
     id: str | None
     type: Literal["tool_call_response"] = "tool_call_response"
+
+
+@dataclass()
+class ToolCallResponse(ToolCallResponsePart):
+    """Represents a tool call result sent to the model or a built-in tool call outcome and details
+
+    .. deprecated:: 1.2b0
+        Use ``ToolCallResponsePart`` instead.
+    """
 
 
 @dataclass()
@@ -98,6 +116,15 @@ class ServerToolCallPart:
 
 
 @dataclass()
+class ServerToolCall(ServerToolCallPart):
+    """Represents a server-side tool call.
+
+    .. deprecated:: 1.2b0
+        Use ``ServerToolCallPart`` instead.
+    """
+
+
+@dataclass()
 class ServerToolCallResponsePart:
     """Represents a server-side tool call response.
 
@@ -115,6 +142,15 @@ class ServerToolCallResponsePart:
 
 
 @dataclass()
+class ServerToolCallResponse(ServerToolCallResponsePart):
+    """Represents a server-side tool call response.
+
+    .. deprecated:: 1.2b0
+        Use ``ServerToolCallResponsePart`` instead.
+    """
+
+
+@dataclass()
 class TextPart:
     """Represents text content sent to or received from the model
 
@@ -127,6 +163,15 @@ class TextPart:
 
 
 @dataclass()
+class Text(TextPart):
+    """Represents text content sent to or received from the model
+
+    .. deprecated:: 1.2b0
+        Use ``TextPart`` instead.
+    """
+
+
+@dataclass()
 class ReasoningPart:
     """Represents reasoning/thinking content received from the model
 
@@ -136,6 +181,15 @@ class ReasoningPart:
 
     content: str
     type: Literal["reasoning"] = "reasoning"
+
+
+@dataclass()
+class Reasoning(ReasoningPart):
+    """Represents reasoning/thinking content received from the model
+
+    .. deprecated:: 1.2b0
+        Use ``ReasoningPart`` instead.
+    """
 
 
 @dataclass()
@@ -175,6 +229,15 @@ class BlobPart:
 
 
 @dataclass()
+class Blob(BlobPart):
+    """Represents blob binary data sent inline to the model
+
+    .. deprecated:: 1.2b0
+        Use ``BlobPart`` instead.
+    """
+
+
+@dataclass()
 class FilePart:
     """Represents an external referenced file sent to the model by file id
 
@@ -186,6 +249,15 @@ class FilePart:
     modality: Modality | str
     file_id: str
     type: Literal["file"] = "file"
+
+
+@dataclass()
+class File(FilePart):
+    """Represents an external referenced file sent to the model by file id
+
+    .. deprecated:: 1.2b0
+        Use ``FilePart`` instead.
+    """
 
 
 @dataclass()
@@ -202,63 +274,13 @@ class UriPart:
     type: Literal["uri"] = "uri"
 
 
-# Deprecated aliases for the message part classes, keeping for backward compatibility
-# for users who import these classes directly. Delete
-# this block once the deprecation period ends.
+@dataclass()
+class Uri(UriPart):
+    """Represents an external referenced file sent to the model by URI
 
-Text = TextPart
-"""
-.. deprecated:: 1.0b0
-    Use ``TextPart`` instead.
-"""
-
-Reasoning = ReasoningPart
-"""
-.. deprecated:: 1.0b0
-    Use ``ReasoningPart`` instead.
-"""
-
-Blob = BlobPart
-"""
-.. deprecated:: 1.0b0
-    Use ``BlobPart`` instead.
-"""
-
-File = FilePart
-"""
-.. deprecated:: 1.0b0
-    Use ``FilePart`` instead.
-"""
-
-Uri = UriPart
-"""
-.. deprecated:: 1.0b0
-    Use ``UriPart`` instead.
-"""
-
-ToolCallRequest = ToolCallRequestPart
-"""
-.. deprecated:: 1.0b0
-    Use ``ToolCallRequestPart`` instead.
-"""
-
-ToolCallResponse = ToolCallResponsePart
-"""
-.. deprecated:: 1.0b0
-    Use ``ToolCallResponsePart`` instead.
-"""
-
-ServerToolCall = ServerToolCallPart
-"""
-.. deprecated:: 1.0b0
-    Use ``ServerToolCallPart`` instead.
-"""
-
-ServerToolCallResponse = ServerToolCallResponsePart
-"""
-.. deprecated:: 1.0b0
-    Use ``ServerToolCallResponsePart`` instead.
-"""
+    .. deprecated:: 1.2b0
+        Use ``UriPart`` instead.
+    """
 
 
 @dataclass()

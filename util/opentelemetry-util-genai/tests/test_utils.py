@@ -147,15 +147,15 @@ def _normalize_to_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, tuple) else value
 
 
-class TestDeprecatedMessagePartAliases(unittest.TestCase):
-    def test_aliases_resolve_to_part_classes(self):
-        self.assertIs(Text, TextPart)
-        self.assertIs(Reasoning, ReasoningPart)
-        self.assertIs(Blob, BlobPart)
-        self.assertIs(File, FilePart)
-        self.assertIs(Uri, UriPart)
+class TestDeprecatedMessagePartNames(unittest.TestCase):
+    def test_names_subclass_part_classes(self):
+        self.assertTrue(issubclass(Text, TextPart))
+        self.assertTrue(issubclass(Reasoning, ReasoningPart))
+        self.assertTrue(issubclass(Blob, BlobPart))
+        self.assertTrue(issubclass(File, FilePart))
+        self.assertTrue(issubclass(Uri, UriPart))
 
-    def test_alias_builds_message_part(self):
+    def test_deprecated_name_builds_message_part(self):
         message = InputMessage(role="user", parts=[Text(content="hello")])
 
         self.assertIsInstance(message.parts[0], TextPart)

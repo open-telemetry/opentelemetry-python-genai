@@ -160,16 +160,16 @@ def test_compactionpart_is_message_part():
     assert isinstance(msg.parts[0], CompactionPart)
 
 
-def test_deprecated_tool_call_aliases_resolve_to_part_classes():
-    """The pre-*Part tool call names still resolve to their replacements."""
-    assert ToolCallRequest is ToolCallRequestPart
-    assert ToolCallResponse is ToolCallResponsePart
-    assert ServerToolCall is ServerToolCallPart
-    assert ServerToolCallResponse is ServerToolCallResponsePart
+def test_deprecated_tool_call_names_subclass_part_classes():
+    """The pre-*Part tool call names subclass their replacements."""
+    assert issubclass(ToolCallRequest, ToolCallRequestPart)
+    assert issubclass(ToolCallResponse, ToolCallResponsePart)
+    assert issubclass(ServerToolCall, ServerToolCallPart)
+    assert issubclass(ServerToolCallResponse, ServerToolCallResponsePart)
 
 
-def test_deprecated_tool_call_aliases_build_message_parts():
-    """Parts built through the deprecated aliases are still valid MessageParts."""
+def test_deprecated_tool_call_names_build_message_parts():
+    """Parts built through the deprecated names are still valid MessageParts."""
     tcr = ToolCallRequest(
         arguments={"location": "Paris"}, name="get_weather", id="call_123"
     )
