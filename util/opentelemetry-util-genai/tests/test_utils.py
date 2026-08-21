@@ -34,11 +34,20 @@ from opentelemetry.util.genai.handler import (
     get_telemetry_handler,
 )
 from opentelemetry.util.genai.types import (
+    Blob,
+    BlobPart,
     ContentCapturingMode,
+    File,
+    FilePart,
     InputMessage,
     MessagePart,
     OutputMessage,
+    Reasoning,
+    ReasoningPart,
     Text,
+    TextPart,
+    Uri,
+    UriPart,
 )
 from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
@@ -50,21 +59,23 @@ from opentelemetry.util.genai.utils import (
 def _create_input_message(
     content: str = "hello world", role: str = "Human"
 ) -> InputMessage:
-    return InputMessage(role=role, parts=[Text(content=content)])
+    return InputMessage(role=role, parts=[TextPart(content=content)])
 
 
 def _create_output_message(
     content: str = "hello back", finish_reason: str = "stop", role: str = "AI"
 ) -> OutputMessage:
     return OutputMessage(
-        role=role, parts=[Text(content=content)], finish_reason=finish_reason
+        role=role,
+        parts=[TextPart(content=content)],
+        finish_reason=finish_reason,
     )
 
 
 def _create_system_instruction(
     content: str = "You are a helpful assistant.",
 ) -> list[MessagePart]:
-    return [Text(content=content)]
+    return [TextPart(content=content)]
 
 
 def _get_single_span(span_exporter: InMemorySpanExporter) -> ReadableSpan:
@@ -134,6 +145,21 @@ def _normalize_to_list(value: Any) -> list[Any]:
 def _normalize_to_dict(value: Any) -> dict[str, Any]:
     """Normalize tuple or dict to dict for OpenTelemetry compatibility."""
     return dict(value) if isinstance(value, tuple) else value
+
+
+class TestDeprecatedMessagePartAliases(unittest.TestCase):
+    def test_aliases_resolve_to_part_classes(self):
+        self.assertIs(Text, TextPart)
+        self.assertIs(Reasoning, ReasoningPart)
+        self.assertIs(Blob, BlobPart)
+        self.assertIs(File, FilePart)
+        self.assertIs(Uri, UriPart)
+
+    def test_alias_builds_message_part(self):
+        message = InputMessage(role="user", parts=[Text(content="hello")])
+
+        self.assertIsInstance(message.parts[0], TextPart)
+        self.assertEqual(message.parts[0].type, "text")
 
 
 class TestShouldEmitEvent(unittest.TestCase):
