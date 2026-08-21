@@ -1,7 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ToolCallRequestPart and ToolInvocation inheritance structure"""
+"""Tests for ToolCallRequest and ToolInvocation inheritance structure"""
 
 import os
 from unittest.mock import patch
@@ -27,13 +27,8 @@ from opentelemetry.util.genai.types import (
     CompactionPart,
     InputMessage,
     ServerToolCall,
-    ServerToolCallPart,
     ServerToolCallResponse,
-    ServerToolCallResponsePart,
     ToolCallRequest,
-    ToolCallRequestPart,
-    ToolCallResponse,
-    ToolCallResponsePart,
 )
 from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
@@ -43,8 +38,8 @@ def _make_handler() -> TelemetryHandler:
 
 
 def test_toolcallrequest_is_message_part():
-    """ToolCallRequestPart is for message parts only"""
-    tcr = ToolCallRequestPart(
+    """ToolCallRequest is for message parts only"""
+    tcr = ToolCallRequest(
         arguments={"location": "Paris"}, name="get_weather", id="call_123"
     )
     msg = InputMessage(role="user", parts=[tcr])
@@ -57,7 +52,7 @@ def test_toolcall_inherits_from_genaiinvocation():
     tc = handler.tool("get_weather")
     tc.arguments = {"city": "Paris"}
     assert isinstance(tc, GenAIInvocation)
-    assert not isinstance(tc, ToolCallRequestPart)
+    assert not isinstance(tc, ToolCallRequest)
     tc.stop()
 
 
@@ -71,13 +66,13 @@ def test_toolcall_has_attributes_dict():
 
 
 def test_toolcallrequest_in_message_part_union():
-    """ToolCallRequestPart (not ToolInvocation) is the correct type for message parts"""
-    tc = ToolCallRequestPart(
+    """ToolCallRequest (not ToolInvocation) is the correct type for message parts"""
+    tc = ToolCallRequest(
         name="get_weather", arguments={"city": "Paris"}, id="call_123"
     )
     msg = InputMessage(role="assistant", parts=[tc])
     assert len(msg.parts) == 1
-    assert isinstance(msg.parts[0], ToolCallRequestPart)
+    assert isinstance(msg.parts[0], ToolCallRequest)
     assert not isinstance(msg.parts[0], GenAIInvocation)
 
 
@@ -90,8 +85,8 @@ def test_toolcall_operation_name():
 
 
 def test_server_tool_call_basic():
-    """ServerToolCallPart can be created with required fields"""
-    stc = ServerToolCallPart(
+    """ServerToolCall can be created with required fields"""
+    stc = ServerToolCall(
         name="code_interpreter",
         server_tool_call={"type": "code_interpreter", "code": "print(1)"},
     )
@@ -105,8 +100,8 @@ def test_server_tool_call_basic():
 
 
 def test_server_tool_call_with_id():
-    """ServerToolCallPart can have an optional id"""
-    stc = ServerToolCallPart(
+    """ServerToolCall can have an optional id"""
+    stc = ServerToolCall(
         name="web_search",
         server_tool_call={"type": "web_search", "query": "weather"},
         id="stc_001",
@@ -115,8 +110,8 @@ def test_server_tool_call_with_id():
 
 
 def test_server_tool_call_response_basic():
-    """ServerToolCallResponsePart can be created with required fields"""
-    stcr = ServerToolCallResponsePart(
+    """ServerToolCallResponse can be created with required fields"""
+    stcr = ServerToolCallResponse(
         server_tool_call_response={
             "type": "code_interpreter",
             "output": "1\n",
@@ -131,19 +126,19 @@ def test_server_tool_call_response_basic():
 
 
 def test_server_tool_call_in_message():
-    """ServerToolCallPart and ServerToolCallResponsePart work as MessageParts"""
-    stc = ServerToolCallPart(
+    """ServerToolCall and ServerToolCallResponse work as MessageParts"""
+    stc = ServerToolCall(
         name="code_interpreter",
         server_tool_call={"type": "code_interpreter", "code": "x = 1"},
     )
-    stcr = ServerToolCallResponsePart(
+    stcr = ServerToolCallResponse(
         server_tool_call_response={"type": "code_interpreter", "output": ""},
         id="stc_001",
     )
     msg = InputMessage(role="assistant", parts=[stc, stcr])
     assert len(msg.parts) == 2
-    assert isinstance(msg.parts[0], ServerToolCallPart)
-    assert isinstance(msg.parts[1], ServerToolCallResponsePart)
+    assert isinstance(msg.parts[0], ServerToolCall)
+    assert isinstance(msg.parts[1], ServerToolCallResponse)
 
 
 def test_compactionpart_is_message_part():

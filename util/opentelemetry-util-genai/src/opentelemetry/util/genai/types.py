@@ -50,7 +50,7 @@ class GenericPart:
 
 
 @dataclass()
-class ToolCallRequestPart:
+class ToolCallRequest:
     """Represents a tool call requested by the model (message part only).
 
     Use this for tool calls in message history. For execution tracking with spans
@@ -67,7 +67,7 @@ class ToolCallRequestPart:
 
 
 @dataclass()
-class ToolCallResponsePart:
+class ToolCallResponse:
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallResponsePart
@@ -80,7 +80,7 @@ class ToolCallResponsePart:
 
 
 @dataclass()
-class ServerToolCallPart:
+class ServerToolCall:
     """Represents a server-side tool call.
 
     Server tool calls are executed by the model provider on the server side rather
@@ -98,7 +98,7 @@ class ServerToolCallPart:
 
 
 @dataclass()
-class ServerToolCallResponsePart:
+class ServerToolCallResponse:
     """Represents a server-side tool call response.
 
     Contains the outcome and details of a server tool execution. Provider-specific
@@ -115,7 +115,7 @@ class ServerToolCallResponsePart:
 
 
 @dataclass()
-class TextPart:
+class Text:
     """Represents text content sent to or received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - TextPart
@@ -127,7 +127,7 @@ class TextPart:
 
 
 @dataclass()
-class ReasoningPart:
+class Reasoning:
     """Represents reasoning/thinking content received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - ReasoningPart
@@ -161,7 +161,7 @@ Modality = Literal["image", "video", "audio", "document"]
 
 
 @dataclass()
-class BlobPart:
+class Blob:
     """Represents blob binary data sent inline to the model
 
     This model is specified as part of semconv in `GenAI messages Python models - BlobPart
@@ -175,7 +175,7 @@ class BlobPart:
 
 
 @dataclass()
-class FilePart:
+class File:
     """Represents an external referenced file sent to the model by file id
 
     This model is specified as part of semconv in `GenAI messages Python models - FilePart
@@ -189,7 +189,7 @@ class FilePart:
 
 
 @dataclass()
-class UriPart:
+class Uri:
     """Represents an external referenced file sent to the model by URI
 
     This model is specified as part of semconv in `GenAI messages Python models - UriPart
@@ -281,15 +281,15 @@ class GenericToolDefinition:
 ToolDefinition = Union[FunctionToolDefinition, GenericToolDefinition]
 
 MessagePart = Union[
-    TextPart,
-    ToolCallRequestPart,
-    ToolCallResponsePart,
-    ServerToolCallPart,
-    ServerToolCallResponsePart,
-    BlobPart,
-    FilePart,
-    UriPart,
-    ReasoningPart,
+    Text,
+    ToolCallRequest,
+    ToolCallResponse,
+    ServerToolCall,
+    ServerToolCallResponse,
+    Blob,
+    File,
+    Uri,
+    Reasoning,
     CompactionPart,
     GenericPart,  # For provider-specific types; prefer standard types above
 ]

@@ -13,7 +13,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
-    TextPart,
+    Text,
 )
 
 
@@ -42,7 +42,7 @@ class TestWorkflowInvocation(unittest.TestCase):
         assert invocation._name == "customer_support_pipeline"
 
     def test_with_input_messages(self):
-        msg = InputMessage(role="user", parts=[TextPart(content="hello")])
+        msg = InputMessage(role="user", parts=[Text(content="hello")])
         invocation = self.handler.workflow(name="test")
         invocation.input_messages = [msg]
         invocation.stop()
@@ -51,9 +51,7 @@ class TestWorkflowInvocation(unittest.TestCase):
 
     def test_with_output_messages(self):
         msg = OutputMessage(
-            role="assistant",
-            parts=[TextPart(content="hi")],
-            finish_reason="stop",
+            role="assistant", parts=[Text(content="hi")], finish_reason="stop"
         )
         invocation = self.handler.workflow(name="test")
         invocation.output_messages = [msg]
@@ -87,10 +85,10 @@ class TestWorkflowInvocation(unittest.TestCase):
         inv2.stop()
 
     def test_full_construction(self):
-        inp = InputMessage(role="user", parts=[TextPart(content="query")])
+        inp = InputMessage(role="user", parts=[Text(content="query")])
         out = OutputMessage(
             role="assistant",
-            parts=[TextPart(content="answer")],
+            parts=[Text(content="answer")],
             finish_reason="stop",
         )
         invocation = self.handler.workflow(name="my_workflow")

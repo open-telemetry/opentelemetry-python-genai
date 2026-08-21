@@ -28,12 +28,12 @@ MAXSIZE = 5
 FAKE_INPUTS = [
     types.InputMessage(
         role="user",
-        parts=[types.TextPart(content="What is the capital of France?")],
+        parts=[types.Text(content="What is the capital of France?")],
     ),
     types.InputMessage(
         role="assistant",
         parts=[
-            types.ToolCallRequestPart(
+            types.ToolCallRequest(
                 id="get_capital_0",
                 name="get_capital",
                 arguments={"city": "Paris"},
@@ -43,7 +43,7 @@ FAKE_INPUTS = [
     types.InputMessage(
         role="user",
         parts=[
-            types.ToolCallResponsePart(
+            types.ToolCallResponse(
                 id="get_capital_0", response={"capital": "Paris"}
             )
         ],
@@ -52,13 +52,11 @@ FAKE_INPUTS = [
 FAKE_OUTPUTS = [
     types.OutputMessage(
         role="assistant",
-        parts=[types.TextPart(content="Paris")],
+        parts=[types.Text(content="Paris")],
         finish_reason="stop",
     ),
 ]
-FAKE_SYSTEM_INSTRUCTION = [
-    types.TextPart(content="You are a helpful assistant.")
-]
+FAKE_SYSTEM_INSTRUCTION = [types.Text(content="You are a helpful assistant.")]
 
 FAKE_TOOL_DEFINITIONS: list[types.ToolDefinition] = [
     types.FunctionToolDefinition(
@@ -176,7 +174,7 @@ class TestUploadCompletionHook(TestCase):
             self.hook.on_completion(
                 inputs=[],
                 outputs=[],
-                system_instruction=[types.TextPart(content=str(iteration))],
+                system_instruction=[types.Text(content=str(iteration))],
                 tool_definitions=[],
             )
         self.hook.shutdown()
@@ -353,8 +351,8 @@ class TestUploadCompletionHookIntegration(TestBase):
         # FIle should exist.
         self.assertTrue(self.hook._file_exists(expected_file_name))
         system_instructions = [
-            types.TextPart(content="You are a helpful assistant."),
-            types.TextPart(content="You will do your best."),
+            types.Text(content="You are a helpful assistant."),
+            types.Text(content="You will do your best."),
         ]
         record = LogRecord()
         self.hook.on_completion(
@@ -482,9 +480,7 @@ class TestUploadCompletionHookIntegration(TestBase):
                 types.InputMessage(
                     role="user",
                     parts=[
-                        types.TextPart(
-                            content="What is the capital of France?"
-                        ),
+                        types.Text(content="What is the capital of France?"),
                         {"type": "generic_bytes", "bytes": b"hello"},
                     ],
                 )
