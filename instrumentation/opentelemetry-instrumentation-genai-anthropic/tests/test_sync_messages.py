@@ -8,12 +8,21 @@ import inspect
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
-import httpx
 import pytest
+
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 from anthropic import Anthropic, APIConnectionError, NotFoundError
-from anthropic._legacy_response import LegacyAPIResponse
 from anthropic._response import APIResponse
+
+try:
+    from anthropic._legacy_response import LegacyAPIResponse
+except ImportError:
+    from anthropic._response import APIResponse as LegacyAPIResponse
 from anthropic._streaming import Stream as AnthropicStream
 from anthropic.resources.messages import Messages as _Messages
 from anthropic.types import (
@@ -33,6 +42,7 @@ from opentelemetry.instrumentation.genai.anthropic._raw_response import (
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+    get_server_address_and_port,
 )
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -50,6 +60,25 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 _create_params = set(inspect.signature(_Messages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        (None, (None, None)),
+        ("https://api.anthropic.com:443", ("api.anthropic.com", None)),
+        ("http://localhost:80", ("localhost", None)),
+        ("https://collector.example:4318", ("collector.example", 4318)),
+        (
+            SimpleNamespace(host="custom.anthropic.test", port=8443),
+            ("custom.anthropic.test", 8443),
+        ),
+    ],
+)
+def test_get_server_address_and_port(base_url, expected):
+    client = SimpleNamespace(_client=SimpleNamespace(base_url=base_url))
+
+    assert get_server_address_and_port(client) == expected
 
 
 def normalize_stop_reason(stop_reason):
@@ -404,23 +433,27 @@ def test_sync_messages_create_with_all_params(
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "Say hello."}]
 
-    anthropic_client.messages.create(
-        model=model,
-        max_tokens=50,
-        messages=messages,
-        temperature=0.7,
-        top_p=0.9,
-        top_k=40,
-        stop_sequences=["STOP"],
-    )
+    kwargs = {
+        "model": model,
+        "max_tokens": 50,
+        "messages": messages,
+        "stop_sequences": ["STOP"],
+    }
+    if "temperature" in _create_params:
+        kwargs.update(temperature=0.7, top_p=0.9, top_k=40)
+
+    anthropic_client.messages.create(**kwargs)
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    if "temperature" in kwargs:
+        assert (
+            span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
+        )
+        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
+        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
     # OpenTelemetry converts lists to tuples when storing as attributes
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
         "STOP",

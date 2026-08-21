@@ -101,7 +101,7 @@ jobs:
           packages-dir: dist/
           skip-existing: true
 
-  finalize:
+  github_release:
     needs: [enumerate, publish]
     permissions:
       contents: write
@@ -114,12 +114,13 @@ jobs:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
       on_main: true
+      sync_main: false
       bump_after_release: false
     secrets: inherit
 
-  bump-main:
-    needs: [enumerate, publish, finalize]
-    if: always() && needs.enumerate.result == 'success'
+  finalize:
+    needs: [enumerate, publish, github_release]
+    if: always() && needs.enumerate.result == 'success' && needs.publish.result == 'success' && needs.github_release.result == 'success'
     permissions:
       contents: write
     runs-on: cncf-ubuntu-2-8-x86
@@ -131,6 +132,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
+      - name: Bump repository version to next dev version
+        run: uv run ./scripts/version_utils.py bump --dev
+
+      - name: Regenerate instrumentations README
+        run: python ./scripts/generate_instrumentation_readme.py
+
       - name: Use CLA approved github bot
         run: .github/scripts/use-cla-approved-github-bot.sh
 
@@ -140,26 +147,23 @@ jobs:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}
           private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
 
-      - name: Bump repository version to next dev version
+      - name: Open pull request for post-release updates on main
         env:
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         run: |
-          uv run ./scripts/version_utils.py bump --dev
-          uv run tox -e generate
-
           if git diff --quiet; then
-            echo "No version bump needed"
+            echo "No updates needed on main"
             exit 0
           fi
 
-          message="Bump packages to next dev versions after release"
-          body="Bump package versions in eachdist.ini and all package version.py files to the next \`.dev\` version."
+          message="Post-release version bump and updates"
+          body="Regenerate instrumentation README and bump package versions in eachdist.ini and all package version.py files to the next \`.dev\` version."
           branch="otelbot/bump-after-release-all-$(date +%Y%m%d)"
 
           git commit -a -m "$message"
           git push origin HEAD:"$branch"
           gh pr create --title "$message" \
                        --body "$body" \
-                       --label "Skip Changelog" \
                        --head "$branch" \
-                       --base main
+                       --base main \
+                       --label "Skip Changelog"

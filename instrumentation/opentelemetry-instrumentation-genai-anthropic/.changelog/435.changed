@@ -1,0 +1,1 @@
+Support Anthropic 1.x, which uses ``httpx2`` as its HTTP client.
