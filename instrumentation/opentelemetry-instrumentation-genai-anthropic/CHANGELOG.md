@@ -15,6 +15,13 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b1 (2026-08-21)
+
+### Changed
+
+- Support Anthropic 1.x, which uses ``httpx2`` as its HTTP client.
+  ([#435](https://github.com/open-telemetry/opentelemetry-python-genai/pull/435))
+
 ## Version 1.1b0 (2026-08-20)
 
 ### Added
