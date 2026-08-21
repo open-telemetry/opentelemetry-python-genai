@@ -88,7 +88,9 @@ def main():
     client = Portkey(api_key=os.getenv("PORTKEY_API_KEY"))
     response = client.chat.completions.create(
         model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
-        messages=[{"role": "user", "content": "Write a short poem on OpenTelemetry."}],
+        messages=[
+            {"role": "user", "content": "Write a short poem on OpenTelemetry."}
+        ],
     )
     print(response.choices[0].message.content)
 

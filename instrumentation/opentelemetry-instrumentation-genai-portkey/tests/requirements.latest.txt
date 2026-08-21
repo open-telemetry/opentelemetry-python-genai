@@ -23,7 +23,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-portkey-ai
+portkey-ai==2.3.4
 wrapt>=1.14.0
 
 -e util/opentelemetry-util-genai
