@@ -24,6 +24,3 @@
 
 
 fsspec==2025.9.0
-
--e instrumentation/opentelemetry-instrumentation-google-genai
--e util/opentelemetry-util-genai[upload]

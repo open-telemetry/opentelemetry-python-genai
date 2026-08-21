@@ -21,6 +21,3 @@
 # OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 #
-
--e util/opentelemetry-util-genai
--e instrumentation/opentelemetry-instrumentation-genai-anthropic
