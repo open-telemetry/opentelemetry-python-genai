@@ -20,11 +20,7 @@
 # pyproject floors by UV_RESOLUTION=lowest-direct on the oldest tox factor, so they are NOT pinned
 # here to avoid drift between the declared bound and the tested version.
 
-# Exception: this change depends on the fully-qualified error.type behavior added in
-# opentelemetry-util-genai 1.1b0, which is not on PyPI yet. Install it from the workspace so the
-# oldest env exercises the required behavior. Remove this once 1.1b0 is released and bump the
-# pyproject floor to >= 1.1b0.
--e ./util/opentelemetry-util-genai
+
 
 langchain-openai==0.2.0
 langchain-aws==0.2.2

@@ -21,14 +21,7 @@
 # OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 #
-# Drop this once opentelemetry-util-genai 1.1b0 is published.
--e util/opentelemetry-util-genai
 
-# Exception: this change depends on the fully-qualified error.type behavior added in
-# opentelemetry-util-genai 1.1b0, which is not on PyPI yet. Install it from the workspace so the
-# oldest env exercises the required behavior. Remove this once 1.1b0 is released and bump the
-# pyproject floor to >= 1.1b0.
--e ./util/opentelemetry-util-genai
 
 numpy==2.3.1 ; python_version >= "3.11"
 numpy==2.1.0 ; python_version == "3.10"
