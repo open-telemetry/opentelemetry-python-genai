@@ -34,3 +34,4 @@ tqdm==4.66.1
 wrapt==1.17.0
 
 -e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-qwen-agent

@@ -23,3 +23,4 @@
 #
 
 -e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-anthropic

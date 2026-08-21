@@ -32,3 +32,4 @@ importlib-metadata==6.11.0
 packaging==24.0
 
 -e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-openai

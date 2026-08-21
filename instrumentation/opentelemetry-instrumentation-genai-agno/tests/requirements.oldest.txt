@@ -25,3 +25,4 @@
 # provided by a declared bound or by the shared test fixtures.
 
 -e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-agno

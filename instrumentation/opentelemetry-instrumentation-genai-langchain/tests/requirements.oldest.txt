@@ -29,3 +29,4 @@ langchain-anthropic==0.3.0
 boto3==1.37.0
 
 -e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-langchain[instruments]
