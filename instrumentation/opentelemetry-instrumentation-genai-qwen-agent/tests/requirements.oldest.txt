@@ -32,3 +32,5 @@ tqdm==4.66.1
 # Exercise the oldest supported wrapt major (1.17 is the floor inherited
 # from opentelemetry-util-genai).
 wrapt==1.17.0
+
+-e util/opentelemetry-util-genai

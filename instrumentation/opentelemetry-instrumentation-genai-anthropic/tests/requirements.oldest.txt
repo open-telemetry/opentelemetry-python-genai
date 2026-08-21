@@ -22,3 +22,4 @@
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 #
 
+-e util/opentelemetry-util-genai
