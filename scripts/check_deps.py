@@ -175,14 +175,14 @@ def check_instruments_match(pkg_dir: Path, pyproject: dict) -> list[str]:
             f"does not match pyproject.toml instruments extra ({pyproject_instruments_raw})."
         )
 
-    for req in pyproject_reqs:
+    for req in sorted(pyproject_reqs, key=lambda r: str(r)):
         if not has_lower_bound(req):
             errors.append(
                 f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing a lower bound (e.g. '>= x.y.z')."
             )
         if not has_upper_bound(req):
             errors.append(
-                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing an upper bound (e.g. '< (x+1)')."
+                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing an upper bound (e.g. '< 2')."
             )
 
     return errors
