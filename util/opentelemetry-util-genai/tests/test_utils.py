@@ -1079,9 +1079,9 @@ class TestMediaHelpers(unittest.TestCase):
         self.assertEqual(part.content, b"<svg/>")
 
     def test_image_from_url_percent_encoded_non_ascii_data_url(self):
-        part = image_from_url("data:text/plain,calf%C3%A9")
+        part = image_from_url("data:text/plain,%C3%A9%E2%82%AC")
         self.assertIsInstance(part, Blob)
-        self.assertEqual(part.content, "café".encode())
+        self.assertEqual(part.content, "é€".encode())
 
     # -- decode_base64 ---------------------------------------------------
 
