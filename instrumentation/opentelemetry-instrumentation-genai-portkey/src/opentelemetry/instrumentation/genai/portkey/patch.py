@@ -11,6 +11,15 @@ from typing import Any, cast
 
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.genai.portkey.utils import (
+    create_inference_invocation,
+    is_streaming,
+    set_response_properties,
+)
+from opentelemetry.instrumentation.genai.portkey.wrappers import (
+    AsyncPortkeyStreamWrapper,
+    PortkeyStreamWrapper,
+)
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
 
@@ -56,8 +65,8 @@ def patch_portkey(handler: TelemetryHandler) -> None:
 def unpatch_portkey() -> None:
     """Remove patches from Portkey AI completion methods."""
     try:
-        from portkey_ai.api_resources.apis import (
-            chat_complete,  # pylint: disable=import-outside-toplevel
+        from portkey_ai.api_resources.apis import (  # pylint: disable=import-outside-toplevel
+            chat_complete,
         )
 
         unwrap(chat_complete.Completions, "create")
@@ -66,8 +75,8 @@ def unpatch_portkey() -> None:
         pass
 
     try:
-        from portkey_ai.api_resources.apis import (
-            generation,  # pylint: disable=import-outside-toplevel
+        from portkey_ai.api_resources.apis import (  # pylint: disable=import-outside-toplevel
+            generation,
         )
 
         unwrap(generation.Completions, "create")
@@ -79,14 +88,26 @@ def unpatch_portkey() -> None:
 def _chat_completions_create(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
     def traced_method(
         wrapped: Callable[..., Any],
         instance: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        # TODO: Implement full inference invocation telemetry mapping
-        return wrapped(*args, **kwargs)
+        invocation = create_inference_invocation(
+            handler, instance, kwargs, capture_content
+        )
+        if is_streaming(kwargs):
+            return PortkeyStreamWrapper(
+                wrapped(*args, **kwargs), invocation, capture_content
+            )
+
+        with invocation:
+            result = wrapped(*args, **kwargs)
+            set_response_properties(invocation, result, capture_content)
+            return result
 
     return traced_method
 
@@ -94,14 +115,26 @@ def _chat_completions_create(
 def _async_chat_completions_create(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
     async def traced_method(
         wrapped: Callable[..., Awaitable[Any]],
         instance: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        # TODO: Implement full inference invocation telemetry mapping
-        return await wrapped(*args, **kwargs)
+        invocation = create_inference_invocation(
+            handler, instance, kwargs, capture_content
+        )
+        if is_streaming(kwargs):
+            return AsyncPortkeyStreamWrapper(
+                await wrapped(*args, **kwargs), invocation, capture_content
+            )
+
+        with invocation:
+            result = await wrapped(*args, **kwargs)
+            set_response_properties(invocation, result, capture_content)
+            return result
 
     return cast(Callable[..., Any], traced_method)
 
@@ -109,14 +142,26 @@ def _async_chat_completions_create(
 def _prompts_completions_create(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
     def traced_method(
         wrapped: Callable[..., Any],
         instance: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        # TODO: Implement full prompt completion inference invocation mapping
-        return wrapped(*args, **kwargs)
+        invocation = create_inference_invocation(
+            handler, instance, kwargs, capture_content, is_prompt=True
+        )
+        if is_streaming(kwargs):
+            return PortkeyStreamWrapper(
+                wrapped(*args, **kwargs), invocation, capture_content
+            )
+
+        with invocation:
+            result = wrapped(*args, **kwargs)
+            set_response_properties(invocation, result, capture_content)
+            return result
 
     return traced_method
 
@@ -124,13 +169,25 @@ def _prompts_completions_create(
 def _async_prompts_completions_create(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
     async def traced_method(
         wrapped: Callable[..., Awaitable[Any]],
         instance: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        # TODO: Implement full prompt completion inference invocation mapping
-        return await wrapped(*args, **kwargs)
+        invocation = create_inference_invocation(
+            handler, instance, kwargs, capture_content, is_prompt=True
+        )
+        if is_streaming(kwargs):
+            return AsyncPortkeyStreamWrapper(
+                await wrapped(*args, **kwargs), invocation, capture_content
+            )
+
+        with invocation:
+            result = await wrapped(*args, **kwargs)
+            set_response_properties(invocation, result, capture_content)
+            return result
 
     return cast(Callable[..., Any], traced_method)
