@@ -19,9 +19,9 @@ pytest_plugins = [
 
 
 @pytest.fixture(autouse=True)
-def environment():
+def environment(monkeypatch: pytest.MonkeyPatch):
     if not os.getenv("PORTKEY_API_KEY"):
-        os.environ["PORTKEY_API_KEY"] = "test_portkey_api_key"
+        monkeypatch.setenv("PORTKEY_API_KEY", "test_portkey_api_key")
 
 
 @pytest.fixture(scope="module")

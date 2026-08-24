@@ -18,6 +18,20 @@
 # ********************************
 #
 # This "requirements.txt" is installed in conjunction
+# with multiple other dependencies in the top-level "tox.ini"
+# file. In particular, please see:
+#
+#   portkey-latest: {[testenv]test_deps}
+#   portkey-latest: -r {toxinidir}/instrumentation/opentelemetry-instrumentation-genai-portkey/tests/requirements.latest.txt
+#
+# This provides additional dependencies, namely:
+#
+#   opentelemetry-api
+#   opentelemetry-sdk
+#   opentelemetry-semantic-conventions
+#   opentelemetry-instrumentation
+#
+# ... with a "dev" version based on the latest distribution.
 #
 #
 # This variant of the requirements aims to test the system using
