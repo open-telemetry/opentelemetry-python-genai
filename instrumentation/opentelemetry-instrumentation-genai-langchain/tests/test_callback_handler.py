@@ -2010,6 +2010,155 @@ def test_media_part_real_png_url_source_returns_uri():
     assert part.uri == "https://example.com/real-image.png"
 
 
+def test_media_part_standard_v1_base64_block_returns_blob():
+    item = {
+        "type": "image",
+        "base64": _REAL_PNG_B64,
+        "mime_type": "image/png",
+    }
+    part = _media_part(item)
+    assert isinstance(part, Blob)
+    assert part.mime_type == "image/png"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_standard_v1_url_block_returns_uri():
+    item = {"type": "image", "url": "https://example.com/a.png"}
+    part = _media_part(item)
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/a.png"
+
+
+def test_media_part_standard_block_without_mime_type_returns_blob():
+    part = _media_part({"type": "image", "base64": _REAL_PNG_B64})
+    assert isinstance(part, Blob)
+    assert part.mime_type is None
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_standard_v03_block_without_mime_type_returns_blob():
+    part = _media_part(
+        {"type": "image", "source_type": "base64", "data": _REAL_PNG_B64}
+    )
+    assert isinstance(part, Blob)
+    assert part.mime_type is None
+
+
+def test_media_part_non_dict_source_falls_through_to_standard_keys():
+    """A non-dict ``source`` must not shadow a standard payload."""
+    part = _media_part(
+        {
+            "type": "image",
+            "source": "not-a-dict",
+            "base64": _REAL_PNG_B64,
+            "mime_type": "image/png",
+        }
+    )
+    assert isinstance(part, Blob)
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_anthropic_source_takes_precedence_over_standard_keys():
+    """Anthropic's ``source`` is checked before the standard top-level keys."""
+    part = _media_part(
+        {
+            "type": "image",
+            "source": {"type": "url", "url": "https://example.com/from.png"},
+            "url": "https://example.com/ignored.png",
+        }
+    )
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/from.png"
+
+
+def test_media_part_v03_url_source_type_does_not_fall_through_to_base64():
+    """An explicit ``source_type`` pins the variant, even when it is broken."""
+    part = _media_part(
+        {
+            "type": "image",
+            "source_type": "url",
+            "url": None,
+            "base64": _REAL_PNG_B64,
+        }
+    )
+    assert part is None
+
+
+def test_media_part_standard_v03_base64_block_returns_blob():
+    item = {
+        "type": "image",
+        "source_type": "base64",
+        "data": _REAL_PNG_B64,
+        "mime_type": "image/png",
+    }
+    part = _media_part(item)
+    assert isinstance(part, Blob)
+    assert part.mime_type == "image/png"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_standard_v03_url_block_returns_uri():
+    item = {
+        "type": "image",
+        "source_type": "url",
+        "url": "https://example.com/b.png",
+    }
+    part = _media_part(item)
+    assert isinstance(part, Uri)
+    assert part.uri == "https://example.com/b.png"
+
+
+def test_media_part_standard_block_corrupted_base64_returns_none():
+    corrupted = _REAL_PNG_B64[:10] + "@@@@" + _REAL_PNG_B64[14:]
+    assert (
+        _media_part(
+            {"type": "image", "base64": corrupted, "mime_type": "image/png"}
+        )
+        is None
+    )
+
+
+def test_media_part_standard_block_without_payload_returns_none():
+    assert _media_part({"type": "image", "mime_type": "image/png"}) is None
+
+
+@pytest.mark.parametrize(
+    "block,expected",
+    [
+        (
+            {
+                "type": "image",
+                "base64": _REAL_PNG_B64,
+                "mime_type": "image/png",
+            },
+            Blob,
+        ),
+        ({"type": "image", "url": "https://example.com/a.png"}, Uri),
+        (
+            {
+                "type": "image",
+                "source_type": "base64",
+                "data": _REAL_PNG_B64,
+                "mime_type": "image/png",
+            },
+            Blob,
+        ),
+        (
+            {
+                "type": "image",
+                "source_type": "url",
+                "url": "https://e/b.png",
+            },
+            Uri,
+        ),
+    ],
+)
+def test_langchain_standard_image_blocks_are_captured(block, expected):
+    messages = to_input_messages([HumanMessage(content=[block])])
+    assert messages, "message dropped entirely - no parts extracted"
+    assert any(isinstance(p, expected) for p in messages[0].parts)
+
+
 def test_to_input_messages_extracts_image_part():
     image_url = "data:image/jpeg;base64,QUJD"
     content = [

@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import urllib.parse
 from base64 import b64decode, b64encode
 from functools import partial
 from typing import Any
@@ -42,7 +43,9 @@ def get_content_capturing_mode() -> ContentCapturingMode:
 
 
 def decode_base64(data: str) -> bytes | None:
-    """Called only when content capture is enabled
+    """Decode a base64 string, returning ``None`` if it is malformed.
+
+    Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
     try:
@@ -56,9 +59,9 @@ def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
 
     A ``data:<mime>;base64,<payload>`` URL is decoded into a
     :class:`~opentelemetry.util.genai.types.Blob`; a ``data:`` URL without
-    base64 encoding keeps its raw payload bytes; any other URL becomes a
-    :class:`~opentelemetry.util.genai.types.Uri`. Shared by instrumentations
-    that parse provider image blocks.
+    base64 encoding has its percent-encoded payload decoded into bytes; any
+    other URL becomes a :class:`~opentelemetry.util.genai.types.Uri`. Shared
+    by instrumentations that parse provider image blocks.
 
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
@@ -72,7 +75,8 @@ def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
                 return None
             content = decoded
         else:
-            content = payload.encode("utf-8")
+            # Non-base64 data URL payloads are percent-encoded (RFC 2397).
+            content = urllib.parse.unquote_to_bytes(payload)
         return Blob(
             mime_type=mime_type,
             modality=modality,

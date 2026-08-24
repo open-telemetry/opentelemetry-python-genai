@@ -1046,7 +1046,7 @@ class TestMediaHelpers(unittest.TestCase):
         self.assertEqual(part.uri, "https://example.com/cat.png")
         self.assertEqual(part.modality, "image")
 
-    def test_image_from_url_data_uri_without_base64_keeps_text_bytes(self):
+    def test_image_from_url_data_uri_without_base64_decodes_payload(self):
         part = image_from_url("data:text/plain,hello")
         self.assertIsInstance(part, Blob)
         self.assertEqual(part.mime_type, "text/plain")
@@ -1071,6 +1071,17 @@ class TestMediaHelpers(unittest.TestCase):
         )
         self.assertIsInstance(uri_part, Uri)
         self.assertEqual(uri_part.modality, "audio")
+
+    def test_image_from_url_percent_encoded_data_url(self):
+        part = image_from_url("data:image/svg+xml,%3Csvg%2F%3E")
+        self.assertIsInstance(part, Blob)
+        self.assertEqual(part.mime_type, "image/svg+xml")
+        self.assertEqual(part.content, b"<svg/>")
+
+    def test_image_from_url_percent_encoded_non_ascii_data_url(self):
+        part = image_from_url("data:text/plain,caf%C3%A9")
+        self.assertIsInstance(part, Blob)
+        self.assertEqual(part.content, "café".encode())
 
     # -- decode_base64 ---------------------------------------------------
 

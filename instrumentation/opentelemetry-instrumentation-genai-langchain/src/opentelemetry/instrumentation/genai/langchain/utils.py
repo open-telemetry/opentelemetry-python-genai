@@ -89,10 +89,23 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
+def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
+    if not isinstance(data, str):
+        return None
+    decoded = decode_base64(data)
+    if decoded is None:
+        return None
+    return Blob(
+        mime_type=mime_type if isinstance(mime_type, str) else None,
+        modality="image",
+        content=decoded,
+    )
+
+
 def _media_part(item: dict[str, Any]) -> MessagePart | None:
     """Convert a LangChain multimodal image content block into a media part.
 
-    Handles the two shapes LangChain chat models accept:
+    Handles every image block shape LangChain chat models accept:
 
     - OpenAI style ``{"type": "image_url", "image_url": {"url": ...}}`` (or a
       bare ``"image_url": "..."`` string). A ``data:<mime>;base64,<payload>``
@@ -100,8 +113,13 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
     - Anthropic style ``{"type": "image", "source": {...}}`` where ``source``
       is either ``{"type": "base64", "media_type": ..., "data": ...}`` (→
       :class:`Blob`) or ``{"type": "url", "url": ...}`` (→ :class:`Uri`).
+    - langchain-core 0.3 standard blocks ``{"type": "image", "source_type":
+      "base64"|"url", "data"/"url": ..., "mime_type": ...}``.
+    - langchain-core 1.x standard blocks ``{"type": "image",
+      "base64"|"url": ..., "mime_type": ...}``.
     """
     block_type = item.get("type")
+    # OpenAI style: {"type": "image_url", "image_url": {"url": ...}}
     if block_type == "image_url":
         image_url = item.get("image_url")
         url: str | None = None
@@ -114,31 +132,42 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
         if not url:
             return None
         return image_from_url(url)
-    if block_type == "image":
-        source = item.get("source")
-        if not isinstance(source, dict):
-            return None
+    if block_type != "image":
+        return None
+
+    # Anthropic style: {"type": "image", "source": {...}}
+    source = item.get("source")
+    if isinstance(source, dict):
         source_dict = cast(dict[str, Any], source)
         source_type = source_dict.get("type")
         if source_type == "base64":
-            data = source_dict.get("data")
-            if not isinstance(data, str):
-                return None
-            decoded = decode_base64(data)
-            if decoded is None:
-                return None
-            media_type = source_dict.get("media_type")
-            return Blob(
-                mime_type=(
-                    media_type if isinstance(media_type, str) else None
-                ),
-                modality="image",
-                content=decoded,
+            return _blob_from_base64(
+                source_dict.get("data"), source_dict.get("media_type")
             )
         if source_type == "url":
             source_url = source_dict.get("url")
             if isinstance(source_url, str) and source_url:
                 return image_from_url(source_url)
+        return None
+
+    # langchain-core 0.3 standard block: tagged with "source_type". Standard
+    # blocks name the MIME key ``mime_type``, not Anthropic's ``media_type``.
+    source_type = item.get("source_type")
+    if source_type == "base64":
+        return _blob_from_base64(item.get("data"), item.get("mime_type"))
+    if source_type == "url":
+        standard_url = item.get("url")
+        if isinstance(standard_url, str) and standard_url:
+            return image_from_url(standard_url)
+        return None
+
+    # langchain-core 1.x standard block: payload keys sit at the top level.
+    base64_data = item.get("base64")
+    if isinstance(base64_data, str):
+        return _blob_from_base64(base64_data, item.get("mime_type"))
+    standard_url = item.get("url")
+    if isinstance(standard_url, str) and standard_url:
+        return image_from_url(standard_url)
     return None
 
 

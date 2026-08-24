@@ -292,6 +292,72 @@ def test_chat_openai_multimodal_image_llm_call(
         instrumentor.uninstrument()
 
 
+def test_chat_openai_standard_image_block_llm_call(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    chat_openai_vision,
+    monkeypatch,
+    vcr,
+):
+    """End-to-end: a LangChain standard ``image`` block is captured as an
+    image ``Blob`` part in ``gen_ai.input.messages``."""
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image",
+                    "base64": _REAL_PNG_B64,
+                    "mime_type": "image/png",
+                },
+            ]
+        ),
+    ]
+
+    # langchain-openai renders a standard block to the same ``image_url`` body
+    # as the native shape, so this shares that cassette.
+    payload = chat_openai_vision._get_request_payload(messages, stop=None)
+    if "n" in payload or not any(
+        isinstance(block, dict) and block.get("type") == "image_url"
+        for block in payload["messages"][0].get("content", [])
+    ):
+        pytest.skip(
+            "langchain-openai < 1.0 does not render standard image blocks "
+            "to the recorded request body"
+        )
+
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        with vcr.use_cassette(
+            "test_chat_openai_multimodal_image_llm_call.yaml"
+        ):
+            chat_openai_vision.invoke(messages)
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+
+        input_message = spans[0].attributes.get(
+            gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+        )
+        assert input_message is not None
+        assert '"type":"blob"' in input_message
+        assert '"modality":"image"' in input_message
+        assert '"mime_type":"image/png"' in input_message
+        assert _REAL_PNG_B64 in input_message
+    finally:
+        instrumentor.uninstrument()
+
+
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
 def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
     span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0, vcr
