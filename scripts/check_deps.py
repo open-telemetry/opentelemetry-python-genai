@@ -4,7 +4,13 @@
 
 """Guard dependency invariants across packages.
 
-1. Oldest dependency invariant:
+1. Package runtime dependency specifier invariant:
+   Instrumentation packages declare their target library dependencies in [project.optional-dependencies]
+   `instruments` in pyproject.toml, and expose them at runtime via `_instruments` in `package.py`.
+   These two must match, and each dependency must declare both lower and upper bounds (e.g., `>= x.y.z, < (x+1)`)
+   to ensure version compatibility and prevent unbounded dependencies.
+
+2. Oldest dependency invariant:
    The oldest tox envs install the lowest versions of each package's *declared* deps straight from
    pyproject.toml via ``UV_RESOLUTION=lowest-direct`` (see AGENTS.md). pyproject.toml is therefore the
    single source of truth for those floors and running the env is what validates them. This script
@@ -21,10 +27,10 @@
        tests/requirements.oldest.txt must install it locally so tests can run against
        the local development version.
 
-2. Package runtime dependency specifier invariant:
-   Instrumentation packages declare their target library dependencies in [project.optional-dependencies]
-   `instruments` in pyproject.toml, and expose them at runtime via `_instruments` in `package.py`.
-   These two must match to ensure runtime instrumentor compatibility checks and package metadata stay in sync.
+3. Latest dependency pinning invariant:
+   Target library dependencies in tests/requirements.latest.txt must have upper bounds or pins
+   (e.g., `~= major.minor` or `== major.minor.patch`) to prevent newly released major versions from
+   breaking test runs unexpectedly.
 """
 
 from __future__ import annotations
@@ -240,21 +246,28 @@ def declared_dep_names(pyproject: dict) -> set[str]:
     }
 
 
-def pinned_names(oldest_req_path: Path) -> set[str]:
-    """Canonical names of every pinned requirement in an oldest requirements file.
-
-    Skips option lines (-e/-r/-c/--flag) and anything that isn't a parseable requirement.
-    """
-    names: set[str] = set()
-    for raw in oldest_req_path.read_text(encoding="utf-8").splitlines():
+def parse_requirements_file(path: Path) -> list[Requirement]:
+    """Extract valid Requirements from a requirements file, skipping options and comments."""
+    reqs: list[Requirement] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
         try:
-            names.add(canonicalize_name(Requirement(line).name))
+            reqs.append(Requirement(line))
         except Exception:
             continue
-    return names
+    return reqs
+
+
+def has_lower_bound(req: Requirement) -> bool:
+    """Check if requirement has a lower bound (>=, >, ~=, ==)."""
+    return any(s.operator in (">=", ">", "~=", "==") for s in req.specifier)
+
+
+def has_upper_bound(req: Requirement) -> bool:
+    """Check if requirement has an upper bound (<, <=, ~=, ==)."""
+    return any(s.operator in ("<", "<=", "~=", "==") for s in req.specifier)
 
 
 def extract_instruments_from_package_py(
@@ -355,6 +368,75 @@ def check_instruments_match(pkg_dir: Path, pyproject: dict) -> list[str]:
             f"does not match pyproject.toml instruments extra ({pyproject_instruments_raw})."
         )
 
+    for req in sorted(pyproject_reqs, key=lambda r: str(r)):
+        if not has_lower_bound(req):
+            errors.append(
+                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing a lower bound (e.g. '>= x.y.z')."
+            )
+        if not has_upper_bound(req):
+            errors.append(
+                f"{pkg_dir.name}: requirement '{req}' in pyproject.toml instruments extra is missing an upper bound (e.g. '< 2')."
+            )
+
+    return errors
+
+
+def check_oldest_requirements(pkg_dir: Path, pyproject: dict) -> list[str]:
+    """Check oldest requirements coverage and redundancy."""
+    errors: list[str] = []
+    oldest = pkg_dir / "tests" / "requirements.oldest.txt"
+    latest = pkg_dir / "tests" / "requirements.latest.txt"
+
+    if not oldest.exists():
+        if latest.exists():
+            errors.append(
+                f"{pkg_dir.name}: has tests/requirements.latest.txt but no "
+                f"tests/requirements.oldest.txt - declared floors are never tested."
+            )
+        return errors
+
+    pinned = {
+        canonicalize_name(r.name) for r in parse_requirements_file(oldest)
+    }
+    redundant = declared_dep_names(pyproject) & pinned
+    for name in sorted(redundant):
+        errors.append(
+            f"{pkg_dir.name}: '{name}' is declared in pyproject.toml and also pinned in "
+            f"tests/requirements.oldest.txt. Remove the pin - the oldest env derives it from "
+            f"the pyproject.toml floor via UV_RESOLUTION=lowest-direct."
+        )
+
+    return errors
+
+
+def check_latest_requirements(pkg_dir: Path, pyproject: dict) -> list[str]:
+    """Verify that target dependencies in tests/requirements.latest.txt have upper bounds / pins."""
+    errors: list[str] = []
+    latest_path = pkg_dir / "tests" / "requirements.latest.txt"
+    if not latest_path.exists():
+        return errors
+
+    instruments_raw = (
+        pyproject.get("project", {})
+        .get("optional-dependencies", {})
+        .get("instruments", [])
+    )
+    if not instruments_raw:
+        return errors
+
+    instrumented_names = {
+        canonicalize_name(Requirement(r).name) for r in instruments_raw
+    }
+
+    for req in parse_requirements_file(latest_path):
+        if canonicalize_name(
+            req.name
+        ) in instrumented_names and not has_upper_bound(req):
+            errors.append(
+                f"{pkg_dir.name}: target dependency '{req}' in tests/requirements.latest.txt "
+                f"is missing an upper bound or pin (use '~= major.minor' or '== major.minor.patch')."
+            )
+
     return errors
 
 
@@ -370,33 +452,19 @@ def main() -> int:
 
     for pyproject_path in pyprojects:
         pkg_dir = pyproject_path.parent
-        oldest = pkg_dir / "tests" / "requirements.oldest.txt"
-        latest = pkg_dir / "tests" / "requirements.latest.txt"
-
         pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
         # Check 1: instruments extra in pyproject.toml matches _instruments in package.py
         errors.extend(check_instruments_match(pkg_dir, pyproject))
 
         # Check 2: oldest dependency coverage and redundancy
-        if not oldest.exists():
-            # Only a gap if the package has an oldest tox factor, signalled by a latest file.
-            if latest.exists():
-                errors.append(
-                    f"{pkg_dir.name}: has tests/requirements.latest.txt but no "
-                    f"tests/requirements.oldest.txt - declared floors are never tested."
-                )
-            continue
+        errors.extend(check_oldest_requirements(pkg_dir, pyproject))
 
-        redundant = declared_dep_names(pyproject) & pinned_names(oldest)
-        for name in sorted(redundant):
-            errors.append(
-                f"{pkg_dir.name}: '{name}' is declared in pyproject.toml and also pinned in "
-                f"tests/requirements.oldest.txt. Remove the pin - the oldest env derives it from "
-                f"the pyproject.toml floor via UV_RESOLUTION=lowest-direct."
-            )
+        # Check 3: target dependencies in requirements.latest.txt are pinned / upper-bounded
+        errors.extend(check_latest_requirements(pkg_dir, pyproject))
 
-        # Check 3: workspace dependencies floor and editable install validation
+        # Check 4: workspace dependencies floor and editable install validation
+        oldest = pkg_dir / "tests" / "requirements.oldest.txt"
         errors.extend(
             check_workspace_dependencies(
                 pkg_dir,
@@ -413,9 +481,7 @@ def main() -> int:
             print(f"  [ERROR] {err}", file=sys.stderr)
         return 1
 
-    print(
-        "Dependency checks passed: package.py matches pyproject.toml, no declared deps re-pinned, no missing coverage, workspace dependency floors validated."
-    )
+    print("Dependency checks passed.")
     return 0
 
 

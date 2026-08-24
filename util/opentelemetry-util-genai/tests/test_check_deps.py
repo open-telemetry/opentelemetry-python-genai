@@ -11,7 +11,11 @@ repo_root = Path(__file__).resolve().parent.parent.parent.parent
 scripts_dir = str(repo_root / "scripts")
 sys.path.insert(0, scripts_dir)
 try:
-    from check_deps import check_workspace_dependencies
+    from check_deps import (
+        check_instruments_match,
+        check_latest_requirements,
+        check_workspace_dependencies,
+    )
 finally:
     if scripts_dir in sys.path:
         sys.path.remove(scripts_dir)
@@ -252,3 +256,117 @@ class TestCheckWorkspaceDependencies(unittest.TestCase):
         )
         self.assertEqual(len(errors), 1)
         self.assertIn("is not permitted", errors[0])
+
+
+class TestCheckInstrumentsMatch(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.pkg_dir = Path(self.temp_dir.name)
+        self.src_dir = (
+            self.pkg_dir
+            / "src"
+            / "opentelemetry"
+            / "instrumentation"
+            / "genai"
+            / "test_pkg"
+        )
+        self.src_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_matching_with_bounds_passes(self):
+        (self.src_dir / "package.py").write_text(
+            '_instruments = ("some-pkg >= 1.0.0, < 2",)\n',
+            encoding="utf-8",
+        )
+        pyproject = {
+            "project": {
+                "optional-dependencies": {
+                    "instruments": ["some-pkg >= 1.0.0, < 2"]
+                }
+            }
+        }
+        errors = check_instruments_match(self.pkg_dir, pyproject)
+        self.assertEqual(errors, [])
+
+    def test_missing_upper_bound_fails(self):
+        (self.src_dir / "package.py").write_text(
+            '_instruments = ("some-pkg >= 1.0.0",)\n',
+            encoding="utf-8",
+        )
+        pyproject = {
+            "project": {
+                "optional-dependencies": {"instruments": ["some-pkg >= 1.0.0"]}
+            }
+        }
+        errors = check_instruments_match(self.pkg_dir, pyproject)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("missing an upper bound", errors[0])
+
+    def test_missing_lower_bound_fails(self):
+        (self.src_dir / "package.py").write_text(
+            '_instruments = ("some-pkg < 2",)\n',
+            encoding="utf-8",
+        )
+        pyproject = {
+            "project": {
+                "optional-dependencies": {"instruments": ["some-pkg < 2"]}
+            }
+        }
+        errors = check_instruments_match(self.pkg_dir, pyproject)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("missing a lower bound", errors[0])
+
+    def test_mismatch_fails(self):
+        (self.src_dir / "package.py").write_text(
+            '_instruments = ("some-pkg >= 1.0.0, < 2",)\n',
+            encoding="utf-8",
+        )
+        pyproject = {
+            "project": {
+                "optional-dependencies": {
+                    "instruments": ["other-pkg >= 1.0.0, < 2"]
+                }
+            }
+        }
+        errors = check_instruments_match(self.pkg_dir, pyproject)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("does not match", errors[0])
+
+
+class TestCheckLatestRequirements(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.pkg_dir = Path(self.temp_dir.name)
+        self.tests_dir = self.pkg_dir / "tests"
+        self.tests_dir.mkdir(parents=True, exist_ok=True)
+        self.latest_path = self.tests_dir / "requirements.latest.txt"
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_latest_pinned_passes(self):
+        self.latest_path.write_text("some-pkg ~= 1.0\n", encoding="utf-8")
+        pyproject = {
+            "project": {
+                "optional-dependencies": {
+                    "instruments": ["some-pkg >= 1.0.0, < 2"]
+                }
+            }
+        }
+        errors = check_latest_requirements(self.pkg_dir, pyproject)
+        self.assertEqual(errors, [])
+
+    def test_latest_unbounded_fails(self):
+        self.latest_path.write_text("some-pkg >= 1.0\n", encoding="utf-8")
+        pyproject = {
+            "project": {
+                "optional-dependencies": {
+                    "instruments": ["some-pkg >= 1.0.0, < 2"]
+                }
+            }
+        }
+        errors = check_latest_requirements(self.pkg_dir, pyproject)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("missing an upper bound or pin", errors[0])

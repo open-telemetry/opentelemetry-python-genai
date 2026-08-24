@@ -1,0 +1,8 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Exercise the latest supported DSPy release with workspace instrumentation.
+dspy~=3.3.1
+
+-e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-dspy

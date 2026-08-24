@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instruments = ["qwen-agent >= 0.0.20"]
+instruments = ["qwen-agent >= 0.0.20, < 1"]
 
 [project.entry-points.opentelemetry_instrumentor]
 qwen-agent = "opentelemetry.instrumentation.genai.qwen_agent:QwenAgentInstrumentor"

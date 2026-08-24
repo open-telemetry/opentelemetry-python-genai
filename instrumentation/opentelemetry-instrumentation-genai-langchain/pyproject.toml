@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 instruments = [
-  "langchain >= 0.3.21",
+  "langchain >= 0.3.21, < 2",
 ]
 
 [project.entry-points.opentelemetry_instrumentor]

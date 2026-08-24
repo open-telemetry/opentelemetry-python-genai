@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instruments = ["agno >= 2.0.0"]
+instruments = ["agno >= 2.0.0, < 3"]
 
 [project.entry-points.opentelemetry_instrumentor]
 agno = "opentelemetry.instrumentation.genai.agno:AgnoInstrumentor"

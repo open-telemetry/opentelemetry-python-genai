@@ -15,6 +15,13 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.1b1 (2026-08-21)
+
+### Changed
+
+- Raised `opentelemetry-util-genai` dependency floor to 1.1b0.
+  ([#433](https://github.com/open-telemetry/opentelemetry-python-genai/pull/433))
+
 ## Version 1.1b0 (2026-08-20)
 
 ### Added
