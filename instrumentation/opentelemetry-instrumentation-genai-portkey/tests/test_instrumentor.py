@@ -72,11 +72,9 @@ def test_instrument_wraps_and_unwraps_methods(
     ]:
         cls = getattr(mod, cls_name, None)
         if cls is not None and hasattr(cls, "create"):
-            targets.append(cls)
+            targets.append((cls, cls.create))
 
     assert len(targets) >= 2
-    for cls in targets:
-        assert not hasattr(cls.create, "__wrapped__")
 
     instrumentor = PortkeyInstrumentor()
     instrumentor.instrument(
@@ -85,13 +83,14 @@ def test_instrument_wraps_and_unwraps_methods(
         meter_provider=meter_provider,
     )
 
-    for cls in targets:
-        assert hasattr(cls.create, "__wrapped__")
+    for cls, original_create in targets:
+        assert cls.create is not original_create
+        assert getattr(cls.create, "__wrapped__", None) == original_create
 
     instrumentor.uninstrument()
 
-    for cls in targets:
-        assert not hasattr(cls.create, "__wrapped__")
+    for cls, original_create in targets:
+        assert cls.create is original_create
 
 
 def test_multiple_instrumentation_calls(
