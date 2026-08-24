@@ -3,8 +3,13 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
+from typing import Any
+from unittest import mock
 
+import pytest
+from crewai import LLM, Agent, Crew, Task
 from crewai.events.types.agent_events import (
     AgentExecutionCompletedEvent,
     AgentExecutionErrorEvent,
@@ -16,6 +21,9 @@ from crewai.events.types.crew_events import (
     CrewKickoffStartedEvent,
 )
 from crewai.events.types.llm_events import LLMCallStartedEvent
+from crewai.memory.storage.kickoff_task_outputs_storage import (
+    KickoffTaskOutputsSQLiteStorage,
+)
 
 from opentelemetry.instrumentation.genai.crewai import CrewAIInstrumentor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -26,6 +34,123 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import SpanKind, StatusCode
+
+
+@pytest.mark.vcr()
+def test_successful_kickoff_emits_completed_spans(
+    instrument_crewai: CrewAIInstrumentor,
+    span_exporter: InMemorySpanExporter,
+    vcr: Any,
+) -> None:
+    """Exercise the public CrewAI API against a replayed provider response."""
+    key_override = (
+        {}
+        if os.getenv("OPENAI_API_KEY")
+        else {"OPENAI_API_KEY": "test_openai_api_key"}
+    )
+    with (
+        mock.patch.dict(
+            os.environ,
+            {**key_override, "CREWAI_DISABLE_TELEMETRY": "true"},
+        ),
+        mock.patch(
+            "crewai.utilities.task_output_storage_handler."
+            "KickoffTaskOutputsSQLiteStorage",
+            return_value=mock.Mock(spec=KickoffTaskOutputsSQLiteStorage),
+        ),
+    ):
+        llm = LLM(model="openai/gpt-4o-mini")
+        researcher = Agent(
+            role="Researcher",
+            goal="Answer the question accurately",
+            backstory="A concise research assistant",
+            llm=llm,
+        )
+        task = Task(
+            description="Say this is a test.",
+            expected_output="A short confirmation.",
+            agent=researcher,
+        )
+        with vcr.use_cassette("successful_kickoff.yaml"):
+            Crew(agents=[researcher], tasks=[task]).kickoff()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    agent_span = next(
+        span
+        for span in spans
+        if span.attributes
+        and span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "invoke_agent"
+    )
+    workflow_span = next(
+        span
+        for span in spans
+        if span.attributes
+        and span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "invoke_workflow"
+    )
+
+    assert agent_span.status.status_code == StatusCode.UNSET
+    assert workflow_span.status.status_code == StatusCode.UNSET
+    assert agent_span.end_time is not None
+    assert workflow_span.end_time is not None
+
+
+@pytest.mark.vcr()
+def test_failed_kickoff_records_error_message_on_all_spans(
+    instrument_crewai: CrewAIInstrumentor,
+    span_exporter: InMemorySpanExporter,
+    vcr: Any,
+) -> None:
+    """Verify public CrewAI failures retain the provider error message."""
+    key_override = (
+        {}
+        if os.getenv("OPENAI_API_KEY")
+        else {"OPENAI_API_KEY": "test_openai_api_key"}
+    )
+    with (
+        mock.patch.dict(
+            os.environ,
+            {**key_override, "CREWAI_DISABLE_TELEMETRY": "true"},
+        ),
+        mock.patch(
+            "crewai.utilities.task_output_storage_handler."
+            "KickoffTaskOutputsSQLiteStorage",
+            return_value=mock.Mock(spec=KickoffTaskOutputsSQLiteStorage),
+        ),
+    ):
+        llm = LLM(model="openai/gpt-4o-mini")
+        researcher = Agent(
+            role="Researcher",
+            goal="Answer the question accurately",
+            backstory="A concise research assistant",
+            llm=llm,
+        )
+        task = Task(
+            description="Say this is a test.",
+            expected_output="A short confirmation.",
+            agent=researcher,
+        )
+        with (
+            vcr.use_cassette("failed_kickoff.yaml"),
+            pytest.raises(Exception, match="CrewAI VCR test"),
+        ):
+            Crew(agents=[researcher], tasks=[task]).kickoff()
+
+    spans = span_exporter.get_finished_spans()
+    assert spans
+    assert {
+        span.attributes[GenAI.GEN_AI_OPERATION_NAME]
+        for span in spans
+        if span.attributes is not None
+    } == {"invoke_agent", "invoke_workflow"}
+    for span in spans:
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.status.description is not None
+        assert "Invalid API key for CrewAI VCR test" in span.status.description
+        assert span.attributes is not None
+        assert error_attributes.ERROR_TYPE in span.attributes
+        assert span.end_time is not None
 
 
 def test_crew_kickoff_emits_workflow_span(
@@ -143,6 +268,10 @@ def test_failed_operations_record_errors(
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 2
+    assert {span.status.description for span in spans} == {
+        "agent failed",
+        "crew failed",
+    }
     for span in spans:
         assert span.status.status_code == StatusCode.ERROR
         assert span.attributes is not None
