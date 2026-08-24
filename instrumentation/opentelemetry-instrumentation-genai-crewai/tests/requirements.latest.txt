@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Exercise the latest supported CrewAI release with workspace instrumentation.
-crewai~=1.15.0
+crewai~=1.15.17
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-crewai
