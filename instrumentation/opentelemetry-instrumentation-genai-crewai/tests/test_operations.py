@@ -10,6 +10,7 @@ from unittest import mock
 
 import pytest
 from crewai import LLM, Agent, Crew, Task
+from crewai.events.event_bus import crewai_event_bus
 from crewai.events.types.agent_events import (
     AgentExecutionCompletedEvent,
     AgentExecutionErrorEvent,
@@ -73,6 +74,7 @@ def test_successful_kickoff_emits_completed_spans(
         )
         with vcr.use_cassette("successful_kickoff.yaml"):
             Crew(agents=[researcher], tasks=[task]).kickoff()
+        assert crewai_event_bus.flush()
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 2
@@ -136,6 +138,7 @@ def test_failed_kickoff_records_error_message_on_all_spans(
             pytest.raises(Exception, match="CrewAI VCR test"),
         ):
             Crew(agents=[researcher], tasks=[task]).kickoff()
+        assert crewai_event_bus.flush()
 
     spans = span_exporter.get_finished_spans()
     assert spans

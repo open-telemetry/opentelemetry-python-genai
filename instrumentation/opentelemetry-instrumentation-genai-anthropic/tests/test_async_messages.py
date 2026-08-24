@@ -6,11 +6,19 @@
 import inspect
 import json
 
-import httpx
 import pytest
+
+try:
+    import httpx2 as _http_lib
+except ImportError:
+    import httpx as _http_lib
 from anthropic import APIConnectionError, AsyncAnthropic, NotFoundError
-from anthropic._legacy_response import LegacyAPIResponse
 from anthropic._response import AsyncAPIResponse
+
+try:
+    from anthropic._legacy_response import LegacyAPIResponse
+except ImportError:
+    from anthropic._response import AsyncAPIResponse as LegacyAPIResponse
 from anthropic._streaming import AsyncStream as AnthropicAsyncStream
 from anthropic.resources.messages import AsyncMessages as _AsyncMessages
 from anthropic.types import Message
@@ -40,6 +48,13 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
+
+
+async def _parse_raw_response(raw_response, **kwargs):
+    result = raw_response.parse(**kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def normalize_stop_reason(stop_reason):
@@ -156,7 +171,7 @@ async def test_async_messages_create_with_raw_response(
     )
 
     assert hasattr(raw_response, "headers")
-    message = raw_response.parse()
+    message = await _parse_raw_response(raw_response)
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -216,23 +231,27 @@ async def test_async_messages_create_with_all_params(
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "Say hello."}]
 
-    await async_anthropic_client.messages.create(
-        model=model,
-        max_tokens=50,
-        messages=messages,
-        temperature=0.7,
-        top_p=0.9,
-        top_k=40,
-        stop_sequences=["STOP"],
-    )
+    kwargs = {
+        "model": model,
+        "max_tokens": 50,
+        "messages": messages,
+        "stop_sequences": ["STOP"],
+    }
+    if "temperature" in _create_params:
+        kwargs.update(temperature=0.7, top_p=0.9, top_k=40)
+
+    await async_anthropic_client.messages.create(**kwargs)
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    if "temperature" in kwargs:
+        assert (
+            span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
+        )
+        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
+        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
         "STOP",
     )
@@ -1106,7 +1125,7 @@ async def test_async_messages_create_streaming_with_raw_response(
     # Deferred: the span must not be finalized before the caller parses/drains.
     assert span_exporter.get_finished_spans() == ()
 
-    stream = raw_response.parse()
+    stream = await _parse_raw_response(raw_response)
     response_text = ""
     async for chunk in stream:
         if chunk.type == "content_block_delta":
@@ -1488,9 +1507,9 @@ async def test_async_messages_raw_response_parse_to_honors_cast_target(
         messages=[{"role": "user", "content": "Say hello in one word."}],
     ) as raw_response:
         await raw_response.parse()
-        as_httpx = await raw_response.parse(to=httpx.Response)
+        as_httpx = await raw_response.parse(to=_http_lib.Response)
 
-    assert isinstance(as_httpx, httpx.Response)
+    assert isinstance(as_httpx, _http_lib.Response)
 
 
 @pytest.mark.cassette("test_async_messages_create_with_raw_response")
@@ -1686,7 +1705,7 @@ async def test_async_messages_with_raw_response_does_not_parse_early(
     assert spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
     assert not parse_calls
 
-    assert raw_response.parse().model == model
+    assert (await _parse_raw_response(raw_response)).model == model
     assert len(parse_calls) == 1
 
 
@@ -1731,7 +1750,7 @@ async def test_async_messages_with_raw_response_captures_content(
             messages=[{"role": "user", "content": "Say hello in one word."}],
         )
     )
-    message = raw_response.parse()
+    message = await _parse_raw_response(raw_response)
 
     span = span_exporter.get_finished_spans()[0]
     input_messages = _load_span_messages(

@@ -15,6 +15,7 @@ dependencies = [
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
   "opentelemetry-instrumentation-genai-crewai[instruments]",
+  "opentelemetry-instrumentation-genai-dspy[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
   "opentelemetry-instrumentation-genai-llama-index[instruments]",
@@ -48,6 +49,7 @@ opentelemetry-instrumentation-genai-agno = { workspace = true }
 opentelemetry-instrumentation-genai-anthropic = { workspace = true }
 opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
 opentelemetry-instrumentation-genai-crewai = { workspace = true }
+opentelemetry-instrumentation-genai-dspy = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }
 opentelemetry-instrumentation-genai-langchain = { workspace = true }
 opentelemetry-instrumentation-genai-llama-index = { workspace = true }
@@ -118,6 +120,7 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
   "instrumentation/opentelemetry-instrumentation-genai-crewai",
+  "instrumentation/opentelemetry-instrumentation-genai-dspy",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
@@ -138,6 +141,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-crewai/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-crewai/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-dspy/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-dspy/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index/tests/**/*.py",

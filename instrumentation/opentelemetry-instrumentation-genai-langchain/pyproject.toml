@@ -26,12 +26,12 @@ classifiers = [
 ]
 dependencies = [
   "opentelemetry-instrumentation >= 0.64b0, <1",
-  "opentelemetry-util-genai >= 1.0b0, <2",
+  "opentelemetry-util-genai >= 1.1b0, <2",
 ]
 
 [project.optional-dependencies]
 instruments = [
-  "langchain >= 0.3.21",
+  "langchain >= 0.3.21, < 2",
 ]
 
 [project.entry-points.opentelemetry_instrumentor]

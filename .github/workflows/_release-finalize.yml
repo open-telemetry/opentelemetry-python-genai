@@ -13,6 +13,10 @@ on:
         required: false
         type: boolean
         default: false
+      sync_main:
+        required: false
+        type: boolean
+        default: true
       bump_after_release:
         required: false
         type: boolean
@@ -92,81 +96,62 @@ jobs:
                             "$RELEASE_TAG"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.sync_main
         with:
           ref: main
 
+      - name: Install uv
+        if: inputs.sync_main
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
       - name: Copy changelog updates to main
+        if: inputs.sync_main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/merge_changelog_to_main.sh
 
+      - name: Bump package version on main after release
+        if: inputs.sync_main && inputs.bump_after_release && steps.target.outputs.on_main == 'true'
+        run: uv run ./scripts/version_utils.py bump --dev
+
       - name: Regenerate instrumentations README
+        if: inputs.sync_main
         run: python ./scripts/generate_instrumentation_readme.py
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-
       - name: Use CLA approved github bot
+        if: inputs.sync_main
         run: .github/scripts/use-cla-approved-github-bot.sh
 
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        if: inputs.sync_main
         id: otelbot-token
         with:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}
           private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
 
-      - name: Open pull request for changelog updates on main
+      - name: Open pull request for post-release updates on main
+        if: inputs.sync_main
         env:
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         run: |
-          message="Copy changelog updates for ${PACKAGE_NAME} v${VERSION}"
-          body="Copy changelog updates for \`${PACKAGE_NAME}\` v\`${VERSION}\`."
-          branch="otelbot/changelog-${PACKAGE_NAME}-${VERSION}"
-
-          changes=0
-          if [[ -z $PRIOR_VERSION_WHEN_PATCH ]]; then
-            if ! git diff --quiet; then
-              changes=1
-            fi
-          else
-            changes=1
-          fi
-
-          if [[ $changes == 0 ]]; then
-            echo "No changelog updates needed on main"
+          if git diff --quiet; then
+            echo "No updates needed on main"
             exit 0
           fi
+
+          if [[ -n "$PRIOR_VERSION_WHEN_PATCH" ]]; then
+            message="Finalize patch release for ${PACKAGE_NAME} v${VERSION}"
+            body="Copy patch changelog updates to main and regenerate instrumentation README for \`${PACKAGE_NAME}\` v\`${VERSION}\`."
+          else
+            message="Finalize release for ${PACKAGE_NAME} v${VERSION}"
+            body="Regenerate instrumentation README and bump package versions to next dev version after releasing \`${PACKAGE_NAME}\` v\`${VERSION}\`."
+          fi
+          branch="otelbot/finalize-${PACKAGE_NAME}-${VERSION}"
 
           git commit -a -m "$message"
           git push origin HEAD:"$branch"
           gh pr create --title "$message" \
                        --body "$body" \
                        --head "$branch" \
-                       --base main
-
-      - name: Bump package version on main after release
-        if: inputs.bump_after_release && steps.target.outputs.on_main == 'true'
-        env:
-          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
-        run: |
-          git checkout main
-          git pull origin main
-
-          uv run ./scripts/version_utils.py bump --dev
-          uv run tox -e generate
-
-          if git diff --quiet; then
-            echo "No version bump needed"
-            exit 0
-          fi
-
-          message="Bump version to next dev version after releasing v${VERSION}"
-          branch="otelbot/bump-after-v${VERSION}"
-
-          git commit -a -m "$message"
-          git push origin HEAD:"$branch"
-          gh pr create --title "$message" \
-                       --body "Bump versions to the next \`.dev\` version after releasing v\`${VERSION}\`." \
-                       --label "Skip Changelog" \
-                       --head "$branch" \
-                       --base main
+                       --base main \
+                       --label "Skip Changelog"

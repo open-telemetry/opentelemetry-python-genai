@@ -45,7 +45,7 @@ def test_entrypoint_loads_instrumentor() -> None:
 
 def test_instrumentation_dependencies() -> None:
     dependencies = SmolagentsInstrumentor().instrumentation_dependencies()
-    assert "smolagents >= 1.24.0" in dependencies
+    assert "smolagents >= 1.24.0, < 2" in dependencies
 
 
 def test_instrument_uninstrument_restores_originals(

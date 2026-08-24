@@ -43,7 +43,7 @@ def _run_agent_once():
 def test_instrumentation_dependencies():
     instrumentor = QwenAgentInstrumentor()
     dependencies = instrumentor.instrumentation_dependencies()
-    assert dependencies == ("qwen-agent >= 0.0.20",)
+    assert dependencies == ("qwen-agent >= 0.0.20, < 1",)
 
 
 def test_uninstrument_stops_span_creation(

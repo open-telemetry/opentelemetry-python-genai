@@ -1,6 +1,5 @@
-anthropic>=0.122.0
+anthropic>=1.0.0
 opentelemetry-sdk~=1.43.0
 opentelemetry-distro~=0.64b0
 opentelemetry-instrumentation-genai-anthropic~=1.0b0
 opentelemetry-exporter-otlp-proto-grpc~=1.43.0
-
