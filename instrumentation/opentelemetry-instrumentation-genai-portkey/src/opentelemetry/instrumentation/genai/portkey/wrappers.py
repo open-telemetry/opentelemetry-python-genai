@@ -58,18 +58,21 @@ class ChoiceBuffer:
             self.tool_calls_buffers.append(None)
 
         function = get_property_value(tool_call, "function")
+        call_id = get_property_value(tool_call, "id")
+        func_name = get_property_value(function, "name") if function else None
         buffer = self.tool_calls_buffers[idx]
         if buffer is None:
-            func_name = (
-                get_property_value(function, "name") if function else None
-            )
-            call_id = get_property_value(tool_call, "id")
             buffer = ToolCallBuffer(
                 idx,
                 str(call_id) if call_id is not None else None,
                 str(func_name) if func_name is not None else None,
             )
             self.tool_calls_buffers[idx] = buffer
+        else:
+            if buffer.tool_call_id is None and call_id is not None:
+                buffer.tool_call_id = str(call_id)
+            if buffer.function_name is None and func_name is not None:
+                buffer.function_name = str(func_name)
 
         if function:
             args = get_property_value(function, "arguments")
@@ -173,7 +176,7 @@ class _PortkeyStreamMixin:
             output_messages.append(
                 OutputMessage(
                     role="assistant",
-                    finish_reason=choice.finish_reason or "error",
+                    finish_reason=choice.finish_reason or "stop",
                     parts=parts,
                 )
             )

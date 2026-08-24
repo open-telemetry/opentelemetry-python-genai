@@ -554,3 +554,137 @@ def test_sync_prompt_streaming(
             span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
         )
         assert output_messages[0]["parts"][0]["content"] == "Prompt stream."
+
+
+def test_sync_streaming_tool_calls_multi_chunk(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+
+        # Chunk 1: buffer initialized with call_id and function name
+        chunk1 = SimpleNamespace(
+            id="stream-tc-1",
+            model="gpt-4o",
+            choices=[
+                SimpleNamespace(
+                    index=0,
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=0,
+                                id="call_abc",
+                                function=SimpleNamespace(
+                                    name="get_weather",
+                                    arguments='{"location":',
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+        # Chunk 2: arguments appended to buffer
+        chunk2 = SimpleNamespace(
+            id="stream-tc-1",
+            model="gpt-4o",
+            choices=[
+                SimpleNamespace(
+                    index=0,
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=0,
+                                id=None,
+                                function=SimpleNamespace(
+                                    name=None, arguments=' "Paris"}'
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=15, completion_tokens=8),
+        )
+        stream_obj = _MockSyncStream([chunk1, chunk2])
+        _setup_mock_stream(p, stream_obj)
+
+        stream = p.chat.completions.create(
+            messages=[
+                {"role": "user", "content": "What is the weather in Paris?"}
+            ],
+            model="gpt-4o",
+            stream=True,
+        )
+        chunks = list(stream)
+        assert len(chunks) == 2
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        output_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        )
+        assert len(output_messages) == 1
+        part = output_messages[0]["parts"][0]
+        assert part["type"] == "tool_call"
+        assert part["name"] == "get_weather"
+        assert part["id"] == "call_abc"
+        assert part["arguments"] == {"location": "Paris"}
+        assert output_messages[0]["finish_reason"] == "tool_calls"
+
+
+def test_sync_streaming_no_finish_reason_defaults_to_stop(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+
+        chunk1 = SimpleNamespace(
+            id="stream-nofinish-1",
+            model="gpt-4o",
+            choices=[
+                SimpleNamespace(
+                    index=0,
+                    delta=SimpleNamespace(content="Hello!"),
+                    finish_reason=None,
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=5, completion_tokens=2),
+        )
+        stream_obj = _MockSyncStream([chunk1])
+        _setup_mock_stream(p, stream_obj)
+
+        stream = p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-4o",
+            stream=True,
+        )
+        chunks = list(stream)
+        assert len(chunks) == 1
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.status.status_code == StatusCode.UNSET
+        output_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        )
+        assert output_messages[0]["finish_reason"] == "stop"

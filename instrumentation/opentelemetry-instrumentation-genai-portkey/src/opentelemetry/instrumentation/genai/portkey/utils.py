@@ -128,12 +128,17 @@ def _prepare_input_messages(messages: Iterable[Any]) -> list[InputMessage]:
         elif content:
             if isinstance(content, str):
                 parts.append(Text(content=content))
+            elif isinstance(content, Mapping):
+                content_dict = cast(Mapping[str, Any], content)
+                content_type = content_dict.get("type")
+                if content_type == "text" and content_dict.get("text"):
+                    parts.append(Text(content=str(content_dict["text"])))
             elif isinstance(content, Iterable):
                 for item in cast(Iterable[Any], content):
                     if isinstance(item, str):
                         parts.append(Text(content=item))
-                    elif isinstance(item, dict):
-                        item_dict = cast(dict[str, Any], item)
+                    elif isinstance(item, Mapping):
+                        item_dict = cast(Mapping[str, Any], item)
                         item_type = item_dict.get("type")
                         if item_type == "text" and item_dict.get("text"):
                             parts.append(Text(content=str(item_dict["text"])))

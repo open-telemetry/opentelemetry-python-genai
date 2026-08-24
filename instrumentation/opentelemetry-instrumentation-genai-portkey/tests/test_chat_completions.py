@@ -41,9 +41,6 @@ def _create_mock_chat_completion(
     completion_tokens: int = 5,
     tool_calls: list[dict[str, object]] | None = None,
 ) -> SimpleNamespace:
-    msg: dict[str, object] = {"role": role, "content": content}
-    if tool_calls:
-        msg["tool_calls"] = tool_calls
     return SimpleNamespace(
         id=id_val,
         model=model,
@@ -533,3 +530,52 @@ async def test_async_chat_completions_error_handling(
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
         assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ValueError"
+
+
+def test_chat_completions_dict_and_multipart_content(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion(
+            content="Processed",
+        )
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": {"type": "text", "text": "single dict content"},
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        "text part",
+                        {"type": "text", "text": "nested dict part"},
+                    ],
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 2
+        assert input_messages[0]["parts"] == [
+            {"content": "single dict content", "type": "text"}
+        ]
+        assert input_messages[1]["parts"] == [
+            {"content": "text part", "type": "text"},
+            {"content": "nested dict part", "type": "text"},
+        ]
