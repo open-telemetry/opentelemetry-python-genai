@@ -148,18 +148,16 @@ def _normalize_to_dict(value: Any) -> dict[str, Any]:
 
 
 class TestDeprecatedMessagePartNames(unittest.TestCase):
-    def test_names_subclass_part_classes(self):
-        self.assertTrue(issubclass(Text, TextPart))
-        self.assertTrue(issubclass(Reasoning, ReasoningPart))
-        self.assertTrue(issubclass(Blob, BlobPart))
-        self.assertTrue(issubclass(File, FilePart))
-        self.assertTrue(issubclass(Uri, UriPart))
+    def test_deprecated_names_are_aliases(self):
+        self.assertIs(Text, TextPart)
+        self.assertIs(Reasoning, ReasoningPart)
+        self.assertIs(Blob, BlobPart)
+        self.assertIs(File, FilePart)
+        self.assertIs(Uri, UriPart)
 
-    def test_deprecated_name_builds_message_part(self):
-        message = InputMessage(role="user", parts=[Text(content="hello")])
-
-        self.assertIsInstance(message.parts[0], TextPart)
-        self.assertEqual(message.parts[0].type, "text")
+    def test_parts_compare_equal_across_names(self):
+        self.assertEqual(Text(content="hello"), TextPart(content="hello"))
+        self.assertIsInstance(TextPart(content="hello"), Text)
 
 
 class TestShouldEmitEvent(unittest.TestCase):

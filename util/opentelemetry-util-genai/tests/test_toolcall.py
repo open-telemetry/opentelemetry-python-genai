@@ -160,12 +160,12 @@ def test_compactionpart_is_message_part():
     assert isinstance(msg.parts[0], CompactionPart)
 
 
-def test_deprecated_tool_call_names_subclass_part_classes():
-    """The pre-*Part tool call names subclass their replacements."""
-    assert issubclass(ToolCallRequest, ToolCallRequestPart)
-    assert issubclass(ToolCallResponse, ToolCallResponsePart)
-    assert issubclass(ServerToolCall, ServerToolCallPart)
-    assert issubclass(ServerToolCallResponse, ServerToolCallResponsePart)
+def test_deprecated_tool_call_names_are_aliases():
+    """The pre-*Part tool call names are aliases of their replacements."""
+    assert ToolCallRequest is ToolCallRequestPart
+    assert ToolCallResponse is ToolCallResponsePart
+    assert ServerToolCall is ServerToolCallPart
+    assert ServerToolCallResponse is ServerToolCallResponsePart
 
 
 def test_deprecated_tool_call_names_build_message_parts():
