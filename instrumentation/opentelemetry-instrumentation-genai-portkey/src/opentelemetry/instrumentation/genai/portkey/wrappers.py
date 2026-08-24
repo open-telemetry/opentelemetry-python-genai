@@ -221,9 +221,7 @@ class PortkeyStreamWrapper(_PortkeyStreamMixin, SyncStreamWrapper[Any]):
         self._self_completion_tokens = None
 
 
-class AsyncPortkeyStreamWrapper(
-    _PortkeyStreamMixin, AsyncStreamWrapper[Any]
-):
+class AsyncPortkeyStreamWrapper(_PortkeyStreamMixin, AsyncStreamWrapper[Any]):
     """Asynchronous stream wrapper for Portkey completions."""
 
     def __init__(

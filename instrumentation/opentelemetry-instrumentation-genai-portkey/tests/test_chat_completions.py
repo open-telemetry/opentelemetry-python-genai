@@ -119,9 +119,7 @@ def _setup_mock_chat(client: Portkey, mock_resp: SimpleNamespace) -> None:
         mock_raw = MagicMock()
         mock_raw.text = json.dumps(raw_dict)
         mock_raw.headers = {}
-        client.chat.completions.openai_client.with_raw_response.chat.completions.create.return_value = (
-            mock_raw
-        )
+        client.chat.completions.openai_client.with_raw_response.chat.completions.create.return_value = mock_raw
     client.chat.completions._post = MagicMock(return_value=mock_resp)
 
 
@@ -195,23 +193,47 @@ def test_sync_chat_completions_basic(
             span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
             == GenAIAttributes.GenAiOperationNameValues.CHAT.value
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == "gpt-4o"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "openai"
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+            == "gpt-4o"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == "openai"
+        )
         assert (
             span.attributes.get(server_attributes.SERVER_ADDRESS)
             == "api.portkey.ai"
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.7
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.9
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 150
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_SEED) == 42
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID) == "chatcmpl-123"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL) == "gpt-4o"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS) == (
-            "stop",
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
+            == 0.7
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 10
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 5
+        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.9
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
+            == 150
+        )
+        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_SEED) == 42
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "chatcmpl-123"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+            == "gpt-4o"
+        )
+        assert span.attributes.get(
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ) == ("stop",)
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 10
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 5
+        )
 
 
 @pytest.mark.skipif(
@@ -253,14 +275,23 @@ async def test_async_chat_completions_basic(
         assert len(spans) == 1
         span = spans[0]
         assert span.name == "chat claude-3-5-sonnet-20241022"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "anthropic"
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == "anthropic"
+        )
         assert (
             span.attributes.get(server_attributes.SERVER_ADDRESS)
             == "custom.portkey.ai"
         )
         assert span.attributes.get(server_attributes.SERVER_PORT) == 8443
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 20
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 8
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 20
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 8
+        )
 
 
 def test_sync_chat_completions_content_capture(
@@ -290,13 +321,19 @@ def test_sync_chat_completions_content_capture(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        assert span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "portkey"
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == "portkey"
+        )
         input_messages = json.loads(
             span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
         )
         assert len(input_messages) == 2
         assert input_messages[0]["role"] == "system"
-        assert input_messages[0]["parts"][0]["content"] == "You are a helpful assistant."
+        assert (
+            input_messages[0]["parts"][0]["content"]
+            == "You are a helpful assistant."
+        )
         assert input_messages[1]["role"] == "user"
         assert input_messages[1]["parts"][0]["content"] == "Hello there!"
 
@@ -305,7 +342,10 @@ def test_sync_chat_completions_content_capture(
         )
         assert len(output_messages) == 1
         assert output_messages[0]["role"] == "assistant"
-        assert output_messages[0]["parts"][0]["content"] == "Captured content reply"
+        assert (
+            output_messages[0]["parts"][0]["content"]
+            == "Captured content reply"
+        )
         assert output_messages[0]["finish_reason"] == "stop"
 
 
@@ -436,8 +476,8 @@ def test_sync_chat_completions_error_handling(
         p = Portkey(api_key="test_pk", provider="openai")
         if hasattr(p.chat.completions, "openai_client"):
             p.chat.completions.openai_client = MagicMock()
-            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = (
-                RuntimeError("Portkey connection error")
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = RuntimeError(
+                "Portkey connection error"
             )
         p.chat.completions._post = MagicMock(
             side_effect=RuntimeError("Portkey connection error")
@@ -453,7 +493,9 @@ def test_sync_chat_completions_error_handling(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )
 
 
 @pytest.mark.skipif(

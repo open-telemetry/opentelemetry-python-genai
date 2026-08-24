@@ -62,7 +62,10 @@ class ToolCallingScenario(Scenario):
                 ]
                 client.chat.completions.create(
                     messages=[
-                        {"role": "user", "content": "What is the weather in SF?"}
+                        {
+                            "role": "user",
+                            "content": "What is the weather in SF?",
+                        }
                     ],
                     model="gpt-4o-mini",
                     tools=tools,

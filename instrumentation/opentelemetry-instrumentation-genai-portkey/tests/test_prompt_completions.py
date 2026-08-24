@@ -93,7 +93,10 @@ def test_sync_prompt_completions_basic(
             span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
             == GenAIAttributes.GenAiOperationNameValues.CHAT.value
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "openai"
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == "openai"
+        )
         assert (
             span.attributes.get(server_attributes.SERVER_ADDRESS)
             == "api.portkey.ai"
@@ -102,15 +105,33 @@ def test_sync_prompt_completions_basic(
             span.attributes.get(GenAIAttributes.GEN_AI_PROMPT_NAME)
             == "pp-customer-service-v1"
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.3
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 200
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID) == "promptcmpl-123"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL) == "gpt-4o"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS) == (
-            "stop",
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE)
+            == 0.3
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 12
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 6
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
+            == 200
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "promptcmpl-123"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+            == "gpt-4o"
+        )
+        assert span.attributes.get(
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ) == ("stop",)
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 12
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 6
+        )
 
 
 @pytest.mark.skipif(
@@ -151,14 +172,26 @@ async def test_async_prompt_completions_basic(
         assert len(spans) == 1
         span = spans[0]
         assert span.name == "chat"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "anthropic"
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == "anthropic"
+        )
         assert (
             span.attributes.get(GenAIAttributes.GEN_AI_PROMPT_NAME)
             == "pp-async-summary"
         )
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL) == "claude-3-haiku-20240307"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 15
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 5
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+            == "claude-3-haiku-20240307"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 15
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 5
+        )
 
 
 def test_sync_prompt_completions_content_capture(
@@ -190,7 +223,10 @@ def test_sync_prompt_completions_content_capture(
             span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
         )
         assert len(output_messages) == 1
-        assert output_messages[0]["parts"][0]["content"] == "Prompt output content"
+        assert (
+            output_messages[0]["parts"][0]["content"]
+            == "Prompt output content"
+        )
 
 
 def test_sync_prompt_completions_error_handling(
@@ -216,7 +252,10 @@ def test_sync_prompt_completions_error_handling(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ConnectionError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE)
+            == "ConnectionError"
+        )
 
 
 @pytest.mark.skipif(
@@ -247,4 +286,6 @@ async def test_async_prompt_completions_error_handling(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "TimeoutError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "TimeoutError"
+        )

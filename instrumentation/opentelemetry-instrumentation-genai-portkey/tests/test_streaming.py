@@ -100,9 +100,7 @@ class _MockAsyncStream(AsyncIterator[SimpleNamespace]):
 def _setup_mock_stream(client: Portkey, stream_obj: _MockSyncStream) -> None:
     if hasattr(client.chat.completions, "openai_client"):
         client.chat.completions.openai_client = MagicMock()
-        client.chat.completions.openai_client.chat.completions.create.return_value = (
-            stream_obj
-        )
+        client.chat.completions.openai_client.chat.completions.create.return_value = stream_obj
     client.chat.completions._post = MagicMock(return_value=stream_obj)
 
 
@@ -111,8 +109,8 @@ def _setup_async_mock_stream(
 ) -> None:
     if hasattr(client.chat.completions, "openai_client"):
         client.chat.completions.openai_client = MagicMock()
-        client.chat.completions.openai_client.chat.completions.create = AsyncMock(
-            return_value=stream_obj
+        client.chat.completions.openai_client.chat.completions.create = (
+            AsyncMock(return_value=stream_obj)
         )
     client.chat.completions._post = AsyncMock(return_value=stream_obj)
 
@@ -173,13 +171,31 @@ def test_sync_chat_streaming_basic(
         assert len(spans) == 1
         span = spans[0]
         assert span.name == "chat gpt-4o"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID) == "stream-chunk-1"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL) == "gpt-4o"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 5
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 2
-        assert GenAIAttributes.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK in span.attributes
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "stream-chunk-1"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_MODEL)
+            == "gpt-4o"
+        )
+        assert span.attributes.get(
+            GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+        ) == ("stop",)
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 5
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 2
+        )
+        assert (
+            GenAIAttributes.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK
+            in span.attributes
+        )
 
         output_messages = json.loads(
             span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
@@ -249,10 +265,21 @@ async def test_async_chat_streaming_basic(
         assert len(spans) == 1
         span = spans[0]
         assert span.name == "chat claude-3-5-sonnet"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID) == "async-stream-1"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 10
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 4
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "async-stream-1"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 10
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 4
+        )
 
         output_messages = json.loads(
             span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
@@ -299,7 +326,9 @@ def test_sync_streaming_caller_error_in_context_manager(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )
 
 
 def test_sync_streaming_midstream_sdk_error(
@@ -328,7 +357,9 @@ def test_sync_streaming_midstream_sdk_error(
         stream_obj = _MockSyncStream([chunk1], fail_after=1)
         _setup_mock_stream(p, stream_obj)
 
-        with pytest.raises(ConnectionResetError, match="Stream connection reset"):
+        with pytest.raises(
+            ConnectionResetError, match="Stream connection reset"
+        ):
             stream = p.chat.completions.create(
                 messages=[{"role": "user", "content": "Hi"}],
                 model="gpt-4o",
@@ -340,7 +371,10 @@ def test_sync_streaming_midstream_sdk_error(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ConnectionResetError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE)
+            == "ConnectionResetError"
+        )
 
 
 @pytest.mark.skipif(
@@ -387,7 +421,9 @@ async def test_async_streaming_caller_error_in_context_manager(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )
 
 
 @pytest.mark.skipif(
@@ -421,7 +457,9 @@ async def test_async_streaming_midstream_sdk_error(
         stream_obj = _MockAsyncStream([chunk1], fail_after=1)
         _setup_async_mock_stream(ap, stream_obj)
 
-        with pytest.raises(ConnectionResetError, match="Async stream connection reset"):
+        with pytest.raises(
+            ConnectionResetError, match="Async stream connection reset"
+        ):
             stream = await ap.chat.completions.create(
                 messages=[{"role": "user", "content": "Hi"}],
                 model="gpt-4o",
@@ -434,7 +472,10 @@ async def test_async_streaming_midstream_sdk_error(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
-        assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ConnectionResetError"
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE)
+            == "ConnectionResetError"
+        )
 
 
 def test_sync_prompt_streaming(
@@ -490,11 +531,24 @@ def test_sync_prompt_streaming(
         assert len(spans) == 1
         span = spans[0]
         assert span.name == "chat"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_PROMPT_NAME) == "pp-stream-test"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
-        assert span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID) == "pchunk-1"
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 8
-        assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROMPT_NAME)
+            == "pp-stream-test"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_STREAM) is True
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID)
+            == "pchunk-1"
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 8
+        )
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
+            == 3
+        )
 
         output_messages = json.loads(
             span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
