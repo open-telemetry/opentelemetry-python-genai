@@ -22,7 +22,8 @@ class InferenceStreamingScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
-        "gen_ai.client.time_to_first_chunk",
+        "gen_ai.client.operation.time_to_first_chunk",
+        "gen_ai.client.operation.time_per_output_chunk",
     )
 
     def run(
