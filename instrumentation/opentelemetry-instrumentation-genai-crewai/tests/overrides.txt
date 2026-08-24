@@ -1,5 +1,6 @@
-# CrewAI 1.10.1 caps opentelemetry-api and opentelemetry-sdk below the
-# workspace's supported ~=1.43 line. Relax those transitive caps so the
-# instrumentation package can be tested with the repository's OTel stack.
+# CrewAI caps parts of its OpenTelemetry stack below the workspace's supported
+# ~=1.43 line. Relax those transitive caps so all test factors use one coherent
+# OpenTelemetry version.
 opentelemetry-api ~= 1.43
 opentelemetry-sdk ~= 1.43
+opentelemetry-exporter-otlp-proto-http ~= 1.43

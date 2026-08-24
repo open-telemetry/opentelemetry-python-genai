@@ -127,6 +127,7 @@ def test_failed_kickoff_records_error_message_on_all_spans(
             goal="Answer the question accurately",
             backstory="A concise research assistant",
             llm=llm,
+            max_retry_limit=0,
         )
         task = Task(
             description="Say this is a test.",

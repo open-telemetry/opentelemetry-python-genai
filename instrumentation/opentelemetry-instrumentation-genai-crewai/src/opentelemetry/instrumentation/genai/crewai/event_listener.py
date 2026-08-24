@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable
+from typing import TypeVar
 
 from crewai.events.base_event_listener import BaseEventListener
 from crewai.events.base_events import BaseEvent
@@ -32,7 +33,14 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text
 
-EventHandler = Callable[[object, BaseEvent], None]
+EventT = TypeVar("EventT", bound=BaseEvent)
+RegisteredHandler = Callable[..., object]
+CompletionEvent = (
+    CrewKickoffCompletedEvent
+    | CrewKickoffFailedEvent
+    | AgentExecutionCompletedEvent
+    | AgentExecutionErrorEvent
+)
 
 
 def _completion_key(event: BaseEvent) -> str | None:
@@ -77,7 +85,8 @@ class CrewAIEventListener(BaseEventListener):
     def __init__(self, telemetry_handler: TelemetryHandler) -> None:
         self._telemetry_handler = telemetry_handler
         self._invocations: dict[str, GenAIInvocation] = {}
-        self._handlers: list[tuple[type[BaseEvent], EventHandler]] = []
+        self._pending_completions: dict[str, CompletionEvent] = {}
+        self._handlers: list[tuple[type[BaseEvent], RegisteredHandler]] = []
         self._event_bus: CrewAIEventsBus | None = None
         self._lock = threading.RLock()
         super().__init__()
@@ -93,8 +102,8 @@ class CrewAIEventListener(BaseEventListener):
 
     def _register(
         self,
-        event_type: type[BaseEvent],
-        handler: EventHandler,
+        event_type: type[EventT],
+        handler: Callable[[object, EventT], None],
     ) -> None:
         if self._event_bus is None:
             return
@@ -104,15 +113,99 @@ class CrewAIEventListener(BaseEventListener):
     def _remember(self, event: BaseEvent, invocation: GenAIInvocation) -> None:
         with self._lock:
             previous = self._invocations.setdefault(event.event_id, invocation)
+            pending = self._pending_completions.pop(event.event_id, None)
+            if pending is None:
+                candidates = [
+                    completion_key
+                    for completion_key, completion in (
+                        self._pending_completions.items()
+                    )
+                    if self._matches(invocation, completion)
+                ]
+                if len(candidates) == 1:
+                    pending = self._pending_completions.pop(candidates[0])
         if previous is not invocation:
             invocation.stop()
+        elif pending is not None:
+            with self._lock:
+                self._invocations.pop(event.event_id, None)
+            self._finish(invocation, pending)
 
-    def _pop(self, event: BaseEvent) -> GenAIInvocation | None:
+    def _pop(self, event: CompletionEvent) -> GenAIInvocation | None:
         key = _completion_key(event)
         if key is None:
             return None
         with self._lock:
-            return self._invocations.pop(key, None)
+            invocation = self._invocations.pop(key, None)
+            if invocation is None:
+                # CrewAI 1.10 can report a task event ID for an agent or crew
+                # failure. Fall back only when the operation match is unique.
+                expected_type: type[GenAIInvocation] = (
+                    WorkflowInvocation
+                    if isinstance(
+                        event,
+                        (CrewKickoffCompletedEvent, CrewKickoffFailedEvent),
+                    )
+                    else AgentInvocation
+                )
+                candidates = [
+                    candidate_key
+                    for candidate_key, candidate in self._invocations.items()
+                    if isinstance(candidate, expected_type)
+                ]
+                if len(candidates) == 1:
+                    invocation = self._invocations.pop(candidates[0])
+            if invocation is None:
+                self._pending_completions[key] = event
+            return invocation
+
+    @staticmethod
+    def _matches(
+        invocation: GenAIInvocation,
+        event: CompletionEvent,
+    ) -> bool:
+        return (
+            isinstance(invocation, WorkflowInvocation)
+            and isinstance(
+                event, (CrewKickoffCompletedEvent, CrewKickoffFailedEvent)
+            )
+        ) or (
+            isinstance(invocation, AgentInvocation)
+            and isinstance(
+                event,
+                (AgentExecutionCompletedEvent, AgentExecutionErrorEvent),
+            )
+        )
+
+    @staticmethod
+    def _finish(
+        invocation: GenAIInvocation,
+        event: CompletionEvent,
+    ) -> None:
+        if isinstance(event, CrewKickoffCompletedEvent) and isinstance(
+            invocation, WorkflowInvocation
+        ):
+            message = _output_message(event.output)
+            if message is not None:
+                invocation.output_messages = [message]
+            invocation.stop()
+        elif isinstance(event, CrewKickoffFailedEvent) and isinstance(
+            invocation, WorkflowInvocation
+        ):
+            invocation.fail(_error(event.error, "CrewAI crew kickoff failed"))
+        elif isinstance(event, AgentExecutionCompletedEvent) and isinstance(
+            invocation, AgentInvocation
+        ):
+            message = _output_message(event.output)
+            if message is not None:
+                invocation.output_messages = [message]
+            invocation.stop()
+        elif isinstance(event, AgentExecutionErrorEvent) and isinstance(
+            invocation, AgentInvocation
+        ):
+            invocation.fail(
+                _error(event.error, "CrewAI agent execution failed")
+            )
 
     def _on_crew_started(
         self, source: object, event: CrewKickoffStartedEvent
@@ -131,20 +224,16 @@ class CrewAIEventListener(BaseEventListener):
     ) -> None:
         del source
         invocation = self._pop(event)
-        if not isinstance(invocation, WorkflowInvocation):
-            return
-        message = _output_message(event.output)
-        if message is not None:
-            invocation.output_messages = [message]
-        invocation.stop()
+        if invocation is not None:
+            self._finish(invocation, event)
 
     def _on_crew_failed(
         self, source: object, event: CrewKickoffFailedEvent
     ) -> None:
         del source
         invocation = self._pop(event)
-        if isinstance(invocation, WorkflowInvocation):
-            invocation.fail(_error(event.error, "CrewAI crew kickoff failed"))
+        if invocation is not None:
+            self._finish(invocation, event)
 
     def _on_agent_started(
         self, source: object, event: AgentExecutionStartedEvent
@@ -168,22 +257,16 @@ class CrewAIEventListener(BaseEventListener):
     ) -> None:
         del source
         invocation = self._pop(event)
-        if not isinstance(invocation, AgentInvocation):
-            return
-        message = _output_message(event.output)
-        if message is not None:
-            invocation.output_messages = [message]
-        invocation.stop()
+        if invocation is not None:
+            self._finish(invocation, event)
 
     def _on_agent_failed(
         self, source: object, event: AgentExecutionErrorEvent
     ) -> None:
         del source
         invocation = self._pop(event)
-        if isinstance(invocation, AgentInvocation):
-            invocation.fail(
-                _error(event.error, "CrewAI agent execution failed")
-            )
+        if invocation is not None:
+            self._finish(invocation, event)
 
     def shutdown(self) -> None:
         if self._event_bus is not None:
@@ -192,6 +275,7 @@ class CrewAIEventListener(BaseEventListener):
         with self._lock:
             invocations = list(self._invocations.values())
             self._invocations.clear()
+            self._pending_completions.clear()
         for invocation in invocations:
             invocation.stop()
         self._handlers.clear()
