@@ -688,3 +688,77 @@ def test_sync_streaming_no_finish_reason_defaults_to_stop(
             span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
         )
         assert output_messages[0]["finish_reason"] == "stop"
+
+
+def test_sync_streaming_request_failure_records_span(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        p.chat.completions.openai_client = MagicMock()
+        p.chat.completions.openai_client.chat.completions.create.side_effect = RuntimeError(
+            "boom"
+        )
+        p.chat.completions._post = MagicMock(side_effect=RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            p.chat.completions.create(
+                messages=[{"role": "user", "content": "Hi"}],
+                model="gpt-4o",
+                stream=True,
+            )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.status.status_code == StatusCode.ERROR
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )
+
+
+@pytest.mark.skipif(
+    not _has_async_portkey,
+    reason="AsyncPortkey not available in this version of portkey-ai",
+)
+@pytest.mark.asyncio
+async def test_async_streaming_request_failure_records_span(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        ap = AsyncPortkey(api_key="test_pk", provider="openai")
+        if hasattr(ap.chat.completions, "openai_client"):
+            ap.chat.completions.openai_client = MagicMock()
+            ap.chat.completions.openai_client.chat.completions.create = (
+                AsyncMock(side_effect=RuntimeError("async boom"))
+            )
+        ap.chat.completions._post = AsyncMock(
+            side_effect=RuntimeError("async boom")
+        )
+
+        with pytest.raises(RuntimeError, match="async boom"):
+            await ap.chat.completions.create(
+                messages=[{"role": "user", "content": "Hi"}],
+                model="gpt-4o",
+                stream=True,
+            )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.status.status_code == StatusCode.ERROR
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )

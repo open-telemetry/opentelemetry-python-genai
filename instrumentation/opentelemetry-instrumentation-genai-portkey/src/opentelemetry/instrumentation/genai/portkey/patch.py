@@ -37,12 +37,12 @@ def patch_portkey(handler: TelemetryHandler) -> None:
         wrap_function_wrapper(
             _CHAT_COMPLETE_MODULE,
             f"{_COMPLETIONS_CLASS}.create",
-            _chat_completions_create(handler),
+            _sync_completions_create(handler, is_prompt=False),
         )
         wrap_function_wrapper(
             _CHAT_COMPLETE_MODULE,
             f"{_ASYNC_COMPLETIONS_CLASS}.create",
-            _async_chat_completions_create(handler),
+            _async_completions_create(handler, is_prompt=False),
         )
     except (ImportError, AttributeError) as exc:
         logger.debug("Failed to patch Portkey chat completions: %s", exc)
@@ -51,12 +51,12 @@ def patch_portkey(handler: TelemetryHandler) -> None:
         wrap_function_wrapper(
             _GENERATION_MODULE,
             f"{_COMPLETIONS_CLASS}.create",
-            _prompts_completions_create(handler),
+            _sync_completions_create(handler, is_prompt=True),
         )
         wrap_function_wrapper(
             _GENERATION_MODULE,
             f"{_ASYNC_COMPLETIONS_CLASS}.create",
-            _async_prompts_completions_create(handler),
+            _async_completions_create(handler, is_prompt=True),
         )
     except (ImportError, AttributeError) as exc:
         logger.debug("Failed to patch Portkey prompt completions: %s", exc)
@@ -85,8 +85,10 @@ def unpatch_portkey() -> None:
         pass
 
 
-def _chat_completions_create(
+def _sync_completions_create(
     handler: TelemetryHandler,
+    *,
+    is_prompt: bool = False,
 ) -> Callable[..., Any]:
     capture_content = handler.should_capture_content()
 
@@ -97,23 +99,29 @@ def _chat_completions_create(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content
+            handler, instance, kwargs, capture_content, is_prompt=is_prompt
         )
-        if is_streaming(kwargs):
-            return PortkeyStreamWrapper(
-                wrapped(*args, **kwargs), invocation, capture_content
-            )
-
-        with invocation:
+        try:
             result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return PortkeyStreamWrapper(
+                    result, invocation, capture_content
+                )
+
             set_response_properties(invocation, result, capture_content)
+            invocation.stop()
             return result
+        except Exception as error:
+            invocation.fail(error)
+            raise
 
     return traced_method
 
 
-def _async_chat_completions_create(
+def _async_completions_create(
     handler: TelemetryHandler,
+    *,
+    is_prompt: bool = False,
 ) -> Callable[..., Any]:
     capture_content = handler.should_capture_content()
 
@@ -124,70 +132,20 @@ def _async_chat_completions_create(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content
+            handler, instance, kwargs, capture_content, is_prompt=is_prompt
         )
-        if is_streaming(kwargs):
-            return AsyncPortkeyStreamWrapper(
-                await wrapped(*args, **kwargs), invocation, capture_content
-            )
-
-        with invocation:
+        try:
             result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return AsyncPortkeyStreamWrapper(
+                    result, invocation, capture_content
+                )
+
             set_response_properties(invocation, result, capture_content)
+            invocation.stop()
             return result
-
-    return cast(Callable[..., Any], traced_method)
-
-
-def _prompts_completions_create(
-    handler: TelemetryHandler,
-) -> Callable[..., Any]:
-    capture_content = handler.should_capture_content()
-
-    def traced_method(
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content, is_prompt=True
-        )
-        if is_streaming(kwargs):
-            return PortkeyStreamWrapper(
-                wrapped(*args, **kwargs), invocation, capture_content
-            )
-
-        with invocation:
-            result = wrapped(*args, **kwargs)
-            set_response_properties(invocation, result, capture_content)
-            return result
-
-    return traced_method
-
-
-def _async_prompts_completions_create(
-    handler: TelemetryHandler,
-) -> Callable[..., Any]:
-    capture_content = handler.should_capture_content()
-
-    async def traced_method(
-        wrapped: Callable[..., Awaitable[Any]],
-        instance: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content, is_prompt=True
-        )
-        if is_streaming(kwargs):
-            return AsyncPortkeyStreamWrapper(
-                await wrapped(*args, **kwargs), invocation, capture_content
-            )
-
-        with invocation:
-            result = await wrapped(*args, **kwargs)
-            set_response_properties(invocation, result, capture_content)
-            return result
+        except Exception as error:
+            invocation.fail(error)
+            raise
 
     return cast(Callable[..., Any], traced_method)

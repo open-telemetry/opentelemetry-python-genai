@@ -18,7 +18,7 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class ToolCallingScenario(Scenario):
-    expected_spans = {"chat": 1}
+    expected_spans = {"chat": 2}
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
@@ -60,14 +60,47 @@ class ToolCallingScenario(Scenario):
                         },
                     }
                 ]
-                client.chat.completions.create(
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": "What is the weather in SF?",
-                        }
-                    ],
+                messages: list[dict[str, Any]] = [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in SF?",
+                    }
+                ]
+                first = client.chat.completions.create(
+                    messages=messages,
                     model="gpt-4o-mini",
                     tools=tools,
+                    stream=False,
+                )
+                assistant_message = first.choices[0].message
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in (assistant_message.tool_calls or [])
+                ]
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_message.content,
+                        "tool_calls": tool_calls,
+                    }
+                )
+                for tc in assistant_message.tool_calls or []:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "content": "65 degrees and sunny",
+                            "tool_call_id": tc.id,
+                        }
+                    )
+                client.chat.completions.create(
+                    messages=messages,
+                    model="gpt-4o-mini",
                     stream=False,
                 )

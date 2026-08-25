@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -25,6 +25,37 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
     ToolDefinition,
 )
+
+if TYPE_CHECKING:
+    from portkey_ai import AsyncPortkey, Portkey
+
+# Mapping from Portkey ``provider`` values to the well-known
+# ``gen_ai.provider.name`` values defined by the GenAI semantic conventions.
+_PROVIDER_NAME_OVERRIDES: dict[str, str] = {
+    "azure-openai": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "azure_openai": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "azure": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "azure-ai-inference": GenAIAttributes.GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
+    "bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
+    "aws-bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
+    "amazon-bedrock": GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
+    "vertex-ai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "vertexai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "google-vertex-ai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "gemini": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,
+    "google-generativeai": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,
+    "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
+    "mistral-ai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
+    "mistralai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
+    "perplexity": GenAIAttributes.GenAiProviderNameValues.PERPLEXITY.value,
+    "perplexity-ai": GenAIAttributes.GenAiProviderNameValues.PERPLEXITY.value,
+    "x-ai": GenAIAttributes.GenAiProviderNameValues.X_AI.value,
+    "xai": GenAIAttributes.GenAiProviderNameValues.X_AI.value,
+    "watsonx": GenAIAttributes.GenAiProviderNameValues.IBM_WATSONX_AI.value,
+    "ibm-watsonx": GenAIAttributes.GenAiProviderNameValues.IBM_WATSONX_AI.value,
+    "deepseek": GenAIAttributes.GenAiProviderNameValues.DEEPSEEK.value,
+    "groq": GenAIAttributes.GenAiProviderNameValues.GROQ.value,
+}
 
 
 def get_property_value(obj: Any, property_name: str) -> Any:
@@ -57,16 +88,17 @@ def is_streaming(kwargs: dict[str, Any]) -> bool:
     return bool(stream)
 
 
-def get_provider(client_instance: Any) -> str:
+def get_provider(client_instance: Portkey | AsyncPortkey) -> str:
     """Derive the provider name from the Portkey client instance."""
     provider = getattr(client_instance, "provider", None)
     if provider and isinstance(provider, str):
-        return provider.lower()
+        provider_lower = provider.lower()
+        return _PROVIDER_NAME_OVERRIDES.get(provider_lower, provider_lower)
     return "portkey"
 
 
 def get_server_address_and_port(
-    client_instance: Any,
+    client_instance: Portkey | AsyncPortkey,
 ) -> tuple[str | None, int | None]:
     """Extract the server host and port from client base_url."""
     base_url = getattr(client_instance, "base_url", None)
@@ -211,18 +243,18 @@ def _apply_request_parameters(
 ) -> None:
     if (temp := get_value(kwargs.get("temperature"))) is not None:
         invocation.temperature = float(temp)
-    if (
-        top_p := get_value(kwargs.get("top_p") or kwargs.get("p"))
-    ) is not None:
+    if (top_p := get_value(kwargs.get("top_p"))) is not None:
         invocation.top_p = float(top_p)
+    elif (p := get_value(kwargs.get("p"))) is not None:
+        invocation.top_p = float(p)
     if (top_k := get_value(kwargs.get("top_k"))) is not None:
         invocation.top_k = float(top_k)
-    if (
-        max_tokens := get_value(
-            kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
-        )
-    ) is not None:
+    if (max_tokens := get_value(kwargs.get("max_tokens"))) is not None:
         invocation.max_tokens = int(max_tokens)
+    elif (
+        max_completion_tokens := get_value(kwargs.get("max_completion_tokens"))
+    ) is not None:
+        invocation.max_tokens = int(max_completion_tokens)
     if (stop := get_value(kwargs.get("stop"))) is not None:
         if isinstance(stop, str):
             invocation.stop_sequences = [stop]

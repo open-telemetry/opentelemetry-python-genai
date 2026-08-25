@@ -579,3 +579,111 @@ def test_chat_completions_dict_and_multipart_content(
             {"content": "text part", "type": "text"},
             {"content": "nested dict part", "type": "text"},
         ]
+
+
+def test_chat_completions_top_p_zero_and_max_tokens_zero(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-4o",
+            top_p=0.0,
+            max_tokens=0,
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.0
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 0
+        )
+
+
+def test_chat_completions_alternative_keys_p_and_max_completion_tokens(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-4o",
+            p=0.0,
+            max_completion_tokens=0,
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.0
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 0
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider_input", "expected_provider"),
+    [
+        ("azure-openai", "azure.ai.openai"),
+        ("azure_openai", "azure.ai.openai"),
+        ("bedrock", "aws.bedrock"),
+        ("aws-bedrock", "aws.bedrock"),
+        ("vertex-ai", "gcp.vertex_ai"),
+        ("gemini", "gcp.gemini"),
+        ("mistral", "mistral_ai"),
+        ("openai", "openai"),
+        ("anthropic", "anthropic"),
+        ("cohere", "cohere"),
+        ("perplexity-ai", "perplexity"),
+        ("deepseek", "deepseek"),
+        ("custom_provider", "custom_provider"),
+    ],
+)
+def test_chat_completions_provider_mapping(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    provider_input,
+    expected_provider,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider=provider_input)
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert (
+            span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+            == expected_provider
+        )

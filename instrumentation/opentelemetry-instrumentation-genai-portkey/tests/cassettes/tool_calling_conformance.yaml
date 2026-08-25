@@ -26,4 +26,30 @@ interactions:
     status:
       code: 200
       message: OK
+- request:
+    body: '{"messages": [{"role": "user", "content": "What is the weather in SF?"}, {"role": "assistant", "content": null, "tool_calls": [{"id": "call_12345", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\": \"San Francisco\"}"}}]}, {"role": "tool", "content": "65 degrees and sunny", "tool_call_id": "call_12345"}], "model": "gpt-4o-mini", "stream": false}'
+    headers:
+      accept:
+      - application/json
+      content-type:
+      - application/json
+      host:
+      - api.portkey.ai
+      x-portkey-api-key:
+      - test_portkey_api_key
+      x-portkey-provider:
+      - openai
+    method: POST
+    uri: https://api.portkey.ai/v1/chat/completions
+  response:
+    body:
+      string: '{"id": "chatcmpl-test-tool-2", "object": "chat.completion", "created": 1731368635, "model": "gpt-4o-mini-2024-07-18", "choices": [{"index": 0, "message": {"role": "assistant", "content": "The weather in San Francisco is 65 degrees and sunny."}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 70, "completion_tokens": 12, "total_tokens": 82}}'
+    headers:
+      content-type:
+      - application/json
+      x-portkey-provider:
+      - openai
+    status:
+      code: 200
+      message: OK
 version: 1
