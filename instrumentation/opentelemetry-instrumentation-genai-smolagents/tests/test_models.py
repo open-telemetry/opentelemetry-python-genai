@@ -46,7 +46,7 @@ from opentelemetry.semconv.attributes import (
     server_attributes,
 )
 from opentelemetry.trace import StatusCode
-from opentelemetry.util.genai.types import Blob, Text, Uri
+from opentelemetry.util.genai.types import BlobPart, TextPart, UriPart
 
 from .test_utils import (
     MESSAGES,
@@ -770,9 +770,9 @@ def test_to_input_messages_dict_and_chatmessage() -> None:
         ]
     )
     assert messages[0].role == "user"
-    assert messages[0].parts == [Text(content="Hello")]
+    assert messages[0].parts == [TextPart(content="Hello")]
     assert messages[1].role == "assistant"
-    assert messages[1].parts == [Text(content="Hi there")]
+    assert messages[1].parts == [TextPart(content="Hi there")]
 
 
 def test_to_input_messages_image_and_base64() -> None:
@@ -790,8 +790,8 @@ def test_to_input_messages_image_and_base64() -> None:
         ]
     )
     parts = messages[0].parts
-    assert parts[0] == Uri(mime_type=None, modality="image", uri=IMAGE_URL)
-    assert isinstance(parts[1], Blob)
+    assert parts[0] == UriPart(mime_type=None, modality="image", uri=IMAGE_URL)
+    assert isinstance(parts[1], BlobPart)
     assert parts[1].modality == "image"
     assert parts[1].mime_type == "image/png"
     assert isinstance(parts[1].content, bytes)
@@ -812,7 +812,7 @@ def test_to_input_messages_data_url_keeps_media_type() -> None:
         ]
     )
     (part,) = messages[0].parts
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type == "image/jpeg"
 
 
@@ -837,7 +837,7 @@ def test_to_output_message_unwraps_the_role_enum() -> None:
         ChatMessage(role=MessageRole.ASSISTANT, content="done")
     )
     assert output.role == "assistant"
-    assert output.parts == [Text(content="done")]
+    assert output.parts == [TextPart(content="done")]
     # The in-process runtimes report no finish reason, and util-genai omits the
     # empty value.
     assert output.finish_reason == ""
@@ -855,7 +855,7 @@ def test_to_output_message_maps_image_content() -> None:
             ],
         )
     )
-    assert output.parts[0] == Text(content="Here it is")
-    assert output.parts[1] == Uri(
+    assert output.parts[0] == TextPart(content="Here it is")
+    assert output.parts[1] == UriPart(
         mime_type=None, modality="image", uri=IMAGE_URL
     )
