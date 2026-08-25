@@ -163,6 +163,8 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     except Exception as e:
         # For this test, to get error, cassettes were recorded with no OPENAI_API_KEY, so an error is expected here.
         assert isinstance(e, AuthenticationError)
+        # langchain-openai >= 1.6 raises its own AuthenticationError subclass.
+        error_type = f"{type(e).__module__}.{type(e).__qualname__}"
 
     assert response is None
 
@@ -173,7 +175,9 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
         True if capture_content in ("SPAN_ONLY", "SPAN_AND_EVENT") else False
     )
     assert_openai_completion_attributes_with_error(
-        spans[0] if len(spans) > 0 else None, verify_content=verify_content
+        spans[0] if len(spans) > 0 else None,
+        error_type,
+        verify_content=verify_content,
     )
 
     # verify metrics
@@ -482,14 +486,12 @@ def assert_openai_completion_attributes(
 
 
 def assert_openai_completion_attributes_with_error(
-    span: ReadableSpan, verify_content: bool = True
+    span: ReadableSpan, error_type: str, verify_content: bool = True
 ):
     assert span is not None
     assert span.name == "chat gpt-3.5-turbo"
     attributes = span.attributes
-    assert (
-        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
-    )
+    assert attributes[error_attributes.ERROR_TYPE] == error_type
     assert attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     assert (
         attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == "gpt-3.5-turbo"
@@ -651,7 +653,8 @@ def assert_duration_metric_when_error(metric, parent_span):
 def assert_duration_metric_attributes_when_error(attributes, parent_span):
     assert len(attributes) == 4
     assert (
-        attributes[error_attributes.ERROR_TYPE] == "openai.AuthenticationError"
+        attributes[error_attributes.ERROR_TYPE]
+        == parent_span.attributes[error_attributes.ERROR_TYPE]
     )
     assert attributes.get(gen_ai_attributes.GEN_AI_PROVIDER_NAME) == "openai"
     assert (
