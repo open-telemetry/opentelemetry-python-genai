@@ -52,18 +52,19 @@ def _make_agent_inv_mock() -> mock.MagicMock:
     agent_inv = mock.MagicMock(spec=AgentInvocation)
     agent_inv.span = mock.MagicMock()
     agent_inv.span.is_recording.return_value = False
-    # agent_name is an instance attribute set in AgentInvocation.__init__ via the
-    # constructor arg; pre-configure it so spec-restricted attribute access works.
     agent_inv.agent_name = None
+    agent_inv.conversation_id = None
     return agent_inv
 
 
 def _make_invoke_local_agent_side_effect(inv: mock.MagicMock):
     """Return a side_effect for invoke_local_agent that mirrors what the real
-    AgentInvocation constructor does: set agent_name from the kwarg."""
+    AgentInvocation constructor does: set agent_name and conversation_id from
+    the kwargs."""
 
     def _side_effect(*args, **kwargs):
         inv.agent_name = kwargs.get("agent_name")
+        inv.conversation_id = kwargs.get("conversation_id")
         return inv
 
     return _side_effect
@@ -145,7 +146,9 @@ class TestOnChainStartWorkflow:
             parent_run_id=None,
         )
 
-        telemetry.workflow.assert_called_once_with(name="MyLangGraph")
+        telemetry.workflow.assert_called_once_with(
+            name="MyLangGraph", conversation_id=None
+        )
 
     def test_workflow_name_overridden_by_metadata(self):
         handler, telemetry, _, _ = _make_handler()
@@ -159,7 +162,25 @@ class TestOnChainStartWorkflow:
             metadata={"workflow_name": "custom_workflow"},
         )
 
-        telemetry.workflow.assert_called_once_with(name="custom_workflow")
+        telemetry.workflow.assert_called_once_with(
+            name="custom_workflow", conversation_id=None
+        )
+
+    def test_workflow_conversation_id_from_metadata(self):
+        handler, telemetry, _, _ = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "MyLangGraph"},
+            inputs={},
+            run_id=run_id,
+            parent_run_id=None,
+            metadata={"thread_id": "t1"},
+        )
+
+        telemetry.workflow.assert_called_once_with(
+            name="MyLangGraph", conversation_id="t1"
+        )
 
     def test_workflow_registered_in_invocation_manager(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -197,6 +218,7 @@ class TestOnChainStartAgent:
 
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
+            conversation_id=None,
         )
         assert agent_inv.agent_name == "math_agent"
         assert handler._invocation_manager.get_invocation(run_id) is agent_inv
@@ -239,6 +261,25 @@ class TestOnChainStartAgent:
         )
 
         assert agent_inv.conversation_id == "t1"
+
+    def test_conversation_id_prefers_session_id_over_conversation_id(self):
+        """thread_id > session_id > conversation_id is the resolution order."""
+        handler, _, _, agent_inv = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=run_id,
+            parent_run_id=None,
+            metadata={
+                "agent_name": "math_agent",
+                "conversation_id": "c1",
+                "session_id": "s1",
+            },
+        )
+
+        assert agent_inv.conversation_id == "s1"
 
     def test_duplicate_agent_name_does_not_create_new_span(self):
         """When the nearest ancestor already has the same agent name, no new
@@ -395,6 +436,60 @@ class TestOnChainStartAgent:
 # ---------------------------------------------------------------------------
 # on_chain_start – unclassified
 # ---------------------------------------------------------------------------
+
+
+class TestOnChatModelStartConversationId:
+    def test_conversation_id_from_metadata(self):
+        handler, telemetry, _, _ = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="What is 3 * 4?")]],
+            run_id=run_id,
+            parent_run_id=None,
+            metadata={"ls_provider": "openai", "thread_id": "t1"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
+
+    def test_conversation_id_inherited_from_parent_chain(self):
+        handler, telemetry, _, _ = _make_handler()
+        workflow_run_id, chat_run_id = _run_id(), _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "LangGraph", "id": ["langgraph"]},
+            inputs={},
+            run_id=workflow_run_id,
+            parent_run_id=None,
+            metadata={"thread_id": "t1"},
+        )
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="What is 3 * 4?")]],
+            run_id=chat_run_id,
+            parent_run_id=workflow_run_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
+
+    def test_no_conversation_id_available(self):
+        handler, telemetry, _, _ = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="What is 3 * 4?")]],
+            run_id=run_id,
+            parent_run_id=None,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        assert telemetry.inference.call_args.kwargs["conversation_id"] is None
 
 
 class TestOnChainStartUnclassified:
@@ -1249,6 +1344,21 @@ class TestOnRetrieverStart:
         assert (
             handler._invocation_manager.get_invocation(run_id) is retrieval_inv
         )
+
+    def test_conversation_id_tracked_but_not_passed_to_invocation(self):
+        """Retrieval spans omit the attribute; descendants still inherit it."""
+        handler, telemetry, _ = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        handler.on_retriever_start(
+            serialized={},
+            query="what is AI?",
+            run_id=run_id,
+            metadata={"thread_id": "t1"},
+        )
+
+        assert "conversation_id" not in telemetry.retrieval.call_args.kwargs
+        assert handler._invocation_manager.get_conversation_id(run_id) == "t1"
 
     def test_query_text_set_on_invocation(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()

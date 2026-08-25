@@ -49,6 +49,7 @@ class AgentInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
@@ -73,7 +74,7 @@ class AgentInvocation(GenAIInvocation):
         self.agent_description: str | None = None
         self.agent_version: str | None = None
 
-        self.conversation_id: str | None = None
+        self.conversation_id: str | None = conversation_id
         self.data_source_id: str | None = None
         self.output_type: str | None = None
 
@@ -113,6 +114,7 @@ class AgentInvocation(GenAIInvocation):
             (server_attributes.SERVER_ADDRESS, self._server_address),
             (server_attributes.SERVER_PORT, self._server_port),
             (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
+            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,

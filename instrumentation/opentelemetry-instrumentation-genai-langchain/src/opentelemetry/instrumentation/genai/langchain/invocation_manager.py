@@ -14,6 +14,7 @@ class _InvocationState:
     invocation: GenAIInvocation | None
     children: list[UUID] = field(default_factory=lambda: list())
     parent_run_id: UUID | None = None
+    conversation_id: str | None = None
     ended: bool = False
 
 
@@ -30,6 +31,7 @@ class _InvocationManager:
         run_id: UUID,
         parent_run_id: UUID | None,
         invocation: GenAIInvocation | None,
+        conversation_id: str | None = None,
     ) -> None:
         invocation_state = _InvocationState(invocation=invocation)
 
@@ -39,11 +41,23 @@ class _InvocationManager:
             parent_invocation_state = self._invocations[parent_run_id]
             parent_invocation_state.children.append(run_id)
 
+        invocation_state.conversation_id = (
+            conversation_id
+            if conversation_id is not None
+            else self.get_conversation_id(parent_run_id)
+        )
+
         self._invocations[run_id] = invocation_state
 
     def get_invocation(self, run_id: UUID) -> GenAIInvocation | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.invocation if invocation_state else None
+
+    def get_conversation_id(self, run_id: UUID | None) -> str | None:
+        if run_id is None:
+            return None
+        invocation_state = self._invocations.get(run_id)
+        return invocation_state.conversation_id if invocation_state else None
 
     def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)

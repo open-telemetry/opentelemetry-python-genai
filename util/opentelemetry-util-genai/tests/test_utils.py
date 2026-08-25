@@ -470,6 +470,7 @@ class TestTelemetryHandler(unittest.TestCase):
             request_model="sampler-model",
             server_address="api.example.com",
             server_port=8080,
+            conversation_id="conv-1",
         )
         invocation.stop()
 
@@ -485,6 +486,16 @@ class TestTelemetryHandler(unittest.TestCase):
             == "api.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
+        assert captured_attributes[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
+
+    def test_inference_omits_conversation_id_when_not_supplied(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
 
     def test_start_inference_sampler_can_drop_span_based_on_attributes(self):
         """Verify that a sampler can reject spans based on attributes passed at creation time."""

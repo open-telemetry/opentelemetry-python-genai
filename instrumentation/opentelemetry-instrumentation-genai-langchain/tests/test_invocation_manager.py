@@ -239,3 +239,101 @@ def test_none_invocation_can_be_stored_and_retrieved(invocation_manager):
 
 def test_delete_nonexistent_run_id_does_not_raise(invocation_manager):
     invocation_manager.delete_invocation_state(uuid.uuid4())  # must not raise
+
+
+def test_get_conversation_id_returns_none_for_unknown(invocation_manager):
+    assert invocation_manager.get_conversation_id(uuid.uuid4()) is None
+
+
+def test_get_conversation_id_returns_none_for_none_run_id(invocation_manager):
+    assert invocation_manager.get_conversation_id(None) is None
+
+
+def test_conversation_id_is_stored_when_supplied(invocation_manager):
+    run_id = uuid.uuid4()
+
+    invocation_manager.add_invocation_state(
+        run_id=run_id,
+        parent_run_id=None,
+        invocation=mock.Mock(spec=GenAIInvocation),
+        conversation_id="t1",
+    )
+
+    assert invocation_manager.get_conversation_id(run_id) == "t1"
+
+
+def test_conversation_id_is_inherited_from_parent(invocation_manager):
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+
+    invocation_manager.add_invocation_state(
+        run_id=parent_id,
+        parent_run_id=None,
+        invocation=mock.Mock(spec=GenAIInvocation),
+        conversation_id="t1",
+    )
+    invocation_manager.add_invocation_state(
+        run_id=child_id,
+        parent_run_id=parent_id,
+        invocation=mock.Mock(spec=GenAIInvocation),
+    )
+
+    assert invocation_manager.get_conversation_id(child_id) == "t1"
+
+
+def test_supplied_conversation_id_overrides_inherited_one(invocation_manager):
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+
+    invocation_manager.add_invocation_state(
+        run_id=parent_id,
+        parent_run_id=None,
+        invocation=mock.Mock(spec=GenAIInvocation),
+        conversation_id="outer",
+    )
+    invocation_manager.add_invocation_state(
+        run_id=child_id,
+        parent_run_id=parent_id,
+        invocation=mock.Mock(spec=GenAIInvocation),
+        conversation_id="inner",
+    )
+
+    assert invocation_manager.get_conversation_id(child_id) == "inner"
+
+
+def test_conversation_id_inherited_through_span_less_nodes(invocation_manager):
+    """A node with no invocation must still carry the id to its descendants."""
+    root_id = uuid.uuid4()
+    middle_id = uuid.uuid4()
+    leaf_id = uuid.uuid4()
+
+    invocation_manager.add_invocation_state(
+        run_id=root_id,
+        parent_run_id=None,
+        invocation=mock.Mock(spec=GenAIInvocation),
+        conversation_id="t1",
+    )
+    # Unclassified chain: tracked for traversal, but emits no span.
+    invocation_manager.add_invocation_state(
+        run_id=middle_id, parent_run_id=root_id, invocation=None
+    )
+    invocation_manager.add_invocation_state(
+        run_id=leaf_id,
+        parent_run_id=middle_id,
+        invocation=mock.Mock(spec=GenAIInvocation),
+    )
+
+    assert invocation_manager.get_conversation_id(middle_id) == "t1"
+    assert invocation_manager.get_conversation_id(leaf_id) == "t1"
+
+
+def test_conversation_id_none_when_parent_is_unregistered(invocation_manager):
+    run_id = uuid.uuid4()
+
+    invocation_manager.add_invocation_state(
+        run_id=run_id,
+        parent_run_id=uuid.uuid4(),  # never registered
+        invocation=mock.Mock(spec=GenAIInvocation),
+    )
+
+    assert invocation_manager.get_conversation_id(run_id) is None

@@ -438,6 +438,68 @@ def test_on_tool_start_and_end_creates_span(monkeypatch):
     )
 
 
+def test_on_tool_start_tracks_conversation_id_without_emitting_it():
+    """execute_tool omits gen_ai.conversation.id; descendants still inherit it.
+
+    semconv does not define the attribute for execute_tool, but a tool can
+    start nested chains and model calls that do, so the id has to reach this
+    run's descendants through the invocation manager.
+    """
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "multiply"},
+        input_str="",
+        run_id=run_id,
+        inputs={"a": 3, "b": 4},
+        metadata={"thread_id": "t1"},
+    )
+    assert handler._invocation_manager.get_conversation_id(run_id) == "t1"
+
+    output = MagicMock()
+    output.content = "12"
+    output.tool_call_id = "call_abc"
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert gen_ai_attributes.GEN_AI_CONVERSATION_ID not in spans[0].attributes
+
+
+def test_on_tool_start_inherits_conversation_id_from_parent_chain():
+    """A tool with no metadata of its own takes its ancestor's id."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    agent_run_id, tool_run_id = uuid4(), uuid4()
+    handler.on_chain_start(
+        serialized={"name": "math_agent"},
+        inputs={},
+        run_id=agent_run_id,
+        parent_run_id=None,
+        metadata={"agent_name": "math_agent", "thread_id": "t1"},
+    )
+    handler.on_tool_start(
+        serialized={"name": "multiply"},
+        input_str="",
+        run_id=tool_run_id,
+        parent_run_id=agent_run_id,
+        inputs={"a": 3, "b": 4},
+    )
+
+    assert handler._invocation_manager.get_conversation_id(tool_run_id) == "t1"
+
+
 def test_on_tool_start_with_string_input(monkeypatch):
     monkeypatch.setenv(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
