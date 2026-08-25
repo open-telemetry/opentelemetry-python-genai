@@ -1,1 +1,1 @@
-Align message-part class names with semconv (*Part suffix). Rename Text/Blob/File/Uri/Reasoning/ToolCallRequest/ToolCallResponse/ServerToolCall/ServerToolCallResponse to their *Part forms to match non-normative models naming convention.
+Align message-part class names with semconv (*Part suffix). Rename Text/Blob/File/Uri/Reasoning/ToolCallRequest/ToolCallResponse/ServerToolCall/ServerToolCallResponse to their *Part forms matching the naming for non-normative models in semantic conventions.
