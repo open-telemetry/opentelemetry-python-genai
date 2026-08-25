@@ -70,6 +70,6 @@ jobs:
           weaver --version
 
       - name: Run tests
-        run: uvx --with tox-uv tox -e ${MATRIX_TOX_ENV} -- -ra
+        run: uvx --with tox-uv tox -e "${MATRIX_TOX_ENV}" -- -ra
         env:
           MATRIX_TOX_ENV: ${{ matrix.tox_env }}
