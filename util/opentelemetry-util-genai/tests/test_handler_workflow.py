@@ -25,7 +25,7 @@ from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
     OutputMessage,
-    Text,
+    TextPart,
 )
 
 
@@ -273,9 +273,11 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
         self.assertEqual(spans[0].status.status_code, StatusCode.UNSET)
 
     def test_workflow_context_manager_with_messages(self) -> None:
-        inp = InputMessage(role="user", parts=[Text(content="hello")])
+        inp = InputMessage(role="user", parts=[TextPart(content="hello")])
         out = OutputMessage(
-            role="assistant", parts=[Text(content="hi")], finish_reason="stop"
+            role="assistant",
+            parts=[TextPart(content="hi")],
+            finish_reason="stop",
         )
         with self.handler.workflow("msg_wf") as inv:
             inv.input_messages = [inp]

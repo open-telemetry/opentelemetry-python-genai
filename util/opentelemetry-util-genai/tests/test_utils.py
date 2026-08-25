@@ -34,11 +34,20 @@ from opentelemetry.util.genai.handler import (
     get_telemetry_handler,
 )
 from opentelemetry.util.genai.types import (
+    Blob,
+    BlobPart,
     ContentCapturingMode,
+    File,
+    FilePart,
     InputMessage,
     MessagePart,
     OutputMessage,
+    Reasoning,
+    ReasoningPart,
     Text,
+    TextPart,
+    Uri,
+    UriPart,
 )
 from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
@@ -50,21 +59,23 @@ from opentelemetry.util.genai.utils import (
 def _create_input_message(
     content: str = "hello world", role: str = "Human"
 ) -> InputMessage:
-    return InputMessage(role=role, parts=[Text(content=content)])
+    return InputMessage(role=role, parts=[TextPart(content=content)])
 
 
 def _create_output_message(
     content: str = "hello back", finish_reason: str = "stop", role: str = "AI"
 ) -> OutputMessage:
     return OutputMessage(
-        role=role, parts=[Text(content=content)], finish_reason=finish_reason
+        role=role,
+        parts=[TextPart(content=content)],
+        finish_reason=finish_reason,
     )
 
 
 def _create_system_instruction(
     content: str = "You are a helpful assistant.",
 ) -> list[MessagePart]:
-    return [Text(content=content)]
+    return [TextPart(content=content)]
 
 
 def _get_single_span(span_exporter: InMemorySpanExporter) -> ReadableSpan:

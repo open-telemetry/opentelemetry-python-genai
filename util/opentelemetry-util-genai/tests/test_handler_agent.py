@@ -25,7 +25,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
-    Text,
+    TextPart,
 )
 
 
@@ -196,12 +196,12 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
     def test_with_messages(self):
         invocation = self.handler.invoke_local_agent()
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="Hello")])
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="Hi there!")],
+                parts=[TextPart(content="Hi there!")],
                 finish_reason="stop",
             )
         ]
@@ -331,7 +331,7 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_system_instruction_on_span(self, _mock_cap):
         invocation = self.handler.invoke_local_agent()
         invocation.system_instruction = [
-            Text(content="You are a helpful assistant."),
+            TextPart(content="You are a helpful assistant."),
         ]
         invocation.stop()
 
@@ -362,12 +362,12 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_messages_on_span(self, _mock_cap):
         invocation = self.handler.invoke_local_agent()
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="Hello")])
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="Hi!")],
+                parts=[TextPart(content="Hi!")],
                 finish_reason="stop",
             )
         ]
@@ -380,10 +380,10 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_content_not_on_span_by_default(self):
         invocation = self.handler.invoke_local_agent()
         invocation.system_instruction = [
-            Text(content="You are a helpful assistant."),
+            TextPart(content="You are a helpful assistant."),
         ]
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="Hello")])
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
         invocation.stop()
 
