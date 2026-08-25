@@ -14,6 +14,7 @@ from langchain_core.messages import (
     ToolMessage,
     convert_to_messages,
 )
+from langchain_core.outputs import ChatGenerationChunk, GenerationChunk
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -45,6 +46,17 @@ _PROVIDER_NAME_OVERRIDES: dict[str, str] = {
     "mistralai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
     "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
 }
+
+
+def is_stream_end_marker(
+    token: str | list[str | dict[str, Any]],
+    chunk: GenerationChunk | ChatGenerationChunk | None,
+) -> bool:
+    """Whether an ``on_llm_new_token`` call carries LangChain's end-of-stream marker."""
+    if token:
+        return False
+    message = getattr(chunk, "message", None)
+    return getattr(message, "chunk_position", None) == "last"
 
 
 def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
