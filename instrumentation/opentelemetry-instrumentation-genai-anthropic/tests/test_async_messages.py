@@ -237,8 +237,11 @@ async def test_async_messages_create_with_all_params(
         "messages": messages,
         "stop_sequences": ["STOP"],
     }
+    sampling_params = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
     if "temperature" in _create_params:
-        kwargs.update(temperature=0.7, top_p=0.9, top_k=40)
+        kwargs.update(sampling_params)
+    else:
+        kwargs["extra_body"] = sampling_params
 
     await async_anthropic_client.messages.create(**kwargs)
 
@@ -246,12 +249,9 @@ async def test_async_messages_create_with_all_params(
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
-    if "temperature" in kwargs:
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
-        )
-        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
-        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
         "STOP",
     )
