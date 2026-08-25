@@ -30,7 +30,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 | [opentelemetry-instrumentation-genai-crewai](./instrumentation/opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1, < 2 | 1.2b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-dspy](./instrumentation/opentelemetry-instrumentation-genai-dspy) | dspy >= 2.5.0, < 4 | 1.2b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-llama-index](./instrumentation/opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19, < 1 | 1.2b0.dev | skeleton |
-| [opentelemetry-instrumentation-genai-portkey](./instrumentation/opentelemetry-instrumentation-genai-portkey) | portkey-ai >= 1.0.0, < 3 | 1.2b0.dev | skeleton |
+| [opentelemetry-instrumentation-genai-portkey](./instrumentation/opentelemetry-instrumentation-genai-portkey) | portkey-ai >= 1.0.0, < 3 | 1.2b0.dev | to be released |
 | [opentelemetry-instrumentation-genai-weaviate-client](./instrumentation/opentelemetry-instrumentation-genai-weaviate-client) | weaviate-client >= 3.0.0, <5.0.0 | 1.2b0.dev | skeleton |
 <!-- end -->
 
