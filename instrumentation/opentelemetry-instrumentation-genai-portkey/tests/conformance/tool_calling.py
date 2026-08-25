@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from portkey_ai import Portkey
@@ -41,8 +42,13 @@ class ToolCallingScenario(Scenario):
         ):
             with vcr.use_cassette("tool_calling_conformance.yaml"):
                 client = Portkey(
-                    api_key="test_portkey_api_key",
-                    provider="openai",
+                    api_key=os.environ.get(
+                        "PORTKEY_API_KEY", "test_portkey_api_key"
+                    ),
+                    provider="google",
+                    Authorization=os.environ.get(
+                        "GEMINI_API_KEY", "test_gemini_api_key"
+                    ),
                 )
                 tools = [
                     {
@@ -68,7 +74,7 @@ class ToolCallingScenario(Scenario):
                 ]
                 first = client.chat.completions.create(
                     messages=messages,
-                    model="gpt-4o-mini",
+                    model="gemini-3.5-flash",
                     tools=tools,
                     stream=False,
                 )
@@ -101,6 +107,6 @@ class ToolCallingScenario(Scenario):
                     )
                 client.chat.completions.create(
                     messages=messages,
-                    model="gpt-4o-mini",
+                    model="gemini-3.5-flash",
                     stream=False,
                 )

@@ -22,6 +22,8 @@ pytest_plugins = [
 def environment(monkeypatch: pytest.MonkeyPatch):
     if not os.getenv("PORTKEY_API_KEY"):
         monkeypatch.setenv("PORTKEY_API_KEY", "test_portkey_api_key")
+    if not os.getenv("GEMINI_API_KEY"):
+        monkeypatch.setenv("GEMINI_API_KEY", "test_gemini_api_key")
 
 
 @pytest.fixture(scope="module")
@@ -33,7 +35,7 @@ def vcr_config():
     return {
         "filter_headers": [
             ("x-portkey-api-key", "test_portkey_api_key"),
-            ("authorization", "Bearer test_portkey_api_key"),
+            ("authorization", "Bearer test_gemini_api_key"),
             ("cookie", "test_cookie"),
         ],
         "decode_compressed_response": True,

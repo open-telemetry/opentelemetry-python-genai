@@ -42,6 +42,7 @@ _PROVIDER_NAME_OVERRIDES: dict[str, str] = {
     "vertex-ai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
     "vertexai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
     "google-vertex-ai": GenAIAttributes.GenAiProviderNameValues.GCP_VERTEX_AI.value,
+    "google": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,
     "gemini": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,
     "google-generativeai": GenAIAttributes.GenAiProviderNameValues.GCP_GEMINI.value,
     "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,

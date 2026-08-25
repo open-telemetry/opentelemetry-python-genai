@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from portkey_ai import Portkey
@@ -43,14 +44,19 @@ class InferenceStreamingScenario(Scenario):
         ):
             with vcr.use_cassette("inference_streaming_conformance.yaml"):
                 client = Portkey(
-                    api_key="test_portkey_api_key",
-                    provider="openai",
+                    api_key=os.environ.get(
+                        "PORTKEY_API_KEY", "test_portkey_api_key"
+                    ),
+                    provider="google",
+                    Authorization=os.environ.get(
+                        "GEMINI_API_KEY", "test_gemini_api_key"
+                    ),
                 )
                 stream = client.chat.completions.create(
                     messages=[
                         {"role": "user", "content": "Say this is a test"}
                     ],
-                    model="gpt-4o-mini",
+                    model="gemini-3.5-flash",
                     stream=True,
                 )
                 for _ in stream:
