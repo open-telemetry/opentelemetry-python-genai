@@ -31,6 +31,8 @@ jobs:
     runs-on: cncf-ubuntu-2-8-x86
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true # zizmor: ignore[artipacked] the composite action pushes the patch branch
 
       - uses: ./.github/actions/bump-package
         with:

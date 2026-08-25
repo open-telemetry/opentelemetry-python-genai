@@ -23,11 +23,14 @@ jobs:
     steps:
       - name: Set release ref
         id: release_ref
-        run: echo "ref=${{ github.event.pull_request.merge_commit_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+        run: echo "ref=${RELEASE_REF}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_REF: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.release_ref.outputs.ref }}
+          persist-credentials: false
 
       - name: Verify manual dispatch runs on main
         if: github.event_name == 'workflow_dispatch'
@@ -116,7 +119,6 @@ jobs:
       on_main: true
       sync_main: false
       bump_after_release: false
-    secrets: inherit
 
   finalize:
     needs: [enumerate, publish, github_release]
@@ -128,6 +130,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the post-release branch
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -146,6 +149,7 @@ jobs:
         with:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}
           private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+          permission-pull-requests: write
 
       - name: Open pull request for post-release updates on main
         env:

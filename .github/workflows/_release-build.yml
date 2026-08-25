@@ -26,20 +26,23 @@ jobs:
         run: |
           if [[ "${{ inputs.on_main }}" == "true" || "$GITHUB_REF_NAME" == "main" ]]; then
             echo "on_main=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF_NAME" == package-release/${{ inputs.package }}/v* ]]; then
+          elif [[ "$GITHUB_REF_NAME" == package-release/${INPUTS_PACKAGE}/v* ]]; then
             echo "on_main=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Run on main or package-release/${{ inputs.package }}/v*"
+            echo "Run on main or package-release/${INPUTS_PACKAGE}/v*"
             exit 1
           fi
+        env:
+          INPUTS_PACKAGE: ${{ inputs.package }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          persist-credentials: false
 
       - name: Set environment variables
         run: |
-          version=$(./scripts/eachdist.py version --package ${{ inputs.package }})
+          version=$(./scripts/eachdist.py version --package "${INPUTS_PACKAGE}")
           if [[ $version =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
             major="${BASH_REMATCH[1]}"
             minor="${BASH_REMATCH[2]}"
@@ -59,16 +62,19 @@ jobs:
             exit 1
           fi
 
-          if [[ "${{ steps.target.outputs.on_main }}" == "true" && "$version" == *.dev ]]; then
+          if [[ "${STEPS_TARGET_OUTPUTS_ON_MAIN}" == "true" && "$version" == *.dev ]]; then
             echo "version on main still has a .dev suffix; merge the prepare PR first"
             exit 1
           fi
 
-          path=$(./scripts/eachdist.py find-package --package ${{ inputs.package }})
+          path=$(./scripts/eachdist.py find-package --package "${INPUTS_PACKAGE}")
           echo "CHANGELOG=./$path/CHANGELOG.md" >> $GITHUB_ENV
-          echo "PACKAGE_NAME=${{ inputs.package }}" >> $GITHUB_ENV
+          echo "PACKAGE_NAME=${INPUTS_PACKAGE}" >> $GITHUB_ENV
           echo "VERSION=$version" >> $GITHUB_ENV
           echo "PRIOR_VERSION_WHEN_PATCH=$prior_version_when_patch" >> $GITHUB_ENV
+        env:
+          INPUTS_PACKAGE: ${{ inputs.package }}
+          STEPS_TARGET_OUTPUTS_ON_MAIN: ${{ steps.target.outputs.on_main }}
 
       - name: Check that changelog update was merged to main
         if: steps.target.outputs.on_main == 'true'
@@ -84,6 +90,7 @@ jobs:
         if: steps.target.outputs.on_main != 'true'
         with:
           ref: main
+          persist-credentials: false
 
       - name: Check that changelog update was merged to main (backport branch)
         if: steps.target.outputs.on_main != 'true'
@@ -99,6 +106,7 @@ jobs:
         if: steps.target.outputs.on_main != 'true'
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
