@@ -100,8 +100,8 @@ def _encode_base64_image(image: Image) -> str | None:
     return encoded if isinstance(encoded, str) else None
 
 
-def _image_blob(image: Image | str) -> Blob | None:
-    """Build a ``Blob`` part from a base64 string, data URL, or PIL image."""
+def _image_blob(image: Image | str) -> BlobPart | None:
+    """Build a ``BlobPart`` part from a base64 string, data URL, or PIL image."""
     if isinstance(image, str):
         decoded = _decode_base64_image(image)
     else:
