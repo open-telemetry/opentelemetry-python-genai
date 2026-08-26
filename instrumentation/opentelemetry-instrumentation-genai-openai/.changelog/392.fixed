@@ -1,0 +1,1 @@
+Emit a span for a `with_raw_response` stream the caller abandons without draining, return the caller's own object from `parse(to=...)`, and stop parsing raw responses on the caller's behalf

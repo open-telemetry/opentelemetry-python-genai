@@ -1,199 +1,294 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Transparent proxy for streaming ``with_raw_response`` results."""
+"""OpenAI hooks for the shared ``with_raw_response`` proxy."""
 
 from __future__ import annotations
 
-import functools
 import logging
-from collections.abc import Awaitable, Callable
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Protocol,
-    Union,
-    runtime_checkable,
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from openai import AsyncStream, Stream
+from openai._models import construct_type
+from openai.types.chat import ChatCompletion
+
+from opentelemetry.util.genai.raw_response import (
+    RawResponseProxy,
+    is_raw_response,
+)
+from opentelemetry.util.genai.raw_response import (
+    wrap_raw_response as _wrap_raw_response,
 )
 
-try:
-    import httpx as _http_lib
-except ImportError:
-    import httpx2 as _http_lib
-from openai import AsyncStream, Stream
-from wrapt import ObjectProxy
-
+from .response_extractors import (
+    Response,
+    get_response_error,
+    set_fetch_response_attributes,
+    set_invocation_response_attributes,
+)
 from .utils import get_served_model
 
 if TYPE_CHECKING:
-    from opentelemetry.util.genai.types import GenAIInvocation
+    from opentelemetry.util.genai.invocation import Error, GenAIInvocation
 
 _logger = logging.getLogger(__name__)
 
-AnyStream = Union[Stream[Any], AsyncStream[Any]]
+#: Builds the instrumented wrapper for a parsed stream.
+StreamWrapperFactory = Callable[[Any, "GenAIInvocation", bool], object]
 
 
-@runtime_checkable
-class ParsableResponse(Protocol):
-    """A ``with_raw_response`` result whose payload is behind ``parse()``.
+class _OpenAIRawResponseProxy(RawResponseProxy):
+    """Shared plumbing for the operations that accept ``with_raw_response``.
 
-    Structural rather than nominal: the SDK's response classes
-    (``LegacyAPIResponse``, ``APIResponse``, ``AsyncAPIResponse``) all match,
-    but they live in private modules, so matching on shape keeps us working
-    across SDK versions without importing private names.
+    Subclasses name the payload they expect and record it; everything else --
+    the served-model header, the stream wrapping, and constructing the payload
+    out of an already-read body -- is the same for all of them.
     """
 
-    def parse(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-@runtime_checkable
-class RawResponseLike(ParsableResponse, Protocol):
-    """A parsable response we can also drive to completion.
-
-    Adds the underlying httpx response, which the streaming path needs to
-    finalize the span when the caller never calls ``parse()``.
-    """
-
-    http_response: _http_lib.Response
-
-
-class RawResponseStreamProxy(ObjectProxy):
-    """Proxy for a streaming ``with_raw_response`` result.
-
-    The OpenAI SDK returns a raw-response object (a ``LegacyAPIResponse``) from
-    ``with_raw_response.create(stream=True)``; callers read response metadata
-    (``headers``, ``request_id`` ...) off it and call ``parse()`` to obtain the
-    stream. Wrapping that response (instead of the parsed stream) keeps every
-    metadata attribute resolving natively while ``parse()`` returns an
-    instrumented stream wrapper. Parsing is deferred until the caller asks for
-    it and memoized so repeated calls share one span.
-
-    ``parse()`` wraps the result only when it is an SDK ``Stream`` /
-    ``AsyncStream`` we know how to drive. Anything else is handed back untouched
-    (for example the coroutine ``parse()`` the SDK documents it "will become in
-    the next major version" for the async client, or a custom non-stream parse
-    target): we can't instrument it, so we just log and step aside.
-
-    The span is finalized independently of ``parse()``. Whether the caller
-    parses and drains the wrapper, drains the body directly via the raw
-    response's ``read()``/``iter_bytes()``, or never parses at all, every path
-    ends by closing the underlying httpx response — so a fallback on its
-    ``close``/``aclose`` finalizes the span when ``parse()`` never built a
-    wrapper that would finalize it instead.
-    """
+    #: The SDK model the operation's payload parses into. ``None`` on SDK
+    #: versions that do not ship the type at all, which disables extraction.
+    payload_type: ClassVar[type[Any] | None] = None
+    #: The body's own ``object`` discriminator for that payload.
+    payload_object: ClassVar[str] = ""
 
     def __init__(
         self,
-        raw_response: RawResponseLike,
-        wrap_stream: Callable[[AnyStream], object],
-        finalize: Callable[[], None],
-    ) -> None:
-        super().__init__(raw_response)
-        self._self_wrap_stream = wrap_stream
-        self._self_finalize: Callable[[], None] | None = finalize
-        self._self_parsed: object | None = None
-        self._install_close_fallback(raw_response)
-
-    def _install_close_fallback(self, raw_response: RawResponseLike) -> None:
-        # httpx exposes a sync ``close`` and an async ``aclose``; wrap whichever
-        # the underlying response has so the appropriate one finalizes the span.
-        http_response = raw_response.http_response
-        close = getattr(http_response, "close", None)
-        if close is not None:
-            http_response.close = self._wrap_sync_close(close)
-        aclose = getattr(http_response, "aclose", None)
-        if aclose is not None:
-            http_response.aclose = self._wrap_async_close(aclose)
-
-    def _wrap_sync_close(
-        self, original: Callable[..., object]
-    ) -> Callable[..., object]:
-        @functools.wraps(original)
-        def _close(*args: object, **kwargs: object) -> object:
-            try:
-                return original(*args, **kwargs)
-            finally:
-                self._finalize_close_fallback()
-
-        return _close
-
-    def _wrap_async_close(
-        self, original: Callable[..., Awaitable[object]]
-    ) -> Callable[..., Awaitable[object]]:
-        @functools.wraps(original)
-        async def _aclose(*args: object, **kwargs: object) -> object:
-            try:
-                return await original(*args, **kwargs)
-            finally:
-                self._finalize_close_fallback()
-
-        return _aclose
-
-    def _finalize_close_fallback(self) -> None:
-        # When ``parse()`` built a stream wrapper, that wrapper owns
-        # finalization; only finalize here for callers that never parsed.
-        if self._self_parsed is None:
-            self._finalize_once()
-
-    def _finalize_once(self) -> None:
-        # ``stop()`` is not idempotent, so finalize at most once.
-        if self._self_finalize is not None:
-            finalize, self._self_finalize = self._self_finalize, None
-            finalize()
-
-    def parse(self, *args: Any, **kwargs: Any) -> object:
-        # We memoize the first parse regardless of the arguments it was called
-        # with, so calling parse() again with different args (e.g. a different
-        # ``to=`` type) returns the same wrapper rather than re-parsing. This is
-        # deliberate: one raw response backs one span, and re-parsing a stream
-        # would consume it twice anyway.
-        if self._self_parsed is not None:
-            return self._self_parsed
-        stream = self.__wrapped__.parse(*args, **kwargs)
-        if isinstance(stream, (Stream, AsyncStream)):
-            self._self_parsed = self._self_wrap_stream(stream)
-            return self._self_parsed
-        # Not a stream we can drive; hand it back untouched. The close fallback
-        # finalizes the span once the caller drains/closes the response body.
-        _logger.debug(
-            "with_raw_response.parse() returned %s, not an SDK stream; "
-            "skipping stream instrumentation for this call",
-            type(stream).__name__,
-        )
-        return stream
-
-
-class StreamWrapperFactory(Protocol):
-    """Constructor signature every stream wrapper class must satisfy."""
-
-    def __call__(
-        self,
-        stream: AnyStream,
+        raw_response: object,
         invocation: GenAIInvocation,
         capture_content: bool,
-    ) -> object: ...
+        stream_wrapper_cls: StreamWrapperFactory,
+    ) -> None:
+        super().__init__(raw_response, invocation)
+        self._self_capture_content = capture_content
+        self._self_stream_wrapper_cls = stream_wrapper_cls
+        # The served model is on the headers, which are available now; a caller
+        # that never parses would otherwise finalize without a response model.
+        self._apply_served_model()
+
+    def _record(self, payload: object) -> None:
+        """Record the payload. Overridden where a payload can report failure."""
+        self._extract(payload)
+        self._apply_served_model()
+
+    def _extract(self, payload: object) -> None:
+        """Apply the operation's response attributes to the invocation."""
+        raise NotImplementedError
+
+    def _apply_served_model(self) -> None:
+        """Prefer the gateway's served model over the one in the body.
+
+        The served-model header is only on the HTTP response, which the parsed
+        payload does not carry, so it is applied from the raw response after
+        the payload has been recorded.
+        """
+        served_model = get_served_model(
+            getattr(self.__wrapped__, "headers", None)
+        )
+        if served_model:
+            self._self_invocation.response_model_name = served_model
+
+    def _extract_from_body(self, body: dict[str, object]) -> bool:
+        payload = self._payload_from_body(body)
+        if payload is None:
+            return False
+        self._record(payload)
+        return True
+
+    def _extract_from_parsed(self, parsed: object) -> bool:
+        if self.payload_type is None or not isinstance(
+            parsed, self.payload_type
+        ):
+            return False
+        self._record(parsed)
+        return True
+
+    def _wrap_parsed_stream(self, parsed: object) -> object | None:
+        if not isinstance(parsed, (Stream, AsyncStream)):
+            return None
+        self._apply_served_model()
+        return self._self_stream_wrapper_cls(
+            parsed, self._self_invocation, self._self_capture_content
+        )
+
+    def _body_is_payload(self, body: dict[str, object]) -> bool:
+        """Whether ``body`` is this operation's payload rather than an error."""
+        discriminator = body.get("object")
+        if discriminator is not None:
+            return discriminator == self.payload_object
+        return isinstance(body.get("id"), str)
+
+    def _payload_from_body(self, body: dict[str, object]) -> object | None:
+        """Construct this operation's payload from an already-decoded body.
+
+        Used instead of ``parse()`` so telemetry never runs the caller's
+        deferred parse, which would apply their cast target and post-parser and
+        populate the SDK's parse cache. Goes through the SDK's own
+        ``construct_type``, the same non-strict path ``parse()`` takes, so a
+        field the installed SDK version does not know yet does not cost the
+        whole response's telemetry.
+
+        ``construct_type`` does not validate, so the body is screened first:
+        without that, an error envelope would construct into a payload with
+        every field ``None`` and be recorded as a successful response.
+
+        The screen is deliberately not a bare ``object`` check. OpenAI-
+        compatible gateways routinely omit the discriminator, and requiring it
+        would drop the whole response's telemetry for a body the SDK itself
+        parses without complaint. A body carrying no discriminator is accepted
+        on the strength of its ``id``, which every payload has and an error
+        envelope does not.
+        """
+        if self.payload_type is None:
+            return None
+        if not self._body_is_payload(body):
+            _logger.debug(
+                "raw-response body is not a %s; skipping response telemetry "
+                "for this call",
+                self.payload_object or "known payload",
+            )
+            return None
+        try:
+            return construct_type(type_=self.payload_type, value=body)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "could not construct the raw-response payload; skipping "
+                "response telemetry for this call",
+                exc_info=True,
+            )
+            return None
 
 
-def wrap_stream_result(
-    wrapper_cls: StreamWrapperFactory,
-    result: RawResponseLike | AnyStream,
+class ChatRawResponseProxy(_OpenAIRawResponseProxy):
+    """A raw ``chat.completions.create`` response."""
+
+    payload_type: ClassVar[type[Any] | None] = ChatCompletion
+    payload_object: ClassVar[str] = "chat.completion"
+
+    def __init__(
+        self,
+        raw_response: object,
+        invocation: GenAIInvocation,
+        capture_content: bool,
+        stream_wrapper_cls: StreamWrapperFactory,
+        extract: Callable[[Any, Any, bool], object],
+    ) -> None:
+        # ``_set_response_properties`` lives in patch.py, which imports this
+        # module, so it is injected rather than imported.
+        self._self_extract = extract
+        super().__init__(
+            raw_response, invocation, capture_content, stream_wrapper_cls
+        )
+
+    def _extract(self, payload: object) -> None:
+        self._self_extract(
+            self._self_invocation, payload, self._self_capture_content
+        )
+
+
+class ResponsesRawResponseProxy(_OpenAIRawResponseProxy):
+    """A raw ``responses.create`` response, which can report its own failure."""
+
+    payload_type: ClassVar[type[Any] | None] = Response
+    payload_object: ClassVar[str] = "response"
+
+    def __init__(
+        self,
+        raw_response: object,
+        invocation: GenAIInvocation,
+        capture_content: bool,
+        stream_wrapper_cls: StreamWrapperFactory,
+    ) -> None:
+        # A Responses payload can report a failed generation, which ends the
+        # invocation with fail() rather than stop().
+        self._self_error: Error | None = None
+        super().__init__(
+            raw_response, invocation, capture_content, stream_wrapper_cls
+        )
+
+    def _extract(self, payload: object) -> None:
+        set_invocation_response_attributes(
+            self._self_invocation, payload, self._self_capture_content
+        )
+
+    def _record(self, payload: object) -> None:
+        super()._record(payload)
+        self._self_error = get_response_error(payload)
+
+    def _finalize_once(self) -> None:
+        # Same finalize-at-most-once contract as the base, but a payload that
+        # reported a failed generation ends the invocation as an error.
+        if not self._self_span_open:
+            return
+        if self._self_error is None:
+            super()._finalize_once()
+            return
+        self._self_span_open = False
+        self._self_invocation.fail(self._self_error)
+
+
+class FetchResponseRawResponseProxy(_OpenAIRawResponseProxy):
+    """A raw ``responses.retrieve`` response.
+
+    A replayed failure describes the original generation, not this fetch, so
+    unlike ``ResponsesRawResponseProxy`` it never fails the invocation.
+    """
+
+    payload_type: ClassVar[type[Any] | None] = Response
+    payload_object: ClassVar[str] = "response"
+
+    def _extract(self, payload: object) -> None:
+        set_fetch_response_attributes(
+            self._self_invocation, payload, self._self_capture_content
+        )
+
+
+def wrap_chat_raw_response(
+    result: object,
     invocation: GenAIInvocation,
     capture_content: bool,
-) -> object:
-    """Wrap a streaming call's result, deferring ``parse()`` on raw responses.
+    *,
+    stream_wrapper_cls: StreamWrapperFactory,
+    extract: Callable[[Any, Any, bool], object],
+    streamed: bool = False,
+) -> Any:
+    """Wrap a raw chat-completions result, deferring ``parse()``."""
+    return _wrap_raw_response(
+        lambda raw: ChatRawResponseProxy(
+            raw, invocation, capture_content, stream_wrapper_cls, extract
+        ),
+        result,
+        streamed=streamed,
+    )
 
-    A ``with_raw_response`` result (matching ``RawResponseLike``) is wrapped so
-    its metadata resolves natively and ``parse()`` is deferred; a plain SDK
-    stream is wrapped directly.
-    """
-    if isinstance(result, RawResponseLike):
-        served_model = get_served_model(getattr(result, "headers", None))
-        if served_model:
-            if hasattr(invocation, "response_model_name"):
-                setattr(invocation, "response_model_name", served_model)
-        return RawResponseStreamProxy(
-            result,
-            lambda stream: wrapper_cls(stream, invocation, capture_content),
-            finalize=invocation.stop,
-        )
-    return wrapper_cls(result, invocation, capture_content)
+
+def wrap_responses_raw_response(
+    result: object,
+    invocation: GenAIInvocation,
+    capture_content: bool,
+    *,
+    stream_wrapper_cls: StreamWrapperFactory,
+    fetch: bool = False,
+    streamed: bool = False,
+) -> Any:
+    """Wrap a raw Responses API result, deferring ``parse()``."""
+    proxy_cls = (
+        FetchResponseRawResponseProxy if fetch else ResponsesRawResponseProxy
+    )
+    return _wrap_raw_response(
+        lambda raw: proxy_cls(
+            raw, invocation, capture_content, stream_wrapper_cls
+        ),
+        result,
+        streamed=streamed,
+    )
+
+
+__all__ = [
+    "ChatRawResponseProxy",
+    "FetchResponseRawResponseProxy",
+    "ResponsesRawResponseProxy",
+    "is_raw_response",
+    "wrap_chat_raw_response",
+    "wrap_responses_raw_response",
+]

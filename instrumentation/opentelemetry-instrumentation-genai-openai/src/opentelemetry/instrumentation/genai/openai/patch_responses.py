@@ -12,14 +12,13 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import FetchResponseInvocation
 
-from ._raw_response import wrap_stream_result
+from ._raw_response import is_raw_response, wrap_responses_raw_response
 from .response_extractors import (
     apply_request_attributes,
     extract_params,
     get_fetch_response_creation_kwargs,
     get_inference_creation_kwargs,
     get_response_error,
-    is_streamed_raw_response,
     set_fetch_response_attributes,
     set_invocation_response_attributes,
 )
@@ -91,18 +90,23 @@ def responses_create(
 
         try:
             result = wrapped(*args, **kwargs)
-            if is_streaming(kwargs):
-                return wrap_stream_result(
-                    ResponseStreamWrapper,
+            if is_raw_response(result):
+                return wrap_responses_raw_response(
                     result,
                     invocation,
                     capture_content,
+                    stream_wrapper_cls=ResponseStreamWrapper,
+                    streamed=is_streaming(kwargs),
+                )
+            if is_streaming(kwargs):
+                return ResponseStreamWrapper(
+                    result, invocation, capture_content
                 )
 
             set_invocation_response_attributes(
-                invocation, result, capture_content, kwargs
+                invocation, result, capture_content
             )
-            error = get_response_error(result, kwargs)
+            error = get_response_error(result)
             if error is not None:
                 invocation.fail(error)
             else:
@@ -164,18 +168,23 @@ def async_responses_create(
 
         try:
             result = await wrapped(*args, **kwargs)
-            if is_streaming(kwargs):
-                return wrap_stream_result(
-                    AsyncResponseStreamWrapper,
+            if is_raw_response(result):
+                return wrap_responses_raw_response(
                     result,
                     invocation,
                     capture_content,
+                    stream_wrapper_cls=AsyncResponseStreamWrapper,
+                    streamed=is_streaming(kwargs),
+                )
+            if is_streaming(kwargs):
+                return AsyncResponseStreamWrapper(
+                    result, invocation, capture_content
                 )
 
             set_invocation_response_attributes(
-                invocation, result, capture_content, kwargs
+                invocation, result, capture_content
             )
-            error = get_response_error(result, kwargs)
+            error = get_response_error(result)
             if error is not None:
                 invocation.fail(error)
             else:
@@ -215,11 +224,7 @@ def _start_fetch_response_invocation(
 ) -> FetchResponseInvocation:
     invocation = handler.fetch_response(
         **get_fetch_response_creation_kwargs(response_id, instance),
-        request_stream=(
-            True
-            if is_streaming(kwargs) or is_streamed_raw_response(kwargs)
-            else None
-        ),
+        request_stream=True if is_streaming(kwargs) else None,
     )
     invocation.stream_cursor = _get_stream_cursor(kwargs)
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
@@ -270,20 +275,21 @@ def responses_retrieve(
 
         try:
             result = wrapped(*args, **kwargs)
-            if is_streaming(kwargs):
-                return wrap_stream_result(
-                    FetchResponseStreamWrapper,
+            if is_raw_response(result):
+                return wrap_responses_raw_response(
                     result,
                     invocation,
                     capture_content,
+                    stream_wrapper_cls=FetchResponseStreamWrapper,
+                    fetch=True,
+                    streamed=is_streaming(kwargs),
+                )
+            if is_streaming(kwargs):
+                return FetchResponseStreamWrapper(
+                    result, invocation, capture_content
                 )
 
-            set_fetch_response_attributes(
-                invocation,
-                result,
-                capture_content,
-                kwargs,
-            )
+            set_fetch_response_attributes(invocation, result, capture_content)
             invocation.stop()
             return result
         except Exception as error:
@@ -343,17 +349,21 @@ def async_responses_retrieve(
 
         try:
             result = await wrapped(*args, **kwargs)
-            if is_streaming(kwargs):
-                return wrap_stream_result(
-                    AsyncFetchResponseStreamWrapper,
+            if is_raw_response(result):
+                return wrap_responses_raw_response(
                     result,
                     invocation,
                     capture_content,
+                    stream_wrapper_cls=AsyncFetchResponseStreamWrapper,
+                    fetch=True,
+                    streamed=is_streaming(kwargs),
+                )
+            if is_streaming(kwargs):
+                return AsyncFetchResponseStreamWrapper(
+                    result, invocation, capture_content
                 )
 
-            set_fetch_response_attributes(
-                invocation, result, capture_content, kwargs
-            )
+            set_fetch_response_attributes(invocation, result, capture_content)
             invocation.stop()
             return result
         except Exception as error:

@@ -1737,3 +1737,37 @@ def chat_completion_multiple_tools_streaming(
 
 def assert_no_invalid_type_warning(caplog):
     assert "Invalid type" not in caplog.text
+
+
+def test_chat_completion_with_raw_response_streaming_abandoned(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """A caller that parses the raw stream and walks away still gets a span.
+
+    Before the shared proxy the close fallback stood down as soon as parse()
+    had built a wrapper, so abandoning the stream emitted nothing at all.
+    """
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        raw_response = openai_client.chat.completions.with_raw_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+    stream = raw_response.parse()
+    for _ in stream:
+        break  # stop reading part-way through
+
+    assert span_exporter.get_finished_spans() == ()  # still open
+
+    raw_response.http_response.close()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == f"chat {DEFAULT_MODEL}"
+    assert (
+        spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] is not None
+    )

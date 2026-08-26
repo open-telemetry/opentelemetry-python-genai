@@ -22,3 +22,8 @@
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 #
 
+# Exception: the shared with_raw_response proxy lives in opentelemetry-util-genai 1.2b0, which is
+# not on PyPI yet. Install it from the workspace so the oldest env exercises it. Remove this once
+# 1.2b0 is released and bump the pyproject floor to >= 1.2b0.
+-e ./util/opentelemetry-util-genai
+

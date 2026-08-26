@@ -24,9 +24,6 @@ from anthropic.resources.messages import AsyncMessages as _AsyncMessages
 from anthropic.types import Message
 
 from opentelemetry.instrumentation.genai.anthropic import _raw_response
-from opentelemetry.instrumentation.genai.anthropic._raw_response import (
-    RawResponseProxy,
-)
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -1720,7 +1717,9 @@ async def test_async_messages_raw_response_stream_wrap_failure_not_raised(
     def boom(*args, **kwargs):
         raise ValueError("boom")
 
-    monkeypatch.setattr(_raw_response, "_wrap_parsed_stream", boom)
+    monkeypatch.setattr(
+        _raw_response.MessagesRawResponseProxy, "_wrap_parsed_stream", boom
+    )
 
     async with async_anthropic_client.messages.with_streaming_response.create(
         model="claude-sonnet-4-20250514",
@@ -1915,8 +1914,10 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
             self.http_response = http_response
 
     raw = _Raw()
-    first = RawResponseProxy(raw, _FakeInvocation(first_stops), False)
-    RawResponseProxy(raw, _FakeInvocation(second_stops), False)
+    first = _raw_response.wrap_raw_response(
+        raw, _FakeInvocation(first_stops), False
+    )
+    _raw_response.wrap_raw_response(raw, _FakeInvocation(second_stops), False)
 
     await first.http_response.aclose()
 

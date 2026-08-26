@@ -231,6 +231,7 @@ class AsyncStreamWrapper(
         self._self_invocation = invocation
         if invocation is not None:
             invocation._request_stream = True
+        self._self_is_async_stream_wrapper = True
         self._bind_stream(stream)
 
     # See ``SyncStreamWrapper._self_stream``.
@@ -357,6 +358,18 @@ class AsyncStreamWrapper(
         if invocation is not None and chunk_at is not None:
             invocation._on_stream_chunk(chunk_at)
         return chunk
+
+
+def is_async_stream_wrapper(value: object) -> bool:
+    """Whether ``value`` is an ``AsyncStreamWrapper``.
+
+    ``isinstance`` is unusable for these classes: their metaclass combines
+    ``ABCMeta`` with wrapt's proxy metaclass, and the resulting
+    ``__subclasscheck__`` raises ``TypeError`` when asked about a proxied
+    object. Callers that need to tell a sync wrapper from an async one -- to
+    decide between ``close()`` and ``await close()`` -- use this instead.
+    """
+    return getattr(value, "_self_is_async_stream_wrapper", False) is True
 
 
 class _CloseFinalizingProxy(_ObjectProxy):
@@ -559,4 +572,5 @@ __all__ = [
     "SyncStreamWrapper",
     "finalize_on_aclose",
     "finalize_on_close",
+    "is_async_stream_wrapper",
 ]

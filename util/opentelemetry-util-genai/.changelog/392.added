@@ -1,0 +1,1 @@
+Add `RawResponseProxy` and `wrap_raw_response` to `opentelemetry.util.genai.raw_response` for instrumenting SDK `with_raw_response` results

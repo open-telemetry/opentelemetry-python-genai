@@ -1,0 +1,1 @@
+Record streamed response telemetry for a `with_raw_response` stream whose transport reports the body as already closed

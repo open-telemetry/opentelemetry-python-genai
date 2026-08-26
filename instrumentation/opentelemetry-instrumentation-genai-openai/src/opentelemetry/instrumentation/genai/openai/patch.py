@@ -18,7 +18,7 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 
-from ._raw_response import ParsableResponse, wrap_stream_result
+from ._raw_response import is_raw_response, wrap_chat_raw_response
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
@@ -71,12 +71,18 @@ def chat_completions_create_v_new(
 
         try:
             result = wrapped(*args, **kwargs)
-            if is_streaming(kwargs):
-                return wrap_stream_result(
-                    ChatStreamWrapper,
+            if is_raw_response(result):
+                return wrap_chat_raw_response(
                     result,
                     chat_invocation,
                     capture_content,
+                    stream_wrapper_cls=ChatStreamWrapper,
+                    extract=_set_response_properties,
+                    streamed=is_streaming(kwargs),
+                )
+            if is_streaming(kwargs):
+                return ChatStreamWrapper(
+                    result, chat_invocation, capture_content
                 )
 
             _set_response_properties(chat_invocation, result, capture_content)
@@ -102,12 +108,18 @@ def async_chat_completions_create_v_new(
 
         try:
             result = await wrapped(*args, **kwargs)
-            if is_streaming(kwargs):
-                return wrap_stream_result(
-                    AsyncChatStreamWrapper,
+            if is_raw_response(result):
+                return wrap_chat_raw_response(
                     result,
                     chat_invocation,
                     capture_content,
+                    stream_wrapper_cls=AsyncChatStreamWrapper,
+                    extract=_set_response_properties,
+                    streamed=is_streaming(kwargs),
+                )
+            if is_streaming(kwargs):
+                return AsyncChatStreamWrapper(
+                    result, chat_invocation, capture_content
                 )
 
             _set_response_properties(chat_invocation, result, capture_content)
@@ -162,11 +174,6 @@ def async_embeddings_create(handler: TelemetryHandler):
 def _set_response_properties(
     chat_invocation: InferenceInvocation, result, capture_content: bool
 ) -> InferenceInvocation:
-    if isinstance(result, ParsableResponse):
-        # with_raw_response: safe to parse() here since this is the
-        # non-streaming path, so it has no side effects on the caller's stream.
-        result = result.parse()
-
     if getattr(result, "model", None):
         chat_invocation.response_model_name = result.model
 

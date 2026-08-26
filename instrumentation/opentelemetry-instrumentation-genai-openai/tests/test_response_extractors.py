@@ -65,23 +65,6 @@ def _make_response(output=None, **overrides):
     return Response.model_validate(payload)
 
 
-class _RawResponse:
-    def __init__(self, parsed_response):
-        self.headers = {"x-ms-served-model": "served-gpt-4.1"}
-        self.parsed_response = parsed_response
-        self.parse_count = 0
-
-    def parse(self):
-        self.parse_count += 1
-        return self.parsed_response
-
-
-class _RawResponseWithHeaders(_RawResponse):
-    def __init__(self, parsed_response, headers):
-        super().__init__(parsed_response)
-        self.headers = headers
-
-
 def test_extract_system_instruction_returns_text_for_string(loaded_module):
     params = loaded_module.extract_params(instructions="Be concise")
     instructions = loaded_module.get_system_instruction(params.instructions)
@@ -245,36 +228,6 @@ def test_get_response_error_returns_error_for_failed_response(loaded_module):
     assert error.message == "boom"
 
 
-def test_get_response_error_parses_raw_response(loaded_module):
-    response = _make_response(
-        status="failed",
-        error={"code": "server_error", "message": "boom"},
-    )
-    raw_response = SimpleNamespace(parse=mock.Mock(return_value=response))
-
-    error = loaded_module.get_response_error(raw_response)
-
-    assert error is not None
-    assert error.type == "server_error"
-    raw_response.parse.assert_called_once_with()
-
-
-def test_get_response_error_keeps_streaming_raw_response_lazy(loaded_module):
-    raw_response = SimpleNamespace(parse=mock.Mock())
-
-    error = loaded_module.get_response_error(
-        raw_response,
-        {
-            "extra_headers": {
-                "X-Stainless-Raw-Response": "stream",
-            }
-        },
-    )
-
-    assert error is None
-    raw_response.parse.assert_not_called()
-
-
 def test_get_response_error_none_for_incomplete_response(loaded_module):
     # Incomplete is a finish reason, not an error.
     response = _make_response(
@@ -379,54 +332,6 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
     assert invocation.attributes == {
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER: "scale",
     }
-
-
-def test_set_invocation_response_attributes_prefers_raw_served_model_header(
-    loaded_module,
-):
-    invocation = LLMInvocation(request_model="gpt-4o-mini")
-    raw_response = _RawResponse(_make_response(model="body-gpt-4.1"))
-
-    loaded_module.set_invocation_response_attributes(
-        invocation, raw_response, capture_content=False
-    )
-
-    assert raw_response.parse_count == 1
-    assert invocation.response_model_name == "served-gpt-4.1"
-
-
-def test_set_invocation_response_attributes_falls_back_to_body_model_when_header_empty(
-    loaded_module,
-):
-    invocation = LLMInvocation(request_model="gpt-4o-mini")
-    raw_response = _RawResponseWithHeaders(
-        _make_response(model="deployment-gpt-4.1"),
-        headers={"x-ms-served-model": "  "},
-    )
-
-    loaded_module.set_invocation_response_attributes(
-        invocation, raw_response, capture_content=False
-    )
-
-    assert raw_response.parse_count == 1
-    assert invocation.response_model_name == "deployment-gpt-4.1"
-
-
-def test_set_invocation_response_attributes_falls_back_to_body_model_when_header_absent(
-    loaded_module,
-):
-    invocation = LLMInvocation(request_model="gpt-4o-mini")
-    raw_response = _RawResponseWithHeaders(
-        _make_response(model="deployment-gpt-4.1"),
-        headers={"content-type": "application/json"},
-    )
-
-    loaded_module.set_invocation_response_attributes(
-        invocation, raw_response, capture_content=False
-    )
-
-    assert raw_response.parse_count == 1
-    assert invocation.response_model_name == "deployment-gpt-4.1"
 
 
 def test_set_invocation_response_attributes_populates_output_messages(
@@ -666,27 +571,6 @@ def test_set_fetch_response_attributes_captures_tool_definitions(
         not_captured, response, capture_content=False
     )
     assert not_captured.tool_definitions is None
-
-
-def test_set_fetch_response_attributes_prefers_raw_served_model_header(
-    loaded_module,
-):
-    invocation = SimpleNamespace(
-        response_model_name=None,
-        response_status=None,
-        finish_reasons=None,
-        output_messages=[],
-        system_instruction=[],
-        attributes={},
-    )
-    raw_response = _RawResponse(_make_response(model="body-gpt-4.1"))
-
-    loaded_module.set_fetch_response_attributes(
-        invocation, raw_response, capture_content=False
-    )
-
-    assert raw_response.parse_count == 1
-    assert invocation.response_model_name == "served-gpt-4.1"
 
 
 def test_get_served_model_returns_value_when_present():

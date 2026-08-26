@@ -16,6 +16,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.raw_response import is_raw_response
 
 from ._raw_response import wrap_raw_response
 from .messages_extractors import (
@@ -47,17 +48,6 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 ANTHROPIC = "anthropic"
-
-
-def _is_raw_response(result: object) -> bool:
-    """Whether ``result`` is a raw-response object to route through the proxy.
-
-    Matched on shape rather than on the SDK's private response classes
-    (``LegacyAPIResponse``, ``APIResponse``, ``AsyncAPIResponse``). The proxy
-    needs both attributes: ``parse()`` to route on the parsed value and
-    ``http_response`` to finalize the span for callers that never parse.
-    """
-    return hasattr(result, "parse") and hasattr(result, "http_response")
 
 
 def messages_create(
@@ -102,8 +92,13 @@ def messages_create(
                 invocation,
                 capture_content,
             )
-        if _is_raw_response(result):
-            return wrap_raw_response(result, invocation, capture_content)
+        if is_raw_response(result):
+            return wrap_raw_response(
+                result,
+                invocation,
+                capture_content,
+                streamed=bool(kwargs.get("stream")),
+            )
 
         if isinstance(result, AnthropicMessage):
             MessageWrapper(result, capture_content).extract_into(invocation)
@@ -158,8 +153,13 @@ def async_messages_create(
                 invocation,
                 capture_content,
             )
-        if _is_raw_response(result):
-            return wrap_raw_response(result, invocation, capture_content)
+        if is_raw_response(result):
+            return wrap_raw_response(
+                result,
+                invocation,
+                capture_content,
+                streamed=bool(kwargs.get("stream")),
+            )
 
         if isinstance(result, AnthropicMessage):
             MessageWrapper(result, capture_content).extract_into(invocation)

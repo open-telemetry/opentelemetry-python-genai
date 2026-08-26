@@ -440,7 +440,9 @@ async def test_async_responses_retrieve_with_streaming_response_stays_lazy(
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
         == RETRIEVE_RESPONSE_ID
     )
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    # ``with_streaming_response`` streams the HTTP body; it does not make the
+    # generation a streamed one, so gen_ai.request.stream must stay unset.
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in span.attributes
     assert response.id == RETRIEVE_RESPONSE_ID
 
 

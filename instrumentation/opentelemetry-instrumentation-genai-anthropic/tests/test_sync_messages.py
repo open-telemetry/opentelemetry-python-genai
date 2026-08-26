@@ -36,9 +36,6 @@ from opentelemetry.instrumentation.genai.anthropic import (
     AnthropicInstrumentor,
     _raw_response,
 )
-from opentelemetry.instrumentation.genai.anthropic._raw_response import (
-    RawResponseProxy,
-)
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -353,7 +350,9 @@ def test_raw_response_proxy_parse_error_propagates_and_finalizes_once():
         def parse(self, *args, **kwargs):
             raise ValueError("caller parse boom")
 
-    proxy = RawResponseProxy(_Raw(), _FakeInvocation(finalize_calls), False)
+    proxy = _raw_response.wrap_raw_response(
+        _Raw(), _FakeInvocation(finalize_calls), False
+    )
 
     with pytest.raises(ValueError, match="caller parse boom"):
         proxy.parse()
@@ -384,8 +383,10 @@ def test_raw_response_proxy_hooks_stack_over_one_response():
             return _build_message()
 
     raw = _Raw()
-    first = RawResponseProxy(raw, _FakeInvocation(first_stops), False)
-    RawResponseProxy(raw, _FakeInvocation(second_stops), False)
+    first = _raw_response.wrap_raw_response(
+        raw, _FakeInvocation(first_stops), False
+    )
+    _raw_response.wrap_raw_response(raw, _FakeInvocation(second_stops), False)
 
     first.http_response.close()
 
@@ -1790,7 +1791,9 @@ def test_sync_messages_raw_response_stream_wrap_failure_not_raised(
     def boom(*args, **kwargs):
         raise ValueError("boom")
 
-    monkeypatch.setattr(_raw_response, "_wrap_parsed_stream", boom)
+    monkeypatch.setattr(
+        _raw_response.MessagesRawResponseProxy, "_wrap_parsed_stream", boom
+    )
 
     with anthropic_client.messages.with_streaming_response.create(
         model="claude-sonnet-4-20250514",
@@ -2061,7 +2064,7 @@ def test_raw_response_body_with_unknown_fields_still_extracted():
                 },
             }
 
-    message = _raw_response._message_from_read_body(_Body())
+    message = _raw_response._message_from_body(_Body.json())
 
     assert message is not None
     assert message.id == "msg_1"
@@ -2072,24 +2075,12 @@ def test_raw_response_body_with_unknown_fields_still_extracted():
 
 def test_raw_response_body_that_is_not_a_message_is_skipped():
     """A body that is not a ``Message`` yields no response telemetry."""
-
-    class _Body:
-        @staticmethod
-        def json():
-            return {"type": "error", "error": {"message": "nope"}}
-
-    assert _raw_response._message_from_read_body(_Body()) is None
-
-
-def test_raw_response_unreadable_body_is_skipped():
-    """A body that cannot be deserialized must not raise."""
-
-    class _Body:
-        @staticmethod
-        def json():
-            raise ValueError("not json")
-
-    assert _raw_response._message_from_read_body(_Body()) is None
+    assert (
+        _raw_response._message_from_body(
+            {"type": "error", "error": {"message": "nope"}}
+        )
+        is None
+    )
 
 
 @pytest.mark.vcr()
