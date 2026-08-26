@@ -32,7 +32,7 @@ from opentelemetry.util.genai.types import (
     Error,
     FunctionToolDefinition,
     OutputMessage,
-    Text,
+    TextPart,
 )
 
 # TODO: use the semconv constants once these attributes are released in
@@ -274,12 +274,12 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="This is a test.")],
+                parts=[TextPart(content="This is a test.")],
                 finish_reason="stop",
             )
         ]
         invocation.system_instruction = [
-            Text(content="You are a helpful assistant.")
+            TextPart(content="You are a helpful assistant.")
         ]
         invocation.tool_definitions = [
             FunctionToolDefinition(

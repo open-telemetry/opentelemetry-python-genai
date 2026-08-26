@@ -54,4 +54,5 @@ jobs:
     with:
       package: ${{ inputs.package }}
       bump_after_release: true
-    secrets: inherit
+    secrets:
+      OTELBOT_PRIVATE_KEY: ${{ secrets.OTELBOT_PRIVATE_KEY }}

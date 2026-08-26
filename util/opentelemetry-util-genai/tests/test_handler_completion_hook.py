@@ -20,7 +20,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
-    Text,
+    TextPart,
 )
 
 _CAPTURE_EVENT_ENV = {
@@ -48,16 +48,16 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         handler = self._make_handler(hook)
 
         input_messages = [
-            InputMessage(role="user", parts=[Text(content="hello")])
+            InputMessage(role="user", parts=[TextPart(content="hello")])
         ]
         output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="hi")],
+                parts=[TextPart(content="hi")],
                 finish_reason="stop",
             )
         ]
-        system_instruction = [Text(content="be helpful")]
+        system_instruction = [TextPart(content="be helpful")]
         tool_definitions = [
             FunctionToolDefinition(
                 name="get_weather",
@@ -86,7 +86,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         handler = self._make_handler(hook)
 
         input_messages = [
-            InputMessage(role="user", parts=[Text(content="hello")])
+            InputMessage(role="user", parts=[TextPart(content="hello")])
         ]
 
         invocation = handler.inference("openai", request_model="gpt-4o")
@@ -158,12 +158,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         handler = self._make_handler(hook)
 
         input_messages = [
-            InputMessage(role="user", parts=[Text(content="what is 2+2?")])
+            InputMessage(role="user", parts=[TextPart(content="what is 2+2?")])
         ]
         output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="4")],
+                parts=[TextPart(content="4")],
                 finish_reason="stop",
             )
         ]
@@ -189,7 +189,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
 
         invocation = handler.workflow(name="my-workflow")
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="hello")])
+            InputMessage(role="user", parts=[TextPart(content="hello")])
         ]
         invocation.fail(RuntimeError("workflow failed"))
 
@@ -213,16 +213,16 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         handler = self._make_handler(hook)
 
         input_messages = [
-            InputMessage(role="user", parts=[Text(content="what is 2+2?")])
+            InputMessage(role="user", parts=[TextPart(content="what is 2+2?")])
         ]
         output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="4")],
+                parts=[TextPart(content="4")],
                 finish_reason="stop",
             )
         ]
-        system_instruction = [Text(content="be helpful")]
+        system_instruction = [TextPart(content="be helpful")]
         tool_definitions = [
             FunctionToolDefinition(
                 name="get_weather",
@@ -255,7 +255,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
 
         invocation = handler.invoke_local_agent(request_model="gpt-4")
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="hello")])
+            InputMessage(role="user", parts=[TextPart(content="hello")])
         ]
         invocation.fail(RuntimeError("agent failed"))
 
@@ -268,12 +268,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         handler = self._make_handler(hook)
 
         input_messages = [
-            InputMessage(role="user", parts=[Text(content="hi")])
+            InputMessage(role="user", parts=[TextPart(content="hi")])
         ]
         output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="hello")],
+                parts=[TextPart(content="hello")],
                 finish_reason="stop",
             )
         ]

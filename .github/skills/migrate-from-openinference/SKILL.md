@@ -116,11 +116,11 @@ with the migration flow below.
 - **OTel GenAI spans**: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai> — authoritative attribute names, spans, logs, and metrics definitions.
 - **OpenInference → OTel attribute mapping** (Arize-maintained): <https://github.com/Arize-ai/openinference/blob/e9a8746daeb184c9aabc68ca29c05909ddcccf1e/spec/genai/README.md>. Use as a quick lookup for what an OpenInference attribute *roughly* corresponds to in OTel; when the mapping disagrees with the official semconv, **the official semconv wins**.
 - **Message JSON schemas**:
-  - input messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-input-messages.json>
-  - output messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-output-messages.json>
-  - system instructions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-system-instructions.json>
-  - tool definitions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-tool-definitions.json>
-  - retrieval documents: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-retrieval-documents.json>
+  - input messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-input-messages.json>
+  - output messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-output-messages.json>
+  - system instructions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-system-instructions.json>
+  - tool definitions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-tool-definitions.json>
+  - retrieval documents: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-retrieval-documents.json>
 
 - **Code for above models**: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/non-normative/models.py>.
 

@@ -21,6 +21,9 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      OTELBOT_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -36,20 +39,23 @@ jobs:
         run: |
           if [[ "${{ inputs.on_main }}" == "true" || "$GITHUB_REF_NAME" == "main" ]]; then
             echo "on_main=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF_NAME" == package-release/${{ inputs.package }}/v* ]]; then
+          elif [[ "$GITHUB_REF_NAME" == package-release/${INPUTS_PACKAGE}/v* ]]; then
             echo "on_main=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Run on main or package-release/${{ inputs.package }}/v*"
+            echo "Run on main or package-release/${INPUTS_PACKAGE}/v*"
             exit 1
           fi
+        env:
+          INPUTS_PACKAGE: ${{ inputs.package }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          persist-credentials: false
 
       - name: Set environment variables
         run: |
-          version=$(./scripts/eachdist.py version --package ${{ inputs.package }})
+          version=$(./scripts/eachdist.py version --package "${INPUTS_PACKAGE}")
           if [[ $version =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
             major="${BASH_REMATCH[1]}"
             minor="${BASH_REMATCH[2]}"
@@ -69,17 +75,20 @@ jobs:
             exit 1
           fi
 
-          path=$(./scripts/eachdist.py find-package --package ${{ inputs.package }})
+          path=$(./scripts/eachdist.py find-package --package "${INPUTS_PACKAGE}")
           echo "CHANGELOG=./$path/CHANGELOG.md" >> $GITHUB_ENV
-          echo "PACKAGE_NAME=${{ inputs.package }}" >> $GITHUB_ENV
+          echo "PACKAGE_NAME=${INPUTS_PACKAGE}" >> $GITHUB_ENV
           echo "VERSION=$version" >> $GITHUB_ENV
-          echo "RELEASE_TAG=${{ inputs.package }}==$version" >> $GITHUB_ENV
+          echo "RELEASE_TAG=${INPUTS_PACKAGE}==$version" >> $GITHUB_ENV
           echo "PRIOR_VERSION_WHEN_PATCH=$prior_version_when_patch" >> $GITHUB_ENV
-          if [[ "${{ steps.target.outputs.on_main }}" == "true" ]]; then
+          if [[ "${STEPS_TARGET_OUTPUTS_ON_MAIN}" == "true" ]]; then
             echo "RELEASE_TARGET=main" >> $GITHUB_ENV
           else
             echo "RELEASE_TARGET=$GITHUB_REF_NAME" >> $GITHUB_ENV
           fi
+        env:
+          INPUTS_PACKAGE: ${{ inputs.package }}
+          STEPS_TARGET_OUTPUTS_ON_MAIN: ${{ steps.target.outputs.on_main }}
 
       - name: Generate release notes
         env:
@@ -99,6 +108,7 @@ jobs:
         if: inputs.sync_main
         with:
           ref: main
+          persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the release update branch
 
       - name: Install uv
         if: inputs.sync_main
@@ -128,6 +138,7 @@ jobs:
         with:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}
           private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+          permission-pull-requests: write
 
       - name: Open pull request for post-release updates on main
         if: inputs.sync_main

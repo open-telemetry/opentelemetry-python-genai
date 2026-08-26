@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Get changed markdown files
         id: changed-files
@@ -37,7 +38,7 @@ jobs:
 
       - name: Install markdown-link-check
         if: steps.changed-files.outputs.any_changed == 'true'
-        run: npm install -g markdown-link-check@v3.12.2
+        run: npm install -g markdown-link-check@v3.12.2 # zizmor: ignore[adhoc-packages] pinned CI-only checker is intentionally separate from project dependencies
 
       - name: Check links in merge queue
         if: steps.changed-files.outputs.any_changed == 'true' && github.event_name == 'merge_group'
@@ -45,8 +46,10 @@ jobs:
           markdown-link-check \
             --verbose \
             --config .github/workflows/check_links_config.json \
-            ${{ steps.changed-files.outputs.all_changed_files }} \
+            ${STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES} \
             || { echo "Check that anchor links are lowercase"; exit 1; }
+        env:
+          STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
 
       - name: Check new links only on pull requests
         if: steps.changed-files.outputs.any_changed == 'true' && github.event_name == 'pull_request'
@@ -55,8 +58,8 @@ jobs:
           # rate limiting when checking all links in large files like
           # CHANGELOG.md. Only new/changed links are checked on PRs;
           # merge-queue runs still check all links in changed files.
-          git diff "origin/${{ github.base_ref }}...HEAD" -- \
-            ${{ steps.changed-files.outputs.all_changed_files }} \
+          git diff "origin/${GITHUB_BASE_REF}...HEAD" -- \
+            ${STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES} \
             | grep '^+' | grep -v '^+++' \
             | grep -oP 'https?://[^\s\)\]\"'"'"'`>]+' \
             | sort -u > /tmp/new_links.txt
@@ -77,3 +80,5 @@ jobs:
             --config .github/workflows/check_links_config.json \
             /tmp/new_links.md \
             || { echo "Check that anchor links are lowercase"; exit 1; }
+        env:
+          STEPS_CHANGED_FILES_OUTPUTS_ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
