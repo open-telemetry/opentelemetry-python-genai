@@ -1,1 +1,1 @@
-Align message-part class names with semconv (*Part suffix). Rename Text/Blob/File/Uri/Reasoning/ToolCallRequest/ToolCallResponse/ServerToolCall/ServerToolCallResponse to their *Part forms matching the naming for non-normative models in semantic conventions.
+Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
