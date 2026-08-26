@@ -42,6 +42,7 @@ from opentelemetry.instrumentation.genai.anthropic._raw_response import (
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+    extract_params,
     get_server_address_and_port,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -458,6 +459,23 @@ def test_sync_messages_create_with_all_params(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
         "STOP",
     )
+
+
+def test_extract_params_captures_sampling_params_from_extra_body():
+    params = extract_params(
+        model="claude-sonnet-4-20250514",
+        max_tokens=50,
+        messages=[{"role": "user", "content": "Say hello."}],
+        extra_body={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+        },
+    )
+
+    assert params.temperature == 0.7
+    assert params.top_p == 0.9
+    assert params.top_k == 40
 
 
 @pytest.mark.vcr()

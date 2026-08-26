@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -36,7 +36,7 @@ from .utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import (
@@ -201,12 +201,15 @@ def extract_params(  # pylint: disable=too-many-locals
     timeout: float | _http_lib.Timeout | None = None,
     **_kwargs: object,
 ) -> MessageRequestParams:
+    body = extra_body if isinstance(extra_body, Mapping) else {}
     return MessageRequestParams(
         model=model,
         max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
+        temperature=(
+            temperature if temperature is not None else body.get("temperature")
+        ),
+        top_p=top_p if top_p is not None else body.get("top_p"),
+        top_k=top_k if top_k is not None else body.get("top_k"),
         stop_sequences=stop_sequences,
         stream=stream,
         messages=messages,
