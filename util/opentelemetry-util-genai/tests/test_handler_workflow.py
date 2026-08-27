@@ -73,14 +73,8 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(spans[0].name, "invoke_workflow")
 
     def test_workflow_conversation_id(self) -> None:
-        """Set at construction so it is on the span before any child starts."""
-        invocation = self.handler.workflow(
-            name="wf", conversation_id="conv-456"
-        )
-        self.assertEqual(
-            invocation.span.attributes[GenAI.GEN_AI_CONVERSATION_ID],
-            "conv-456",
-        )
+        invocation = self.handler.workflow(name="wf")
+        invocation.conversation_id = "conv-456"
         invocation.stop()
 
         spans = self._get_finished_spans()

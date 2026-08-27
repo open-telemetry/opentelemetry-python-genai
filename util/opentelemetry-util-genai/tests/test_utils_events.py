@@ -69,6 +69,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         )
         invocation.input_messages = [_create_input_message("test query")]
         invocation.system_instruction = _create_system_instruction()
+        invocation.conversation_id = "event-conv-id"
         invocation.temperature = 0.7
         invocation.max_tokens = 100
         invocation.response_model_name = "response-model"
@@ -94,6 +95,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(attrs[GenAI.GEN_AI_OPERATION_NAME], "chat")
         self.assertEqual(attrs[GenAI.GEN_AI_REQUEST_MODEL], "event-model")
         self.assertEqual(attrs[GenAI.GEN_AI_PROVIDER_NAME], "test-provider")
+        self.assertEqual(attrs[GenAI.GEN_AI_CONVERSATION_ID], "event-conv-id")
         self.assertEqual(attrs[GenAI.GEN_AI_REQUEST_TEMPERATURE], 0.7)
         self.assertEqual(attrs[GenAI.GEN_AI_REQUEST_MAX_TOKENS], 100)
         self.assertEqual(attrs[GenAI.GEN_AI_RESPONSE_MODEL], "response-model")

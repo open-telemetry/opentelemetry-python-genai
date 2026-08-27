@@ -52,19 +52,18 @@ def _make_agent_inv_mock() -> mock.MagicMock:
     agent_inv = mock.MagicMock(spec=AgentInvocation)
     agent_inv.span = mock.MagicMock()
     agent_inv.span.is_recording.return_value = False
+    # agent_name is an instance attribute set in AgentInvocation.__init__ via the
+    # constructor arg; pre-configure it so spec-restricted attribute access works.
     agent_inv.agent_name = None
-    agent_inv.conversation_id = None
     return agent_inv
 
 
 def _make_invoke_local_agent_side_effect(inv: mock.MagicMock):
     """Return a side_effect for invoke_local_agent that mirrors what the real
-    AgentInvocation constructor does: set agent_name and conversation_id from
-    the kwargs."""
+    AgentInvocation constructor does: set agent_name from the kwarg."""
 
     def _side_effect(*args, **kwargs):
         inv.agent_name = kwargs.get("agent_name")
-        inv.conversation_id = kwargs.get("conversation_id")
         return inv
 
     return _side_effect
@@ -146,9 +145,7 @@ class TestOnChainStartWorkflow:
             parent_run_id=None,
         )
 
-        telemetry.workflow.assert_called_once_with(
-            name="MyLangGraph", conversation_id=None
-        )
+        telemetry.workflow.assert_called_once_with(name="MyLangGraph")
 
     def test_workflow_name_overridden_by_metadata(self):
         handler, telemetry, _, _ = _make_handler()
@@ -162,12 +159,10 @@ class TestOnChainStartWorkflow:
             metadata={"workflow_name": "custom_workflow"},
         )
 
-        telemetry.workflow.assert_called_once_with(
-            name="custom_workflow", conversation_id=None
-        )
+        telemetry.workflow.assert_called_once_with(name="custom_workflow")
 
     def test_workflow_conversation_id_from_metadata(self):
-        handler, telemetry, _, _ = _make_handler()
+        handler, _, workflow_inv, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -178,9 +173,7 @@ class TestOnChainStartWorkflow:
             metadata={"thread_id": "t1"},
         )
 
-        telemetry.workflow.assert_called_once_with(
-            name="MyLangGraph", conversation_id="t1"
-        )
+        assert workflow_inv.conversation_id == "t1"
 
     def test_workflow_registered_in_invocation_manager(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -218,7 +211,6 @@ class TestOnChainStartAgent:
 
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
-            conversation_id=None,
         )
         assert agent_inv.agent_name == "math_agent"
         assert handler._invocation_manager.get_invocation(run_id) is agent_inv
@@ -452,7 +444,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
+        assert telemetry.inference.return_value.conversation_id == "t1"
 
     def test_conversation_id_inherited_from_parent_chain(self):
         handler, telemetry, _, _ = _make_handler()
@@ -474,7 +466,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
+        assert telemetry.inference.return_value.conversation_id == "t1"
 
     def test_no_conversation_id_available(self):
         handler, telemetry, _, _ = _make_handler()
@@ -489,7 +481,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.call_args.kwargs["conversation_id"] is None
+        assert telemetry.inference.return_value.conversation_id is None
 
 
 class TestOnChainStartUnclassified:

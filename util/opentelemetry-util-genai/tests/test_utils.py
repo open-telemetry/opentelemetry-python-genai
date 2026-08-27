@@ -470,7 +470,6 @@ class TestTelemetryHandler(unittest.TestCase):
             request_model="sampler-model",
             server_address="api.example.com",
             server_port=8080,
-            conversation_id="conv-1",
         )
         invocation.stop()
 
@@ -486,9 +485,28 @@ class TestTelemetryHandler(unittest.TestCase):
             == "api.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
-        assert captured_attributes[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
 
-    def test_inference_omits_conversation_id_when_not_supplied(self):
+    def test_inference_conversation_id_on_span_but_not_metrics(self):
+        """conversation id is high cardinality, so it must stay off metrics.
+
+        `_get_metric_attributes()` builds on `_get_start_attributes()`, so
+        setting it at span creation would make it a dimension on the duration
+        and token histograms.
+        """
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.conversation_id = "conv-1"
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
+        assert (
+            GenAI.GEN_AI_CONVERSATION_ID
+            not in invocation._get_metric_attributes()
+        )
+
+    def test_inference_omits_conversation_id_when_not_set(self):
         invocation = self.telemetry_handler.inference(
             "test-provider", request_model="test-model"
         )

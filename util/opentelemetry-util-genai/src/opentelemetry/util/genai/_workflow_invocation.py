@@ -40,8 +40,6 @@ class WorkflowInvocation(GenAIInvocation):
         logger: Logger,
         completion_hook: CompletionHook,
         name: str | None,
-        *,
-        conversation_id: str | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = "invoke_workflow"
@@ -55,7 +53,7 @@ class WorkflowInvocation(GenAIInvocation):
             span_kind=SpanKind.INTERNAL,
         )
         self._name: str | None = name
-        self.conversation_id: str | None = conversation_id
+        self.conversation_id: str | None = None
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
         self._start(self._get_start_attributes())
@@ -67,8 +65,6 @@ class WorkflowInvocation(GenAIInvocation):
         }
         if self._name is not None:
             attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._name
-        if self.conversation_id is not None:
-            attrs[GenAI.GEN_AI_CONVERSATION_ID] = self.conversation_id
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:

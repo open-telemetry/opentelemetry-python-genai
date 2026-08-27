@@ -49,7 +49,6 @@ class InferenceInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         operation_name: str | None = None,
-        conversation_id: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
     ) -> None:
         operation_name = (
@@ -72,7 +71,7 @@ class InferenceInvocation(GenAIInvocation):
         self._request_model: str | None = request_model
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
-        self.conversation_id: str | None = conversation_id
+        self.conversation_id: str | None = None
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -140,7 +139,6 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
             (server_attributes.SERVER_ADDRESS, self._server_address),
             (server_attributes.SERVER_PORT, self._server_port),
-            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
