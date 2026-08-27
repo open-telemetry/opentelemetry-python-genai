@@ -27,3 +27,6 @@ langchain-aws==0.2.2
 langchain-google-genai==2.0.0
 langchain-anthropic==0.3.0
 boto3==1.37.0
+
+# Drop this once opentelemetry-util-genai 1.2b0 is published.
+-e util/opentelemetry-util-genai

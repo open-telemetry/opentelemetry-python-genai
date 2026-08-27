@@ -30,3 +30,6 @@ httpx==0.27.2
 Deprecated==1.2.14
 importlib-metadata==6.11.0
 packaging==24.0
+
+# Drop this once opentelemetry-util-genai 1.2b0 is published.
+-e util/opentelemetry-util-genai

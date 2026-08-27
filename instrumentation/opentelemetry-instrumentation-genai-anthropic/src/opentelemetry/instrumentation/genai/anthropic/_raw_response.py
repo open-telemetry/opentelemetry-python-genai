@@ -108,6 +108,15 @@ class RawResponseProxy(_ObjectProxy):
         self._self_stream_wrapper: Any = None
         self._install_hooks(raw_response)
 
+    def _fail(self, error: BaseException) -> None:
+        """Finalize this response with a caller-side failure, once."""
+        if self._self_stream_wrapper is not None:
+            self._self_stream_wrapper._finalize_failure(error)
+            return
+        if self._self_span_open:
+            self._self_span_open = False
+            self._self_invocation.fail(error)
+
     def _install_hooks(self, raw_response: Any) -> None:
         http_response = getattr(raw_response, "http_response", None)
         if http_response is None:

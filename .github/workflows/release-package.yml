@@ -11,6 +11,7 @@ on:
         - opentelemetry-instrumentation-genai-langchain
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-instrumentation-genai-portkey
         - opentelemetry-instrumentation-genai-qwen-agent
         - opentelemetry-instrumentation-genai-smolagents
         - opentelemetry-util-genai

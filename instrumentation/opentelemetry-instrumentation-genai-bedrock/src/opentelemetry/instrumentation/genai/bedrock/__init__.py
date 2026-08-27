@@ -19,6 +19,8 @@ __all__ = ["BedrockInstrumentor"]
 class BedrockInstrumentor(BaseInstrumentor):
     """An instrumentor for Amazon Bedrock."""
 
+    _handler: TelemetryHandler | None = None
+
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
@@ -27,7 +29,7 @@ class BedrockInstrumentor(BaseInstrumentor):
         completion_hook = (
             kwargs.get("completion_hook") or load_completion_hook()
         )
-        TelemetryHandler(
+        self._handler = TelemetryHandler(
             tracer_provider=kwargs.get("tracer_provider"),
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
@@ -37,4 +39,5 @@ class BedrockInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Amazon Bedrock instrumentation."""
+        self._handler = None
         # Amazon Bedrock unpatching will be added in a follow-up change.
