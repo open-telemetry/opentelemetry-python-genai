@@ -586,7 +586,8 @@ def test_chat_anthropic_multimodal_image_llm_call(
 
 
 @pytest.mark.vcr()
-def test_chat_anthropic_file_ref_image_llm_call(    span_exporter,
+def test_chat_anthropic_file_ref_image_llm_call(
+    span_exporter,
     tracer_provider,
     meter_provider,
     logger_provider,
