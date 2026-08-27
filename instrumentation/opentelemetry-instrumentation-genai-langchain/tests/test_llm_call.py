@@ -184,8 +184,8 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
         except Exception as e:
             # For this test, to get error, cassettes were recorded with no OPENAI_API_KEY, so an error is expected here.
             assert isinstance(e, AuthenticationError)
-        # langchain-openai >= 1.6 raises its own AuthenticationError subclass.
-        error_type = f"{type(e).__module__}.{type(e).__qualname__}"
+            # langchain-openai >= 1.6 raises its own AuthenticationError subclass.
+            error_type = f"{type(e).__module__}.{type(e).__qualname__}"
 
     assert response is None
 

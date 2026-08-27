@@ -2292,7 +2292,7 @@ def test_responses_api_input_text_block_is_captured():
     assert len(messages) == 1
     parts = messages[0].parts
     assert len(parts) == 1
-    assert isinstance(parts[0], Text)
+    assert isinstance(parts[0], TextPart)
     assert parts[0].content == "what is this?"
 
 
@@ -2306,7 +2306,7 @@ def test_responses_api_output_text_block_is_captured():
     assert messages[0].role == "assistant"
     parts = messages[0].parts
     assert len(parts) == 1
-    assert isinstance(parts[0], Text)
+    assert isinstance(parts[0], TextPart)
     assert parts[0].content == "the answer"
 
 
@@ -2332,7 +2332,7 @@ def test_text_kept_when_image_block_is_unconvertible():
         ]
     )
     assert messages, "message dropped entirely"
-    assert any(isinstance(p, Text) for p in messages[0].parts)
+    assert any(isinstance(p, TextPart) for p in messages[0].parts)
 
 
 def test_message_with_only_unknown_blocks_is_kept():
@@ -2428,6 +2428,6 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     )
 
     parts = llm_inv.input_messages[0].parts
-    assert any(isinstance(p, Text) for p in parts)
+    assert any(isinstance(p, TextPart) for p in parts)
     blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.content == _REAL_PNG_BYTES
