@@ -59,6 +59,7 @@ def _langchain_openai_version() -> tuple:
 # older releases drop the detail entirely, so the reasoning assertions below
 # cannot hold on those versions.
 _supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
+_supports_responses_api = _langchain_openai_version() >= (1, 3, 0)
 
 _REAL_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
@@ -632,6 +633,10 @@ def test_chat_anthropic_file_ref_image_llm_call(
     assert f'"file_id":"{_ANTHROPIC_FILE_ID}"' in input_message
 
 
+@pytest.mark.skipif(
+    not _supports_responses_api,
+    reason="langchain-openai < 1.3 does not support the Responses API",
+)
 def test_chat_openai_responses_api_input_image_llm_call(
     span_exporter,
     tracer_provider,
