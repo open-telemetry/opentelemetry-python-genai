@@ -1,0 +1,344 @@
+interactions:
+- request:
+    body: |-
+      {
+        "include": [],
+        "input": [
+          {
+            "content": "run tool",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "tools": [
+          {
+            "name": "_failing_tool",
+            "parameters": {
+              "properties": {},
+              "title": "_failing_tool_args",
+              "type": "object",
+              "additionalProperties": false,
+              "required": []
+            },
+            "strict": true,
+            "type": "function",
+            "description": "A tool that raises, so the agents library records Span.error."
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '347'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - Agents/Python 0.22.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.2
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_019dd42d1cafce7f006a112bf5c5c88198941d9e22717f43f8",
+          "object": "response",
+          "created_at": 1779510261,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1779510262,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
+            {
+              "id": "fc_019dd42d1cafce7f006a112bf6579c8198aa2190d103de21f2",
+              "type": "function_call",
+              "status": "completed",
+              "arguments": "{}",
+              "call_id": "call_p8lcZjpfutZxNztLY1QlNNJ4",
+              "name": "_failing_tool"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": "agents-sdk:run:9f2a0c7b6d5e4f1a8c3b2d0e7f6a5b4c",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "type": "function",
+              "description": "A tool that raises, so the agents library records Span.error.",
+              "name": "_failing_tool",
+              "parameters": {
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {},
+                "required": []
+              },
+              "strict": true
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 62,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 12,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 74
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      content-length:
+      - '1874'
+      content-type:
+      - application/json
+      date:
+      - Thu, 27 Aug 2026 07:23:11 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      server:
+      - BaseHTTP/0.6 Python/3.12.2
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "include": [],
+        "input": [
+          {
+            "content": "run tool",
+            "role": "user"
+          },
+          {
+            "arguments": "{}",
+            "call_id": "call_p8lcZjpfutZxNztLY1QlNNJ4",
+            "name": "_failing_tool",
+            "type": "function_call",
+            "id": "fc_019dd42d1cafce7f006a112bf6579c8198aa2190d103de21f2",
+            "status": "completed"
+          },
+          {
+            "call_id": "call_p8lcZjpfutZxNztLY1QlNNJ4",
+            "output": "An error occurred while running the tool. Please try again. Error: database connection failed",
+            "type": "function_call_output"
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "tools": [
+          {
+            "name": "_failing_tool",
+            "parameters": {
+              "properties": {},
+              "title": "_failing_tool_args",
+              "type": "object",
+              "additionalProperties": false,
+              "required": []
+            },
+            "strict": true,
+            "type": "function",
+            "description": "A tool that raises, so the agents library records Span.error."
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '715'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - Agents/Python 0.22.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.2
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_019dd42d1cafce7f006a112bf8a1348198b7c3f0a45de9127c",
+          "object": "response",
+          "created_at": 1779510261,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1779510262,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
+            {
+              "id": "msg_019dd42d1cafce7f006a112bf9013c81989ac6b21e70f4a3d5",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "text": "I couldn't complete that: the tool failed with a database connection error."
+                }
+              ]
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": "agents-sdk:run:9f2a0c7b6d5e4f1a8c3b2d0e7f6a5b4c",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "type": "function",
+              "description": "A tool that raises, so the agents library records Span.error.",
+              "name": "_failing_tool",
+              "parameters": {
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {},
+                "required": []
+              },
+              "strict": true
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 94,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 18,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 112
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      content-length:
+      - '1997'
+      content-type:
+      - application/json
+      date:
+      - Thu, 27 Aug 2026 07:23:11 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      server:
+      - BaseHTTP/0.6 Python/3.12.2
+    status:
+      code: 200
+      message: OK
+version: 1
