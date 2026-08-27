@@ -1,7 +1,6 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -66,7 +65,9 @@ _REAL_PNG_B64 = (
     "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
     "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
 )
-_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
+
+# An Anthropic Files API image reference. Pinned to the recorded cassette.
+_ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -226,7 +227,6 @@ def test_chat_openai_multimodal_image_llm_call(
     meter_provider,
     logger_provider,
     chat_openai_vision,
-    monkeypatch,
     vcr,
 ):
     """End-to-end: an OpenAI ``image_url`` content block is captured as an
@@ -252,44 +252,37 @@ def test_chat_openai_multimodal_image_llm_call(
             "(explicit n/temperature); only the modern cassette is recorded"
         )
 
-    # The content-capture flag is cached when the handler is built at
-    # ``instrument()`` time, so set it before instrumenting (not after).
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = LangChainInstrumentor()
-    instrumentor.instrument(
+    with instrument(
+        LangChainInstrumentor(),
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-    )
-    try:
+        content_capture="SPAN_ONLY",
+    ):
         with vcr.use_cassette(
             "test_chat_openai_multimodal_image_llm_call.yaml"
         ):
             chat_openai_vision.invoke(messages)
 
-        spans = span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        span = spans[0]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
 
-        assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
-            "gpt-4o"
-        )
+    assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+        "gpt-4o"
+    )
 
-        input_message = span.attributes.get(
-            gen_ai_attributes.GEN_AI_INPUT_MESSAGES
-        )
-        assert input_message is not None
-        assert '"role":"user"' in input_message
-        assert '"type":"text"' in input_message
-        assert '"content":"What is in this image?"' in input_message
-        assert '"type":"blob"' in input_message
-        assert '"modality":"image"' in input_message
-        assert '"mime_type":"image/png"' in input_message
-        assert _REAL_PNG_B64 in input_message
-    finally:
-        instrumentor.uninstrument()
+    input_message = span.attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"role":"user"' in input_message
+    assert '"type":"text"' in input_message
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
 
 
 def test_chat_openai_standard_image_block_llm_call(
@@ -298,7 +291,6 @@ def test_chat_openai_standard_image_block_llm_call(
     meter_provider,
     logger_provider,
     chat_openai_vision,
-    monkeypatch,
     vcr,
 ):
     """End-to-end: a LangChain standard ``image`` block is captured as an
@@ -328,34 +320,33 @@ def test_chat_openai_standard_image_block_llm_call(
             "to the recorded request body"
         )
 
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = LangChainInstrumentor()
-    instrumentor.instrument(
+    with instrument(
+        LangChainInstrumentor(),
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-    )
-    try:
+        content_capture="SPAN_ONLY",
+    ):
         with vcr.use_cassette(
             "test_chat_openai_multimodal_image_llm_call.yaml"
         ):
             chat_openai_vision.invoke(messages)
 
-        spans = span_exporter.get_finished_spans()
-        assert len(spans) == 1
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert (
+        spans[0].attributes.get(gen_ai_attributes.GEN_AI_RESPONSE_MODEL)
+        == "gpt-4o-2024-11-20"
+    )
 
-        input_message = spans[0].attributes.get(
-            gen_ai_attributes.GEN_AI_INPUT_MESSAGES
-        )
-        assert input_message is not None
-        assert '"type":"blob"' in input_message
-        assert '"modality":"image"' in input_message
-        assert '"mime_type":"image/png"' in input_message
-        assert _REAL_PNG_B64 in input_message
-    finally:
-        instrumentor.uninstrument()
+    input_message = spans[0].attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
 
 
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
@@ -453,15 +444,12 @@ def test_chat_anthropic_claude_sonnet_tool_call(
 
 def test_chat_openai_legacy_function_call(
     span_exporter,
-    start_instrumentation,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
     chat_openai_legacy_functions,
-    monkeypatch,
     vcr,
 ):
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-
     functions = [
         {
             "name": "get_current_weather",
@@ -496,10 +484,17 @@ def test_chat_openai_legacy_function_call(
     payload = chat_openai_legacy_functions._get_request_payload([], stop=None)
     cassette_suffix = "_old" if "n" in payload else ""
 
-    with vcr.use_cassette(
-        f"test_chat_openai_legacy_function_call{cassette_suffix}"
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
     ):
-        llm_with_functions.invoke(messages)
+        with vcr.use_cassette(
+            f"test_chat_openai_legacy_function_call{cassette_suffix}"
+        ):
+            llm_with_functions.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -541,7 +536,6 @@ def test_chat_anthropic_multimodal_image_llm_call(
     meter_provider,
     logger_provider,
     chat_anthropic_claude_sonnet,
-    monkeypatch,
 ):
     """End-to-end: an Anthropic ``image`` content block is captured as an
     image ``Blob`` part in ``gen_ai.input.messages``."""
@@ -561,41 +555,128 @@ def test_chat_anthropic_multimodal_image_llm_call(
         ),
     ]
 
-    # The content-capture flag is cached when the handler is built at
-    # ``instrument()`` time, so set it before instrumenting (not after).
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    instrumentor = LangChainInstrumentor()
-    instrumentor.instrument(
+    with instrument(
+        LangChainInstrumentor(),
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-    )
-    try:
+        content_capture="SPAN_ONLY",
+    ):
         chat_anthropic_claude_sonnet.invoke(messages)
 
-        spans = span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        span = spans[0]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
 
-        assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
-            "claude-sonnet-4-5"
-        )
+    assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
+        "claude-sonnet-4-5"
+    )
 
-        input_message = span.attributes.get(
-            gen_ai_attributes.GEN_AI_INPUT_MESSAGES
-        )
-        assert input_message is not None
-        assert '"role":"user"' in input_message
-        assert '"type":"text"' in input_message
-        assert '"content":"What is in this image?"' in input_message
-        assert '"type":"blob"' in input_message
-        assert '"modality":"image"' in input_message
-        assert '"mime_type":"image/png"' in input_message
-        assert _REAL_PNG_B64 in input_message
-    finally:
-        instrumentor.uninstrument()
+    input_message = span.attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"role":"user"' in input_message
+    assert '"type":"text"' in input_message
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_file_ref_image_llm_call(    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    chat_anthropic_claude_sonnet,
+):
+    """End-to-end: a provider-hosted Anthropic image is captured as a ``file``
+    part carrying the file id, rather than dropped."""
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "file",
+                        "file_id": _ANTHROPIC_FILE_ID,
+                    },
+                },
+            ]
+        ),
+    ]
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        chat_anthropic_claude_sonnet.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    input_message = spans[0].attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"file"' in input_message
+    assert '"modality":"image"' in input_message
+    assert f'"file_id":"{_ANTHROPIC_FILE_ID}"' in input_message
+
+
+def test_chat_openai_responses_api_input_image_llm_call(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    chat_openai_responses_vision,
+    vcr,
+):
+    """End-to-end: Responses API ``input_text``/``input_image`` blocks, which
+    langchain-openai forwards verbatim, are captured as text and blob parts."""
+    messages = [
+        HumanMessage(
+            content=[
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{_REAL_PNG_B64}",
+                },
+            ]
+        ),
+    ]
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with vcr.use_cassette(
+            "test_chat_openai_responses_input_image_llm_call.yaml"
+        ):
+            chat_openai_responses_vision.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    input_message = spans[0].attributes.get(
+        gen_ai_attributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_message is not None
+    assert '"content":"What is in this image?"' in input_message
+    assert '"type":"blob"' in input_message
+    assert '"modality":"image"' in input_message
+    assert '"mime_type":"image/png"' in input_message
+    assert _REAL_PNG_B64 in input_message
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py

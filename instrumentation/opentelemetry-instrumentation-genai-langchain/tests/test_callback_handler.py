@@ -38,12 +38,13 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
-    Blob,
+    BlobPart,
+    FilePart,
     InputMessage,
     OutputMessage,
     TextPart,
     ToolCallRequestPart,
-    Uri,
+    UriPart,
 )
 
 # ---------------------------------------------------------------------------
@@ -1868,14 +1869,14 @@ def test_media_part_openai_image_url_dict():
         "image_url": {"url": "https://example.com/a.png"},
     }
     part = _media_part(item)
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/a.png"
 
 
 def test_media_part_openai_image_url_string():
     item = {"type": "image_url", "image_url": "https://example.com/b.png"}
     part = _media_part(item)
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/b.png"
 
 
@@ -1889,7 +1890,7 @@ def test_media_part_anthropic_base64_source_returns_blob():
         },
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type == "image/png"
     assert part.content == b"GIF89a"
 
@@ -1900,7 +1901,7 @@ def test_media_part_anthropic_base64_source_without_media_type():
         "source": {"type": "base64", "data": "QUJD"},
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type is None
     assert part.content == b"ABC"
 
@@ -1915,7 +1916,7 @@ def test_media_part_base64_source_decodes_real_png():
         },
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.content == _REAL_PNG_BYTES
 
 
@@ -1925,7 +1926,7 @@ def test_media_part_anthropic_url_source_returns_uri():
         "source": {"type": "url", "url": "https://example.com/c.png"},
     }
     part = _media_part(item)
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/c.png"
 
 
@@ -1964,7 +1965,7 @@ def test_media_part_openai_real_png_data_uri_returns_blob():
         "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type == "image/png"
     assert part.content == _REAL_PNG_BYTES
 
@@ -1979,7 +1980,7 @@ def test_media_part_anthropic_real_png_source_returns_blob():
         },
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type == "image/png"
     assert part.content == _REAL_PNG_BYTES
 
@@ -2006,7 +2007,7 @@ def test_media_part_real_png_url_source_returns_uri():
         },
     }
     part = _media_part(item)
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/real-image.png"
 
 
@@ -2017,7 +2018,7 @@ def test_media_part_standard_v1_base64_block_returns_blob():
         "mime_type": "image/png",
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type == "image/png"
     assert part.content == _REAL_PNG_BYTES
 
@@ -2025,13 +2026,13 @@ def test_media_part_standard_v1_base64_block_returns_blob():
 def test_media_part_standard_v1_url_block_returns_uri():
     item = {"type": "image", "url": "https://example.com/a.png"}
     part = _media_part(item)
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/a.png"
 
 
 def test_media_part_standard_block_without_mime_type_returns_blob():
     part = _media_part({"type": "image", "base64": _REAL_PNG_B64})
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type is None
     assert part.content == _REAL_PNG_BYTES
 
@@ -2040,7 +2041,7 @@ def test_media_part_standard_v03_block_without_mime_type_returns_blob():
     part = _media_part(
         {"type": "image", "source_type": "base64", "data": _REAL_PNG_B64}
     )
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type is None
 
 
@@ -2054,7 +2055,7 @@ def test_media_part_non_dict_source_falls_through_to_standard_keys():
             "mime_type": "image/png",
         }
     )
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.content == _REAL_PNG_BYTES
 
 
@@ -2067,7 +2068,7 @@ def test_media_part_anthropic_source_takes_precedence_over_standard_keys():
             "url": "https://example.com/ignored.png",
         }
     )
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/from.png"
 
 
@@ -2092,7 +2093,7 @@ def test_media_part_standard_v03_base64_block_returns_blob():
         "mime_type": "image/png",
     }
     part = _media_part(item)
-    assert isinstance(part, Blob)
+    assert isinstance(part, BlobPart)
     assert part.mime_type == "image/png"
     assert part.content == _REAL_PNG_BYTES
 
@@ -2104,7 +2105,7 @@ def test_media_part_standard_v03_url_block_returns_uri():
         "url": "https://example.com/b.png",
     }
     part = _media_part(item)
-    assert isinstance(part, Uri)
+    assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/b.png"
 
 
@@ -2123,7 +2124,7 @@ def test_media_part_standard_block_without_payload_returns_none():
 
 
 @pytest.mark.parametrize(
-    "block,expected",
+    "block,expected,expected_value",
     [
         (
             {
@@ -2131,9 +2132,14 @@ def test_media_part_standard_block_without_payload_returns_none():
                 "base64": _REAL_PNG_B64,
                 "mime_type": "image/png",
             },
-            Blob,
+            BlobPart,
+            _REAL_PNG_BYTES,
         ),
-        ({"type": "image", "url": "https://example.com/a.png"}, Uri),
+        (
+            {"type": "image", "url": "https://example.com/a.png"},
+            UriPart,
+            "https://example.com/a.png",
+        ),
         (
             {
                 "type": "image",
@@ -2141,7 +2147,8 @@ def test_media_part_standard_block_without_payload_returns_none():
                 "data": _REAL_PNG_B64,
                 "mime_type": "image/png",
             },
-            Blob,
+            BlobPart,
+            _REAL_PNG_BYTES,
         ),
         (
             {
@@ -2149,14 +2156,217 @@ def test_media_part_standard_block_without_payload_returns_none():
                 "source_type": "url",
                 "url": "https://e/b.png",
             },
-            Uri,
+            UriPart,
+            "https://e/b.png",
+        ),
+        (
+            {"type": "image", "source_type": "id", "id": "file-123"},
+            FilePart,
+            "file-123",
+        ),
+        (
+            {"type": "image", "id": "file-456"},
+            FilePart,
+            "file-456",
+        ),
+        (
+            {
+                "type": "image",
+                "source": {"type": "file", "file_id": "file-789"},
+            },
+            FilePart,
+            "file-789",
         ),
     ],
 )
-def test_langchain_standard_image_blocks_are_captured(block, expected):
+def test_langchain_standard_image_blocks_are_captured(
+    block, expected, expected_value
+):
     messages = to_input_messages([HumanMessage(content=[block])])
     assert messages, "message dropped entirely - no parts extracted"
-    assert any(isinstance(p, expected) for p in messages[0].parts)
+    part = next(p for p in messages[0].parts if isinstance(p, expected))
+    assert part.modality == "image"
+    assert _part_payload(part) == expected_value
+
+
+@pytest.mark.parametrize(
+    "block,expected,expected_value",
+    [
+        (
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{_REAL_PNG_B64}",
+            },
+            BlobPart,
+            _REAL_PNG_BYTES,
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.com/a.png"},
+            UriPart,
+            "https://example.com/a.png",
+        ),
+        (
+            {
+                "type": "input_image",
+                "image_url": {"url": "https://example.com/a.png"},
+            },
+            UriPart,
+            "https://example.com/a.png",
+        ),
+        (
+            {"type": "input_image", "file_id": "file-123"},
+            FilePart,
+            "file-123",
+        ),
+    ],
+)
+def test_responses_api_input_image_blocks_are_captured(
+    block, expected, expected_value
+):
+    messages = to_input_messages([HumanMessage(content=[block])])
+    assert messages, "message dropped entirely - no parts extracted"
+    part = next(p for p in messages[0].parts if isinstance(p, expected))
+    assert part.modality == "image"
+    assert _part_payload(part) == expected_value
+
+
+def _part_payload(part):
+    if isinstance(part, BlobPart):
+        return part.content
+    if isinstance(part, UriPart):
+        return part.uri
+    return part.file_id
+
+
+def test_media_part_responses_api_input_image_base64_url():
+    part = _media_part(
+        {
+            "type": "input_image",
+            "image_url": f"data:image/png;base64,{_REAL_PNG_B64}",
+        }
+    )
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.modality == "image"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_responses_api_input_image_file_id_returns_file_part():
+    # Provider-hosted image: no bytes and no URL, but the reference is still
+    # worth recording.
+    part = _media_part({"type": "input_image", "file_id": "file-123"})
+    assert isinstance(part, FilePart)
+    assert part.file_id == "file-123"
+    assert part.modality == "image"
+    assert part.mime_type is None
+
+
+def test_media_part_anthropic_file_source_returns_file_part():
+    part = _media_part(
+        {
+            "type": "image",
+            "source": {
+                "type": "file",
+                "file_id": "file-789",
+                "media_type": "image/png",
+            },
+        }
+    )
+    assert isinstance(part, FilePart)
+    assert part.file_id == "file-789"
+    assert part.mime_type == "image/png"
+
+
+def test_media_part_anthropic_file_source_without_file_id_returns_none():
+    assert _media_part({"type": "image", "source": {"type": "file"}}) is None
+
+
+def test_responses_api_input_text_block_is_captured():
+    messages = to_input_messages(
+        [
+            HumanMessage(
+                content=[{"type": "input_text", "text": "what is this?"}]
+            )
+        ]
+    )
+    assert len(messages) == 1
+    parts = messages[0].parts
+    assert len(parts) == 1
+    assert isinstance(parts[0], Text)
+    assert parts[0].content == "what is this?"
+
+
+def test_responses_api_output_text_block_is_captured():
+    # langchain-openai accepts "output_text" on an assistant turn fed back in
+    # as request input.
+    messages = to_input_messages(
+        [AIMessage(content=[{"type": "output_text", "text": "the answer"}])]
+    )
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    parts = messages[0].parts
+    assert len(parts) == 1
+    assert isinstance(parts[0], Text)
+    assert parts[0].content == "the answer"
+
+
+def test_message_survives_unconvertible_image_block():
+    # An image block with no bytes, url, or file id has nothing to record.
+    messages = to_input_messages(
+        [HumanMessage(content=[{"type": "image", "detail": "high"}])]
+    )
+    assert messages, "message dropped entirely"
+    assert messages[0].role == "user"
+    assert messages[0].parts == []
+
+
+def test_text_kept_when_image_block_is_unconvertible():
+    messages = to_input_messages(
+        [
+            HumanMessage(
+                content=[
+                    {"type": "input_text", "text": "what is in this image?"},
+                    {"type": "input_image", "detail": "high"},
+                ]
+            )
+        ]
+    )
+    assert messages, "message dropped entirely"
+    assert any(isinstance(p, Text) for p in messages[0].parts)
+
+
+def test_message_with_only_unknown_blocks_is_kept():
+    messages = to_input_messages(
+        [HumanMessage(content=[{"type": "input_file", "file_id": "file-1"}])]
+    )
+    assert messages
+    assert messages[0].parts == []
+
+
+def test_empty_message_is_still_dropped():
+    assert to_input_messages([HumanMessage(content="")]) == []
+    assert to_input_messages([HumanMessage(content=[])]) == []
+
+
+@pytest.mark.parametrize("content", [[""], ["", ""], [{}], ["", {}]])
+def test_message_of_blank_blocks_is_dropped(content):
+    # Blank blocks are empty content, not content we failed to convert.
+    assert to_input_messages([HumanMessage(content=content)]) == []
+
+
+def test_output_message_survives_unconvertible_blocks():
+    # A dropped output message would also lose its finish_reason.
+    messages = to_output_messages(
+        [AIMessage(content=[{"type": "input_file", "file_id": "file-1"}])],
+        finish_reason="stop",
+    )
+    assert messages
+    assert messages[0].parts == []
+    assert messages[0].finish_reason == "stop"
+
+
+def test_empty_output_message_is_still_dropped():
+    assert to_output_messages([AIMessage(content="")]) == []
 
 
 def test_to_input_messages_extracts_image_part():
@@ -2169,8 +2379,8 @@ def test_to_input_messages_extracts_image_part():
     assert len(messages) == 1
     parts = messages[0].parts
 
-    assert any(isinstance(p, Blob) for p in parts)
-    blob = next(p for p in parts if isinstance(p, Blob))
+    assert any(isinstance(p, BlobPart) for p in parts)
+    blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.mime_type == "image/jpeg"
     assert blob.content == b"ABC"
 
@@ -2219,5 +2429,5 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
 
     parts = llm_inv.input_messages[0].parts
     assert any(isinstance(p, Text) for p in parts)
-    blob = next(p for p in parts if isinstance(p, Blob))
+    blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.content == _REAL_PNG_BYTES

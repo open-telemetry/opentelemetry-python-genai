@@ -24,8 +24,11 @@ from .conformance.agent import AgentScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.multimodal import (
+    AnthropicFileRefMultimodalScenario,
     AnthropicMultimodalScenario,
     OpenAIMultimodalScenario,
+    OpenAIResponsesInputImageScenario,
+    OpenAIStandardBlockMultimodalScenario,
 )
 from .conformance.retrieval import RetrievalScenario
 from .conformance.tool_calling import ToolCallingScenario
@@ -38,7 +41,10 @@ from .conformance.workflow import WorkflowScenario
         InferenceScenario(),
         InferenceStreamingScenario(),
         OpenAIMultimodalScenario(),
+        OpenAIStandardBlockMultimodalScenario(),
+        OpenAIResponsesInputImageScenario(),
         AnthropicMultimodalScenario(),
+        AnthropicFileRefMultimodalScenario(),
         AgentScenario(),
         ToolCallingScenario(),
         WorkflowScenario(),

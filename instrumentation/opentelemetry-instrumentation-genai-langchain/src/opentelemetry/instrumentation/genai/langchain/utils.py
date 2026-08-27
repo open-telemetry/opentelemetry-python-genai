@@ -20,7 +20,8 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.util.genai.types import (
-    Blob,
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
@@ -95,10 +96,21 @@ def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
     decoded = decode_base64(data)
     if decoded is None:
         return None
-    return Blob(
+    return BlobPart(
         mime_type=mime_type if isinstance(mime_type, str) else None,
         modality="image",
         content=decoded,
+    )
+
+
+def _file_from_id(file_id: Any, mime_type: Any) -> MessagePart | None:
+    """Build a :class:`FilePart` for a provider-hosted image reference."""
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    return FilePart(
+        mime_type=mime_type if isinstance(mime_type, str) else None,
+        modality="image",
+        file_id=file_id,
     )
 
 
@@ -109,18 +121,24 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
 
     - OpenAI style ``{"type": "image_url", "image_url": {"url": ...}}`` (or a
       bare ``"image_url": "..."`` string). A ``data:<mime>;base64,<payload>``
-      URL becomes a :class:`Blob`; any other URL becomes a :class:`Uri`.
+      URL becomes a :class:`BlobPart`; any other URL becomes a :class:`UriPart`.
+    - OpenAI Responses API ``{"type": "input_image", "image_url": "..."}``,
+      which langchain-openai passes through verbatim.
     - Anthropic style ``{"type": "image", "source": {...}}`` where ``source``
       is either ``{"type": "base64", "media_type": ..., "data": ...}`` (→
-      :class:`Blob`) or ``{"type": "url", "url": ...}`` (→ :class:`Uri`).
+      :class:`BlobPart`) or ``{"type": "url", "url": ...}`` (→ :class:`UriPart`).
     - langchain-core 0.3 standard blocks ``{"type": "image", "source_type":
-      "base64"|"url", "data"/"url": ..., "mime_type": ...}``.
+      "base64"|"url"|"id", "data"/"url"/"id": ..., "mime_type": ...}``.
     - langchain-core 1.x standard blocks ``{"type": "image",
-      "base64"|"url": ..., "mime_type": ...}``.
+      "base64"|"url"|"id": ..., "mime_type": ...}``.
+
+    A provider-hosted image, referenced by file id rather than carrying bytes
+    or a URL, becomes a :class:`FilePart`. Returns ``None`` only when the
+    block carries no recordable reference at all.
     """
     block_type = item.get("type")
     # OpenAI style: {"type": "image_url", "image_url": {"url": ...}}
-    if block_type == "image_url":
+    if block_type in ("image_url", "input_image"):
         image_url = item.get("image_url")
         url: str | None = None
         if isinstance(image_url, str):
@@ -130,7 +148,7 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
             raw_url = image_url_dict.get("url")
             url = raw_url if isinstance(raw_url, str) else None
         if not url:
-            return None
+            return _file_from_id(item.get("file_id"), item.get("mime_type"))
         return image_from_url(url)
     if block_type != "image":
         return None
@@ -148,6 +166,11 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
             source_url = source_dict.get("url")
             if isinstance(source_url, str) and source_url:
                 return image_from_url(source_url)
+            return None
+        if source_type == "file":
+            return _file_from_id(
+                source_dict.get("file_id"), source_dict.get("media_type")
+            )
         return None
 
     # langchain-core 0.3 standard block: tagged with "source_type". Standard
@@ -160,6 +183,8 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
         if isinstance(standard_url, str) and standard_url:
             return image_from_url(standard_url)
         return None
+    if source_type == "id":
+        return _file_from_id(item.get("id"), item.get("mime_type"))
 
     # langchain-core 1.x standard block: payload keys sit at the top level.
     base64_data = item.get("base64")
@@ -168,7 +193,9 @@ def _media_part(item: dict[str, Any]) -> MessagePart | None:
     standard_url = item.get("url")
     if isinstance(standard_url, str) and standard_url:
         return image_from_url(standard_url)
-    return None
+    return _file_from_id(
+        item.get("id") or item.get("file_id"), item.get("mime_type")
+    )
 
 
 def _content_to_parts(
@@ -193,7 +220,7 @@ def _content_to_parts(
                 parts.append(TextPart(content=item))
             continue
         block_type = item.get("type")
-        if block_type == "text":
+        if block_type in ("text", "input_text", "output_text"):
             text_value = item.get("text")
             if isinstance(text_value, str) and text_value:
                 parts.append(TextPart(content=text_value))
@@ -205,11 +232,19 @@ def _content_to_parts(
             )
             if isinstance(reasoning_value, str) and reasoning_value:
                 parts.append(ReasoningPart(content=reasoning_value))
-        elif block_type in ("image_url", "image"):
+        elif block_type in ("image_url", "image", "input_image"):
             media = _media_part(item)
             if media is not None:
                 parts.append(media)
     return parts
+
+
+def _has_content(message: BaseMessage) -> bool:
+    # Whether the message carried content we failed to convert.
+    content = message.content
+    if isinstance(content, str):
+        return bool(content)
+    return any(bool(block) for block in content)
 
 
 def _legacy_function_call_request(
@@ -303,7 +338,7 @@ def to_input_messages(
     result: list[InputMessage] = []
     for message in normalized_messages:
         parts = _message_parts(message)
-        if not parts:
+        if not parts and not _has_content(message):
             continue
         result.append(InputMessage(role=_normalize_role(message), parts=parts))
     return result
@@ -329,7 +364,7 @@ def to_output_messages(
         if not isinstance(message, AIMessage):
             continue
         parts = _ai_message_parts(message)
-        if not parts:
+        if not parts and not _has_content(message):
             continue
         result.append(
             OutputMessage(

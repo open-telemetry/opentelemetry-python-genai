@@ -14,10 +14,10 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.types import (
-    Blob,
+    BlobPart,
     ContentCapturingMode,
     MessagePart,
-    Uri,
+    UriPart,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,9 +58,9 @@ def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
     """Return a media part for an image ``url``.
 
     A ``data:<mime>;base64,<payload>`` URL is decoded into a
-    :class:`~opentelemetry.util.genai.types.Blob`; a ``data:`` URL without
+    :class:`~opentelemetry.util.genai.types.BlobPart`; a ``data:`` URL without
     base64 encoding has its percent-encoded payload decoded into bytes; any
-    other URL becomes a :class:`~opentelemetry.util.genai.types.Uri`. Shared
+    other URL becomes a :class:`~opentelemetry.util.genai.types.UriPart`. Shared
     by instrumentations that parse provider image blocks.
 
     Called only when content capture is enabled
@@ -69,7 +69,7 @@ def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
     if url.startswith("data:"):
         header, _, payload = url[len("data:") :].partition(",")
         mime_type = header.split(";", 1)[0] or None
-        if ";base64" in header:
+        if ";base64" in header.lower():
             decoded = decode_base64(payload)
             if decoded is None:
                 return None
@@ -77,12 +77,12 @@ def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
         else:
             # Non-base64 data URL payloads are percent-encoded (RFC 2397).
             content = urllib.parse.unquote_to_bytes(payload)
-        return Blob(
+        return BlobPart(
             mime_type=mime_type,
             modality=modality,
             content=content,
         )
-    return Uri(mime_type=None, modality=modality, uri=url)
+    return UriPart(mime_type=None, modality=modality, uri=url)
 
 
 def is_experimental_mode() -> bool:
