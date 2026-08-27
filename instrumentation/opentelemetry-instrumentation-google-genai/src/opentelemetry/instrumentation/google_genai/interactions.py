@@ -99,11 +99,11 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     OutputMessage,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     ToolDefinition,
-    Uri,
+    UriPart,
 )
 
 
@@ -174,7 +174,9 @@ def _interactions_input_to_messages(
     if input_data is None:
         return []
     if isinstance(input_data, str):
-        return [InputMessage(role="user", parts=[Text(content=input_data)])]
+        return [
+            InputMessage(role="user", parts=[TextPart(content=input_data)])
+        ]
 
     if not isinstance(input_data, Sequence):
         input_data = [input_data]
@@ -186,22 +188,22 @@ def _interactions_input_to_messages(
             call_id = _get_field(item, "id")
             name = _get_field(item, "name")
             arguments = _get_field(item, "arguments")
-            part = ToolCallRequest(
+            part = ToolCallRequestPart(
                 id=call_id, name=name or "", arguments=arguments
             )
             parts.append(part)
         elif item_type == "function_result":
             call_id = _get_field(item, "call_id")
             result = _get_field(item, "result")
-            part = ToolCallResponse(id=call_id, response=result)
+            part = ToolCallResponsePart(id=call_id, response=result)
             parts.append(part)
         elif isinstance(item, str):
-            parts.append(Text(content=item))
+            parts.append(TextPart(content=item))
         elif item_type == "text":
-            part = Text(content=_get_field(item, "text") or "")
+            part = TextPart(content=_get_field(item, "text") or "")
             parts.append(part)
         elif item_type == "document":
-            part = Uri(
+            part = UriPart(
                 mime_type=_get_field(item, "mime_type"),
                 modality="document",
                 uri=_get_field(item, "uri") or "",
@@ -244,7 +246,7 @@ def _interactions_response_to_messages(
     return [
         OutputMessage(
             role="assistant",
-            parts=[Text(content=output_text)],
+            parts=[TextPart(content=output_text)],
             finish_reason="stop",
         )
     ]
@@ -406,7 +408,9 @@ def _start_interactions_invocation(
             kwargs.get("input")
         )
         if system_instruction := kwargs.get("system_instruction"):
-            invocation.system_instruction = [Text(content=system_instruction)]
+            invocation.system_instruction = [
+                TextPart(content=system_instruction)
+            ]
 
     return invocation
 

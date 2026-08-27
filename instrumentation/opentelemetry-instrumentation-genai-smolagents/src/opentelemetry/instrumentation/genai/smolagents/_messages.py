@@ -23,14 +23,14 @@ from smolagents.models import get_tool_json_schema
 from smolagents.utils import encode_image_base64
 
 from opentelemetry.util.genai.types import (
-    Blob,
+    BlobPart,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
     OutputMessage,
-    Text,
+    TextPart,
     ToolDefinition,
-    Uri,
+    UriPart,
 )
 
 if TYPE_CHECKING:
@@ -100,8 +100,8 @@ def _encode_base64_image(image: Image) -> str | None:
     return encoded if isinstance(encoded, str) else None
 
 
-def _image_blob(image: Image | str) -> Blob | None:
-    """Build a ``Blob`` part from a base64 string, data URL, or PIL image."""
+def _image_blob(image: Image | str) -> BlobPart | None:
+    """Build a ``BlobPart`` part from a base64 string, data URL, or PIL image."""
     if isinstance(image, str):
         decoded = _decode_base64_image(image)
     else:
@@ -112,16 +112,18 @@ def _image_blob(image: Image | str) -> Blob | None:
     if decoded is None:
         return None
     content, mime_type = decoded
-    return Blob(mime_type=mime_type, modality="image", content=content)
+    return BlobPart(mime_type=mime_type, modality="image", content=content)
 
 
-def _image_part_from_element(element: _ContentElement) -> Uri | Blob | None:
+def _image_part_from_element(
+    element: _ContentElement,
+) -> UriPart | BlobPart | None:
     content_type = element.get("type")
     if content_type == "image_url":
         image_url = element.get("image_url")
         url = image_url.get("url") if isinstance(image_url, dict) else None
         if isinstance(url, str) and url:
-            return Uri(mime_type=None, modality="image", uri=url)
+            return UriPart(mime_type=None, modality="image", uri=url)
         return None
     if content_type == "image":
         image = element.get("image")
@@ -135,7 +137,7 @@ def _parts_from_content(
 ) -> list[MessagePart]:
     parts: list[MessagePart] = []
     if isinstance(content, str):
-        parts.append(Text(content=content))
+        parts.append(TextPart(content=content))
         return parts
     if isinstance(content, list):
         for element in content:
@@ -146,7 +148,7 @@ def _parts_from_content(
                 )
                 continue
             if element.get("type") == "text" and (text := element.get("text")):
-                parts.append(Text(content=text))
+                parts.append(TextPart(content=text))
                 continue
             if image_part := _image_part_from_element(element):
                 parts.append(image_part)

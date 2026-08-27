@@ -1,0 +1,331 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in SF?"
+          }
+        ],
+        "model": "gemini-3.5-flash",
+        "stream": false,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "Get weather for a city",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_gemini_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '305'
+      content-type:
+      - application/json
+      host:
+      - api.portkey.ai
+      user-agent:
+      - OpenAI/Python 2.30.0
+      x-portkey-api-key:
+      - test_portkey_api_key
+      x-portkey-package-version:
+      - portkey-2.3.4
+      x-portkey-provider:
+      - google
+      x-portkey-runtime:
+      - CPython
+      x-portkey-runtime-version:
+      - 3.14.3
+      x-portkey-strict-open-ai-compliance:
+      - 'false'
+      x-stainless-arch:
+      - x64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Linux
+      x-stainless-package-version:
+      - 2.30.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.3
+    method: POST
+    uri: https://api.portkey.ai/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-upudXrGWjCGtOlAWPNVcLpVQTYoO6",
+          "object": "chat.completion",
+          "created": 1787667893,
+          "model": "gemini-3.5-flash",
+          "provider": "google",
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "id": "call_WRWJdBOtUvzgcvREJ01ptGMT",
+                    "type": "function",
+                    "function": {
+                      "name": "get_weather",
+                      "arguments": "{\"city\":\"San Francisco\"}",
+                      "thought_signature": "EpwECpkEARFNMg9zqFQMh5Qu00jGMBxb+Z2m6Cp9q8Ga592Vo0dUJzSWeK9e1wQb50eGRciGvdydH2GuxxS0YmzzpFxS1i6FVyf/69DTBC2PELl6e3mIC9EDQeVlR9snJKk9X+Qr7Yv87FTq9uNW2XR+k/EZRwFcw5iqek/KLquuOWnLCg4U4S1M1/AfVCpIAHgld2hAPCZFDWMXlck1JukYJkIQG7n/tXIS2V6Nan4aU6S2aI+PWczVIFAQu+KBfHpioWh/sB2SqHirwf19RT4Juqu3imYzzxz83Vc42lIVYRBHNiDsklN+JWdOEnTa2USdbNw881YuJl494QSW1mhzEn0OhbumwEtGd+jb4YyRYegb5e8zaJ1llQP8wzlDU+B0aBp4gI0YoHJPiyoihyqnPnydOlDCVdCvZLHXFURV9eYZCTXplJ5y3V+I+e3R2+Rwz+6lgszMeT67lyKVMpw81pLW8zNWzE2uvVZhXRpJFVc28RYUEkqaQOrK7qSZQMP1IZiAPfXBnjwo//yvywciPxR5SBUOzcg27Fc7Pg2G53rk3eFXHH49MZ0MCucpb+HWopCYN3XdVn44JBvHtrY0rhF73XQnmeTlfYKDF1BmiqITZW41Hp762LDbbxSEVBC4b5l/UemiswmaZD6WwFERXWFn4+Sdk+Jd53Q3/CZOm2hNmazIN8KtEQldocX6YExWrc3N1ATloSSSekWU"
+                    }
+                  }
+                ]
+              },
+              "index": 0,
+              "finish_reason": "TOOL_CALLS"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 123,
+            "total_tokens": 173,
+            "completion_tokens_details": {
+              "reasoning_tokens": 106
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a30b4349b96d1f55-IAD
+      connection:
+      - keep-alive
+      content-length:
+      - '1291'
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Tue, 25 Aug 2026 14:24:53 GMT
+      server:
+      - cloudflare
+      server-timing:
+      - gfet4t7; dur=1160
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin, X-Origin, Referer, accept-encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-portkey-cache-status:
+      - DISABLED
+      x-portkey-last-used-option-index:
+      - config
+      x-portkey-provider:
+      - google
+      x-portkey-retry-attempt-count:
+      - '0'
+      x-portkey-trace-id:
+      - ee7ddb25-5e89-4f5b-913b-9c07892c70cb
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in SF?"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_WRWJdBOtUvzgcvREJ01ptGMT",
+                "type": "function",
+                "function": {
+                  "name": "get_weather",
+                  "arguments": "{\"city\":\"San Francisco\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "65 degrees and sunny",
+            "tool_call_id": "call_WRWJdBOtUvzgcvREJ01ptGMT"
+          }
+        ],
+        "model": "gemini-3.5-flash",
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_gemini_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '392'
+      content-type:
+      - application/json
+      host:
+      - api.portkey.ai
+      user-agent:
+      - OpenAI/Python 2.30.0
+      x-portkey-api-key:
+      - test_portkey_api_key
+      x-portkey-package-version:
+      - portkey-2.3.4
+      x-portkey-provider:
+      - google
+      x-portkey-runtime:
+      - CPython
+      x-portkey-runtime-version:
+      - 3.14.3
+      x-portkey-strict-open-ai-compliance:
+      - 'false'
+      x-stainless-arch:
+      - x64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Linux
+      x-stainless-package-version:
+      - 2.30.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.3
+    method: POST
+    uri: https://api.portkey.ai/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-RynFsIBquoezmLZY3qLNANFP2ftHE",
+          "object": "chat.completion",
+          "created": 1787667894,
+          "model": "gemini-3.5-flash",
+          "provider": "google",
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "The weather in San Francisco is currently 65\u00b0F and sunny.",
+                "content_blocks": [
+                  {
+                    "type": "text",
+                    "text": "The weather in San Francisco is currently 65\u00b0F and sunny."
+                  }
+                ]
+              },
+              "index": 0,
+              "finish_reason": "STOP"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 47,
+            "completion_tokens": 15,
+            "total_tokens": 62,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a30b43515e0c1f55-IAD
+      connection:
+      - keep-alive
+      content-length:
+      - '559'
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Tue, 25 Aug 2026 14:24:54 GMT
+      server:
+      - cloudflare
+      server-timing:
+      - gfet4t7; dur=939
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin, X-Origin, Referer, accept-encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-portkey-cache-status:
+      - DISABLED
+      x-portkey-last-used-option-index:
+      - config
+      x-portkey-provider:
+      - google
+      x-portkey-retry-attempt-count:
+      - '0'
+      x-portkey-trace-id:
+      - 3d15a909-a8a1-4ff6-97de-998c655ee4cf
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

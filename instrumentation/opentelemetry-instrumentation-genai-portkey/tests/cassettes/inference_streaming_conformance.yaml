@@ -1,0 +1,109 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say this is a test"
+          }
+        ],
+        "model": "gemini-3.5-flash",
+        "stream": true
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_gemini_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '102'
+      content-type:
+      - application/json
+      host:
+      - api.portkey.ai
+      user-agent:
+      - OpenAI/Python 2.30.0
+      x-portkey-api-key:
+      - test_portkey_api_key
+      x-portkey-package-version:
+      - portkey-2.3.4
+      x-portkey-provider:
+      - google
+      x-portkey-runtime:
+      - CPython
+      x-portkey-runtime-version:
+      - 3.14.3
+      x-portkey-strict-open-ai-compliance:
+      - 'false'
+      x-stainless-arch:
+      - x64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Linux
+      x-stainless-package-version:
+      - 2.30.0
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.3
+    method: POST
+    uri: https://api.portkey.ai/v1/chat/completions
+  response:
+    body:
+      string: |+
+        data: {"id":"google-1787667883708","object":"chat.completion.chunk","created":1787667883,"model":"gemini-3.5-flash","provider":"google","choices":[{"delta":{"role":"assistant","content":"This is a test.","content_blocks":[{"index":0,"delta":{"text":"This is a test."}}]},"index":0,"finish_reason":null}],"usage":{"prompt_tokens":6,"completion_tokens":222,"total_tokens":228,"completion_tokens_details":{"reasoning_tokens":217},"prompt_tokens_details":{"cached_tokens":0}}}
+
+        data: {"id":"google-1787667883708","object":"chat.completion.chunk","created":1787667883,"model":"gemini-3.5-flash","provider":"google","choices":[{"delta":{"role":"assistant","content":""},"index":0,"finish_reason":"STOP"}],"usage":{"prompt_tokens":6,"completion_tokens":222,"total_tokens":228,"completion_tokens_details":{"reasoning_tokens":217},"prompt_tokens_details":{"cached_tokens":0}}}
+
+    headers:
+      Set-Cookie: test_set_cookie
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a30b4303dfa3b114-IAD
+      connection:
+      - keep-alive
+      content-type:
+      - text/event-stream
+      date:
+      - Tue, 25 Aug 2026 14:24:43 GMT
+      server:
+      - cloudflare
+      server-timing:
+      - gfet4t7; dur=2111
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin, X-Origin, Referer, accept-encoding
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-portkey-cache-status:
+      - DISABLED
+      x-portkey-last-used-option-index:
+      - config
+      x-portkey-provider:
+      - google
+      x-portkey-retry-attempt-count:
+      - '0'
+      x-portkey-trace-id:
+      - 8bebd521-822c-4bde-917d-2bfaaace12e6
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

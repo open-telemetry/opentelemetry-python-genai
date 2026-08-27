@@ -42,8 +42,8 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
-    Text,
-    ToolCallRequest,
+    TextPart,
+    ToolCallRequestPart,
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
@@ -374,9 +374,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
 
                     if finish_reason in ("tool_calls", "tool_use"):
-                        tool_calls: list[ToolCallRequest] = []
+                        tool_calls: list[ToolCallRequestPart] = []
                         for tool_call in chat_generation.message.tool_calls:
-                            tool_call_request = ToolCallRequest(
+                            tool_call_request = ToolCallRequestPart(
                                 name=tool_call["name"],
                                 id=tool_call["id"],
                                 arguments=tool_call["args"],
@@ -402,7 +402,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
                     else:
                         parts = [
-                            Text(
+                            TextPart(
                                 content=chat_generation.message.content,
                                 type="text",
                             )
