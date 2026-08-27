@@ -287,6 +287,7 @@ def _failing_tool() -> str:
 
 @pytest.mark.vcr
 def test_runner_failing_tool_records_span_error(
+    reset_telemetry_handler: None,
     tracer_provider: TracerProvider,
     logger_provider: Any,
     meter_provider: Any,

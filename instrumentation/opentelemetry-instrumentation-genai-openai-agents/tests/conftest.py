@@ -40,7 +40,7 @@ def vcr_config():
     }
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def reset_telemetry_handler() -> Iterator[None]:
     """Drop util-genai's process-wide ``TelemetryHandler`` around each test.
 
