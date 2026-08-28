@@ -16,9 +16,9 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
 )
 
 if TYPE_CHECKING:
@@ -116,7 +116,7 @@ def find_tool_call_id(
     return None
 
 
-def _function_call_part(function_call: Any) -> ToolCallRequest:
+def _function_call_part(function_call: Any) -> ToolCallRequestPart:
     name = _field_value(function_call, "name") or ""
     arguments = _field_value(function_call, "arguments") or "{}"
     if isinstance(arguments, str):
@@ -124,7 +124,7 @@ def _function_call_part(function_call: Any) -> ToolCallRequest:
             arguments = json.loads(arguments)
         except (json.JSONDecodeError, ValueError):
             pass
-    return ToolCallRequest(name=name, arguments=arguments, id=None)
+    return ToolCallRequestPart(name=name, arguments=arguments, id=None)
 
 
 def _tool_call_response_id(msg: Any) -> str:
@@ -165,7 +165,7 @@ def convert_to_input_messages(
             # API converts it to role="tool"; handle both.
             if role in ("function", "tool") and content:
                 parts.append(
-                    ToolCallResponse(
+                    ToolCallResponsePart(
                         id=_tool_call_response_id(msg),
                         response=_extract_content_text(content),
                     )
@@ -173,7 +173,7 @@ def convert_to_input_messages(
             elif content:
                 text = _extract_content_text(content)
                 if text:
-                    parts.append(Text(content=text))
+                    parts.append(TextPart(content=text))
 
             if parts:
                 input_messages.append(InputMessage(role=role, parts=parts))
@@ -210,10 +210,10 @@ def convert_to_output_messages(
             if content:
                 text = _extract_content_text(content)
                 if text:
-                    parts.append(Text(content=text))
+                    parts.append(TextPart(content=text))
 
             if not parts:
-                parts.append(Text(content=""))
+                parts.append(TextPart(content=""))
 
             output_messages.append(
                 OutputMessage(
@@ -293,6 +293,6 @@ def create_agent_invocation(
         # qwen-agent prepends to the LLM messages on every run.
         system_message = getattr(agent_instance, "system_message", None)
         if system_message:
-            invocation.system_instruction = [Text(content=system_message)]
+            invocation.system_instruction = [TextPart(content=system_message)]
 
     return invocation
