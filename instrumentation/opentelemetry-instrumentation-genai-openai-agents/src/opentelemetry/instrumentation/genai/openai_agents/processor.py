@@ -134,11 +134,8 @@ class GenAITracingProcessor(TracingProcessor):
                 invocation.tool_result = (
                     output if isinstance(output, str) else str(output)
                 )
-        # SpanError is a mapping the agents library attaches to the span,
-        # not a raised exception, so it never reaches util-genai's exception
-        # path on its own. It carries a message and free-form data with no
-        # exception type behind it, so report the semconv fallback rather
-        # than inventing a type that was never raised.
+        # SpanError is a mapping, not a raised exception, so it never
+        # reaches util-genai's exception path on its own.
         span_error = getattr(span, "error", None)
         if span_error is not None:
             invocation.fail(

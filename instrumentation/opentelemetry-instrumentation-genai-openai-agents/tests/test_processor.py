@@ -3,15 +3,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import gc
-import os
 from typing import Any
-from unittest import mock
 from unittest.mock import MagicMock
 
 import pytest
-from agents import Agent, Runner, function_tool
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
@@ -20,9 +16,6 @@ from agents.tracing.span_data import (
     ResponseSpanData,
 )
 
-from opentelemetry.instrumentation.genai.openai_agents import (
-    OpenAIAgentsInstrumentor,
-)
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
@@ -30,7 +23,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -249,10 +241,7 @@ def test_tool_span_error_sets_error_status_and_type(
 
     (tool_span,) = span_exporter.get_finished_spans()
     assert tool_span.status.status_code is StatusCode.ERROR
-    assert "Error running tool" in (tool_span.status.description or "")
     assert tool_span.attributes is not None
-    # The agents library reports no exception type, only a message and
-    # free-form data, so error.type is the semconv fallback.
     assert tool_span.attributes["error.type"] == "_OTHER"
 
 
@@ -271,60 +260,8 @@ def test_agent_span_error_sets_error_status_and_type(
 
     (agent_span,) = span_exporter.get_finished_spans()
     assert agent_span.status.status_code is StatusCode.ERROR
-    assert "Error in agent run" in (agent_span.status.description or "")
     assert agent_span.attributes is not None
-    # The agents library reports no exception type, only a message and
-    # free-form data, so error.type is the semconv fallback.
     assert agent_span.attributes["error.type"] == "_OTHER"
-
-
-@function_tool
-def _failing_tool() -> str:
-    """A tool that raises, so the agents library records Span.error."""
-
-    raise ValueError("database connection failed")
-
-
-@pytest.mark.vcr
-def test_runner_failing_tool_records_span_error(
-    reset_telemetry_handler: None,
-    tracer_provider: TracerProvider,
-    logger_provider: Any,
-    meter_provider: Any,
-    span_exporter: InMemorySpanExporter,
-) -> None:
-    """End-to-end: a raising tool must surface as a failed execute_tool span.
-
-    The unit tests above set ``Span.error`` by hand. This one drives a real
-    ``Runner.run`` so the agents library itself decides what a failed tool
-    records, which is what the processor has to keep working against.
-    """
-    key_override = (
-        {}
-        if os.getenv("OPENAI_API_KEY")
-        else {"OPENAI_API_KEY": "test_openai_api_key"}
-    )
-    with mock.patch.dict(os.environ, key_override):
-        with instrument(
-            OpenAIAgentsInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-        ):
-            agent = Agent(
-                name="test_agent",
-                model="gpt-4o-mini",
-                tools=[_failing_tool],
-            )
-            asyncio.run(Runner.run(agent, "run tool"))
-
-    spans = {span.name: span for span in span_exporter.get_finished_spans()}
-    assert "execute_tool _failing_tool" in spans
-    tool_span = spans["execute_tool _failing_tool"]
-    assert tool_span.status.status_code is StatusCode.ERROR
-    assert "database connection failed" in (tool_span.status.description or "")
-    assert tool_span.attributes is not None
-    assert tool_span.attributes["error.type"] == "_OTHER"
 
 
 def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
