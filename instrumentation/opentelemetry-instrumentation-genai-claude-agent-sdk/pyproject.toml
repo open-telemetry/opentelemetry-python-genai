@@ -49,9 +49,6 @@ include = ["/src", "/tests", "/examples"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentelemetry"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.towncrier]
 directory = ".changelog"
 filename = "CHANGELOG.md"
