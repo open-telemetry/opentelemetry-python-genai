@@ -56,7 +56,13 @@ interactions:
           "parallel_tool_calls": true,
           "usage": {
             "input_tokens": 10,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
             "output_tokens": 10,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
             "total_tokens": 20
           }
         }
@@ -141,7 +147,13 @@ interactions:
           ],
           "usage": {
             "input_tokens": 20,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
             "output_tokens": 10,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
             "total_tokens": 30
           }
         }
