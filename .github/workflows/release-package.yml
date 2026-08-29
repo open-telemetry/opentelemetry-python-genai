@@ -11,6 +11,7 @@ on:
         - opentelemetry-instrumentation-genai-langchain
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
+        - opentelemetry-instrumentation-genai-portkey
         - opentelemetry-instrumentation-genai-qwen-agent
         - opentelemetry-instrumentation-genai-smolagents
         - opentelemetry-util-genai
@@ -54,4 +55,5 @@ jobs:
     with:
       package: ${{ inputs.package }}
       bump_after_release: true
-    secrets: inherit
+    secrets:
+      OTELBOT_PRIVATE_KEY: ${{ secrets.OTELBOT_PRIVATE_KEY }}

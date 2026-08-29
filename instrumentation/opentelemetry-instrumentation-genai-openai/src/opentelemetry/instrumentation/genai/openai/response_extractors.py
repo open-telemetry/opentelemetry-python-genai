@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         Error,
         InputMessage,
         OutputMessage,
-        Text,
+        TextPart,
         ToolDefinition,
     )
 
@@ -67,11 +67,11 @@ try:
         GenericToolDefinition,
         InputMessage,
         OutputMessage,
-        Reasoning,
-        Text,
+        ReasoningPart,
+        TextPart,
     )
     from opentelemetry.util.genai.types import (
-        ToolCallRequest as ToolCall,
+        ToolCallRequestPart as ToolCall,
     )
 except ImportError:
     Error = None
@@ -79,8 +79,8 @@ except ImportError:
     GenericToolDefinition = None
     InputMessage = None
     OutputMessage = None
-    Reasoning = None
-    Text = None
+    ReasoningPart = None
+    TextPart = None
     ToolCall = None
 
 
@@ -180,20 +180,22 @@ def extract_params(
     )
 
 
-def get_system_instruction(instructions: str | None) -> list[Text]:
-    if Text is None or instructions is None:
+def get_system_instruction(instructions: str | None) -> list[TextPart]:
+    if TextPart is None or instructions is None:
         return []
-    return [Text(content=instructions)]
+    return [TextPart(content=instructions)]
 
 
 def get_input_messages(
     input_value: str | Sequence[object] | None,
 ) -> list[InputMessage]:
-    if InputMessage is None or Text is None:
+    if InputMessage is None or TextPart is None:
         return []
 
     if isinstance(input_value, str):
-        return [InputMessage(role="user", parts=[Text(content=input_value)])]
+        return [
+            InputMessage(role="user", parts=[TextPart(content=input_value)])
+        ]
 
     messages: list[InputMessage] = []
     for item in _get_sequence(input_value):
@@ -204,7 +206,7 @@ def get_input_messages(
         content = _get_field(item, "content")
         if isinstance(content, str):
             messages.append(
-                InputMessage(role=role, parts=[Text(content=content)])
+                InputMessage(role=role, parts=[TextPart(content=content)])
             )
             continue
 
@@ -212,27 +214,27 @@ def get_input_messages(
         for part in _get_sequence(content):
             text = _get_field(part, "text")
             if isinstance(text, str):
-                parts.append(Text(content=text))
+                parts.append(TextPart(content=text))
         if parts:
             messages.append(InputMessage(role=role, parts=parts))
 
     return messages
 
 
-def _extract_output_parts(content_blocks: Sequence[object]) -> list[Text]:
+def _extract_output_parts(content_blocks: Sequence[object]) -> list[TextPart]:
     if (
-        Text is None
+        TextPart is None
         or ResponseOutputText is None
         or ResponseOutputRefusal is None
     ):
         return []
 
-    parts: list[Text] = []
+    parts: list[TextPart] = []
     for block in content_blocks:
         if isinstance(block, ResponseOutputText):
-            parts.append(Text(content=block.text))
+            parts.append(TextPart(content=block.text))
         elif isinstance(block, ResponseOutputRefusal):
-            parts.append(Text(content=block.refusal))
+            parts.append(TextPart(content=block.refusal))
     return parts
 
 
@@ -248,19 +250,19 @@ def _parse_tool_call_arguments(arguments: str | None) -> object:
 
 def _extract_reasoning_parts(
     item: ResponseReasoningItem,
-) -> list[Reasoning]:
-    if Reasoning is None:
+) -> list[ReasoningPart]:
+    if ReasoningPart is None:
         return []
 
-    parts: list[Reasoning] = []
+    parts: list[ReasoningPart] = []
     for block in item.summary:
         if isinstance(block.text, str):
-            parts.append(Reasoning(content=block.text))
+            parts.append(ReasoningPart(content=block.text))
     for block in item.content or []:
         if getattr(block, "type", None) == "reasoning_text" and isinstance(
             getattr(block, "text", None), str
         ):
-            parts.append(Reasoning(content=block.text))
+            parts.append(ReasoningPart(content=block.text))
     return parts
 
 
@@ -352,7 +354,7 @@ def get_output_messages_from_response(
         not _response_types_available()
         or not isinstance(response, Response)
         or OutputMessage is None
-        or Text is None
+        or TextPart is None
     ):
         return []
 

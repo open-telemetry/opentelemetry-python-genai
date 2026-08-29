@@ -14,6 +14,7 @@ from langchain_core.messages import (
     ToolMessage,
     convert_to_messages,
 )
+from langchain_core.outputs import ChatGenerationChunk, GenerationChunk
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -23,10 +24,10 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
-    Reasoning,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    ReasoningPart,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     ToolDefinition,
 )
 
@@ -45,6 +46,17 @@ _PROVIDER_NAME_OVERRIDES: dict[str, str] = {
     "mistralai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
     "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
 }
+
+
+def is_stream_end_marker(
+    token: str | list[str | dict[str, Any]],
+    chunk: GenerationChunk | ChatGenerationChunk | None,
+) -> bool:
+    """Whether an ``on_llm_new_token`` call carries LangChain's end-of-stream marker."""
+    if token:
+        return False
+    message = getattr(chunk, "message", None)
+    return getattr(message, "chunk_position", None) == "last"
 
 
 def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
@@ -81,26 +93,26 @@ def _content_to_parts(
     """Convert a LangChain message ``content`` payload into ``MessagePart`` s.
 
     Content may be a plain string or a list of provider-specific block dicts
-    (e.g. Anthropic structured content). We extract :class:`Text` and
-    :class:`Reasoning` parts; ``tool_use`` blocks are intentionally ignored
+    (e.g. Anthropic structured content). We extract :class:`TextPart` and
+    :class:`ReasoningPart` parts; ``tool_use`` blocks are intentionally ignored
     here because LangChain consolidates them into ``message.tool_calls`` which
     is read separately.
     """
     parts: list[MessagePart] = []
     if isinstance(content, str):
         if content:
-            parts.append(Text(content=content))
+            parts.append(TextPart(content=content))
         return parts
     for item in content:
         if isinstance(item, str):
             if item:
-                parts.append(Text(content=item))
+                parts.append(TextPart(content=item))
             continue
         block_type = item.get("type")
         if block_type == "text":
             text_value = item.get("text")
             if isinstance(text_value, str) and text_value:
-                parts.append(Text(content=text_value))
+                parts.append(TextPart(content=text_value))
         elif block_type in ("thinking", "reasoning"):
             reasoning_value = (
                 item.get("thinking")
@@ -108,14 +120,14 @@ def _content_to_parts(
                 or item.get("text")
             )
             if isinstance(reasoning_value, str) and reasoning_value:
-                parts.append(Reasoning(content=reasoning_value))
+                parts.append(ReasoningPart(content=reasoning_value))
     return parts
 
 
 def _legacy_function_call_request(
     message: AIMessage,
-) -> ToolCallRequest | None:
-    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
+) -> ToolCallRequestPart | None:
+    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequestPart`.
 
     Pre-tools OpenAI models return a single call under
     ``additional_kwargs['function_call']`` (``{"name", "arguments"}``) rather
@@ -136,14 +148,14 @@ def _legacy_function_call_request(
             arguments = json.loads(raw_arguments)
         except (json.JSONDecodeError, ValueError):
             arguments = raw_arguments
-    return ToolCallRequest(arguments=arguments, name=name, id=None)
+    return ToolCallRequestPart(arguments=arguments, name=name, id=None)
 
 
 def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
-    :class:`ToolCallRequest` for each entry in ``message.tool_calls``, plus a
+    :class:`ToolCallRequestPart` for each entry in ``message.tool_calls``, plus a
     legacy ``additional_kwargs['function_call']`` when present.
     """
     parts: list[MessagePart] = _content_to_parts(message.content)
@@ -152,7 +164,7 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
         if not name:
             continue
         parts.append(
-            ToolCallRequest(
+            ToolCallRequestPart(
                 arguments=call["args"],
                 name=name,
                 id=call["id"],
@@ -169,7 +181,7 @@ def _tool_message_parts(message: ToolMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for a :class:`ToolMessage` (tool result)."""
     tool_call_id = getattr(message, "tool_call_id", None)
     return [
-        ToolCallResponse(
+        ToolCallResponsePart(
             response=message.content,
             id=tool_call_id if isinstance(tool_call_id, str) else None,
         )
@@ -294,7 +306,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
 
     When no ``messages`` key exists (common in LangGraph state dicts), the
     remaining state fields are serialized as JSON and emitted as a single
-    user-role :class:`Text` part.
+    user-role :class:`TextPart` part.
     """
     if not isinstance(data, dict):
         return []
@@ -318,7 +330,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
     if input_data:
         serialized = serialize(input_data)
         if serialized:
-            return [InputMessage(role="user", parts=[Text(serialized)])]
+            return [InputMessage(role="user", parts=[TextPart(serialized)])]
     return []
 
 

@@ -24,12 +24,12 @@ from anthropic.types import (
 )
 
 from opentelemetry.util.genai.types import (
-    Blob,
+    BlobPart,
     MessagePart,
-    Reasoning,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    ReasoningPart,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
 )
 
 if TYPE_CHECKING:
@@ -99,8 +99,8 @@ def _decode_base64(data: str) -> bytes | None:
         return None
 
 
-def _extract_base64_blob(source: object, modality: str) -> Blob | None:
-    """Extract a Blob from a base64-encoded source dict."""
+def _extract_base64_blob(source: object, modality: str) -> BlobPart | None:
+    """Extract a BlobPart from a base64-encoded source dict."""
     if not isinstance(source, dict):
         return None
     # source is a TypedDict (e.g. Base64ImageSourceParam) narrowed to dict;
@@ -112,7 +112,7 @@ def _extract_base64_blob(source: object, modality: str) -> Blob | None:
     if decoded is None:
         return None
     media_type: object = source.get("media_type")  # type: ignore[reportUnknownMemberType]
-    return Blob(
+    return BlobPart(
         mime_type=media_type if isinstance(media_type, str) else None,
         modality=modality,
         content=decoded,
@@ -127,25 +127,27 @@ def _convert_dict_block_to_part(
 
     if block_type == "text":
         text = block.get("text")
-        return Text(content=str(text) if text is not None else "")
+        return TextPart(content=str(text) if text is not None else "")
 
     if block_type == "tool_use":
         inp = block.get("input")
-        return ToolCallRequest(
+        return ToolCallRequestPart(
             arguments=inp if isinstance(inp, dict) else None,
             name=str(block.get("name", "")),
             id=str(block.get("id", "")),
         )
 
     if block_type == "tool_result":
-        return ToolCallResponse(
+        return ToolCallResponsePart(
             response=block.get("content"),
             id=str(block.get("tool_use_id", "")),
         )
 
     if block_type in ("thinking", "redacted_thinking"):
         thinking = block.get("thinking") or block.get("data")
-        return Reasoning(content=str(thinking) if thinking is not None else "")
+        return ReasoningPart(
+            content=str(thinking) if thinking is not None else ""
+        )
 
     if block_type in ("image", "audio", "video", "document", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))
@@ -158,10 +160,10 @@ def _convert_content_block_to_part(
 ) -> MessagePart | None:
     """Convert an Anthropic content block to a MessagePart."""
     if isinstance(block, TextBlock):
-        return Text(content=block.text)
+        return TextPart(content=block.text)
 
     if isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
-        return ToolCallRequest(
+        return ToolCallRequestPart(
             arguments=block.input, name=block.name, id=block.id
         )
 
@@ -169,10 +171,10 @@ def _convert_content_block_to_part(
         content = (
             block.thinking if isinstance(block, ThinkingBlock) else block.data
         )
-        return Reasoning(content=content)
+        return ReasoningPart(content=content)
 
     if isinstance(block, WebSearchToolResultBlock):
-        return ToolCallResponse(
+        return ToolCallResponsePart(
             response=block.model_dump().get("content"),
             id=block.tool_use_id,
         )
@@ -188,7 +190,7 @@ def convert_content_to_parts(
     if content is None:
         return []
     if isinstance(content, str):
-        return [Text(content=content)]
+        return [TextPart(content=content)]
     parts: list[MessagePart] = []
     for item in content:
         part = _convert_content_block_to_part(item)
@@ -236,7 +238,7 @@ def update_stream_block_state(
 
 def stream_block_state_to_part(state: StreamBlockState) -> MessagePart | None:
     if state.type == "text":
-        return Text(content=state.text)
+        return TextPart(content=state.text)
 
     if state.type == "tool_use":
         arguments: str | dict[str, object] | None = state.tool_input
@@ -245,13 +247,13 @@ def stream_block_state_to_part(state: StreamBlockState) -> MessagePart | None:
                 arguments = json.loads(state.input_json)
             except ValueError:
                 arguments = state.input_json
-        return ToolCallRequest(
+        return ToolCallRequestPart(
             arguments=arguments,
             name=state.tool_name,
             id=state.tool_id,
         )
 
     if state.type in ("thinking", "redacted_thinking"):
-        return Reasoning(content=state.thinking)
+        return ReasoningPart(content=state.thinking)
 
     return None

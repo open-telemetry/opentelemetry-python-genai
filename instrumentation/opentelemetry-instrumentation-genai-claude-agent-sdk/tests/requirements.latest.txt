@@ -37,7 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-claude-agent-sdk~=0.2.144
+claude-agent-sdk~=0.2.147
 wrapt==2.2.2
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
