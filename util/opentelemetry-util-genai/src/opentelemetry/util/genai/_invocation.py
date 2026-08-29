@@ -121,6 +121,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Return {token_type: count} for token histogram recording."""
         return {}
 
+    def record_stream_chunk(self) -> None:
+        """Mark the request as streamed and record one output chunk arriving."""
+        if self._context_token is None:
+            return
+        self._request_stream = True
+        self._on_stream_chunk(timeit.default_timer())
+
     def _on_stream_chunk(self, chunk_at: float) -> None:
         """Record streaming timing for one output chunk as it arrives.
 

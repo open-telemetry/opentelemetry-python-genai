@@ -11,7 +11,11 @@ from uuid import UUID
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
-from langchain_core.outputs import LLMResult
+from langchain_core.outputs import (
+    ChatGenerationChunk,
+    GenerationChunk,
+    LLMResult,
+)
 
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
@@ -25,6 +29,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _normalize_role,
     extract_token_details,
+    is_stream_end_marker,
     make_input_message,
     make_last_output_message,
     normalize_provider,
@@ -294,6 +299,25 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             invocation=llm_invocation,
         )
+
+    def on_llm_new_token(
+        self,
+        token: str | list[str | dict[str, Any]],
+        *,
+        chunk: GenerationChunk | ChatGenerationChunk | None = None,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if is_stream_end_marker(token, chunk):
+            return
+
+        llm_invocation = self._invocation_manager.get_invocation(run_id=run_id)
+        if not isinstance(llm_invocation, InferenceInvocation):
+            return
+
+        llm_invocation.record_stream_chunk()
 
     def on_llm_end(
         self,

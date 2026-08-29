@@ -22,6 +22,7 @@ from opentelemetry.test_util_genai.conformance import (
 
 from .conformance.agent import AgentScenario
 from .conformance.inference import InferenceScenario
+from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.retrieval import RetrievalScenario
 from .conformance.tool_calling import ToolCallingScenario
 from .conformance.workflow import WorkflowScenario
@@ -31,6 +32,7 @@ from .conformance.workflow import WorkflowScenario
     "scenario",
     [
         InferenceScenario(),
+        InferenceStreamingScenario(),
         AgentScenario(),
         ToolCallingScenario(),
         WorkflowScenario(),
