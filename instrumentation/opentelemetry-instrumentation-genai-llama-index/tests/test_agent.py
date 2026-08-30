@@ -834,7 +834,7 @@ async def test_unknown_tool_output_marks_tool_span_as_error(
 
 
 @pytest.mark.asyncio
-async def test_agent_workflow_emits_tool_span(
+async def test_agent_workflow_emits_span_hierarchy(
     span_exporter, instrument_llama_index
 ) -> None:
     def echo(value: str) -> str:
@@ -868,12 +868,190 @@ async def test_agent_workflow_emits_tool_span(
 
     result = await workflow.run(user_msg="Call echo")
     assert result.response.content == "done"
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    workflow_attrs = dict(workflow_span.attributes or {})
+    assert workflow_span.kind == SpanKind.INTERNAL
+    assert workflow_span.parent is None
+    assert (
+        workflow_attrs[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "invoke_workflow"
+    )
+    assert (
+        workflow_attrs[GenAIAttributes.GEN_AI_WORKFLOW_NAME] == "AgentWorkflow"
+    )
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent workflow-agent")
+    assert len(agent_spans) == 2
+    assert all(
+        span.parent is not None
+        and span.parent.span_id == workflow_span.context.span_id
+        and span.context.trace_id == workflow_span.context.trace_id
+        for span in agent_spans
+    )
+
     tool_spans = _spans_named(span_exporter, "execute_tool echo")
     assert len(tool_spans) == 1
-    assert tool_spans[0].parent is None
+    assert tool_spans[0].parent is not None
+    assert tool_spans[0].parent.span_id == workflow_span.context.span_id
+    assert tool_spans[0].context.trace_id == workflow_span.context.trace_id
 
     FunctionTool.from_defaults(echo)(value="after workflow")
-    assert len(_spans_named(span_exporter, "execute_tool echo")) == 2
+    tool_spans = _spans_named(span_exporter, "execute_tool echo")
+    assert len(tool_spans) == 2
+    assert tool_spans[1].parent is None
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_captures_content(
+    span_exporter, instrument_llama_index_with_content
+) -> None:
+    def response_generator(messages, **kwargs):
+        return ChatMessage(role="assistant", content="workflow complete")
+
+    agent = FunctionAgent(
+        name="content-agent",
+        system_prompt="Answer briefly.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    await workflow.run(user_msg="Run the workflow")
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(span_exporter, "invoke_agent content-agent")[0]
+    workflow_attrs = dict(workflow_span.attributes or {})
+    agent_attrs = dict(agent_span.attributes or {})
+    assert json.loads(
+        workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    ) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Run the workflow"}],
+        }
+    ]
+    assert json.loads(workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[
+        0
+    ]["parts"] == [{"type": "text", "content": "workflow complete"}]
+    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Run the workflow"}],
+        }
+    ]
+    assert json.loads(
+        agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
+    ) == [{"type": "text", "content": "Answer briefly."}]
+    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[0][
+        "parts"
+    ] == [{"type": "text", "content": "workflow complete"}]
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_error_marks_workflow_and_agent_spans(
+    span_exporter, instrument_llama_index
+) -> None:
+    error = RuntimeError("workflow agent failed")
+
+    def response_generator(messages, **kwargs):
+        raise error
+
+    agent = FunctionAgent(
+        name="failing-workflow-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    with pytest.raises(RuntimeError) as caught:
+        await workflow.run(user_msg="Fail")
+    assert caught.value is error
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(
+        span_exporter, "invoke_agent failing-workflow-agent"
+    )[0]
+    for span in (workflow_span, agent_span):
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_instruments_function_and_react_members(
+    span_exporter, instrument_llama_index
+) -> None:
+    def function_response(messages, **kwargs):
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="handoff-call",
+                    tool_name="handoff",
+                    tool_kwargs={
+                        "to_agent": "react-member",
+                        "reason": "The ReAct agent should answer.",
+                    },
+                )
+            ],
+        )
+
+    def react_response(messages, **kwargs):
+        return ChatMessage(
+            role="assistant",
+            content="Thought: I can answer.\nAnswer: complete",
+        )
+
+    function_agent = FunctionAgent(
+        name="function-member",
+        description="Routes the request.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=function_response,
+        ),
+        streaming=False,
+    )
+    react_agent = ReActAgent(
+        name="react-member",
+        description="Answers the request.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=react_response,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(
+        agents=[function_agent, react_agent],
+        root_agent="function-member",
+    )
+
+    result = await workflow.run(user_msg="Complete the request")
+    assert result.response.content == "complete"
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    function_span = _spans_named(
+        span_exporter, "invoke_agent function-member"
+    )[0]
+    react_span = _spans_named(span_exporter, "invoke_agent react-member")[0]
+    handoff_span = _spans_named(span_exporter, "execute_tool handoff")[0]
+    for span in (function_span, react_span, handoff_span):
+        assert span.parent is not None
+        assert span.parent.span_id == workflow_span.context.span_id
+        assert span.context.trace_id == workflow_span.context.trace_id
 
 
 def test_sync_tool_span(
