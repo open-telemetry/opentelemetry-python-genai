@@ -1,0 +1,1 @@
+End streamed invocations abandoned before the stream is drained, so the span and OTel context no longer leak.
