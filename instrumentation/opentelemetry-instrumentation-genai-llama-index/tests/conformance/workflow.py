@@ -95,6 +95,7 @@ class WorkflowScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
+
             async def run_workflow() -> None:
                 await workflow.run(user_msg="Complete the request")
 
