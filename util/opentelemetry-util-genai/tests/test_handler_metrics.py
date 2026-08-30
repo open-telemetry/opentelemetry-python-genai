@@ -20,7 +20,7 @@ SCOPE = "opentelemetry.util.genai.handler"
 
 
 class TelemetryHandlerMetricsTest(TestBase):
-    def test_stop_llm_records_duration_and_tokens(self) -> None:
+    def test_inference_stop_records_duration_and_tokens(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             meter_provider=self.meter_provider,
@@ -74,7 +74,7 @@ class TelemetryHandlerMetricsTest(TestBase):
             places=3,
         )
 
-    def test_stop_llm_records_duration_and_tokens_with_additional_attributes(
+    def test_inference_stop_records_duration_and_tokens_with_additional_attributes(
         self,
     ) -> None:
         handler = TelemetryHandler(
@@ -114,7 +114,7 @@ class TelemetryHandlerMetricsTest(TestBase):
             )
             self.assertIsNone(point.attributes.get("should not be on metrics"))
 
-    def test_fail_llm_records_error_and_available_tokens(self) -> None:
+    def test_inference_fail_records_error_and_available_tokens(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             meter_provider=self.meter_provider,
