@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gc
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +20,7 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import INVALID_SPAN, SpanKind
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     Error,
@@ -624,3 +626,75 @@ class TestAgentInvocationMetrics(TestBase):
             points = metric.data.data_points or []
             metrics_by_name.setdefault(metric.name, []).extend(points)
         return metrics_by_name
+
+
+class _AbandonableStreamWrapper(SyncStreamWrapper):
+    """Minimal wrapper whose invocation is finalized only on a GC finalizer."""
+
+    def _process_chunk(self, chunk):  # pylint: disable=unused-argument
+        pass
+
+    def _on_stream_end(self):
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error):
+        self._self_invocation.fail(error)
+
+
+class TestAbandonedStreamInvocation(unittest.TestCase):
+    """Caller walking away before consuming the stream leaks the span/context.
+
+    Regression coverage for the open-telemetry/opentelemetry-python-genai
+    abandoned-stream investigation.
+    """
+
+    def setUp(self):
+        self._span_exporter = InMemorySpanExporter()
+        self._tracer_provider = TracerProvider()
+        self._tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self._span_exporter)
+        )
+        self._tracer = self._tracer_provider.get_tracer(__name__)
+        self._handler = TelemetryHandler(tracer_provider=self._tracer_provider)
+
+    def _abandoned_spans(self, agent_name):
+        invocation = self._handler.invoke_local_agent(
+            agent_name=agent_name, request_model="gpt-4"
+        )
+        wrapper = _AbandonableStreamWrapper(self._chunks(), invocation)
+        for _ in wrapper:
+            break
+        del wrapper
+        gc.collect()
+
+    @staticmethod
+    def _chunks():
+        yield "a"
+        yield "b"
+
+    def test_abandoned_stream_ends_span_and_detaches_context(self):
+        self._abandoned_spans("Math Tutor")
+
+        with self._tracer.start_as_current_span("later"):
+            pass
+
+        spans = {
+            span.name: span
+            for span in self._span_exporter.get_finished_spans()
+        }
+        assert "invoke_agent Math Tutor" in spans
+        assert spans["later"].parent is None
+
+    def test_consumed_stream_still_ends_span(self):
+        invocation = self._handler.invoke_local_agent(
+            agent_name="Reading", request_model="gpt-4"
+        )
+        wrapper = _AbandonableStreamWrapper(self._chunks(), invocation)
+        list(wrapper)
+        del wrapper
+        gc.collect()
+
+        spans = {
+            span.name for span in self._span_exporter.get_finished_spans()
+        }
+        assert "invoke_agent Reading" in spans
