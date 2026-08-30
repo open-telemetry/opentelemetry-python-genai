@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import pytest
-from llama_index.core.agent.workflow import FunctionAgent, ReActAgent
+from llama_index.core.agent.workflow import (
+    AgentWorkflow,
+    FunctionAgent,
+    ReActAgent,
+)
 from llama_index.core.base.llms.types import ToolCallBlock
 from llama_index.core.llms import ChatMessage, MockFunctionCallingLLM
 from llama_index.core.tools import FunctionTool
@@ -84,6 +88,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
         llm=openai_llm,
         streaming=False,
     )
+    provider_workflow = AgentWorkflow(agents=[provider_agent])
 
     providers = {
         "tracer_provider": tracer_provider,
@@ -95,7 +100,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
             await function_agent.run(user_msg="What is the weather in Paris?")
             await react_agent.run(user_msg="What is two plus two?")
             with vcr.use_cassette("inference.yaml"):
-                await provider_agent.run(user_msg="Hello!")
+                await provider_workflow.run(user_msg="Hello!")
 
     spans = span_exporter.get_finished_spans()
     operations = [
@@ -103,6 +108,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
         for span in spans
     ]
     assert operations.count("invoke_agent") == 3
+    assert operations.count("invoke_workflow") == 1
     assert operations.count("execute_tool") == 1
     assert operations.count("chat") == 1
     assert all(isinstance(operation, str) for operation in operations)
@@ -112,6 +118,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
     function_span = spans_by_name["invoke_agent weather-agent"]
     inference_span = spans_by_name["chat gpt-4o-mini"]
     provider_span = spans_by_name["invoke_agent provider-agent"]
+    workflow_span = spans_by_name["invoke_workflow AgentWorkflow"]
 
     assert tool_span.context.trace_id == function_span.context.trace_id
     assert tool_span.parent is not None
@@ -119,6 +126,9 @@ async def test_agent_tool_and_inference_instrumentation_compose(
     assert inference_span.context.trace_id == provider_span.context.trace_id
     assert inference_span.parent is not None
     assert inference_span.parent.span_id == provider_span.context.span_id
+    assert provider_span.context.trace_id == workflow_span.context.trace_id
+    assert provider_span.parent is not None
+    assert provider_span.parent.span_id == workflow_span.context.span_id
 
 
 @pytest.mark.asyncio
