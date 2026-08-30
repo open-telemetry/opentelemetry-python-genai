@@ -56,6 +56,17 @@ CONVERSATION_ID_METADATA_KEYS = (
 )
 
 
+def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
+    """Return the conversation id from a run's own metadata."""
+    if not metadata:
+        return None
+    for key in CONVERSATION_ID_METADATA_KEYS:
+        conversation_id = metadata.get(key)
+        if conversation_id:
+            return str(conversation_id)
+    return None
+
+
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     """
     A callback handler for LangChain that uses OpenTelemetry to create spans for LLM calls and chains, tools etc,. in future.
@@ -80,9 +91,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         operation = classify_chain_run(
             serialized, metadata, kwargs, parent_run_id
         )
-        conversation_id = self._resolve_conversation_id(
-            metadata, parent_run_id
-        )
+        conversation_id = _conversation_id(metadata)
 
         if operation == OperationName.INVOKE_WORKFLOW:
             workflow_name = kwargs.get("name") or serialized.get("name")
@@ -95,7 +104,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             workflow.conversation_id = conversation_id
             workflow.input_messages = make_input_message(inputs)
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, workflow, conversation_id
+                run_id, parent_run_id, workflow
             )
         elif operation == OperationName.INVOKE_AGENT:
             # agent name passed by the user
@@ -128,24 +137,24 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
 
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, agent, conversation_id
+                        run_id, parent_run_id, agent
                     )
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, None, conversation_id
+                        run_id, parent_run_id, None
                     )
             else:
                 # No agent name could be resolved; still register the run_id so that
                 # parent-child traversal (e.g. _find_nearest_agent) is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
-                    run_id, parent_run_id, None, conversation_id
+                    run_id, parent_run_id, None
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, None, conversation_id
+                run_id, parent_run_id, None
             )
 
     def on_chain_end(
@@ -274,14 +283,11 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
         input_messages = to_input_messages(flattened)
 
-        conversation_id = self._resolve_conversation_id(
-            metadata, parent_run_id
-        )
         llm_invocation = self._telemetry_handler.inference(
             provider,
             request_model=request_model,
         )
-        llm_invocation.conversation_id = conversation_id
+        llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
         llm_invocation.frequency_penalty = frequency_penalty
@@ -299,7 +305,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             run_id=run_id,
             parent_run_id=parent_run_id,
             invocation=llm_invocation,
-            conversation_id=conversation_id,
         )
 
     def on_llm_end(
@@ -536,10 +541,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         tool_invocation.arguments = arguments
         self._invocation_manager.add_invocation_state(
-            run_id,
-            parent_run_id,
-            tool_invocation,
-            self._resolve_conversation_id(metadata, parent_run_id),
+            run_id, parent_run_id, tool_invocation
         )
 
     def on_tool_end(
@@ -593,10 +595,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         retrieval.query_text = query
         self._invocation_manager.add_invocation_state(
-            run_id,
-            parent_run_id,
-            retrieval,
-            self._resolve_conversation_id(metadata, parent_run_id),
+            run_id, parent_run_id, retrieval
         )
 
     def on_retriever_end(
@@ -644,19 +643,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         invocation.fail(error)
         if not invocation.span.is_recording():
             self._invocation_manager.delete_invocation_state(run_id=run_id)
-
-    def _resolve_conversation_id(
-        self, metadata: dict[str, Any] | None, parent_run_id: UUID | None
-    ) -> str | None:
-        if metadata:
-            for key in CONVERSATION_ID_METADATA_KEYS:
-                conversation_id = metadata.get(key)
-                if conversation_id:
-                    return str(conversation_id)
-
-        # The application attaches the id to a single point in the chain, so a
-        # run without one of its own tries to inherit from its nearest ancestor.
-        return self._invocation_manager.get_conversation_id(parent_run_id)
 
     def _find_nearest_agent(
         self, run_id: UUID | None

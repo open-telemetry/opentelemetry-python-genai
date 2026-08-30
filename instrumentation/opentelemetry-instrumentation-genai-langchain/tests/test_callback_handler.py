@@ -446,28 +446,6 @@ class TestOnChatModelStartConversationId:
 
         assert telemetry.inference.return_value.conversation_id == "t1"
 
-    def test_conversation_id_inherited_from_parent_chain(self):
-        handler, telemetry, _, _ = _make_handler()
-        workflow_run_id, chat_run_id = _run_id(), _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph", "id": ["langgraph"]},
-            inputs={},
-            run_id=workflow_run_id,
-            parent_run_id=None,
-            metadata={"thread_id": "t1"},
-        )
-        handler.on_chat_model_start(
-            serialized={"name": "ChatOpenAI"},
-            messages=[[HumanMessage(content="What is 3 * 4?")]],
-            run_id=chat_run_id,
-            parent_run_id=workflow_run_id,
-            metadata={"ls_provider": "openai"},
-            invocation_params={"model_name": "gpt-4"},
-        )
-
-        assert telemetry.inference.return_value.conversation_id == "t1"
-
     def test_no_conversation_id_available(self):
         handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
@@ -1337,8 +1315,8 @@ class TestOnRetrieverStart:
             handler._invocation_manager.get_invocation(run_id) is retrieval_inv
         )
 
-    def test_conversation_id_tracked_but_not_passed_to_invocation(self):
-        """Retrieval spans omit the attribute; descendants still inherit it."""
+    def test_conversation_id_not_passed_to_invocation(self):
+        """semconv does not define gen_ai.conversation.id for retrieval."""
         handler, telemetry, _ = _make_handler_with_retrieval()
         run_id = _run_id()
 
@@ -1350,7 +1328,6 @@ class TestOnRetrieverStart:
         )
 
         assert "conversation_id" not in telemetry.retrieval.call_args.kwargs
-        assert handler._invocation_manager.get_conversation_id(run_id) == "t1"
 
     def test_query_text_set_on_invocation(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
