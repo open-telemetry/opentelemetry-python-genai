@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
 from opentelemetry.util.genai.types import GenAIInvocation
@@ -15,6 +16,8 @@ class _InvocationState:
     children: list[UUID] = field(default_factory=lambda: list())
     parent_run_id: UUID | None = None
     ended: bool = False
+    is_langgraph_node: bool = False
+    langgraph_state_version: str | None = None
 
 
 class _InvocationManager:
@@ -30,8 +33,25 @@ class _InvocationManager:
         run_id: UUID,
         parent_run_id: UUID | None,
         invocation: GenAIInvocation | None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
-        invocation_state = _InvocationState(invocation=invocation)
+        is_langgraph_node = bool(
+            metadata
+            and metadata.get("ls_integration") == "langgraph"
+            and metadata.get("langgraph_node")
+        )
+        state_version = (
+            metadata.get("langgraph_step")
+            if is_langgraph_node and metadata
+            else None
+        )
+        invocation_state = _InvocationState(
+            invocation=invocation,
+            is_langgraph_node=is_langgraph_node,
+            langgraph_state_version=(
+                str(state_version) if state_version is not None else None
+            ),
+        )
 
         if parent_run_id is not None and parent_run_id in self._invocations:
             invocation_state.parent_run_id = parent_run_id
@@ -48,6 +68,18 @@ class _InvocationManager:
     def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.parent_run_id if invocation_state else None
+
+    def is_langgraph_node(self, run_id: UUID) -> bool:
+        invocation_state = self._invocations.get(run_id)
+        return bool(invocation_state and invocation_state.is_langgraph_node)
+
+    def get_langgraph_state_version(self, run_id: UUID) -> str | None:
+        invocation_state = self._invocations.get(run_id)
+        return (
+            invocation_state.langgraph_state_version
+            if invocation_state
+            else None
+        )
 
     def delete_invocation_state(self, run_id: UUID) -> None:
         invocation_state = self._invocations.get(run_id)
