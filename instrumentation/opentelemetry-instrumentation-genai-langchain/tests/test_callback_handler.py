@@ -13,14 +13,30 @@ from unittest import mock
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    FunctionMessage,
+    FunctionMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
+)
+from langchain_core.outputs import (
+    ChatGeneration,
+    ChatGenerationChunk,
+    LLMResult,
+)
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
+    _normalize_role,
     extract_token_details,
     make_input_message,
     make_last_output_message,
@@ -1764,3 +1780,47 @@ class TestOnLlmEndResponseModel:
         handler.on_llm_end(response=response, run_id=run_id)
 
         assert llm_inv.response_model_name == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# on_llm_end – streamed output messages
+# ---------------------------------------------------------------------------
+
+
+def test_streamed_output_message_role_is_assistant():
+    run_id = _run_id()
+    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+    gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+
+    handler.on_llm_end(response=LLMResult(generations=[[gen]]), run_id=run_id)
+
+    (output_message,) = llm_inv.output_messages
+    assert output_message.role == "assistant"
+
+
+# ---------------------------------------------------------------------------
+# utils._normalize_role
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message,expected_role",
+    [
+        (AIMessage(content="hi"), "assistant"),
+        (AIMessageChunk(content="hi"), "assistant"),
+        (HumanMessage(content="hi"), "user"),
+        (HumanMessageChunk(content="hi"), "user"),
+        (SystemMessage(content="hi"), "system"),
+        (SystemMessageChunk(content="hi"), "system"),
+        (ToolMessage(content="hi", tool_call_id="call_1"), "tool"),
+        (ToolMessageChunk(content="hi", tool_call_id="call_1"), "tool"),
+        (FunctionMessage(content="hi", name="f"), "tool"),
+        (FunctionMessageChunk(content="hi", name="f"), "tool"),
+    ],
+)
+def test_normalize_role_resolves_chunk_variants(message, expected_role):
+    """Chunk classes report their class name as ``.type``
+    (``AIMessageChunk.type == "AIMessageChunk"``), so they only resolve to a
+    spec role when matched by class."""
+    assert _normalize_role(message) == expected_role

@@ -11,6 +11,9 @@ from typing import Any, cast
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
     ToolMessage,
     convert_to_messages,
 )
@@ -25,6 +28,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -73,18 +77,20 @@ def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
     return _PROVIDER_NAME_OVERRIDES.get(raw, raw)
 
 
-# LangChain ``BaseMessage.type`` -> spec ``role`` value. Anything not in the
-# map is passed through unchanged so future LangChain message types still emit
-# telemetry without code changes here.
-_ROLE_MAP: dict[str, str] = {
-    "human": "user",
-    "ai": "assistant",
-    "function": "tool",
-}
+_ROLE_BY_CLASS: tuple[tuple[type[BaseMessage], Role], ...] = (
+    (ToolMessage, Role.TOOL),
+    (FunctionMessage, Role.TOOL),
+    (AIMessage, Role.ASSISTANT),
+    (HumanMessage, Role.USER),
+    (SystemMessage, Role.SYSTEM),
+)
 
 
 def _normalize_role(message: BaseMessage) -> str:
-    return _ROLE_MAP.get(message.type, message.type)
+    for message_class, role in _ROLE_BY_CLASS:
+        if isinstance(message, message_class):
+            return role.value
+    return message.type
 
 
 def _content_to_parts(
@@ -330,7 +336,11 @@ def make_input_message(data: Any) -> list[InputMessage]:
     if input_data:
         serialized = serialize(input_data)
         if serialized:
-            return [InputMessage(role="user", parts=[TextPart(serialized)])]
+            return [
+                InputMessage(
+                    role=Role.USER.value, parts=[TextPart(serialized)]
+                )
+            ]
     return []
 
 

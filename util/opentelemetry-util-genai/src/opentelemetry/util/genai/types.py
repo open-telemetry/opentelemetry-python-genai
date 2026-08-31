@@ -300,15 +300,23 @@ FinishReason = Literal[
 ]
 
 
+# https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/gen-ai-output-messages.json
+class Role(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
 @dataclass()
 class InputMessage:
-    role: str
+    role: str | Role
     parts: list[MessagePart]
 
 
 @dataclass()
 class OutputMessage:
-    role: str
+    role: str | Role
     parts: list[MessagePart]
     finish_reason: str | FinishReason
 
