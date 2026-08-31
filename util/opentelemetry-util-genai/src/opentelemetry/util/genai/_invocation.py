@@ -8,7 +8,7 @@ from abc import abstractmethod
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from contextvars import Token
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TypeAlias
 
@@ -25,6 +25,7 @@ from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     Error,
     ErrorTypeResolver,
+    GenericToolDefinition,
     InputMessage,
     MessagePart,
     OutputMessage,
@@ -268,11 +269,26 @@ def get_content_attributes(
         dicts = [asdict(item) for item in items]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
-    # Tool definitions are always captured, the sem conv recommends adding params / description only
-    # when the content capture mode is set..
+    def serialize_required_tool_definitions(
+        items: Sequence[ToolDefinition],
+    ) -> Any:
+        required = {field.name for field in fields(GenericToolDefinition)}
+        dicts = [
+            {k: v for k, v in asdict(item).items() if k in required}
+            for item in items
+        ]
+        return gen_ai_json_dumps(dicts) if for_span else dicts
+
+    # Tool definitions are always captured, the sem conv recommends adding the
+    # non-required properties (description / parameters) only when the content
+    # capture mode is set.
     if mode not in allowed_modes:
         return (
-            {GenAI.GEN_AI_TOOL_DEFINITIONS: serialize(tool_definitions)}
+            {
+                GenAI.GEN_AI_TOOL_DEFINITIONS: serialize_required_tool_definitions(
+                    tool_definitions
+                )
+            }
             if tool_definitions
             else {}
         )

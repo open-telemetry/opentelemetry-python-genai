@@ -674,6 +674,4 @@ def set_fetch_response_attributes(
         invocation.output_messages = get_output_messages_from_response(
             response
         )
-        invocation.tool_definitions = get_tool_definitions_from_response(
-            response
-        )
+    invocation.tool_definitions = get_tool_definitions_from_response(response)

@@ -137,7 +137,7 @@ def test_prepare_tool_definitions_deduplication() -> None:
 
 
 def test_agent_run_with_tools(
-    instrument_agno,
+    instrument_agno_with_content,
     span_exporter,
 ) -> None:
     """Test that Agent.run emits gen_ai.tool.definitions when tools are present."""
@@ -186,7 +186,7 @@ def test_agent_run_with_tools(
 
 
 def test_agent_arun_with_tools(
-    instrument_agno,
+    instrument_agno_with_content,
     span_exporter,
 ) -> None:
     """Test that Agent.arun emits gen_ai.tool.definitions when tools are present."""
@@ -256,3 +256,40 @@ def test_agent_run_without_tools(
     span = spans[0]
     assert span.name == "invoke_agent test-no-tools-agent"
     assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+
+
+def test_agent_run_tool_definitions_omit_optional_properties_without_content_capture(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Tool definitions carry the (sensitive) description and parameters and
+    must not be emitted on the span when span content capture is disabled
+    (NO_CONTENT or EVENT_ONLY)."""
+
+    def sample_tool(location: str) -> str:
+        """Get weather for location."""
+        return "sunny"
+
+    agent = Agent(
+        name="test-tools-no-capture-agent",
+        model=MockModel(id="mock-model"),
+        tools=[sample_tool],
+    )
+    mock_output = ModelResponse(content="The weather is sunny.")
+
+    with (
+        patch.object(Agent, "run", wraps=agent.run),
+        patch("agno.models.base.Model.response", return_value=mock_output),
+    ):
+        res = agent.run("what is the weather in Seattle?")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "invoke_agent test-tools-no-capture-agent"
+
+    tool_defs = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
+    )
+    assert tool_defs == [{"name": "sample_tool", "type": "function"}]

@@ -357,6 +357,28 @@ class TestAgentInvocationContent(unittest.TestCase):
 
     @patch(
         "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        return_value=ContentCapturingMode.NO_CONTENT,
+    )
+    def test_tool_definitions_on_span_omit_optional_properties_without_content_capture(
+        self, _mock_cap
+    ):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather",
+            parameters={"type": "object", "properties": {}},
+        )
+        invocation = self.handler.invoke_local_agent()
+        invocation.tool_definitions = [tool]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert (
+            attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]
+            == '[{"name":"get_weather","type":"function"}]'
+        )
+
+    @patch(
+        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_messages_on_span(self, _mock_cap):
