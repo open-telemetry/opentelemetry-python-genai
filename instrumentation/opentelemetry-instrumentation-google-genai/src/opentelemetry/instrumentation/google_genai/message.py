@@ -9,15 +9,15 @@ from enum import Enum
 from google.genai import types as genai_types
 
 from opentelemetry.util.genai.types import (
-    Blob,
+    BlobPart,
     FinishReason,
     InputMessage,
     MessagePart,
     OutputMessage,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
-    Uri,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
+    UriPart,
 )
 
 
@@ -91,12 +91,12 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
         return f"{idx}"
 
     if (text := part.text) is not None:
-        return Text(content=text)
+        return TextPart(content=text)
 
     if inline_data := part.inline_data:
         mime_type = inline_data.mime_type or ""
         modality = mime_type.split("/")[0] if mime_type else ""
-        return Blob(
+        return BlobPart(
             mime_type=mime_type,
             modality=modality,
             content=inline_data.data or b"",
@@ -105,21 +105,21 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
     if file_data := part.file_data:
         mime_type = file_data.mime_type or ""
         modality = mime_type.split("/")[0] if mime_type else ""
-        return Uri(
+        return UriPart(
             mime_type=mime_type,
             modality=modality,
             uri=file_data.file_uri or "",
         )
 
     if call := part.function_call:
-        return ToolCallRequest(
+        return ToolCallRequestPart(
             id=call.id or tool_call_id(call.name),
             name=call.name or "",
             arguments=call.args,
         )
 
     if response := part.function_response:
-        return ToolCallResponse(
+        return ToolCallResponsePart(
             id=response.id or tool_call_id(response.name),
             response=response.response,
         )

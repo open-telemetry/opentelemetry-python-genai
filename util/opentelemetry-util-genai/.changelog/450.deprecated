@@ -1,0 +1,1 @@
+Deprecate the message part classes `Text`, `Reasoning`, `Blob`, `File`, `Uri`, `ToolCallRequest`, `ToolCallResponse`, `ServerToolCall` and `ServerToolCallResponse`; they remain available as aliases of their *Part replacements.

@@ -24,3 +24,6 @@
 
 
 fsspec==2025.9.0
+
+# Drop this once opentelemetry-util-genai 1.2b0 is published.
+-e util/opentelemetry-util-genai[upload]

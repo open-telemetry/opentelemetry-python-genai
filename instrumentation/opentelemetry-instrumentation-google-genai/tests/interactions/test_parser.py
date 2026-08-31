@@ -13,10 +13,10 @@ from opentelemetry.instrumentation.google_genai.interactions import (
 )
 from opentelemetry.util.genai.types import (
     GenericPart,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
-    Uri,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
+    UriPart,
 )
 
 
@@ -32,22 +32,22 @@ class TestInteractionsParser(unittest.TestCase):
         messages = _interactions_input_to_messages("Hello world")
         self.assertEqual(messages[0].role, "user")
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], Text)
+        self.assertIsInstance(messages[0].parts[0], TextPart)
         self.assertEqual(messages[0].parts[0].content, "Hello world")
 
     def test_input_to_messages_list_of_strings(self) -> None:
         messages = _interactions_input_to_messages(["Hello", "world"])
         self.assertEqual(len(messages[0].parts), 2)
-        self.assertIsInstance(messages[0].parts[0], Text)
+        self.assertIsInstance(messages[0].parts[0], TextPart)
         self.assertEqual(messages[0].parts[0].content, "Hello")
-        self.assertIsInstance(messages[0].parts[1], Text)
+        self.assertIsInstance(messages[0].parts[1], TextPart)
         self.assertEqual(messages[0].parts[1].content, "world")
 
     def test_input_to_messages_text_step(self) -> None:
         steps = [{"type": "text", "text": "Hello text step"}]
         messages = _interactions_input_to_messages(steps)
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], Text)
+        self.assertIsInstance(messages[0].parts[0], TextPart)
         self.assertEqual(messages[0].parts[0].content, "Hello text step")
 
     def test_input_to_messages_document_step(self) -> None:
@@ -60,7 +60,7 @@ class TestInteractionsParser(unittest.TestCase):
         ]
         messages = _interactions_input_to_messages(steps)
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], Uri)
+        self.assertIsInstance(messages[0].parts[0], UriPart)
         self.assertEqual(messages[0].parts[0].mime_type, "application/pdf")
         self.assertEqual(messages[0].parts[0].modality, "document")
         self.assertEqual(
@@ -78,7 +78,7 @@ class TestInteractionsParser(unittest.TestCase):
         ]
         messages = _interactions_input_to_messages(steps)
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], ToolCallRequest)
+        self.assertIsInstance(messages[0].parts[0], ToolCallRequestPart)
         self.assertEqual(messages[0].parts[0].id, "call-123")
         self.assertEqual(messages[0].parts[0].name, "calc")
         self.assertEqual(messages[0].parts[0].arguments, {"x": 5})
@@ -93,7 +93,7 @@ class TestInteractionsParser(unittest.TestCase):
         ]
         messages = _interactions_input_to_messages(steps)
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], ToolCallResponse)
+        self.assertIsInstance(messages[0].parts[0], ToolCallResponsePart)
         self.assertEqual(messages[0].parts[0].id, "call-123")
         self.assertEqual(messages[0].parts[0].response, {"val": 10})
 
@@ -109,7 +109,7 @@ class TestInteractionsParser(unittest.TestCase):
         step = {"type": "text", "text": "Hello single step"}
         messages = _interactions_input_to_messages(step)
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], Text)
+        self.assertIsInstance(messages[0].parts[0], TextPart)
         self.assertEqual(messages[0].parts[0].content, "Hello single step")
 
     def test_input_to_messages_none_type_fall_through(self) -> None:
@@ -126,5 +126,5 @@ class TestInteractionsParser(unittest.TestCase):
         self.assertEqual(messages[0].role, "assistant")
         self.assertEqual(messages[0].finish_reason, "stop")
         self.assertEqual(len(messages[0].parts), 1)
-        self.assertIsInstance(messages[0].parts[0], Text)
+        self.assertIsInstance(messages[0].parts[0], TextPart)
         self.assertEqual(messages[0].parts[0].content, "Model response text")

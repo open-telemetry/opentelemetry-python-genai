@@ -11,7 +11,11 @@ from uuid import UUID
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage
-from langchain_core.outputs import LLMResult
+from langchain_core.outputs import (
+    ChatGenerationChunk,
+    GenerationChunk,
+    LLMResult,
+)
 
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
@@ -25,6 +29,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _normalize_role,
     extract_token_details,
+    is_stream_end_marker,
     make_input_message,
     make_last_output_message,
     normalize_provider,
@@ -42,8 +47,8 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
-    Text,
-    ToolCallRequest,
+    TextPart,
+    ToolCallRequestPart,
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
@@ -297,6 +302,25 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             invocation=llm_invocation,
         )
 
+    def on_llm_new_token(
+        self,
+        token: str | list[str | dict[str, Any]],
+        *,
+        chunk: GenerationChunk | ChatGenerationChunk | None = None,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if is_stream_end_marker(token, chunk):
+            return
+
+        llm_invocation = self._invocation_manager.get_invocation(run_id=run_id)
+        if not isinstance(llm_invocation, InferenceInvocation):
+            return
+
+        llm_invocation.record_stream_chunk()
+
     def on_llm_end(
         self,
         response: LLMResult,
@@ -376,9 +400,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
 
                     if finish_reason in ("tool_calls", "tool_use"):
-                        tool_calls: list[ToolCallRequest] = []
+                        tool_calls: list[ToolCallRequestPart] = []
                         for tool_call in chat_generation.message.tool_calls:
-                            tool_call_request = ToolCallRequest(
+                            tool_call_request = ToolCallRequestPart(
                                 name=tool_call["name"],
                                 id=tool_call["id"],
                                 arguments=tool_call["args"],
@@ -404,7 +428,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
                     else:
                         parts = [
-                            Text(
+                            TextPart(
                                 content=chat_generation.message.content,
                                 type="text",
                             )

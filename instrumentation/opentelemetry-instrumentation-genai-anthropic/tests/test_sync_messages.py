@@ -17,7 +17,7 @@ try:
 except ImportError:
     import httpx2 as httpx
 from anthropic import Anthropic, APIConnectionError, NotFoundError
-from anthropic._response import APIResponse
+from anthropic._response import APIResponse, ResponseContextManager
 
 try:
     from anthropic._legacy_response import LegacyAPIResponse
@@ -265,12 +265,15 @@ def test_sync_messages_streaming_response_is_transparent(
     span_exporter, anthropic_client, instrument_no_content
 ):
     """The streaming proxy must also keep the SDK's type and its parsed stream."""
-    with anthropic_client.messages.with_streaming_response.create(
+    context_manager = anthropic_client.messages.with_streaming_response.create(
         model="claude-sonnet-4-20250514",
         max_tokens=100,
         messages=[{"role": "user", "content": "Say hello in one word."}],
         stream=True,
-    ) as raw_response:
+    )
+    assert isinstance(context_manager, ResponseContextManager)
+    assert context_manager.__class__ is ResponseContextManager
+    with context_manager as raw_response:
         assert isinstance(raw_response, APIResponse)
         assert raw_response.__class__ is APIResponse
         stream = raw_response.parse()
@@ -439,8 +442,11 @@ def test_sync_messages_create_with_all_params(
         "messages": messages,
         "stop_sequences": ["STOP"],
     }
+    sampling_params = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
     if "temperature" in _create_params:
-        kwargs.update(temperature=0.7, top_p=0.9, top_k=40)
+        kwargs.update(sampling_params)
+    else:
+        kwargs["extra_body"] = sampling_params
 
     anthropic_client.messages.create(**kwargs)
 
@@ -448,12 +454,9 @@ def test_sync_messages_create_with_all_params(
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
-    if "temperature" in kwargs:
-        assert (
-            span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
-        )
-        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
-        assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
     # OpenTelemetry converts lists to tuples when storing as attributes
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES] == (
         "STOP",
@@ -583,6 +586,40 @@ def test_uninstrument_removes_patching(
     # but we can verify no spans are created for a mocked scenario
     # For this test, we'll just verify uninstrument doesn't raise
     assert True
+
+
+def test_sync_streaming_response_type_survives_instrumentation_round_trip(
+    tracer_provider, logger_provider, meter_provider
+):
+    """Instrumenting and uninstrumenting keeps the SDK manager type intact."""
+    instrumentor = AnthropicInstrumentor()
+    client = Anthropic()
+
+    def create_context_manager():
+        return client.messages.with_streaming_response.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    try:
+        assert create_context_manager().__class__ is ResponseContextManager
+        instrumentor.uninstrument()
+        assert create_context_manager().__class__ is ResponseContextManager
+        instrumentor.instrument(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        )
+        assert create_context_manager().__class__ is ResponseContextManager
+    finally:
+        instrumentor.uninstrument()
 
 
 def test_multiple_instrument_uninstrument_cycles(
@@ -1806,14 +1843,6 @@ def test_sync_messages_raw_response_stream_wrap_failure_not_raised(
     assert len(span_exporter.get_finished_spans()) == 1
 
 
-@pytest.mark.skip(
-    reason="Known gap, tracked in #389: the SDK's "
-    "ResponseContextManager.__exit__ discards the caller's exception before "
-    "closing the response, so the proxy never sees it and the span is "
-    "finalized as a success. Fixing it means instrumenting "
-    "MessagesWithStreamingResponse.create and wrapping the context manager "
-    "itself, which is a new patch target and out of scope here."
-)
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
 def test_sync_messages_with_streaming_response_user_exception(
@@ -1842,6 +1871,89 @@ def test_sync_messages_with_streaming_response_user_exception(
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_with_streaming_response_user_exception_before_parse(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error before parsing still fails the raw-response span once."""
+    with pytest.raises(ValueError, match="User raised exception"):
+        with anthropic_client.messages.with_streaming_response.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            stream=True,
+        ):
+            raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_streaming_with_raw_response")
+def test_sync_messages_with_streaming_response_user_exception_after_drain(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error after draining does not finalize the span twice."""
+    with pytest.raises(ValueError, match="User raised exception"):
+        with anthropic_client.messages.with_streaming_response.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            stream=True,
+        ) as raw_response:
+            list(raw_response.parse())
+            raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert ErrorAttributes.ERROR_TYPE not in spans[0].attributes
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_with_streaming_response_nonstreaming_user_exception(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error in a non-streaming response context fails the span."""
+    model = "claude-sonnet-4-20250514"
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        with anthropic_client.messages.with_streaming_response.create(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+        ):
+            raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_with_raw_response")
+def test_sync_messages_with_raw_response_caller_exception(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error while handling a raw response is separate from the call."""
+    raw_response = anthropic_client.messages.with_raw_response.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    )
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert ErrorAttributes.ERROR_TYPE not in spans[0].attributes
+    assert raw_response.headers is not None
 
 
 @pytest.mark.vcr()

@@ -19,8 +19,8 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
-    Text,
-    ToolCallRequest,
+    TextPart,
+    ToolCallRequestPart,
 )
 
 from .chat_buffers import ChoiceBuffer
@@ -123,7 +123,7 @@ class _ChatStreamMixin:
             )
             if choice.text_content:
                 message.parts.append(
-                    Text(content="".join(choice.text_content))
+                    TextPart(content="".join(choice.text_content))
                 )
             if choice.tool_calls_buffers:
                 tool_calls = []
@@ -135,7 +135,7 @@ class _ChatStreamMixin:
                             arguments = json.loads(arguments_str)
                         except json.JSONDecodeError:
                             arguments = arguments_str
-                    tool_call_part = ToolCallRequest(
+                    tool_call_part = ToolCallRequestPart(
                         name=tool_call.function_name,
                         id=tool_call.tool_call_id,
                         arguments=arguments,

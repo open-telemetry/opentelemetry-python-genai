@@ -7,7 +7,7 @@ OpenTelemetry LangChain Instrumentation
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-langchain/
 
 This library traces `LangChain <https://pypi.org/project/langchain/>`_ and
-`LangGraph <https://pypi.org/project/langgraph/>`_ applications. It hooks into
+`LangGraph`_ applications. It hooks into
 LangChain's callback manager to emit spans that mirror the structure of your
 application:
 

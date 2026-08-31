@@ -30,7 +30,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.stream import SyncStreamWrapper
-from opentelemetry.util.genai.types import OutputMessage, Text
+from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 from ._messages import (
     to_input_messages,
@@ -349,7 +349,9 @@ class _ModelStreamWrapper(SyncStreamWrapper["ChatMessageStreamDelta"]):
         # Deltas carry no finish reason, and defaulting to "stop" would hide a
         # generation cut short by a token limit.
         return OutputMessage(
-            role="assistant", parts=[Text(content=content)], finish_reason=""
+            role="assistant",
+            parts=[TextPart(content=content)],
+            finish_reason="",
         )
 
     def _finalize(self, error: BaseException | None = None) -> None:

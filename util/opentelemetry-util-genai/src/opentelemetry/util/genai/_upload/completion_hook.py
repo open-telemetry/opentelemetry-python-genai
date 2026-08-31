@@ -83,7 +83,7 @@ def is_message_part_list_hashable(
     message_parts: list[types.MessagePart] | None,
 ) -> bool:
     return bool(message_parts) and all(
-        isinstance(x, types.Text) for x in message_parts
+        isinstance(x, types.TextPart) for x in message_parts
     )
 
 

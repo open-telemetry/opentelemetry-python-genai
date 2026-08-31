@@ -10,7 +10,7 @@ Key Components
 --------------
 
 - ``TelemetryHandler`` -- manages LLM invocation lifecycles (spans, metrics, events)
-- ``InferenceInvocation`` and message types (``Text``, ``Reasoning``, ``Blob``, etc.) -- structured data model for GenAI interactions
+- ``InferenceInvocation`` and message types (``TextPart``, ``ReasoningPart``, ``BlobPart``, etc.) -- structured data model for GenAI interactions
 - ``CompletionHook`` -- protocol for uploading content to external storage (built-in ``fsspec`` support)
 - Metrics -- ``gen_ai.client.operation.duration`` and ``gen_ai.client.token.usage`` histograms, plus
   the streaming timing histograms ``gen_ai.client.operation.time_to_first_chunk`` and
