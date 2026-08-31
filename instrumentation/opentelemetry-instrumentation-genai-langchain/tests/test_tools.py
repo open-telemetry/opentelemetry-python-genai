@@ -40,6 +40,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import FunctionToolDefinition
 
@@ -517,6 +518,143 @@ def test_on_tool_error_records_error_type(monkeypatch):
     attrs = spans[0].attributes
     assert attrs[gen_ai_attributes.GEN_AI_TOOL_NAME] == "failing_tool"
     assert attrs[error_attributes.ERROR_TYPE] == "ValueError"
+
+
+def test_on_tool_error_records_tool_call_id_from_start():
+    """A failing tool still records ``gen_ai.tool.call.id`` when the id is
+    delivered by LangChain in the ``on_tool_start`` kwargs."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "failing_tool"},
+        input_str="bad input",
+        run_id=run_id,
+        tool_call_id="call_abc",
+    )
+    handler.on_tool_error(error=RuntimeError("boom"), run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    attrs = span.attributes
+    assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ID] == "call_abc"
+    assert attrs[error_attributes.ERROR_TYPE] == "RuntimeError"
+    assert span.status.status_code == StatusCode.ERROR
+
+
+def test_on_tool_start_tool_call_id_is_kept_when_end_matches():
+    """When ``on_tool_start`` records the id and ``on_tool_end`` returns the
+    same id, the value is present and unchanged on the finished span."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "mytool"},
+        input_str="",
+        run_id=run_id,
+        tool_call_id="call_xyz",
+    )
+    output = MagicMock()
+    output.content = "ok"
+    output.tool_call_id = "call_xyz"
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ID] == "call_xyz"
+
+
+def test_start_tool_call_id_is_not_overwritten_when_end_disagrees():
+    """When ``on_tool_start`` records the id, a differing id on the
+    ``ToolMessage`` at ``on_tool_end`` must not silently replace it."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "mytool"},
+        input_str="",
+        run_id=run_id,
+        tool_call_id="from_start",
+    )
+    output = MagicMock()
+    output.content = "ok"
+    output.tool_call_id = "from_end"
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ID] == "from_start"
+
+
+def test_on_tool_end_still_records_tool_call_id_when_start_omitted_it():
+    """If ``on_tool_start`` receives no ``tool_call_id`` kwarg, the id from the
+    ``ToolMessage`` returned by ``on_tool_end`` is still recorded."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "mytool"},
+        input_str="",
+        run_id=run_id,
+    )
+    output = MagicMock()
+    output.content = "ok"
+    output.tool_call_id = "from_end"
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ID] == "from_end"
+
+
+def test_tool_call_id_absent_when_neither_start_nor_end_provides_it():
+    """No ``gen_ai.tool.call.id`` when neither start nor end delivers a value."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "mytool"},
+        input_str="",
+        run_id=run_id,
+    )
+    output = MagicMock()
+    output.content = "ok"
+    output.tool_call_id = None
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert gen_ai_attributes.GEN_AI_TOOL_CALL_ID not in attrs
 
 
 # ---------------------------------------------------------------------------

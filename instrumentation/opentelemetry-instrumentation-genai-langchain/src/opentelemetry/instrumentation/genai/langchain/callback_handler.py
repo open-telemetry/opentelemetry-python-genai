@@ -528,6 +528,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             name=name, tool_description=description, tool_type="function"
         )
         tool_invocation.arguments = arguments
+        tool_call_id = kwargs.get("tool_call_id")
+        if tool_call_id:
+            tool_invocation.tool_call_id = tool_call_id
         self._invocation_manager.add_invocation_state(
             run_id, parent_run_id, tool_invocation
         )
@@ -543,7 +546,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         tool_invocation = self._invocation_manager.get_invocation(run_id)
         if not isinstance(tool_invocation, ToolInvocation):
             return
-        tool_invocation.tool_call_id = getattr(output, "tool_call_id", None)
+        end_tool_call_id = getattr(output, "tool_call_id", None)
+        if end_tool_call_id and not tool_invocation.tool_call_id:
+            tool_invocation.tool_call_id = end_tool_call_id
         tool_invocation.tool_result = getattr(output, "content", None)
         tool_invocation.stop()
         if not tool_invocation.span.is_recording():
