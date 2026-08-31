@@ -227,7 +227,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if exc_value is not None and isinstance(exc_value, Exception):
+        if exc_value is not None:
             self.fail(exc_value)
         else:
             self.stop()
