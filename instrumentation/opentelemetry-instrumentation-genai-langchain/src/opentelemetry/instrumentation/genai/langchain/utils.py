@@ -222,13 +222,14 @@ def to_system_instruction(
     messages: Iterable[Any],
 ) -> list[MessagePart]:
     """Extract ``MessagePart`` s from ``SystemMessage`` s for ``gen_ai.system_instructions``."""
+    materialized = list(messages)
     try:
         normalized_messages: Iterable[BaseMessage] = convert_to_messages(
-            list(messages)
+            materialized
         )
     except Exception:  # pylint: disable=broad-except
         normalized_messages = [
-            m for m in messages if isinstance(m, BaseMessage)
+            m for m in materialized if isinstance(m, BaseMessage)
         ]
     parts: list[MessagePart] = []
     for message in normalized_messages:
@@ -241,10 +242,11 @@ def split_system_and_input_messages(
     messages: Iterable[Any],
 ) -> tuple[list[MessagePart], list[InputMessage]]:
     """Split ``messages`` into ``system_instruction`` parts and ``InputMessage`` s."""
+    materialized = list(messages)
     try:
-        normalized: Iterable[BaseMessage] = convert_to_messages(list(messages))
+        normalized: Iterable[BaseMessage] = convert_to_messages(materialized)
     except Exception:  # pylint: disable=broad-except
-        normalized = [m for m in messages if isinstance(m, BaseMessage)]
+        normalized = [m for m in materialized if isinstance(m, BaseMessage)]
     system: list[BaseMessage] = []
     non_system: list[BaseMessage] = []
     for message in normalized:
