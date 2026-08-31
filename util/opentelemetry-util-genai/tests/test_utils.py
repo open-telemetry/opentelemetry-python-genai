@@ -1000,7 +1000,6 @@ class TestRole(unittest.TestCase):
             finish_reason="stop",
         )
 
-        serialized = gen_ai_json_dumps(asdict(message))
+        serialized = json.loads(gen_ai_json_dumps(asdict(message)))
 
-        self.assertIn('"role":"assistant"', serialized)
-        self.assertNotIn("Role.", serialized)
+        self.assertEqual(serialized["role"], "assistant")
