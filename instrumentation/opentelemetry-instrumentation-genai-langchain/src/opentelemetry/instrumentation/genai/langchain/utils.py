@@ -11,6 +11,7 @@ from typing import Any, cast
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    SystemMessage,
     ToolMessage,
     convert_to_messages,
 )
@@ -203,6 +204,43 @@ def to_input_messages(
             continue
         result.append(InputMessage(role=_normalize_role(message), parts=parts))
     return result
+
+
+def to_system_instruction(
+    messages: Iterable[Any],
+) -> list[MessagePart]:
+    """Extract ``MessagePart`` s from ``SystemMessage`` s for ``gen_ai.system_instructions``."""
+    try:
+        normalized_messages: Iterable[BaseMessage] = convert_to_messages(
+            list(messages)
+        )
+    except Exception:  # pylint: disable=broad-except
+        normalized_messages = [
+            m for m in messages if isinstance(m, BaseMessage)
+        ]
+    parts: list[MessagePart] = []
+    for message in normalized_messages:
+        if isinstance(message, SystemMessage):
+            parts.extend(_content_to_parts(message.content))
+    return parts
+
+
+def split_system_and_input_messages(
+    messages: Iterable[Any],
+) -> tuple[list[MessagePart], list[InputMessage]]:
+    """Split ``messages`` into ``system_instruction`` parts and ``InputMessage`` s."""
+    try:
+        normalized: Iterable[BaseMessage] = convert_to_messages(list(messages))
+    except Exception:  # pylint: disable=broad-except
+        normalized = [m for m in messages if isinstance(m, BaseMessage)]
+    system: list[BaseMessage] = []
+    non_system: list[BaseMessage] = []
+    for message in normalized:
+        if isinstance(message, SystemMessage):
+            system.append(message)
+        else:
+            non_system.append(message)
+    return to_system_instruction(system), to_input_messages(non_system)
 
 
 def to_output_messages(
