@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import agents
 import agents.tracing
+import pytest
 
 from opentelemetry.instrumentation.genai.openai_agents import (
     OpenAIAgentsInstrumentor,
@@ -14,6 +18,12 @@ from opentelemetry.instrumentation.genai.openai_agents.package import (
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.trace import StatusCode
 
 
 def _registered_processors() -> tuple:
@@ -105,3 +115,38 @@ def test_double_uninstrument_is_noop() -> None:
     instrumentor.instrument()
     instrumentor.uninstrument()
     instrumentor.uninstrument()  # must not raise
+
+
+@agents.function_tool
+def _failing_tool() -> str:
+    raise ValueError("database connection failed")
+
+
+@pytest.mark.vcr
+@pytest.mark.asyncio
+async def test_runner_failing_tool_records_span_error(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        agent = agents.Agent(
+            name="test_agent",
+            model="gpt-4o-mini",
+            tools=[_failing_tool],
+        )
+        await agents.Runner.run(agent, "run tool")
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "execute_tool _failing_tool" in spans
+    tool_span = spans["execute_tool _failing_tool"]
+    assert tool_span.status.status_code is StatusCode.ERROR
+    assert "database connection failed" in (tool_span.status.description or "")
+    assert tool_span.attributes is not None
+    assert tool_span.attributes["error.type"] == "_OTHER"

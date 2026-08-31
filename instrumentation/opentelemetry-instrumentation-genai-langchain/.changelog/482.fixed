@@ -1,0 +1,1 @@
+Mark streamed calls with `gen_ai.request.stream` and record `gen_ai.response.time_to_first_chunk` plus the streaming timing metrics, which were never emitted for LangChain.

@@ -47,10 +47,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.util.genai.completion_hook import load_completion_hook
-from opentelemetry.util.genai.handler import (
-    TelemetryHandler,
-    get_telemetry_handler,
-)
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
 from .processor import GenAITracingProcessor
@@ -89,12 +86,14 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         if self._processor is not None:
             return
 
-        handler: TelemetryHandler = get_telemetry_handler(
+        completion_hook = (
+            kwargs.get("completion_hook") or load_completion_hook()
+        )
+        handler = TelemetryHandler(
             tracer_provider=kwargs.get("tracer_provider"),
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
-            completion_hook=kwargs.get("completion_hook")
-            or load_completion_hook(),
+            completion_hook=completion_hook,
         )
         provider = GenAI.GenAiProviderNameValues.OPENAI.value
         self._processor = GenAITracingProcessor(handler, provider)
