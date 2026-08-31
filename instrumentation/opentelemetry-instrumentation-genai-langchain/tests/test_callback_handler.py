@@ -1791,7 +1791,7 @@ class TestOnLlmEndStreamedResponse:
         the provider wrote onto the message, so this is the one place that
         covers every provider. The ``generation_info`` half of that union is
         covered end to end by
-        ``test_chat_openai_streamed_response_model_and_role``, which drives a
+        ``test_chat_openai_streamed_response_model``, which drives a
         real ``.stream()`` so LangChain performs the copy.
         """
         run_id = _run_id()
