@@ -808,6 +808,15 @@ class TestMakeOutputMessage:
         assert result[0].finish_reason == ""
         assert result[0].parts[0].content == "The answer is 42"
 
+    def test_role_content_dict_produces_assistant_output(self):
+        result = make_output_message(
+            {"messages": [{"role": "assistant", "content": "Hello"}]}
+        )
+
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].parts[0].content == "Hello"
+
     def test_non_ai_message_skipped(self):
         human_msg = HumanMessage(content="Hello")
         result = make_output_message({"messages": [human_msg]})
@@ -1043,6 +1052,31 @@ class TestOutputMessagesOnInvocations:
         assert assigned[0].role == "assistant"
         assert assigned[0].parts[0].content == "The final answer is 42"
 
+    def test_workflow_dict_output_messages_set_on_chain_end(self):
+        handler, _, workflow_inv, _ = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=run_id,
+            parent_run_id=None,
+        )
+
+        handler.on_chain_end(
+            outputs={
+                "messages": [
+                    {"role": "assistant", "content": "The final answer is 42"}
+                ]
+            },
+            run_id=run_id,
+        )
+
+        assigned = workflow_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].role == "assistant"
+        assert assigned[0].parts[0].content == "The final answer is 42"
+
     def test_workflow_output_messages_only_last_ai_message(self):
         handler, _, workflow_inv, _ = _make_handler()
         run_id = _run_id()
@@ -1114,6 +1148,28 @@ class TestOutputMessagesOnInvocations:
 
         assigned = agent_inv.output_messages
         assert len(assigned) == 1
+        assert assigned[0].parts[0].content == "x = 3"
+
+    def test_agent_dict_output_messages_set_on_chain_end(self):
+        handler, _, _, agent_inv = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=run_id,
+            parent_run_id=None,
+            metadata={"agent_name": "math_agent"},
+        )
+
+        handler.on_chain_end(
+            outputs={"messages": [{"role": "assistant", "content": "x = 3"}]},
+            run_id=run_id,
+        )
+
+        assigned = agent_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].role == "assistant"
         assert assigned[0].parts[0].content == "x = 3"
 
     def test_agent_output_messages_only_last_ai_message(self):

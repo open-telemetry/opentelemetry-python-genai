@@ -218,19 +218,29 @@ def to_input_messages(
 
 
 def to_output_messages(
-    messages: Iterable[BaseMessage],
+    messages: Iterable[Any],
     *,
     finish_reason: str = "",
 ) -> list[OutputMessage]:
-    """Convert LangChain ``AIMessage`` instances into ``OutputMessage`` s.
+    """Convert LangChain assistant messages into ``OutputMessage`` s.
 
-    Non-``AIMessage`` entries are skipped: only assistant turns are recorded
-    as ``gen_ai.output.messages``. Tool execution results belong on the
-    *input* side of the next inference call, not the output side of the
-    previous one.
+    LangChain-supported message representations, such as role/content dicts,
+    are normalized first. Non-``AIMessage`` entries are skipped: only
+    assistant turns are recorded as ``gen_ai.output.messages``. Tool execution
+    results belong on the *input* side of the next inference call, not the
+    output side of the previous one.
     """
+    materialized_messages = list(messages)
+    try:
+        normalized_messages: Iterable[BaseMessage] = convert_to_messages(
+            materialized_messages
+        )
+    except Exception:  # pylint: disable=broad-except
+        normalized_messages = [
+            m for m in materialized_messages if isinstance(m, BaseMessage)
+        ]
     result: list[OutputMessage] = []
-    for message in messages:
+    for message in normalized_messages:
         if not isinstance(message, AIMessage):
             continue
         parts = _ai_message_parts(message)
@@ -352,7 +362,7 @@ def make_output_message(data: Any) -> list[OutputMessage]:
         or not isinstance(messages, Iterable)
     ):
         return []
-    return to_output_messages(cast(Iterable[BaseMessage], messages))
+    return to_output_messages(cast(Iterable[Any], messages))
 
 
 def make_last_output_message(data: Any) -> list[OutputMessage]:
