@@ -300,7 +300,7 @@ FinishReason = Literal[
 ]
 
 
-# https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/gen-ai-output-messages.json
+# Semconv schemas: model/gen-ai/gen-ai-{input,output}-messages.json (pinned by SEMCONV_GENAI_REF).
 class Role(str, Enum):
     SYSTEM = "system"
     USER = "user"
