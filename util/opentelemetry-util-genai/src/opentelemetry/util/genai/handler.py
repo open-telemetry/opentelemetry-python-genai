@@ -406,6 +406,7 @@ class TelemetryHandler:
         tool_call_id: str | None = None,
         tool_type: str | None = None,
         tool_description: str | None = None,
+        agent_name: str | None = None,
     ) -> ToolInvocation:
         """Returns a Tool invocation. Starts span when called.
 
@@ -426,6 +427,7 @@ class TelemetryHandler:
             tool_call_id=tool_call_id,
             tool_type=tool_type,
             tool_description=tool_description,
+            agent_name=agent_name,
         )
 
     def start_invoke_local_agent(

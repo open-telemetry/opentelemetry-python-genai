@@ -550,6 +550,27 @@ class TelemetryHandlerToolMetricsTest(TestBase):
         self.assertAlmostEqual(duration_point.sum, 1.5, places=3)
         self.assertNotIn("gen_ai.client.token.usage", metrics)
 
+    def test_stop_tool_does_not_leak_agent_name_to_duration_metric(
+        self,
+    ) -> None:
+        """`gen_ai.agent.name` belongs on the span but not on
+        ``gen_ai.client.operation.duration`` — the semconv attribute set for
+        that metric does not include it. The dedicated
+        ``gen_ai.execute_tool.duration`` metric (which does list it as
+        Conditionally Required) is not emitted by util-genai today."""
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        handler.tool("get_weather", agent_name="weather_agent").stop()
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertEqual(len(duration_points), 1)
+        self.assertNotIn(
+            GenAI.GEN_AI_AGENT_NAME, duration_points[0].attributes
+        )
+
 
 class TelemetryHandlerRetrievalMetricsTest(TestBase):
     def _harvest_metrics(self) -> dict[str, list[Any]]:

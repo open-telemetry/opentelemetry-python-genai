@@ -42,6 +42,8 @@ class ToolInvocation(GenAIInvocation):
     Semantic convention attributes for execute_tool spans:
     - gen_ai.operation.name: "execute_tool" (Required)
     - gen_ai.tool.name: Name of the tool (Recommended)
+    - gen_ai.agent.name: Human-readable name of the agent executing the tool
+      (Conditionally Required "When applicable")
     - gen_ai.tool.call.id: Tool call identifier (Recommended if available)
     - gen_ai.tool.type: Type classification - "function", "extension", or "datastore" (Recommended if available)
     - gen_ai.tool.description: Tool description (Recommended if available)
@@ -61,6 +63,7 @@ class ToolInvocation(GenAIInvocation):
         tool_call_id: str | None = None,
         tool_type: str | None = None,
         tool_description: str | None = None,
+        agent_name: str | None = None,
     ) -> None:
         """Use handler.tool(name) instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
@@ -84,6 +87,7 @@ class ToolInvocation(GenAIInvocation):
         self._tool_call_id: str | None = tool_call_id
         self._tool_type: str | None = tool_type
         self._tool_description: str | None = tool_description
+        self._agent_name: str | None = agent_name
         self._start(self._get_start_attributes())
 
     @property
@@ -101,6 +105,7 @@ class ToolInvocation(GenAIInvocation):
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self._name),
+            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (GenAI.GEN_AI_TOOL_CALL_ID, self._tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self._tool_description),
