@@ -103,11 +103,14 @@ LangGraph state changes
 
 For each LangGraph node that returns a non-empty state update, the
 instrumentation emits a ``gen_ai.execution.state.changed`` event. The event
-records ``gen_ai.execution.state.changed_key.count`` and, when LangGraph
-provides it, ``gen_ai.execution.state.version`` from ``langgraph_step``.
+records ``gen_ai.execution.state.changed_key.count``. These names follow the
+`proposed GenAI execution-state semantic conventions
+<https://github.com/open-telemetry/semantic-conventions-genai/pull/483>`_ and
+remain subject to change until that proposal is accepted.
 
-State values and key names are not recorded. This keeps dynamic application
-state, user identifiers, tool data, and secrets out of telemetry by default.
+State values and key names are never recorded by this instrumentation. This
+keeps dynamic application state, user identifiers, tool data, and secrets out
+of telemetry.
 
 Configuration
 -------------

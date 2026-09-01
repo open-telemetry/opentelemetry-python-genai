@@ -45,7 +45,7 @@ def test_persisted_node_delta_emits_correlated_state_event(
     event = state_events[0]
     assert event.attributes is not None
     assert event.attributes["gen_ai.execution.state.changed_key.count"] == 1
-    assert "gen_ai.execution.state.version" in event.attributes
+    assert "gen_ai.execution.state.version" not in event.attributes
     assert "gen_ai.execution.state.changed_keys" not in event.attributes
     assert "approval_status" not in event.attributes.values()
     assert "accepted" not in event.attributes.values()

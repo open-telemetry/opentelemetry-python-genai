@@ -720,14 +720,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if workflow is None:
             return
 
-        attributes: dict[str, int | str] = {
-            "gen_ai.execution.state.changed_key.count": len(outputs)
-        }
-        state_version = self._invocation_manager.get_langgraph_state_version(
-            run_id
-        )
-        if state_version is not None:
-            attributes["gen_ai.execution.state.version"] = state_version
+        attributes = {"gen_ai.execution.state.changed_key.count": len(outputs)}
         workflow.emit_event(
             "gen_ai.execution.state.changed",
             attributes,

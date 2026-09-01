@@ -237,7 +237,7 @@ def test_none_invocation_can_be_stored_and_retrieved(invocation_manager):
     assert invocation_manager.get_invocation(run_id) is None
 
 
-def test_langgraph_state_metadata_is_normalized(invocation_manager):
+def test_langgraph_metadata_retains_only_node_marker(invocation_manager):
     run_id = uuid.uuid4()
     invocation_manager.add_invocation_state(
         run_id=run_id,
@@ -253,7 +253,6 @@ def test_langgraph_state_metadata_is_normalized(invocation_manager):
 
     state = invocation_manager._invocations[run_id]
     assert invocation_manager.is_langgraph_node(run_id)
-    assert invocation_manager.get_langgraph_state_version(run_id) == "7"
     assert not hasattr(state, "metadata")
 
 
@@ -271,7 +270,6 @@ def test_non_langgraph_metadata_is_not_treated_as_state(invocation_manager):
     )
 
     assert not invocation_manager.is_langgraph_node(run_id)
-    assert invocation_manager.get_langgraph_state_version(run_id) is None
 
 
 def test_delete_nonexistent_run_id_does_not_raise(invocation_manager):

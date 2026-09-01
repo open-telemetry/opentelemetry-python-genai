@@ -17,7 +17,6 @@ class _InvocationState:
     parent_run_id: UUID | None = None
     ended: bool = False
     is_langgraph_node: bool = False
-    langgraph_state_version: str | None = None
 
 
 class _InvocationManager:
@@ -40,17 +39,9 @@ class _InvocationManager:
             and metadata.get("ls_integration") == "langgraph"
             and metadata.get("langgraph_node")
         )
-        state_version = (
-            metadata.get("langgraph_step")
-            if is_langgraph_node and metadata
-            else None
-        )
         invocation_state = _InvocationState(
             invocation=invocation,
             is_langgraph_node=is_langgraph_node,
-            langgraph_state_version=(
-                str(state_version) if state_version is not None else None
-            ),
         )
 
         if parent_run_id is not None and parent_run_id in self._invocations:
@@ -72,14 +63,6 @@ class _InvocationManager:
     def is_langgraph_node(self, run_id: UUID) -> bool:
         invocation_state = self._invocations.get(run_id)
         return bool(invocation_state and invocation_state.is_langgraph_node)
-
-    def get_langgraph_state_version(self, run_id: UUID) -> str | None:
-        invocation_state = self._invocations.get(run_id)
-        return (
-            invocation_state.langgraph_state_version
-            if invocation_state
-            else None
-        )
 
     def delete_invocation_state(self, run_id: UUID) -> None:
         invocation_state = self._invocations.get(run_id)

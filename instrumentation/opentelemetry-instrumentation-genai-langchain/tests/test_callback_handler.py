@@ -590,10 +590,7 @@ class TestOnChainEnd:
 
         workflow_inv.emit_event.assert_called_once_with(
             "gen_ai.execution.state.changed",
-            {
-                "gen_ai.execution.state.changed_key.count": 2,
-                "gen_ai.execution.state.version": "4",
-            },
+            {"gen_ai.execution.state.changed_key.count": 2},
             body="Execution state changed",
         )
 
