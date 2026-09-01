@@ -17,6 +17,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
+    ChatMessage,
     FunctionMessage,
     FunctionMessageChunk,
     HumanMessage,
@@ -1908,6 +1909,16 @@ def test_normalize_role_resolves_chunk_variants(message, expected_role):
     (``AIMessageChunk.type == "AIMessageChunk"``), so they only resolve to a
     spec role when matched by class."""
     assert _normalize_role(message) == expected_role
+
+
+def test_normalize_role_returns_none_for_unmapped_class():
+    """``ChatMessage.type`` is ``"chat"``, which is not a spec role."""
+    assert _normalize_role(ChatMessage(content="hi", role="custom")) is None
+
+
+def test_unmapped_class_defaults_to_user_on_the_input_side():
+    (message,) = to_input_messages([ChatMessage(content="hi", role="custom")])
+    assert message.role == "user"
 
 
 # utils._media_part - LangChain multimodal image block parsing

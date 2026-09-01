@@ -89,11 +89,11 @@ _ROLE_BY_CLASS: tuple[tuple[type[BaseMessage], Role], ...] = (
 )
 
 
-def _normalize_role(message: BaseMessage) -> str:
+def _normalize_role(message: BaseMessage) -> str | None:
     for message_class, role in _ROLE_BY_CLASS:
         if isinstance(message, message_class):
             return role.value
-    return message.type
+    return None
 
 
 def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
@@ -346,7 +346,12 @@ def to_input_messages(
         parts = _message_parts(message)
         if not parts and not _has_content(message):
             continue
-        result.append(InputMessage(role=_normalize_role(message), parts=parts))
+        result.append(
+            InputMessage(
+                role=_normalize_role(message) or Role.USER.value,
+                parts=parts,
+            )
+        )
     return result
 
 
@@ -374,7 +379,7 @@ def to_output_messages(
             continue
         result.append(
             OutputMessage(
-                role=_normalize_role(message),
+                role=_normalize_role(message) or Role.ASSISTANT.value,
                 parts=parts,
                 finish_reason=finish_reason,
             )

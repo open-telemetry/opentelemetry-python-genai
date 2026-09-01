@@ -310,13 +310,13 @@ class Role(str, Enum):
 
 @dataclass()
 class InputMessage:
-    role: str | Role
+    role: str
     parts: list[MessagePart]
 
 
 @dataclass()
 class OutputMessage:
-    role: str | Role
+    role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason
 

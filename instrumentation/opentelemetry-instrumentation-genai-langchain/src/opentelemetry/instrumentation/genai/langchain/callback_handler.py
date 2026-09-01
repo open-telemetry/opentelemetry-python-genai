@@ -48,6 +48,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
 )
@@ -425,7 +426,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                             tool_calls.append(tool_call_request)
                         output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message),
+                            role=_normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
                         )
@@ -438,7 +440,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         # ``additional_kwargs`` — surface it as a tool-call
                         # request part like the modern ``tool_calls`` path.
                         output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message),
+                            role=_normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
                         )
@@ -449,7 +452,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 type="text",
                             )
                         ]
-                        role = _normalize_role(chat_generation.message)
+                        role = (
+                            _normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value
+                        )
                         output_message = OutputMessage(
                             role=role,
                             parts=cast(list[MessagePart], parts),
