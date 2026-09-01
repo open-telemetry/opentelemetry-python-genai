@@ -310,7 +310,7 @@ class Role(str, Enum):
 
 @dataclass()
 class InputMessage:
-    role: str | Role
+    role: str
     parts: list[MessagePart]
 
 
