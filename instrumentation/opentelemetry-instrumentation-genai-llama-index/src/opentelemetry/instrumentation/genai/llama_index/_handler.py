@@ -19,6 +19,7 @@ from llama_index.core.agent.workflow.workflow_events import (
     ToolCall,
     ToolCallResult,
 )
+from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.llms.types import (
     AudioBlock,
     ChatMessage,
@@ -30,6 +31,7 @@ from llama_index.core.base.llms.types import (
 )
 from llama_index.core.instrumentation.span import BaseSpan
 from llama_index.core.instrumentation.span_handlers import BaseSpanHandler
+from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.tools import BaseTool, FunctionTool, ToolOutput
 from pydantic import PrivateAttr
 
@@ -37,6 +39,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
     GenAIInvocation,
+    RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
@@ -53,6 +56,7 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+from opentelemetry.util.genai.utils import should_capture_content_on_spans
 
 _ToolExecutionAttributes = tuple[str, str | None]
 _AGENT_TOOL_ATTRIBUTES: ContextVar[
@@ -242,6 +246,48 @@ def _request_model(agent: BaseWorkflowAgent) -> str | None:
     except Exception:  # LLM integrations can compute metadata dynamically.
         model_name = getattr(agent.llm, "model", None)
     return model_name if isinstance(model_name, str) and model_name else None
+
+
+def _retrieval_query(bound_args: inspect.BoundArguments) -> str | None:
+    """Extract text from either accepted LlamaIndex retrieval query form."""
+    query = bound_args.arguments.get("str_or_query_bundle")
+    if isinstance(query, str):
+        return query
+    if isinstance(query, QueryBundle):
+        return query.query_str
+    return None
+
+
+def _retrieval_top_k(retriever: BaseRetriever) -> float | None:
+    """Read the common top-k setting without requiring a retriever subtype."""
+    try:
+        top_k = getattr(retriever, "similarity_top_k", None)
+    except Exception:
+        return None
+    if isinstance(top_k, (int, float)) and not isinstance(top_k, bool):
+        return float(top_k)
+    return None
+
+
+def _retrieval_documents(result: object) -> list[dict[str, Any]]:
+    """Convert retrieved LlamaIndex nodes to semconv document objects."""
+    if not isinstance(result, Sequence):
+        return []
+    documents: list[dict[str, Any]] = []
+    for candidate in cast(Sequence[object], result):
+        if not isinstance(candidate, NodeWithScore):
+            continue
+        try:
+            document: dict[str, Any] = {
+                "id": candidate.node_id,
+                "content": candidate.get_content(),
+            }
+            if candidate.score is not None:
+                document["score"] = candidate.score
+            documents.append(document)
+        except Exception:
+            continue
+    return documents
 
 
 def _tool_attributes(
@@ -440,7 +486,7 @@ class _LlamaIndexInvocation(BaseSpan):
 
 
 class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
-    """Map LlamaIndex-owned agent and tool operations to GenAI spans."""
+    """Map LlamaIndex-owned agent, tool, and retrieval operations to spans."""
 
     _handler: TelemetryHandler = PrivateAttr()
 
@@ -458,7 +504,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         tags: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> _LlamaIndexInvocation | None:
-        """Start GenAI invocations for LlamaIndex-owned agents and tools.
+        """Start GenAI invocations for agents, tools, and retrievers.
 
         Provider inference is deliberately ignored so its own instrumentation
         can emit inference telemetry, and nested tool callbacks are deduplicated.
@@ -543,6 +589,17 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             agent_invocation.tool_definitions = tool_definitions
             agent_invocation.system_instruction = system_instruction
             invocation = agent_invocation
+        elif isinstance(instance, BaseRetriever) and method_name in {
+            "retrieve",
+            "aretrieve",
+        }:
+            query_text = _retrieval_query(bound_args)
+            top_k = _retrieval_top_k(instance)
+            retrieval_invocation = self._handler.retrieval()
+            retrieval_invocation.top_k = top_k
+            if should_capture_content_on_spans():
+                retrieval_invocation.query_text = query_text
+            invocation = retrieval_invocation
         elif method_name == "call_tool" and isinstance(
             (tool_call := bound_args.arguments.get("ev")), ToolCall
         ):
@@ -627,6 +684,9 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                     _set_agent_step_output(span._invocation, result)
                 else:
                     _set_agent_output(span._invocation, result)
+        elif isinstance(span._invocation, RetrievalInvocation):
+            if should_capture_content_on_spans():
+                span._invocation.documents = _retrieval_documents(result)
         elif isinstance(span._invocation, ToolInvocation):
             tool_output: ToolOutput | None = None
             if isinstance(result, ToolCallResult):
