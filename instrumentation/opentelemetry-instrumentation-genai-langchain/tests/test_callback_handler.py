@@ -18,10 +18,12 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     ChatMessage,
+    ChatMessageChunk,
     FunctionMessage,
     FunctionMessageChunk,
     HumanMessage,
     HumanMessageChunk,
+    RemoveMessage,
     SystemMessage,
     SystemMessageChunk,
     ToolMessage,
@@ -1911,14 +1913,26 @@ def test_normalize_role_resolves_chunk_variants(message, expected_role):
     assert _normalize_role(message) == expected_role
 
 
+@pytest.mark.parametrize(
+    "message,expected_role",
+    [
+        (ChatMessage(content="hi", role="assistant"), "assistant"),
+        (ChatMessage(content="hi", role="custom"), "custom"),
+        (ChatMessageChunk(content="hi", role="custom"), "custom"),
+    ],
+)
+def test_normalize_role_reads_the_chat_message_role(message, expected_role):
+    """``ChatMessage`` keeps its speaker in ``role`` rather than in the class."""
+    assert _normalize_role(message) == expected_role
+
+
 def test_normalize_role_returns_none_for_unmapped_class():
-    """``ChatMessage.type`` is ``"chat"``, which is not a spec role."""
-    assert _normalize_role(ChatMessage(content="hi", role="custom")) is None
+    assert _normalize_role(RemoveMessage(id="abc")) is None
 
 
-def test_unmapped_class_defaults_to_user_on_the_input_side():
+def test_chat_message_role_reaches_the_input_side():
     (message,) = to_input_messages([ChatMessage(content="hi", role="custom")])
-    assert message.role == "user"
+    assert message.role == "custom"
 
 
 # utils._media_part - LangChain multimodal image block parsing

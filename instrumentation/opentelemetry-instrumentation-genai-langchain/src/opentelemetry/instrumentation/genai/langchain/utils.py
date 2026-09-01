@@ -11,6 +11,7 @@ from typing import Any, cast
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    ChatMessage,
     FunctionMessage,
     HumanMessage,
     SystemMessage,
@@ -90,6 +91,10 @@ _ROLE_BY_CLASS: tuple[tuple[type[BaseMessage], Role], ...] = (
 
 
 def _normalize_role(message: BaseMessage) -> str | None:
+    # ChatMessage is not binding to a specific role
+    # but it carries a role in the `role` field.
+    if isinstance(message, ChatMessage):
+        return message.role or None
     for message_class, role in _ROLE_BY_CLASS:
         if isinstance(message, message_class):
             return role.value
