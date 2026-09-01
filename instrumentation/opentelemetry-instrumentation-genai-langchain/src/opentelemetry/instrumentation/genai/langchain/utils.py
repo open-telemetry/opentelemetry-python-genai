@@ -201,27 +201,6 @@ def to_input_messages(
     messages: Iterable[Any],
 ) -> list[InputMessage]:
     """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
-    try:
-        normalized_messages: Iterable[BaseMessage] = convert_to_messages(
-            list(messages)
-        )
-    except Exception:  # pylint: disable=broad-except
-        normalized_messages = [
-            m for m in messages if isinstance(m, BaseMessage)
-        ]
-    result: list[InputMessage] = []
-    for message in normalized_messages:
-        parts = _message_parts(message)
-        if not parts:
-            continue
-        result.append(InputMessage(role=_normalize_role(message), parts=parts))
-    return result
-
-
-def to_system_instruction(
-    messages: Iterable[Any],
-) -> list[MessagePart]:
-    """Extract ``MessagePart`` s from ``SystemMessage`` s for ``gen_ai.system_instructions``."""
     materialized = list(messages)
     try:
         normalized_messages: Iterable[BaseMessage] = convert_to_messages(
@@ -231,11 +210,13 @@ def to_system_instruction(
         normalized_messages = [
             m for m in materialized if isinstance(m, BaseMessage)
         ]
-    parts: list[MessagePart] = []
+    result: list[InputMessage] = []
     for message in normalized_messages:
-        if isinstance(message, SystemMessage):
-            parts.extend(_content_to_parts(message.content))
-    return parts
+        parts = _message_parts(message)
+        if not parts:
+            continue
+        result.append(InputMessage(role=_normalize_role(message), parts=parts))
+    return result
 
 
 def split_system_and_input_messages(
@@ -262,6 +243,10 @@ def split_system_and_input_messages(
                 )
 
     return system_parts, input_messages
+
+
+def to_output_messages(
+    messages: Iterable[BaseMessage],
     *,
     finish_reason: str = "",
 ) -> list[OutputMessage]:

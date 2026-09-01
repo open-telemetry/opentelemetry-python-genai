@@ -19,7 +19,6 @@ from openai import AuthenticationError
 from opentelemetry.instrumentation.genai.langchain.utils import (
     split_system_and_input_messages,
     to_input_messages,
-    to_system_instruction,
 )
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
@@ -129,6 +128,48 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
         assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
         assert len(logs) == 0
+
+
+@pytest.mark.parametrize(
+    "capture_content",
+    ["NO_CONTENT", "EVENT_ONLY"],
+)
+def test_system_instructions_absent_from_span_without_content_capture(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_gpt_3_5_turbo_model,
+    monkeypatch,
+    capture_content,
+    vcr,
+):
+    """``gen_ai.system_instructions`` is a sensitive attribute and must be
+    gated by ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``: when
+    content capture excludes ``SPAN`` (``NO_CONTENT`` / ``EVENT_ONLY``), the
+    span attribute must not appear even though the input contained a
+    ``SystemMessage``.
+    """
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
+    )
+
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    with vcr.use_cassette(
+        _openai_cassette_name(
+            chat_openai_gpt_3_5_turbo_model,
+            "test_chat_openai_gpt_3_5_turbo_model_llm_call",
+        )
+    ):
+        chat_openai_gpt_3_5_turbo_model.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert (
+        gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS not in spans[0].attributes
+    )
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -481,39 +522,6 @@ def test_split_system_and_input_messages_normalizes_shorthand_inputs():
     )
     assert [part.content for part in system] == ["You are helpful."]
     assert [msg.role for msg in inputs] == ["user"]
-
-
-def test_to_system_instruction_ignores_non_system_messages():
-    # Symmetric to ``to_input_messages``: ``to_system_instruction`` only
-    # emits parts from ``SystemMessage`` s and silently drops everything else.
-    parts = to_system_instruction(
-        [
-            HumanMessage(content="Hi"),
-            SystemMessage(content="You are helpful."),
-            AIMessage(content="Hello"),
-            SystemMessageChunk(content="More guidance."),
-        ]
-    )
-    assert [part.content for part in parts] == [
-        "You are helpful.",
-        "More guidance.",
-    ]
-
-
-def test_to_system_instruction_normalizes_shorthand_inputs():
-    # Accepts ``("system", "…")`` tuples and ``{"role": "system", …}`` dicts
-    # via ``convert_to_messages``, matching ``to_input_messages`` behavior.
-    parts = to_system_instruction(
-        [
-            ("system", "First guidance."),
-            {"role": "user", "content": "Hi"},
-            {"role": "system", "content": "Second guidance."},
-        ]
-    )
-    assert [part.content for part in parts] == [
-        "First guidance.",
-        "Second guidance.",
-    ]
 
 
 def assert_openai_completion_attributes(
