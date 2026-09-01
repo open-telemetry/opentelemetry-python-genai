@@ -247,18 +247,21 @@ def split_system_and_input_messages(
         normalized: Iterable[BaseMessage] = convert_to_messages(materialized)
     except Exception:  # pylint: disable=broad-except
         normalized = [m for m in materialized if isinstance(m, BaseMessage)]
-    system: list[BaseMessage] = []
-    non_system: list[BaseMessage] = []
+
+    system_parts: list[MessagePart] = []
+    input_messages: list[InputMessage] = []
+
     for message in normalized:
         if isinstance(message, SystemMessage):
-            system.append(message)
+            system_parts.extend(_content_to_parts(message.content))
         else:
-            non_system.append(message)
-    return to_system_instruction(system), to_input_messages(non_system)
+            parts = _message_parts(message)
+            if parts:
+                input_messages.append(
+                    InputMessage(role=_normalize_role(message), parts=parts)
+                )
 
-
-def to_output_messages(
-    messages: Iterable[BaseMessage],
+    return system_parts, input_messages
     *,
     finish_reason: str = "",
 ) -> list[OutputMessage]:
