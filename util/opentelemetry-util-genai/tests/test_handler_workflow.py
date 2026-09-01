@@ -72,6 +72,23 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(spans[0].name, "invoke_workflow")
 
+    def test_workflow_conversation_id(self) -> None:
+        invocation = self.handler.workflow(name="wf")
+        invocation.conversation_id = "conv-456"
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertEqual(
+            spans[0].attributes[GenAI.GEN_AI_CONVERSATION_ID], "conv-456"
+        )
+
+    def test_workflow_without_conversation_id(self) -> None:
+        invocation = self.handler.workflow(name="wf")
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertNotIn(GenAI.GEN_AI_CONVERSATION_ID, spans[0].attributes)
+
     def test_start_workflow_span_kind_is_internal(self) -> None:
         invocation = self.handler.workflow(name="wf")
         invocation.stop()
