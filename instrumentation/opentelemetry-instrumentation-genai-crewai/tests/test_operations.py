@@ -279,4 +279,4 @@ def test_failed_operations_record_errors(
     for span in spans:
         assert span.status.status_code == StatusCode.ERROR
         assert span.attributes is not None
-        assert error_attributes.ERROR_TYPE in span.attributes
+        assert span.attributes[error_attributes.ERROR_TYPE] == "str"

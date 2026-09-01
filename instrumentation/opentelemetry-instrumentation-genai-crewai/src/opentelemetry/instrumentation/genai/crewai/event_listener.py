@@ -31,7 +31,7 @@ from opentelemetry.util.genai.invocation import (
     GenAIInvocation,
     WorkflowInvocation,
 )
-from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text
+from opentelemetry.util.genai.types import Error, InputMessage, OutputMessage, Text
 
 EventT = TypeVar("EventT", bound=BaseEvent)
 RegisteredHandler = Callable[..., object]
@@ -47,12 +47,10 @@ def _completion_key(event: BaseEvent) -> str | None:
     return event.started_event_id
 
 
-def _error(value: object, fallback: str) -> BaseException:
-    return (
-        value
-        if isinstance(value, BaseException)
-        else RuntimeError(str(value or fallback))
-    )
+def _error(value: object) -> Error:
+    if isinstance(value, BaseException):
+        return Error.from_exception(value)
+    return Error(type=type(value).__name__, message=str(value))
 
 
 def _input_message(value: object) -> InputMessage | None:
@@ -192,7 +190,7 @@ class CrewAIEventListener(BaseEventListener):
         elif isinstance(event, CrewKickoffFailedEvent) and isinstance(
             invocation, WorkflowInvocation
         ):
-            invocation.fail(_error(event.error, "CrewAI crew kickoff failed"))
+            invocation.fail(_error(event.error))
         elif isinstance(event, AgentExecutionCompletedEvent) and isinstance(
             invocation, AgentInvocation
         ):
@@ -203,9 +201,7 @@ class CrewAIEventListener(BaseEventListener):
         elif isinstance(event, AgentExecutionErrorEvent) and isinstance(
             invocation, AgentInvocation
         ):
-            invocation.fail(
-                _error(event.error, "CrewAI agent execution failed")
-            )
+            invocation.fail(_error(event.error))
 
     def _on_crew_started(
         self, source: object, event: CrewKickoffStartedEvent
