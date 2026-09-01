@@ -67,9 +67,7 @@ def _assert_retrieval_content(span) -> None:
     assert attrs[GenAIAttributes.GEN_AI_RETRIEVAL_QUERY_TEXT] == (
         "Where are Paris and Berlin?"
     )
-    documents = json.loads(
-        attrs[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
-    )
+    documents = json.loads(attrs[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS])
     assert documents == [
         {
             "id": "doc-1",

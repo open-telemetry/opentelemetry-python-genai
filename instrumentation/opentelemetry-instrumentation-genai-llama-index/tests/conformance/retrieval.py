@@ -54,6 +54,4 @@ class RetrievalScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            _ConformanceRetriever().retrieve(
-                "What is the capital of France?"
-            )
+            _ConformanceRetriever().retrieve("What is the capital of France?")
