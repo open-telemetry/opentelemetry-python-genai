@@ -8,6 +8,7 @@ All TelemetryHandler interactions are mocked so that these tests exercise only
 the callback-handler logic and the invocation-manager bookkeeping.
 """
 
+import base64
 import uuid
 from unittest import mock
 
@@ -21,6 +22,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
+    _media_part,
     extract_token_details,
     make_input_message,
     make_last_output_message,
@@ -36,10 +38,13 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     InputMessage,
     OutputMessage,
     TextPart,
     ToolCallRequestPart,
+    UriPart,
 )
 
 # ---------------------------------------------------------------------------
@@ -1843,3 +1848,586 @@ class TestOnLlmEndResponseModel:
         handler.on_llm_end(response=response, run_id=run_id)
 
         assert llm_inv.response_model_name == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# utils._media_part - LangChain multimodal image block parsing
+# ---------------------------------------------------------------------------
+
+_REAL_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
+    b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc"
+    b"\xf8\xcf\xc0\xf0\x1f\x00\x05\x05\x02\x00\xa1\r\xf7\xdf\x00\x00\x00"
+    b"\x00IEND\xaeB`\x82"
+)
+_REAL_PNG_B64 = base64.b64encode(_REAL_PNG_BYTES).decode("ascii")
+
+
+def test_media_part_openai_image_url_dict():
+    item = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/a.png"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/a.png"
+
+
+def test_media_part_openai_image_url_string():
+    item = {"type": "image_url", "image_url": "https://example.com/b.png"}
+    part = _media_part(item)
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/b.png"
+
+
+def test_media_part_anthropic_base64_source_returns_blob():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "R0lGODlh",
+        },
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.content == b"GIF89a"
+
+
+def test_media_part_anthropic_base64_source_without_media_type():
+    item = {
+        "type": "image",
+        "source": {"type": "base64", "data": "QUJD"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.mime_type is None
+    assert part.content == b"ABC"
+
+
+def test_media_part_base64_source_decodes_real_png():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": _REAL_PNG_B64,
+        },
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_anthropic_url_source_returns_uri():
+    item = {
+        "type": "image",
+        "source": {"type": "url", "url": "https://example.com/c.png"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/c.png"
+
+
+def test_media_part_unrecognized_returns_none():
+    assert _media_part({"type": "text", "text": "hi"}) is None
+    assert _media_part({"type": "image_url", "image_url": {}}) is None
+    assert (
+        _media_part({"type": "image_url", "image_url": {"url": 123}}) is None
+    )
+    assert _media_part({"type": "image", "source": "nope"}) is None
+    assert (
+        _media_part({"type": "image", "source": {"type": "base64", "data": 5}})
+        is None
+    )
+    assert (
+        _media_part({"type": "image", "source": {"type": "url", "url": ""}})
+        is None
+    )
+
+
+def test_media_part_malformed_base64_returns_none():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "not!valid!base64!",
+        },
+    }
+    assert _media_part(item) is None
+
+
+def test_media_part_openai_real_png_data_uri_returns_blob():
+    item = {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_anthropic_real_png_source_returns_blob():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": _REAL_PNG_B64,
+        },
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_anthropic_real_png_corrupted_base64_returns_none():
+    corrupted = _REAL_PNG_B64[:10] + "@@@@" + _REAL_PNG_B64[14:]
+    item = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": corrupted,
+        },
+    }
+    assert _media_part(item) is None
+
+
+def test_media_part_real_png_url_source_returns_uri():
+    item = {
+        "type": "image",
+        "source": {
+            "type": "url",
+            "url": "https://example.com/real-image.png",
+        },
+    }
+    part = _media_part(item)
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/real-image.png"
+
+
+def test_media_part_standard_v1_base64_block_returns_blob():
+    item = {
+        "type": "image",
+        "base64": _REAL_PNG_B64,
+        "mime_type": "image/png",
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_standard_v1_url_block_returns_uri():
+    item = {"type": "image", "url": "https://example.com/a.png"}
+    part = _media_part(item)
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/a.png"
+
+
+def test_media_part_standard_block_without_mime_type_returns_blob():
+    part = _media_part({"type": "image", "base64": _REAL_PNG_B64})
+    assert isinstance(part, BlobPart)
+    assert part.mime_type is None
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_standard_v03_block_without_mime_type_returns_blob():
+    part = _media_part(
+        {"type": "image", "source_type": "base64", "data": _REAL_PNG_B64}
+    )
+    assert isinstance(part, BlobPart)
+    assert part.mime_type is None
+
+
+def test_media_part_non_dict_source_falls_through_to_standard_keys():
+    """A non-dict ``source`` must not shadow a standard payload."""
+    part = _media_part(
+        {
+            "type": "image",
+            "source": "not-a-dict",
+            "base64": _REAL_PNG_B64,
+            "mime_type": "image/png",
+        }
+    )
+    assert isinstance(part, BlobPart)
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_anthropic_source_takes_precedence_over_standard_keys():
+    """Anthropic's ``source`` is checked before the standard top-level keys."""
+    part = _media_part(
+        {
+            "type": "image",
+            "source": {"type": "url", "url": "https://example.com/from.png"},
+            "url": "https://example.com/ignored.png",
+        }
+    )
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/from.png"
+
+
+def test_media_part_v03_url_source_type_does_not_fall_through_to_base64():
+    """An explicit ``source_type`` pins the variant, even when it is broken."""
+    part = _media_part(
+        {
+            "type": "image",
+            "source_type": "url",
+            "url": None,
+            "base64": _REAL_PNG_B64,
+        }
+    )
+    assert part is None
+
+
+def test_media_part_standard_v03_base64_block_returns_blob():
+    item = {
+        "type": "image",
+        "source_type": "base64",
+        "data": _REAL_PNG_B64,
+        "mime_type": "image/png",
+    }
+    part = _media_part(item)
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_standard_v03_url_block_returns_uri():
+    item = {
+        "type": "image",
+        "source_type": "url",
+        "url": "https://example.com/b.png",
+    }
+    part = _media_part(item)
+    assert isinstance(part, UriPart)
+    assert part.uri == "https://example.com/b.png"
+
+
+def test_media_part_standard_block_corrupted_base64_returns_none():
+    corrupted = _REAL_PNG_B64[:10] + "@@@@" + _REAL_PNG_B64[14:]
+    assert (
+        _media_part(
+            {"type": "image", "base64": corrupted, "mime_type": "image/png"}
+        )
+        is None
+    )
+
+
+def test_media_part_standard_block_without_payload_returns_none():
+    assert _media_part({"type": "image", "mime_type": "image/png"}) is None
+
+
+@pytest.mark.parametrize(
+    "block,expected,expected_value",
+    [
+        (
+            {
+                "type": "image",
+                "base64": _REAL_PNG_B64,
+                "mime_type": "image/png",
+            },
+            BlobPart,
+            _REAL_PNG_BYTES,
+        ),
+        (
+            {"type": "image", "url": "https://example.com/a.png"},
+            UriPart,
+            "https://example.com/a.png",
+        ),
+        (
+            {
+                "type": "image",
+                "source_type": "base64",
+                "data": _REAL_PNG_B64,
+                "mime_type": "image/png",
+            },
+            BlobPart,
+            _REAL_PNG_BYTES,
+        ),
+        (
+            {
+                "type": "image",
+                "source_type": "url",
+                "url": "https://e/b.png",
+            },
+            UriPart,
+            "https://e/b.png",
+        ),
+        (
+            {"type": "image", "source_type": "id", "id": "file-123"},
+            FilePart,
+            "file-123",
+        ),
+        (
+            {"type": "image", "id": "file-456"},
+            FilePart,
+            "file-456",
+        ),
+        (
+            {
+                "type": "image",
+                "source": {"type": "file", "file_id": "file-789"},
+            },
+            FilePart,
+            "file-789",
+        ),
+    ],
+)
+def test_langchain_standard_image_blocks_are_captured(
+    block, expected, expected_value
+):
+    messages = to_input_messages([HumanMessage(content=[block])])
+    assert messages, "message dropped entirely - no parts extracted"
+    part = next(p for p in messages[0].parts if isinstance(p, expected))
+    assert part.modality == "image"
+    assert _part_payload(part) == expected_value
+
+
+@pytest.mark.parametrize(
+    "block,expected,expected_value",
+    [
+        (
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{_REAL_PNG_B64}",
+            },
+            BlobPart,
+            _REAL_PNG_BYTES,
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.com/a.png"},
+            UriPart,
+            "https://example.com/a.png",
+        ),
+        (
+            {
+                "type": "input_image",
+                "image_url": {"url": "https://example.com/a.png"},
+            },
+            UriPart,
+            "https://example.com/a.png",
+        ),
+        (
+            {"type": "input_image", "file_id": "file-123"},
+            FilePart,
+            "file-123",
+        ),
+    ],
+)
+def test_responses_api_input_image_blocks_are_captured(
+    block, expected, expected_value
+):
+    messages = to_input_messages([HumanMessage(content=[block])])
+    assert messages, "message dropped entirely - no parts extracted"
+    part = next(p for p in messages[0].parts if isinstance(p, expected))
+    assert part.modality == "image"
+    assert _part_payload(part) == expected_value
+
+
+def _part_payload(part):
+    if isinstance(part, BlobPart):
+        return part.content
+    if isinstance(part, UriPart):
+        return part.uri
+    return part.file_id
+
+
+def test_media_part_responses_api_input_image_base64_url():
+    part = _media_part(
+        {
+            "type": "input_image",
+            "image_url": f"data:image/png;base64,{_REAL_PNG_B64}",
+        }
+    )
+    assert isinstance(part, BlobPart)
+    assert part.mime_type == "image/png"
+    assert part.modality == "image"
+    assert part.content == _REAL_PNG_BYTES
+
+
+def test_media_part_responses_api_input_image_file_id_returns_file_part():
+    # Provider-hosted image: no bytes and no URL, but the reference is still
+    # worth recording.
+    part = _media_part({"type": "input_image", "file_id": "file-123"})
+    assert isinstance(part, FilePart)
+    assert part.file_id == "file-123"
+    assert part.modality == "image"
+    assert part.mime_type is None
+
+
+def test_media_part_anthropic_file_source_returns_file_part():
+    part = _media_part(
+        {
+            "type": "image",
+            "source": {
+                "type": "file",
+                "file_id": "file-789",
+                "media_type": "image/png",
+            },
+        }
+    )
+    assert isinstance(part, FilePart)
+    assert part.file_id == "file-789"
+    assert part.mime_type == "image/png"
+
+
+def test_media_part_anthropic_file_source_without_file_id_returns_none():
+    assert _media_part({"type": "image", "source": {"type": "file"}}) is None
+
+
+def test_responses_api_input_text_block_is_captured():
+    messages = to_input_messages(
+        [
+            HumanMessage(
+                content=[{"type": "input_text", "text": "what is this?"}]
+            )
+        ]
+    )
+    assert len(messages) == 1
+    parts = messages[0].parts
+    assert len(parts) == 1
+    assert isinstance(parts[0], TextPart)
+    assert parts[0].content == "what is this?"
+
+
+def test_responses_api_output_text_block_is_captured():
+    # langchain-openai accepts "output_text" on an assistant turn fed back in
+    # as request input.
+    messages = to_input_messages(
+        [AIMessage(content=[{"type": "output_text", "text": "the answer"}])]
+    )
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    parts = messages[0].parts
+    assert len(parts) == 1
+    assert isinstance(parts[0], TextPart)
+    assert parts[0].content == "the answer"
+
+
+def test_message_survives_unconvertible_image_block():
+    # An image block with no bytes, url, or file id has nothing to record.
+    messages = to_input_messages(
+        [HumanMessage(content=[{"type": "image", "detail": "high"}])]
+    )
+    assert messages, "message dropped entirely"
+    assert messages[0].role == "user"
+    assert messages[0].parts == []
+
+
+def test_text_kept_when_image_block_is_unconvertible():
+    messages = to_input_messages(
+        [
+            HumanMessage(
+                content=[
+                    {"type": "input_text", "text": "what is in this image?"},
+                    {"type": "input_image", "detail": "high"},
+                ]
+            )
+        ]
+    )
+    assert messages, "message dropped entirely"
+    assert any(isinstance(p, TextPart) for p in messages[0].parts)
+
+
+def test_message_with_only_unknown_blocks_is_kept():
+    messages = to_input_messages(
+        [HumanMessage(content=[{"type": "input_file", "file_id": "file-1"}])]
+    )
+    assert messages
+    assert messages[0].parts == []
+
+
+def test_empty_message_is_still_dropped():
+    assert to_input_messages([HumanMessage(content="")]) == []
+    assert to_input_messages([HumanMessage(content=[])]) == []
+
+
+@pytest.mark.parametrize("content", [[""], ["", ""], [{}], ["", {}]])
+def test_message_of_blank_blocks_is_dropped(content):
+    # Blank blocks are empty content, not content we failed to convert.
+    assert to_input_messages([HumanMessage(content=content)]) == []
+
+
+def test_output_message_survives_unconvertible_blocks():
+    # A dropped output message would also lose its finish_reason.
+    messages = to_output_messages(
+        [AIMessage(content=[{"type": "input_file", "file_id": "file-1"}])],
+        finish_reason="stop",
+    )
+    assert messages
+    assert messages[0].parts == []
+    assert messages[0].finish_reason == "stop"
+
+
+def test_empty_output_message_is_still_dropped():
+    assert to_output_messages([AIMessage(content="")]) == []
+
+
+def test_to_input_messages_extracts_image_part():
+    image_url = "data:image/jpeg;base64,QUJD"
+    content = [
+        {"type": "text", "text": "What's in this image?"},
+        {"type": "image_url", "image_url": {"url": image_url}},
+    ]
+    messages = to_input_messages([HumanMessage(content=content)])
+    assert len(messages) == 1
+    parts = messages[0].parts
+
+    assert any(isinstance(p, BlobPart) for p in parts)
+    blob = next(p for p in parts if isinstance(p, BlobPart))
+    assert blob.mime_type == "image/jpeg"
+    assert blob.content == b"ABC"
+
+
+def test_on_chat_model_start_skips_input_messages_when_content_disabled():
+    """Gating happens in the callback handler, not inside the utils."""
+    run_id = _run_id()
+    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+    telemetry.should_capture_content.return_value = False
+
+    content = [
+        {"type": "text", "text": "What's in this image?"},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+        },
+    ]
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content=content)]],
+        run_id=_run_id(),
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    assert llm_inv.input_messages == []
+
+
+def test_on_chat_model_start_captures_input_messages_when_content_enabled():
+    run_id = _run_id()
+    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+    telemetry.should_capture_content.return_value = True
+
+    content = [
+        {"type": "text", "text": "What's in this image?"},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+        },
+    ]
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content=content)]],
+        run_id=_run_id(),
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    parts = llm_inv.input_messages[0].parts
+    assert any(isinstance(p, TextPart) for p in parts)
+    blob = next(p for p in parts if isinstance(p, BlobPart))
+    assert blob.content == _REAL_PNG_BYTES

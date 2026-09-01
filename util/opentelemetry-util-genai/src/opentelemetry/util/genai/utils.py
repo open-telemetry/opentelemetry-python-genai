@@ -4,7 +4,8 @@
 import json
 import logging
 import os
-from base64 import b64encode
+import urllib.parse
+from base64 import b64decode, b64encode
 from functools import partial
 from typing import Any
 
@@ -12,7 +13,12 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
-from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.types import (
+    BlobPart,
+    ContentCapturingMode,
+    MessagePart,
+    UriPart,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,49 @@ def get_content_capturing_mode() -> ContentCapturingMode:
             ", ".join(e.name for e in ContentCapturingMode),
         )
         return ContentCapturingMode.NO_CONTENT
+
+
+def decode_base64(data: str) -> bytes | None:
+    """Decode a base64 string, returning ``None`` if it is malformed.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
+    """
+    try:
+        return b64decode("".join(data.split()), validate=True)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+
+
+def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
+    """Return a media part for an image ``url``.
+
+    A ``data:<mime>;base64,<payload>`` URL is decoded into a
+    :class:`~opentelemetry.util.genai.types.BlobPart`; a ``data:`` URL without
+    base64 encoding has its percent-encoded payload decoded into bytes; any
+    other URL becomes a :class:`~opentelemetry.util.genai.types.UriPart`. Shared
+    by instrumentations that parse provider image blocks.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
+    """
+    if url.startswith("data:"):
+        header, _, payload = url[len("data:") :].partition(",")
+        mime_type = header.split(";", 1)[0] or None
+        if ";base64" in header.lower():
+            decoded = decode_base64(payload)
+            if decoded is None:
+                return None
+            content = decoded
+        else:
+            # Non-base64 data URL payloads are percent-encoded (RFC 2397).
+            content = urllib.parse.unquote_to_bytes(payload)
+        return BlobPart(
+            mime_type=mime_type,
+            modality=modality,
+            content=content,
+        )
+    return UriPart(mime_type=None, modality=modality, uri=url)
 
 
 def is_experimental_mode() -> bool:

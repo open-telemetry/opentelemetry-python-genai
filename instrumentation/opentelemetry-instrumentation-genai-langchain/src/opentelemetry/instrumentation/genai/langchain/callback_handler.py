@@ -45,6 +45,7 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
+    InputMessage,
     MessagePart,
     OutputMessage,
     TextPart,
@@ -97,7 +98,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             serialized, metadata, kwargs, parent_run_id
         )
         conversation_id = _conversation_id(metadata)
-
+        capture_content = self._telemetry_handler.should_capture_content()
         if operation == OperationName.INVOKE_WORKFLOW:
             workflow_name = kwargs.get("name") or serialized.get("name")
             workflow_name_override = (
@@ -107,7 +108,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 name=workflow_name_override or workflow_name
             )
             workflow.conversation_id = conversation_id
-            workflow.input_messages = make_input_message(inputs)
+            if capture_content:
+                workflow.input_messages = make_input_message(inputs)
             self._invocation_manager.add_invocation_state(
                 run_id, parent_run_id, workflow
             )
@@ -133,7 +135,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent_name=suggested_agent_name,
                     )
                     agent.conversation_id = conversation_id
-                    agent.input_messages = make_input_message(inputs)
+                    if capture_content:
+                        agent.input_messages = make_input_message(inputs)
 
                     if metadata:
                         agent.agent_id = metadata.get("agent_id")
@@ -178,7 +181,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             self._invocation_manager.delete_invocation_state(run_id)
             return
 
-        invocation.output_messages = make_last_output_message(outputs)
+        if self._telemetry_handler.should_capture_content():
+            invocation.output_messages = make_last_output_message(outputs)
 
         invocation.stop()
 
@@ -286,7 +290,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
         # with proper roles, tool-call requests, tool results, and reasoning.
         flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
-        input_messages = to_input_messages(flattened)
+        input_messages: list[InputMessage] = []
+        if self._telemetry_handler.should_capture_content():
+            input_messages = to_input_messages(flattened)
 
         llm_invocation = self._telemetry_handler.inference(
             provider,
