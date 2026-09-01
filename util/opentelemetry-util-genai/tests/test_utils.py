@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import json
 import os
 import unittest
@@ -34,14 +35,25 @@ from opentelemetry.util.genai.handler import (
     get_telemetry_handler,
 )
 from opentelemetry.util.genai.types import (
+    Blob,
+    BlobPart,
     ContentCapturingMode,
+    File,
+    FilePart,
     InputMessage,
     MessagePart,
     OutputMessage,
+    Reasoning,
+    ReasoningPart,
     Text,
+    TextPart,
+    Uri,
+    UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    decode_base64,
     get_content_capturing_mode,
+    image_from_url,
     should_capture_content_on_spans,
     should_emit_event,
 )
@@ -50,21 +62,23 @@ from opentelemetry.util.genai.utils import (
 def _create_input_message(
     content: str = "hello world", role: str = "Human"
 ) -> InputMessage:
-    return InputMessage(role=role, parts=[Text(content=content)])
+    return InputMessage(role=role, parts=[TextPart(content=content)])
 
 
 def _create_output_message(
     content: str = "hello back", finish_reason: str = "stop", role: str = "AI"
 ) -> OutputMessage:
     return OutputMessage(
-        role=role, parts=[Text(content=content)], finish_reason=finish_reason
+        role=role,
+        parts=[TextPart(content=content)],
+        finish_reason=finish_reason,
     )
 
 
 def _create_system_instruction(
     content: str = "You are a helpful assistant.",
 ) -> list[MessagePart]:
-    return [Text(content=content)]
+    return [TextPart(content=content)]
 
 
 def _get_single_span(span_exporter: InMemorySpanExporter) -> ReadableSpan:
@@ -134,6 +148,19 @@ def _normalize_to_list(value: Any) -> list[Any]:
 def _normalize_to_dict(value: Any) -> dict[str, Any]:
     """Normalize tuple or dict to dict for OpenTelemetry compatibility."""
     return dict(value) if isinstance(value, tuple) else value
+
+
+class TestDeprecatedMessagePartNames(unittest.TestCase):
+    def test_deprecated_names_are_aliases(self):
+        self.assertIs(Text, TextPart)
+        self.assertIs(Reasoning, ReasoningPart)
+        self.assertIs(Blob, BlobPart)
+        self.assertIs(File, FilePart)
+        self.assertIs(Uri, UriPart)
+
+    def test_parts_compare_equal_across_names(self):
+        self.assertEqual(Text(content="hello"), TextPart(content="hello"))
+        self.assertIsInstance(TextPart(content="hello"), Text)
 
 
 class TestShouldEmitEvent(unittest.TestCase):
@@ -461,6 +488,35 @@ class TestTelemetryHandler(unittest.TestCase):
             == "api.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
+
+    def test_inference_conversation_id_on_span_but_not_metrics(self):
+        """conversation id is high cardinality, so it must stay off metrics.
+
+        `_get_metric_attributes()` builds on `_get_start_attributes()`, so
+        setting it at span creation would make it a dimension on the duration
+        and token histograms.
+        """
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.conversation_id = "conv-1"
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
+        assert (
+            GenAI.GEN_AI_CONVERSATION_ID
+            not in invocation._get_metric_attributes()
+        )
+
+    def test_inference_omits_conversation_id_when_not_set(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
 
     def test_start_inference_sampler_can_drop_span_based_on_attributes(self):
         """Verify that a sampler can reject spans based on attributes passed at creation time."""
@@ -956,3 +1012,128 @@ class TestTelemetryHandler(unittest.TestCase):
 class AnyNonNone:
     def __eq__(self, other):
         return other is not None
+
+
+_REAL_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
+    b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc"
+    b"\xf8\xcf\xc0\xf0\x1f\x00\x05\x05\x02\x00\xa1\r\xf7\xdf\x00\x00\x00"
+    b"\x00IEND\xaeB`\x82"
+)
+_REAL_PNG_B64 = base64.b64encode(_REAL_PNG_BYTES).decode("ascii")
+
+
+class TestMediaHelpers(unittest.TestCase):
+    """Tests for the shared ``decode_base64`` / ``image_from_url`` helpers.
+
+    Both helpers unconditionally decode the payload they are given; callers are
+    expected to check whether content capture is enabled and skip calling them
+    when it is not.
+    """
+
+    # -- image_from_url --------------------------------------------------
+
+    def test_image_from_url_data_uri_returns_blob(self):
+        part = image_from_url("data:image/jpeg;base64,QUJD")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.mime_type, "image/jpeg")
+        self.assertEqual(part.modality, "image")
+        self.assertEqual(part.content, b"ABC")
+
+    def test_image_from_url_http_returns_uri(self):
+        part = image_from_url("https://example.com/cat.png")
+        self.assertIsInstance(part, UriPart)
+        self.assertEqual(part.uri, "https://example.com/cat.png")
+        self.assertEqual(part.modality, "image")
+
+    def test_image_from_url_data_uri_without_base64_decodes_payload(self):
+        part = image_from_url("data:text/plain,hello")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.mime_type, "text/plain")
+        self.assertEqual(part.content, b"hello")
+
+    def test_image_from_url_data_uri_no_mime_type(self):
+        part = image_from_url("data:;base64,QUJD")
+        self.assertIsInstance(part, BlobPart)
+        self.assertIsNone(part.mime_type)
+        self.assertEqual(part.content, b"ABC")
+
+    def test_image_from_url_data_uri_malformed_base64_returns_none(self):
+        part = image_from_url("data:image/png;base64,not!valid!base64!")
+        self.assertIsNone(part)
+
+    def test_image_from_url_data_uri_uppercase_base64_marker(self):
+        part = image_from_url("data:image/jpeg;BASE64,QUJD")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.content, b"ABC")
+
+    def test_image_from_url_honours_modality_override(self):
+        part = image_from_url("data:audio/mp3;base64,QUJD", modality="audio")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.modality, "audio")
+        uri_part = image_from_url(
+            "https://example.com/a.mp3", modality="audio"
+        )
+        self.assertIsInstance(uri_part, UriPart)
+        self.assertEqual(uri_part.modality, "audio")
+
+    def test_image_from_url_percent_encoded_data_url(self):
+        part = image_from_url("data:image/svg+xml,%3Csvg%2F%3E")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.mime_type, "image/svg+xml")
+        self.assertEqual(part.content, b"<svg/>")
+
+    def test_image_from_url_percent_encoded_non_ascii_data_url(self):
+        part = image_from_url("data:text/plain,%C3%A9%E2%82%AC")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.content, "é€".encode())
+
+    # -- decode_base64 ---------------------------------------------------
+
+    def test_decode_base64_valid_returns_bytes(self):
+        self.assertEqual(decode_base64("QUJD"), b"ABC")
+
+    def test_decode_base64_valid_with_padding(self):
+        self.assertEqual(decode_base64("R0lGODlh"), b"GIF89a")
+
+    def test_decode_base64_strips_whitespace_and_newlines(self):
+        self.assertEqual(decode_base64("QU\nJD"), b"ABC")
+        self.assertEqual(decode_base64("  QUJD  "), b"ABC")
+        self.assertEqual(decode_base64("QU JD"), b"ABC")
+
+    def test_decode_base64_malformed_returns_none(self):
+        self.assertIsNone(decode_base64("not!valid!base64!"))
+        self.assertIsNone(decode_base64("@@@@"))
+        self.assertIsNone(decode_base64("****"))
+
+    def test_decode_base64_wrong_padding_returns_none(self):
+        # Correct base64 alphabet but invalid length/padding.
+        self.assertIsNone(decode_base64("QUJ"))
+        self.assertIsNone(decode_base64("QQ"))
+
+    def test_decode_base64_empty_returns_empty_bytes(self):
+        self.assertEqual(decode_base64(""), b"")
+
+    def test_decode_base64_real_image_round_trips(self):
+        self.assertEqual(decode_base64(_REAL_PNG_B64), _REAL_PNG_BYTES)
+
+    @patch.dict(
+        os.environ,
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
+    )
+    def test_decode_base64_ignores_content_capture_env(self):
+        # Gating is the caller's responsibility, so the helper never reads the
+        # content-capture environment variable itself.
+        self.assertEqual(decode_base64("QUJD"), b"ABC")
+        self.assertEqual(decode_base64(_REAL_PNG_B64), _REAL_PNG_BYTES)
+
+    def test_image_from_url_real_png_data_uri_returns_blob(self):
+        part = image_from_url(f"data:image/png;base64,{_REAL_PNG_B64}")
+        self.assertIsInstance(part, BlobPart)
+        self.assertEqual(part.mime_type, "image/png")
+        self.assertEqual(part.content, _REAL_PNG_BYTES)
+
+    def test_image_from_url_real_png_truncated_base64_returns_none(self):
+        corrupted = _REAL_PNG_B64[:-4] + "!!!!"
+        part = image_from_url(f"data:image/png;base64,{corrupted}")
+        self.assertIsNone(part)

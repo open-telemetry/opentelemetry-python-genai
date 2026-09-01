@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 pytest.register_assert_rewrite("opentelemetry.test_util_genai.vcr")
@@ -15,6 +17,12 @@ pytest_plugins = [
     "opentelemetry.test_util_genai.fixtures",
     "opentelemetry.test_util_genai.vcr",
 ]
+
+
+@pytest.fixture(autouse=True)
+def environment():
+    if not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = "test_openai_api_key"
 
 
 @pytest.fixture(scope="module")

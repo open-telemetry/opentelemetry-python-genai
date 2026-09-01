@@ -49,6 +49,52 @@ _logger = logging.getLogger(__name__)
 ANTHROPIC = "anthropic"
 
 
+def response_context_manager_exit(
+    wrapped: Callable[..., Any],
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Forward caller failures before Anthropic closes a raw response."""
+    error = args[1] if len(args) > 1 else kwargs.get("exc")
+    if isinstance(error, BaseException):
+        _fail_context_manager_response(instance, error)
+    return wrapped(*args, **kwargs)
+
+
+async def async_response_context_manager_exit(
+    wrapped: Callable[..., Any],
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Async counterpart to :func:`response_context_manager_exit`."""
+    error = args[1] if len(args) > 1 else kwargs.get("exc")
+    if isinstance(error, BaseException):
+        _fail_context_manager_response(instance, error)
+    return await wrapped(*args, **kwargs)
+
+
+def _fail_context_manager_response(
+    instance: Any, error: BaseException
+) -> None:
+    response = getattr(instance, "_ResponseContextManager__response", None)
+    if response is None:
+        response = getattr(
+            instance, "_AsyncResponseContextManager__response", None
+        )
+    fail = getattr(response, "_fail", None)
+    if not callable(fail):
+        return
+    try:
+        fail(error)
+    except Exception:  # pylint: disable=broad-exception-caught
+        _logger.debug(
+            "Failed to record an exception from a streaming response",
+            exc_info=True,
+        )
+
+
 def _is_raw_response(result: object) -> bool:
     """Whether ``result`` is a raw-response object to route through the proxy.
 

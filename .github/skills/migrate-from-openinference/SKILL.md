@@ -116,11 +116,11 @@ with the migration flow below.
 - **OTel GenAI spans**: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai> — authoritative attribute names, spans, logs, and metrics definitions.
 - **OpenInference → OTel attribute mapping** (Arize-maintained): <https://github.com/Arize-ai/openinference/blob/e9a8746daeb184c9aabc68ca29c05909ddcccf1e/spec/genai/README.md>. Use as a quick lookup for what an OpenInference attribute *roughly* corresponds to in OTel; when the mapping disagrees with the official semconv, **the official semconv wins**.
 - **Message JSON schemas**:
-  - input messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-input-messages.json>
-  - output messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-output-messages.json>
-  - system instructions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-system-instructions.json>
-  - tool definitions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-tool-definitions.json>
-  - retrieval documents: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/gen-ai-retrieval-documents.json>
+  - input messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-input-messages.json>
+  - output messages: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-output-messages.json>
+  - system instructions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-system-instructions.json>
+  - tool definitions: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-tool-definitions.json>
+  - retrieval documents: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/model/gen-ai/gen-ai-retrieval-documents.json>
 
 - **Code for above models**: <https://github.com/open-telemetry/semantic-conventions-genai/tree/main/docs/gen-ai/non-normative/models.py>.
 
@@ -338,9 +338,9 @@ Drop every match. The mappings:
   `EmbeddingInvocation`, `ToolInvocation`, `WorkflowInvocation`,
   `AgentInvocation`, `Error`, `GenAIInvocation`
 - `opentelemetry.util.genai.types` — `InputMessage`, `OutputMessage`,
-  `Text`, `ToolCallRequest`, `ToolCallResponse`, `Reasoning`,
-  `ServerToolCall`, `ServerToolCallResponse`, `GenericPart`, `Blob`,
-  `File`, `Uri`, `Modality`
+  `TextPart`, `ToolCallRequestPart`, `ToolCallResponsePart`, `ReasoningPart`,
+  `ServerToolCallPart`, `ServerToolCallResponsePart`, `GenericPart`, `BlobPart`,
+  `FilePart`, `UriPart`, `Modality`
 - `opentelemetry.util.genai.completion_hook`
 - `opentelemetry.util.genai.environment_variables`
 
@@ -401,15 +401,15 @@ right (all types from `opentelemetry.util.genai.types` unless noted):
 
 | Source request item | OTel construct |
 |---|---|
-| User / assistant / system text message | `Input/OutputMessage(role=…, parts=[Text(content=…)])` |
-| Assistant message containing a tool/function call | `Message(role="assistant", parts=[ToolCallRequest(name=…, id=…, arguments=…)])` |
-| Tool/function result message | `Message(role="tool", parts=[ToolCallResponse(id=…, response=…)])` |
-| Reasoning / thinking item | `Message(role="assistant", parts=[Reasoning(content=…)])` |
-| Server-side tool call (web_search, file_search, code_interpreter, …) | `Message(parts=[ServerToolCall(name=…, server_tool_call=…, id=…)])` |
-| Server-side tool call result | `Message(parts=[ServerToolCallResponse(server_tool_call_response=…, id=…)])` |
-| Inline image / audio / video bytes | `Blob(mime_type=…, modality="image"\|"audio"\|"video", content=b"…")` |
-| External media URL | `Uri(mime_type=…, modality=…, uri="…")` |
-| File reference (e.g. OpenAI `file_id`) | `File(mime_type=…, modality=…, file_id="file-…")` |
+| User / assistant / system text message | `Input/OutputMessage(role=…, parts=[TextPart(content=…)])` |
+| Assistant message containing a tool/function call | `Message(role="assistant", parts=[ToolCallRequestPart(name=…, id=…, arguments=…)])` |
+| Tool/function result message | `Message(role="tool", parts=[ToolCallResponsePart(id=…, response=…)])` |
+| Reasoning / thinking item | `Message(role="assistant", parts=[ReasoningPart(content=…)])` |
+| Server-side tool call (web_search, file_search, code_interpreter, …) | `Message(parts=[ServerToolCallPart(name=…, server_tool_call=…, id=…)])` |
+| Server-side tool call result | `Message(parts=[ServerToolCallResponsePart(server_tool_call_response=…, id=…)])` |
+| Inline image / audio / video bytes | `BlobPart(mime_type=…, modality="image"\|"audio"\|"video", content=b"…")` |
+| External media URL | `UriPart(mime_type=…, modality=…, uri="…")` |
+| File reference (e.g. OpenAI `file_id`) | `FilePart(mime_type=…, modality=…, file_id="file-…")` |
 | Provider-specific item with no semconv mapping | `GenericPart(value=…)` — never silently drop. Flag those in the review report. |
 
 Output messages mirror the input mapping — `OutputMessage` serializes with

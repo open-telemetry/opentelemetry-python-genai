@@ -1,0 +1,1 @@
+Populate ``gen_ai.conversation.id`` on model call and workflow spans, resolved from the ``thread_id``, ``session_id`` or ``conversation_id`` metadata keys and inherited by nested runs.

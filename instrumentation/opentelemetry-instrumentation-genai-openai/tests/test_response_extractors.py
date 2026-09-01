@@ -323,7 +323,7 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
 
 def test_extractors_handle_missing_genai_types_import(loaded_module):
     with (
-        mock.patch.object(loaded_module, "Text", None),
+        mock.patch.object(loaded_module, "TextPart", None),
         mock.patch.object(loaded_module, "InputMessage", None),
         mock.patch.object(loaded_module, "OutputMessage", None),
     ):

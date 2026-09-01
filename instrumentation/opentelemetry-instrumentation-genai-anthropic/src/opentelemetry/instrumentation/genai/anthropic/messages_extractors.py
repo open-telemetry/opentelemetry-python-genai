@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 try:
@@ -36,7 +36,7 @@ from .utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import (
@@ -201,6 +201,32 @@ def extract_params(  # pylint: disable=too-many-locals
     timeout: float | _http_lib.Timeout | None = None,
     **_kwargs: object,
 ) -> MessageRequestParams:
+    if isinstance(extra_body, Mapping):
+        body = cast(Mapping[object, object], extra_body)
+        body_temperature = body.get("temperature")
+        if (
+            temperature is None
+            and isinstance(body_temperature, (int, float))
+            and not isinstance(body_temperature, bool)
+        ):
+            temperature = float(body_temperature)
+
+        body_top_p = body.get("top_p")
+        if (
+            top_p is None
+            and isinstance(body_top_p, (int, float))
+            and not isinstance(body_top_p, bool)
+        ):
+            top_p = float(body_top_p)
+
+        body_top_k = body.get("top_k")
+        if (
+            top_k is None
+            and isinstance(body_top_k, int)
+            and not isinstance(body_top_k, bool)
+        ):
+            top_k = body_top_k
+
     return MessageRequestParams(
         model=model,
         max_tokens=max_tokens,

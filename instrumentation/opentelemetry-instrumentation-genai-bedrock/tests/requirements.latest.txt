@@ -1,0 +1,9 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Exercise the latest supported Amazon Bedrock (boto3) release with workspace instrumentation.
+boto3 ~=1.43
+
+-e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-bedrock
+

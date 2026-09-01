@@ -25,7 +25,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
-    Text,
+    TextPart,
 )
 
 
@@ -67,6 +67,25 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert server_attributes.SERVER_ADDRESS not in attrs
         assert server_attributes.SERVER_PORT not in attrs
+
+    def test_conversation_id_on_span_but_not_metrics(self):
+        """conversation id is high cardinality, so it must stay off metrics."""
+        invocation = self.handler.invoke_local_agent(agent_name="Researcher")
+        invocation.conversation_id = "conv-456"
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-456"
+        assert (
+            GenAI.GEN_AI_CONVERSATION_ID
+            not in invocation._get_metric_attributes()
+        )
+
+    def test_no_conversation_id(self):
+        invocation = self.handler.invoke_local_agent()
+        invocation.stop()
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
 
     def test_all_attributes(self):
         invocation = self.handler.invoke_local_agent(
@@ -196,12 +215,12 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
     def test_with_messages(self):
         invocation = self.handler.invoke_local_agent()
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="Hello")])
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="Hi there!")],
+                parts=[TextPart(content="Hi there!")],
                 finish_reason="stop",
             )
         ]
@@ -331,7 +350,7 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_system_instruction_on_span(self, _mock_cap):
         invocation = self.handler.invoke_local_agent()
         invocation.system_instruction = [
-            Text(content="You are a helpful assistant."),
+            TextPart(content="You are a helpful assistant."),
         ]
         invocation.stop()
 
@@ -362,12 +381,12 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_messages_on_span(self, _mock_cap):
         invocation = self.handler.invoke_local_agent()
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="Hello")])
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="Hi!")],
+                parts=[TextPart(content="Hi!")],
                 finish_reason="stop",
             )
         ]
@@ -380,10 +399,10 @@ class TestAgentInvocationContent(unittest.TestCase):
     def test_content_not_on_span_by_default(self):
         invocation = self.handler.invoke_local_agent()
         invocation.system_instruction = [
-            Text(content="You are a helpful assistant."),
+            TextPart(content="You are a helpful assistant."),
         ]
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="Hello")])
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
         invocation.stop()
 
