@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -1041,3 +1042,43 @@ def test_chat_openai_streamed_response_model(
         == "gpt-3.5-turbo-0125"
     )
     assert span.attributes.get(gen_ai_attributes.GEN_AI_RESPONSE_ID) is None
+
+
+def test_chat_openai_astreamed_response_model(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_gpt_3_5_turbo_model,
+    monkeypatch,
+):
+    """``.astream()`` reports the response model, as ``.stream()`` does."""
+
+    async def fake_astream(
+        self, messages, stop=None, run_manager=None, **kwargs
+    ):
+        yield ChatGenerationChunk(message=AIMessageChunk(content="Paris"))
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(content=""),
+            generation_info={
+                "finish_reason": "stop",
+                "model_name": "gpt-3.5-turbo-0125",
+            },
+        )
+
+    monkeypatch.setattr(ChatOpenAI, "_astream", fake_astream)
+
+    async def drain():
+        return [
+            chunk
+            async for chunk in chat_openai_gpt_3_5_turbo_model.astream(
+                [HumanMessage(content="What is the capital of France?")]
+            )
+        ]
+
+    chunks = asyncio.run(drain())
+    assert "".join(chunk.content for chunk in chunks) == "Paris"
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_RESPONSE_MODEL)
+        == "gpt-3.5-turbo-0125"
+    )

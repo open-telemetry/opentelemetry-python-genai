@@ -1814,6 +1814,40 @@ class TestOnLlmEndStreamedResponse:
         assert llm_inv.response_model_name == "claude-sonnet-4-5"
         assert llm_inv.response_id == "msg_01ABC"
 
+    def test_model_from_generation_info(self):
+        """A generation that skipped LangChain's merge still reports."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(content="hello"),
+            generation_info={"model_name": "claude-sonnet-4-5"},
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name == "claude-sonnet-4-5"
+
+    def test_response_metadata_wins_over_generation_info(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="hello",
+                response_metadata={"model_name": "from-response-metadata"},
+            ),
+            generation_info={"model_name": "from-generation-info"},
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name == "from-response-metadata"
+
     def test_message_id_not_used_as_response_id(self):
         """LangChain puts its own run id on ``message.id`` when the provider
         supplies none, which must not surface as ``gen_ai.response.id``."""

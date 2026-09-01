@@ -398,12 +398,20 @@ def response_fields_from_generation(
     response_metadata: Mapping[str, Any] = (
         getattr(message, "response_metadata", None) or {}
     )
+    generation_info: Mapping[str, Any] = (
+        getattr(chat_generation, "generation_info", None) or {}
+    )
 
     response_model = _first_string(
         response_metadata.get("model_name"),
         response_metadata.get("model"),
+        generation_info.get("model_name"),
+        generation_info.get("model"),
     )
-    response_id = _first_string(response_metadata.get("id"))
+    response_id = _first_string(
+        response_metadata.get("id"),
+        generation_info.get("id"),
+    )
     return response_model, response_id
 
 
