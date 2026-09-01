@@ -1,0 +1,5 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The oldest tox factor resolves declared dependencies from pyproject.toml
+# with UV_RESOLUTION=lowest-direct. There are no additional test-only pins.

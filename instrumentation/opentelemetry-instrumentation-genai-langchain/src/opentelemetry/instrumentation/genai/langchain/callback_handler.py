@@ -45,6 +45,7 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
+    InputMessage,
     MessagePart,
     OutputMessage,
     TextPart,
@@ -52,6 +53,24 @@ from opentelemetry.util.genai.types import (
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
+
+# Conversation identifier in precedence order.
+CONVERSATION_ID_METADATA_KEYS = (
+    "thread_id",
+    "session_id",
+    "conversation_id",
+)
+
+
+def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
+    """Return the conversation id from a run's own metadata."""
+    if not metadata:
+        return None
+    for key in CONVERSATION_ID_METADATA_KEYS:
+        conversation_id = metadata.get(key)
+        if conversation_id:
+            return str(conversation_id)
+    return None
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -78,7 +97,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         operation = classify_chain_run(
             serialized, metadata, kwargs, parent_run_id
         )
-
+        conversation_id = _conversation_id(metadata)
+        capture_content = self._telemetry_handler.should_capture_content()
         if operation == OperationName.INVOKE_WORKFLOW:
             workflow_name = kwargs.get("name") or serialized.get("name")
             workflow_name_override = (
@@ -87,7 +107,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             workflow = self._telemetry_handler.workflow(
                 name=workflow_name_override or workflow_name
             )
-            workflow.input_messages = make_input_message(inputs)
+            workflow.conversation_id = conversation_id
+            if capture_content:
+                workflow.input_messages = make_input_message(inputs)
             self._invocation_manager.add_invocation_state(
                 run_id, parent_run_id, workflow, metadata
             )
@@ -112,23 +134,15 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     agent = self._telemetry_handler.invoke_local_agent(
                         agent_name=suggested_agent_name,
                     )
-                    agent.input_messages = make_input_message(inputs)
+                    agent.conversation_id = conversation_id
+                    if capture_content:
+                        agent.input_messages = make_input_message(inputs)
 
                     if metadata:
                         agent.agent_id = metadata.get("agent_id")
                         agent.agent_description = metadata.get(
                             "agent_description"
                         )
-
-                        for key in (
-                            "thread_id",
-                            "session_id",
-                            "conversation_id",
-                        ):
-                            conv_id = metadata.get(key)
-                            if conv_id:
-                                agent.conversation_id = conv_id
-                                break
 
                     self._invocation_manager.add_invocation_state(
                         run_id, parent_run_id, agent, metadata
@@ -168,7 +182,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             self._invocation_manager.delete_invocation_state(run_id)
             return
 
-        invocation.output_messages = make_last_output_message(outputs)
+        if self._telemetry_handler.should_capture_content():
+            invocation.output_messages = make_last_output_message(outputs)
 
         invocation.stop()
 
@@ -276,12 +291,15 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
         # with proper roles, tool-call requests, tool results, and reasoning.
         flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
-        input_messages = to_input_messages(flattened)
+        input_messages: list[InputMessage] = []
+        if self._telemetry_handler.should_capture_content():
+            input_messages = to_input_messages(flattened)
 
         llm_invocation = self._telemetry_handler.inference(
             provider,
             request_model=request_model,
         )
+        llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
         llm_invocation.frequency_penalty = frequency_penalty
@@ -553,6 +571,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             name=name, tool_description=description, tool_type="function"
         )
         tool_invocation.arguments = arguments
+        tool_call_id = kwargs.get("tool_call_id")
+        if tool_call_id:
+            tool_invocation.tool_call_id = tool_call_id
         self._invocation_manager.add_invocation_state(
             run_id, parent_run_id, tool_invocation
         )
@@ -568,7 +589,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         tool_invocation = self._invocation_manager.get_invocation(run_id)
         if not isinstance(tool_invocation, ToolInvocation):
             return
-        tool_invocation.tool_call_id = getattr(output, "tool_call_id", None)
+        end_tool_call_id = getattr(output, "tool_call_id", None)
+        if end_tool_call_id and not tool_invocation.tool_call_id:
+            tool_invocation.tool_call_id = end_tool_call_id
         tool_invocation.tool_result = getattr(output, "content", None)
         tool_invocation.stop()
         if not tool_invocation.span.is_recording():

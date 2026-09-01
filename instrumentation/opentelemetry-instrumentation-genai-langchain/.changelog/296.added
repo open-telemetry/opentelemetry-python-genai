@@ -1,0 +1,1 @@
+(OpenInference Migration: LangChain) - Capture multimodal image content (OpenAI ``image_url`` and Responses API ``input_image``, Anthropic ``image``, and LangChain standard ``image`` blocks) as ``BlobPart``/``UriPart``/``FilePart`` message parts.
