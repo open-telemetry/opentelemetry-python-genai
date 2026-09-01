@@ -1,0 +1,12 @@
+llama-index-core~=0.14
+llama-index-llms-openai~=0.7
+
+opentelemetry-sdk~=1.43.0
+opentelemetry-distro~=0.64b0
+opentelemetry-exporter-otlp-proto-grpc~=1.43.0
+opentelemetry-instrumentation-genai-llama-index~=1.2b0
+opentelemetry-instrumentation-genai-openai~=1.2b0
+
+# Uncomment to enable the upload completion hook (pulls in fsspec).
+# Required when OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload.
+# opentelemetry-util-genai[upload]
