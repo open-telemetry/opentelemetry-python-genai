@@ -1,0 +1,1 @@
+Add a settable ``conversation_id`` to inference and workflow invocations, emitted as ``gen_ai.conversation.id``.
