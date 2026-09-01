@@ -69,12 +69,14 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        parent_context: Context | None = None,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
         self._logger = logger
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver
+        self._parent_context = parent_context
         self._operation_name: str = operation_name
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
@@ -105,12 +107,23 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
         Args:
             attributes: Initial span attributes available for sampling decisions.
+
+        The span is parented to ``self._parent_context`` when one was supplied
+        at construction; otherwise it parents from the ambient context.
         """
-        self.span = self._tracer.start_span(
-            name=self._span_name,
-            kind=self._span_kind,
-            attributes=attributes,
-        )
+        if self._parent_context is not None:
+            self.span = self._tracer.start_span(
+                name=self._span_name,
+                kind=self._span_kind,
+                attributes=attributes,
+                context=self._parent_context,
+            )
+        else:
+            self.span = self._tracer.start_span(
+                name=self._span_name,
+                kind=self._span_kind,
+                attributes=attributes,
+            )
         self._span_context = set_span_in_context(self.span)
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)

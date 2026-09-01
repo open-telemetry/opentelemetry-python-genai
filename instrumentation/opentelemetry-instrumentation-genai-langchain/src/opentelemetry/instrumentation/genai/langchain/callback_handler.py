@@ -17,6 +17,7 @@ from langchain_core.outputs import (
     LLMResult,
 )
 
+from opentelemetry.context import Context
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
 )
@@ -38,6 +39,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     response_fields_from_generation,
     to_input_messages,
 )
+from opentelemetry.trace import set_span_in_context
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
@@ -86,6 +88,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         self._telemetry_handler = telemetry_handler
         self._invocation_manager = _InvocationManager()
 
+    def _parent_context(self, parent_run_id: UUID | None) -> Context | None:
+        """Return a context carrying the nearest emitted ancestor invocation's span.
+
+        LangChain runs queued callbacks in its own task loop where the
+        ambient OpenTelemetry context does not hold the parent span, and a
+        child's ``parent_run_id`` may point at an intermediate chain node that
+        emits no telemetry. Walk up the run hierarchy to the nearest live
+        invocation and parent to its span so child spans nest under their
+        caller instead of becoming their own root trace.
+        """
+        current = parent_run_id
+        visited: set[UUID] = set()
+        while current is not None and current not in visited:
+            visited.add(current)
+            parent = self._invocation_manager.get_invocation(current)
+            if parent is not None and parent.span.is_recording():
+                return set_span_in_context(parent.span)
+            current = self._invocation_manager.get_parent_run_id(current)
+        return None
+
     def on_chain_start(
         self,
         serialized: dict[str, Any],
@@ -108,7 +130,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 metadata.get("workflow_name") if metadata else None
             )
             workflow = self._telemetry_handler.workflow(
-                name=workflow_name_override or workflow_name
+                name=workflow_name_override or workflow_name,
+                parent_context=self._parent_context(parent_run_id),
             )
             workflow.conversation_id = conversation_id
             if capture_content:
@@ -136,6 +159,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 if suggested_agent_name_lower != agent_invocation_name_lower:
                     agent = self._telemetry_handler.invoke_local_agent(
                         agent_name=suggested_agent_name,
+                        parent_context=self._parent_context(parent_run_id),
                     )
                     agent.conversation_id = conversation_id
                     if capture_content:
@@ -300,6 +324,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         llm_invocation = self._telemetry_handler.inference(
             provider,
             request_model=request_model,
+            parent_context=self._parent_context(parent_run_id),
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
@@ -589,6 +614,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             tool_description=description,
             tool_type="function",
             agent_name=agent_name,
+            parent_context=self._parent_context(parent_run_id),
         )
         tool_invocation.arguments = arguments
         tool_call_id = kwargs.get("tool_call_id")

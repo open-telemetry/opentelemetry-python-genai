@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -64,6 +65,7 @@ class ToolInvocation(GenAIInvocation):
         tool_type: str | None = None,
         tool_description: str | None = None,
         agent_name: str | None = None,
+        parent_context: Context | None = None,
     ) -> None:
         """Use handler.tool(name) instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
@@ -75,6 +77,7 @@ class ToolInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            parent_context=parent_context,
         )
         self.should_capture_content_on_span = should_capture_content_on_spans()
         self._name: str = name

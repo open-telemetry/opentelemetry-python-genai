@@ -35,6 +35,7 @@ from langchain_core.outputs import (
     LLMResult,
 )
 
+from opentelemetry import context
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
@@ -50,6 +51,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     to_input_messages,
     to_output_messages,
 )
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
     InferenceInvocation,
@@ -169,7 +171,9 @@ class TestOnChainStartWorkflow:
             parent_run_id=None,
         )
 
-        telemetry.workflow.assert_called_once_with(name="MyLangGraph")
+        telemetry.workflow.assert_called_once_with(
+            name="MyLangGraph", parent_context=None
+        )
 
     def test_workflow_name_overridden_by_metadata(self):
         handler, telemetry, _, _ = _make_handler()
@@ -183,7 +187,9 @@ class TestOnChainStartWorkflow:
             metadata={"workflow_name": "custom_workflow"},
         )
 
-        telemetry.workflow.assert_called_once_with(name="custom_workflow")
+        telemetry.workflow.assert_called_once_with(
+            name="custom_workflow", parent_context=None
+        )
 
     def test_workflow_conversation_id_from_metadata(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -235,6 +241,7 @@ class TestOnChainStartAgent:
 
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
+            parent_context=None,
         )
         assert agent_inv.agent_name == "math_agent"
         assert handler._invocation_manager.get_invocation(run_id) is agent_inv
@@ -2674,3 +2681,116 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     assert any(isinstance(p, TextPart) for p in parts)
     blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.content == _REAL_PNG_BYTES
+
+
+# ---------------------------------------------------------------------------
+# Span parenting across callback types
+# ---------------------------------------------------------------------------
+
+
+class TestSpanParenting:
+    def test_chat_span_nested_under_agent_span(
+        self, tracer_provider, span_exporter
+    ):
+        handler = OpenTelemetryLangChainCallbackHandler(
+            TelemetryHandler(tracer_provider=tracer_provider)
+        )
+
+        agent_run_id = _run_id()
+        chat_run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "agent_1"},
+            inputs={},
+            run_id=agent_run_id,
+            parent_run_id=None,
+            metadata={"agent_name": "agent_1", "ls_provider": "openai"},
+        )
+
+        # Mask the ambient context so the chat span can only be parented via
+        # the explicit parent_context resolved from parent_run_id.
+        mask = context.attach(context.Context())
+        try:
+            handler.on_chat_model_start(
+                serialized={},
+                messages=[[HumanMessage(content="hello")]],
+                run_id=chat_run_id,
+                parent_run_id=agent_run_id,
+                metadata={"model_name": "gpt-4o"},
+            )
+        finally:
+            context.detach(mask)
+
+        handler.on_llm_end(
+            response=LLMResult(
+                generations=[
+                    [
+                        ChatGeneration(
+                            message=AIMessage(content="hi"),
+                            generation_info={"finish_reason": "stop"},
+                        )
+                    ]
+                ]
+            ),
+            run_id=chat_run_id,
+        )
+        handler.on_chain_end(outputs={}, run_id=agent_run_id)
+
+        spans = span_exporter.get_finished_spans()
+        chat = next(s for s in spans if s.name == "chat gpt-4o")
+        agent = next(s for s in spans if s.name == "invoke_agent agent_1")
+        assert chat.parent is not None
+        assert chat.parent.span_id == agent.context.span_id
+
+    def test_tool_span_nested_under_workflow_through_unemitted_node(
+        self, tracer_provider, span_exporter
+    ):
+        handler = OpenTelemetryLangChainCallbackHandler(
+            TelemetryHandler(tracer_provider=tracer_provider)
+        )
+
+        workflow_run_id = _run_id()
+        # An intermediate chain node that emits no telemetry of its own but
+        # sits between the workflow and the tool in the run hierarchy.
+        intermediate_run_id = _run_id()
+        tool_run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=workflow_run_id,
+            parent_run_id=None,
+        )
+
+        # Register an intermediate chain node that emits no telemetry of its
+        # own but sits between the workflow and the tool in the hierarchy.
+        handler.on_chain_start(
+            serialized={"name": "intermediate_node"},
+            inputs={},
+            run_id=intermediate_run_id,
+            parent_run_id=workflow_run_id,
+        )
+
+        mask = context.attach(context.Context())
+        try:
+            handler.on_tool_start(
+                serialized=None,
+                input_str="{}",
+                run_id=tool_run_id,
+                parent_run_id=intermediate_run_id,
+                inputs={"x": 1},
+            )
+        finally:
+            context.detach(mask)
+
+        handler.on_tool_end(output={"x": 43}, run_id=tool_run_id)
+        handler.on_chain_end(outputs={}, run_id=workflow_run_id)
+
+        spans = span_exporter.get_finished_spans()
+        tool = next(s for s in spans if s.name == "execute_tool unknown")
+        workflow = next(
+            s for s in spans if s.name == "invoke_workflow LangGraph"
+        )
+        assert tool.parent is not None
+        assert tool.context.trace_id == workflow.context.trace_id
+        assert tool.parent.span_id == workflow.context.span_id

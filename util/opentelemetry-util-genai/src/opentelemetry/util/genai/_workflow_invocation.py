@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -40,6 +41,7 @@ class WorkflowInvocation(GenAIInvocation):
         logger: Logger,
         completion_hook: CompletionHook,
         name: str | None,
+        parent_context: Context | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = "invoke_workflow"
@@ -51,6 +53,7 @@ class WorkflowInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            parent_context=parent_context,
         )
         self._name: str | None = name
         self.conversation_id: str | None = None

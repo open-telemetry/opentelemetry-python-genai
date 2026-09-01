@@ -41,6 +41,7 @@ from opentelemetry._logs import (
     LoggerProvider,
     get_logger,
 )
+from opentelemetry.context import Context
 from opentelemetry.metrics import MeterProvider, get_meter
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
@@ -315,6 +316,7 @@ class TelemetryHandler:
         server_port: int | None = None,
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        parent_context: Context | None = None,
     ) -> InferenceInvocation:
         """Returns an Inference invocation. Starts span when called.
 
@@ -335,6 +337,7 @@ class TelemetryHandler:
             server_port=server_port,
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
+            parent_context=parent_context,
         )
 
     def embedding(
@@ -407,6 +410,7 @@ class TelemetryHandler:
         tool_type: str | None = None,
         tool_description: str | None = None,
         agent_name: str | None = None,
+        parent_context: Context | None = None,
     ) -> ToolInvocation:
         """Returns a Tool invocation. Starts span when called.
 
@@ -428,6 +432,7 @@ class TelemetryHandler:
             tool_type=tool_type,
             tool_description=tool_description,
             agent_name=agent_name,
+            parent_context=parent_context,
         )
 
     def start_invoke_local_agent(
@@ -493,6 +498,7 @@ class TelemetryHandler:
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
+        parent_context: Context | None = None,
     ) -> AgentInvocation:
         """Returns an agent invocation (INTERNAL span kind). Starts span when called.
 
@@ -512,6 +518,7 @@ class TelemetryHandler:
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
+            parent_context=parent_context,
         )
 
     def invoke_remote_agent(
@@ -549,6 +556,7 @@ class TelemetryHandler:
     def workflow(
         self,
         name: str | None = None,
+        parent_context: Context | None = None,
     ) -> WorkflowInvocation:
         """Returns a Workflow invocation. Starts a span when called.
 
@@ -564,6 +572,7 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
+            parent_context=parent_context,
         )
 
 
