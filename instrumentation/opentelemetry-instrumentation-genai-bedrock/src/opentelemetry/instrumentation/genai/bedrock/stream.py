@@ -14,6 +14,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
 )
@@ -34,7 +35,7 @@ class BedrockConverseStreamWrapper(SyncStreamWrapper[dict[str, Any]]):
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_capture_content = capture_content
-        self._self_role = "assistant"
+        self._self_role = Role.ASSISTANT.value
         self._self_stop_reason: str | None = None
         self._self_input_tokens: int | None = None
         self._self_output_tokens: int | None = None

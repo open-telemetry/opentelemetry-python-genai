@@ -16,6 +16,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -193,7 +194,7 @@ def extract_converse_request(
         for msg in raw_messages:
             if not _is_dict(msg):
                 continue
-            role = msg.get("role", "user")
+            role = msg.get("role", Role.USER.value)
             parts: list[MessagePart] = []
             content = msg.get("content")
             if _is_list(content):
@@ -256,7 +257,7 @@ def extract_converse_response(
     if capture_content and _is_dict(output):
         msg = output.get("message")
         if _is_dict(msg):
-            role = msg.get("role", "assistant")
+            role = msg.get("role", Role.ASSISTANT.value)
             parts: list[MessagePart] = []
             content = msg.get("content")
             if _is_list(content):

@@ -19,6 +19,7 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
 )
@@ -117,7 +118,7 @@ class _ChatStreamMixin:
         output_messages = []
         for choice in self._self_choice_buffers:
             message = OutputMessage(
-                role="assistant",
+                role=Role.ASSISTANT.value,
                 finish_reason=choice.finish_reason or "error",
                 parts=[],
             )
