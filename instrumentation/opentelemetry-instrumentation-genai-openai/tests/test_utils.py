@@ -5,6 +5,7 @@
 
 import base64
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -102,6 +103,25 @@ def test_chat_content_parts_capture_text_and_image_url():
             modality="image",
             uri="https://example.com/image.png",
         ),
+    ]
+
+
+def test_chat_content_parts_capture_image_url_object():
+    parts = _content_to_parts(
+        [
+            SimpleNamespace(
+                type="image_url",
+                image_url=SimpleNamespace(url="https://example.com/image.png"),
+            )
+        ]
+    )
+
+    assert parts == [
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        )
     ]
 
 

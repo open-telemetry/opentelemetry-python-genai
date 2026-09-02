@@ -59,7 +59,7 @@ def get_served_model(headers: Mapping[str, str] | None) -> str | None:
 
 
 def get_property_value(obj, property_name):
-    if isinstance(obj, dict):
+    if isinstance(obj, Mapping):
         return obj.get(property_name, None)
 
     return getattr(obj, property_name, None)
@@ -220,7 +220,7 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
             continue
 
         image_url = get_property_value(item, "image_url")
-        if isinstance(image_url, Mapping):
+        if not isinstance(image_url, str):
             image_url = get_property_value(image_url, "url")
         if isinstance(image_url, str) and image_url:
             image_part = image_from_url(image_url)
