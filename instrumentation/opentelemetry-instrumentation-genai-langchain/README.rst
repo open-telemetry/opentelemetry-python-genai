@@ -16,6 +16,8 @@ application:
 * **Agent spans** for agent invocations nested inside a workflow, including the
   agent name, id, description, and conversation/session id when available.
 * **Tool spans** for tool calls made during a run.
+* **State-change events** for non-empty LangGraph node updates, correlated with
+  the workflow span.
 
 The spans nest to reflect the graph, so a single graph invocation produces a
 workflow span with the agent, tool, and model calls it triggered as children.
@@ -95,6 +97,20 @@ calls nested underneath.
             "research": "",
         }
     )
+
+LangGraph state changes
+-----------------------
+
+For each LangGraph node that returns a non-empty state update, the
+instrumentation emits a ``gen_ai.execution.state.changed`` event. The event
+records ``gen_ai.execution.state.changed_key.count``. These names follow the
+`proposed GenAI execution-state semantic conventions
+<https://github.com/open-telemetry/semantic-conventions-genai/pull/483>`_ and
+remain subject to change until that proposal is accepted.
+
+State values and key names are never recorded by this instrumentation. This
+keeps dynamic application state, user identifiers, tool data, and secrets out
+of telemetry.
 
 Configuration
 -------------

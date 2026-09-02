@@ -579,6 +579,107 @@ class TestOnChainEnd:
 
         assert run_id not in handler._invocation_manager._invocations
 
+    def test_langgraph_node_emits_state_delta_event_on_workflow(self):
+        handler, _, workflow_inv, _ = _make_handler()
+        workflow_run_id = _run_id()
+        node_run_id = _run_id()
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=workflow_run_id,
+            metadata={"ls_integration": "langgraph", "thread_id": "thread-1"},
+        )
+        handler.on_chain_start(
+            serialized={"name": "approval_node"},
+            inputs={},
+            run_id=node_run_id,
+            parent_run_id=workflow_run_id,
+            metadata={
+                "ls_integration": "langgraph",
+                "langgraph_node": "approval_node",
+                "langgraph_step": 4,
+            },
+        )
+
+        handler.on_chain_end(
+            outputs={"approval_status": "accepted", "next_step": "submit"},
+            run_id=node_run_id,
+            parent_run_id=workflow_run_id,
+        )
+
+        workflow_inv.emit_event.assert_called_once_with(
+            "gen_ai.execution.state.changed",
+            {"gen_ai.execution.state.changed_key.count": 2},
+            body="Execution state changed",
+        )
+
+    def test_langgraph_state_event_omits_values_and_key_names(self):
+        handler, _, workflow_inv, _ = _make_handler()
+        workflow_run_id = _run_id()
+        node_run_id = _run_id()
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=workflow_run_id,
+        )
+        handler.on_chain_start(
+            serialized={"name": "sensitive_node"},
+            inputs={},
+            run_id=node_run_id,
+            parent_run_id=workflow_run_id,
+            metadata={
+                "ls_integration": "langgraph",
+                "langgraph_node": "sensitive_node",
+            },
+        )
+
+        handler.on_chain_end(
+            outputs={"user_123_secret": "do-not-export"},
+            run_id=node_run_id,
+            parent_run_id=workflow_run_id,
+        )
+
+        attributes = workflow_inv.emit_event.call_args.args[1]
+        assert attributes == {"gen_ai.execution.state.changed_key.count": 1}
+
+    @pytest.mark.parametrize(
+        ("metadata", "outputs"),
+        [
+            ({"ls_integration": "langgraph", "langgraph_node": "node"}, {}),
+            (
+                {"ls_integration": "langchain", "langgraph_node": "node"},
+                {"x": 1},
+            ),
+            ({"ls_integration": "langgraph"}, {"x": 1}),
+        ],
+    )
+    def test_non_delta_chain_end_does_not_emit_state_event(
+        self, metadata, outputs
+    ):
+        handler, _, workflow_inv, _ = _make_handler()
+        workflow_run_id = _run_id()
+        node_run_id = _run_id()
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=workflow_run_id,
+        )
+        handler.on_chain_start(
+            serialized={"name": "node"},
+            inputs={},
+            run_id=node_run_id,
+            parent_run_id=workflow_run_id,
+            metadata=metadata,
+        )
+
+        handler.on_chain_end(
+            outputs=outputs,
+            run_id=node_run_id,
+            parent_run_id=workflow_run_id,
+        )
+
+        workflow_inv.emit_event.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # on_chain_error

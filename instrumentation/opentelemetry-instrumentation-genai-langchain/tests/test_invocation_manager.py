@@ -237,5 +237,40 @@ def test_none_invocation_can_be_stored_and_retrieved(invocation_manager):
     assert invocation_manager.get_invocation(run_id) is None
 
 
+def test_langgraph_metadata_retains_only_node_marker(invocation_manager):
+    run_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(
+        run_id=run_id,
+        parent_run_id=None,
+        invocation=None,
+        metadata={
+            "ls_integration": "langgraph",
+            "langgraph_node": "approval_node",
+            "langgraph_step": 7,
+            "application_secret": "not-retained",
+        },
+    )
+
+    state = invocation_manager._invocations[run_id]
+    assert invocation_manager.is_langgraph_node(run_id)
+    assert not hasattr(state, "metadata")
+
+
+def test_non_langgraph_metadata_is_not_treated_as_state(invocation_manager):
+    run_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(
+        run_id=run_id,
+        parent_run_id=None,
+        invocation=None,
+        metadata={
+            "ls_integration": "langchain",
+            "langgraph_node": "lookalike",
+            "langgraph_step": 3,
+        },
+    )
+
+    assert not invocation_manager.is_langgraph_node(run_id)
+
+
 def test_delete_nonexistent_run_id_does_not_raise(invocation_manager):
     invocation_manager.delete_invocation_state(uuid.uuid4())  # must not raise

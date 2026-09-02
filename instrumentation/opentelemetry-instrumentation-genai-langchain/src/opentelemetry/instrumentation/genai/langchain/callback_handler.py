@@ -114,7 +114,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if capture_content:
                 workflow.input_messages = make_input_message(inputs)
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, workflow
+                run_id, parent_run_id, workflow, metadata
             )
         elif operation == OperationName.INVOKE_AGENT:
             # agent name passed by the user
@@ -148,24 +148,24 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
 
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, agent
+                        run_id, parent_run_id, agent, metadata
                     )
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, None
+                        run_id, parent_run_id, None, metadata
                     )
             else:
                 # No agent name could be resolved; still register the run_id so that
                 # parent-child traversal (e.g. _find_nearest_agent) is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
-                    run_id, parent_run_id, None
+                    run_id, parent_run_id, None, metadata
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, None
+                run_id, parent_run_id, None, metadata
             )
 
     def on_chain_end(
@@ -176,6 +176,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
+        self._emit_langgraph_state_change(run_id, outputs)
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
             invocation, (WorkflowInvocation, AgentInvocation)
@@ -712,3 +713,37 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 return entity
             current = self._invocation_manager.get_parent_run_id(current)
         return None
+
+    def _find_nearest_workflow(
+        self, run_id: UUID | None
+    ) -> WorkflowInvocation | None:
+        current = run_id
+        visited: set[UUID] = set()
+        while current is not None and current not in visited:
+            visited.add(current)
+            entity = self._invocation_manager.get_invocation(current)
+            if isinstance(entity, WorkflowInvocation):
+                return entity
+            current = self._invocation_manager.get_parent_run_id(current)
+        return None
+
+    def _emit_langgraph_state_change(
+        self, run_id: UUID, outputs: dict[str, Any]
+    ) -> None:
+        if not outputs or not self._invocation_manager.is_langgraph_node(
+            run_id
+        ):
+            return
+
+        workflow = self._find_nearest_workflow(
+            self._invocation_manager.get_parent_run_id(run_id)
+        )
+        if workflow is None:
+            return
+
+        attributes = {"gen_ai.execution.state.changed_key.count": len(outputs)}
+        workflow.emit_event(
+            "gen_ai.execution.state.changed",
+            attributes,
+            body="Execution state changed",
+        )
