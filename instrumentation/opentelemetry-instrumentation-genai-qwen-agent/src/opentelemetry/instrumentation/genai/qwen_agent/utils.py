@@ -16,6 +16,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -152,7 +153,7 @@ def convert_to_input_messages(
     input_messages: list[InputMessage] = []
     for msg in messages:
         try:
-            role = _field_value(msg, "role") or "user"
+            role = _field_value(msg, "role") or Role.USER.value
             content = _field_value(msg, "content") or ""
             function_call = _field_value(msg, "function_call")
 
@@ -217,7 +218,7 @@ def convert_to_output_messages(
 
             output_messages.append(
                 OutputMessage(
-                    role="assistant",
+                    role=Role.ASSISTANT.value,
                     parts=parts,
                     finish_reason=finish_reason,
                 )

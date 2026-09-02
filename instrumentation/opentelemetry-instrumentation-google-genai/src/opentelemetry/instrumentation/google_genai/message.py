@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from enum import Enum
 
 from google.genai import types as genai_types
 
@@ -14,19 +13,12 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
     UriPart,
 )
-
-
-class Role(str, Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
 
 _logger = logging.getLogger(__name__)
 

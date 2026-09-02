@@ -99,6 +99,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -175,7 +176,9 @@ def _interactions_input_to_messages(
         return []
     if isinstance(input_data, str):
         return [
-            InputMessage(role="user", parts=[TextPart(content=input_data)])
+            InputMessage(
+                role=Role.USER.value, parts=[TextPart(content=input_data)]
+            )
         ]
 
     if not isinstance(input_data, Sequence):
@@ -213,7 +216,7 @@ def _interactions_input_to_messages(
             part = GenericPart(type=item_type, value=type(item).__name__)
             parts.append(part)
 
-    return [InputMessage(role="user", parts=parts)]
+    return [InputMessage(role=Role.USER.value, parts=parts)]
 
 
 def _get_interaction_output_text(interaction: Interaction) -> str:
@@ -245,7 +248,7 @@ def _interactions_response_to_messages(
     output_text = _get_interaction_output_text(interaction)
     return [
         OutputMessage(
-            role="assistant",
+            role=Role.ASSISTANT.value,
             parts=[TextPart(content=output_text)],
             finish_reason="stop",
         )

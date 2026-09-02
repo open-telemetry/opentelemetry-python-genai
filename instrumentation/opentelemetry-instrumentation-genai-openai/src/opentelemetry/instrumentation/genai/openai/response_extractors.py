@@ -68,6 +68,7 @@ try:
         InputMessage,
         OutputMessage,
         ReasoningPart,
+        Role,
         TextPart,
     )
     from opentelemetry.util.genai.types import (
@@ -80,6 +81,7 @@ except ImportError:
     InputMessage = None
     OutputMessage = None
     ReasoningPart = None
+    Role = None
     TextPart = None
     ToolCall = None
 
@@ -194,7 +196,9 @@ def get_input_messages(
 
     if isinstance(input_value, str):
         return [
-            InputMessage(role="user", parts=[TextPart(content=input_value)])
+            InputMessage(
+                role=Role.USER.value, parts=[TextPart(content=input_value)]
+            )
         ]
 
     messages: list[InputMessage] = []
@@ -383,7 +387,7 @@ def get_output_messages_from_response(
 
             messages.append(
                 OutputMessage(
-                    role="assistant",
+                    role=Role.ASSISTANT.value,
                     parts=[
                         ToolCall(
                             id=item.call_id if item.call_id else item.id,
@@ -407,7 +411,7 @@ def get_output_messages_from_response(
             if parts:
                 messages.append(
                     OutputMessage(
-                        role="assistant",
+                        role=Role.ASSISTANT.value,
                         parts=parts,
                         finish_reason=finish_reason,
                     )
