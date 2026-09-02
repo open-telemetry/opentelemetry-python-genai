@@ -10,9 +10,7 @@ from typing import Any
 from opentelemetry.test.weaver_live_check import LiveCheckReport
 
 
-def span_attribute_values(
-    report: LiveCheckReport, name: str
-) -> list[Any]:
+def span_attribute_values(report: LiveCheckReport, name: str) -> list[Any]:
     """Return every value of ``name`` across all span samples in ``report``."""
     return [
         attr["value"]
