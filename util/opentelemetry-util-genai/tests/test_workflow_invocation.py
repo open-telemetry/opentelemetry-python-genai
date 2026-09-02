@@ -101,3 +101,15 @@ class TestWorkflowInvocation(unittest.TestCase):
         assert len(invocation.input_messages) == 1
         assert len(invocation.output_messages) == 1
         assert invocation.output_messages[0].parts[0].content == "answer"
+
+    def test_with_conversation_id(self):
+        from opentelemetry.semconv._incubating.attributes import (
+            gen_ai_attributes as GenAI,
+        )
+
+        invocation = self.handler.workflow(name="test")
+        invocation.conversation_id = "conv-123"
+        invocation.stop()
+        spans = self.span_exporter.get_finished_spans()
+        assert spans[0].attributes is not None
+        assert spans[0].attributes[GenAI.GEN_AI_CONVERSATION_ID] == "conv-123"

@@ -14,8 +14,26 @@ from unittest import mock
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    ChatMessage,
+    ChatMessageChunk,
+    FunctionMessage,
+    FunctionMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    RemoveMessage,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
+)
+from langchain_core.outputs import (
+    ChatGeneration,
+    ChatGenerationChunk,
+    LLMResult,
+)
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
@@ -23,6 +41,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _media_part,
+    _normalize_role,
     extract_token_details,
     make_input_message,
     make_last_output_message,
@@ -1848,6 +1867,230 @@ class TestOnLlmEndResponseModel:
         handler.on_llm_end(response=response, run_id=run_id)
 
         assert llm_inv.response_model_name == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# on_llm_end – streamed output messages
+# ---------------------------------------------------------------------------
+
+
+def test_streamed_output_message_role_is_assistant():
+    run_id = _run_id()
+    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+    gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+
+    handler.on_llm_end(response=LLMResult(generations=[[gen]]), run_id=run_id)
+
+    (output_message,) = llm_inv.output_messages
+    assert output_message.role == "assistant"
+
+
+# ---------------------------------------------------------------------------
+# utils._normalize_role
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message,expected_role",
+    [
+        (AIMessage(content="hi"), "assistant"),
+        (AIMessageChunk(content="hi"), "assistant"),
+        (HumanMessage(content="hi"), "user"),
+        (HumanMessageChunk(content="hi"), "user"),
+        (SystemMessage(content="hi"), "system"),
+        (SystemMessageChunk(content="hi"), "system"),
+        (ToolMessage(content="hi", tool_call_id="call_1"), "tool"),
+        (ToolMessageChunk(content="hi", tool_call_id="call_1"), "tool"),
+        (FunctionMessage(content="hi", name="f"), "tool"),
+        (FunctionMessageChunk(content="hi", name="f"), "tool"),
+    ],
+)
+def test_normalize_role_resolves_chunk_variants(message, expected_role):
+    """Chunk classes report their class name as ``.type``
+    (``AIMessageChunk.type == "AIMessageChunk"``), so they only resolve to a
+    spec role when matched by class."""
+    assert _normalize_role(message) == expected_role
+
+
+@pytest.mark.parametrize(
+    "message,expected_role",
+    [
+        (ChatMessage(content="hi", role="assistant"), "assistant"),
+        (ChatMessage(content="hi", role="custom"), "custom"),
+        (ChatMessageChunk(content="hi", role="custom"), "custom"),
+    ],
+)
+def test_normalize_role_reads_the_chat_message_role(message, expected_role):
+    """``ChatMessage`` keeps its speaker in ``role`` rather than in the class."""
+    assert _normalize_role(message) == expected_role
+
+
+def test_normalize_role_returns_none_for_unmapped_class():
+    assert _normalize_role(RemoveMessage(id="abc")) is None
+
+
+def test_chat_message_role_reaches_the_input_side():
+    (message,) = to_input_messages([ChatMessage(content="hi", role="custom")])
+    assert message.role == "custom"
+
+
+# on_llm_end – streamed responses
+#
+# Streaming reaches on_llm_end with an LLMResult that LangChain assembles from
+# the merged chunks alone, so ``llm_output`` — the usual source of
+# ``gen_ai.response.model`` and ``gen_ai.response.id`` — is never populated.
+# ---------------------------------------------------------------------------
+
+
+class TestOnLlmEndStreamedResponse:
+    def test_model_and_id_from_response_metadata(self):
+        """Both fields are read off the message's ``response_metadata``.
+
+        LangChain fills it with the union of ``generation_info`` and whatever
+        the provider wrote onto the message, so this is the one place that
+        covers every provider. The ``generation_info`` half of that union is
+        covered end to end by
+        ``test_chat_openai_streamed_response_model``, which drives a
+        real ``.stream()`` so LangChain performs the copy.
+        """
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="hello",
+                response_metadata={
+                    "model_name": "claude-sonnet-4-5",
+                    "id": "msg_01ABC",
+                },
+            )
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name == "claude-sonnet-4-5"
+        assert llm_inv.response_id == "msg_01ABC"
+
+    def test_model_from_generation_info(self):
+        """A generation that skipped LangChain's merge still reports."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(content="hello"),
+            generation_info={"model_name": "claude-sonnet-4-5"},
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name == "claude-sonnet-4-5"
+
+    def test_response_metadata_wins_over_generation_info(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="hello",
+                response_metadata={"model_name": "from-response-metadata"},
+            ),
+            generation_info={"model_name": "from-generation-info"},
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name == "from-response-metadata"
+
+    def test_message_id_not_used_as_response_id(self):
+        """LangChain puts its own run id on ``message.id`` when the provider
+        supplies none, which must not surface as ``gen_ai.response.id``."""
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        llm_inv.response_id = None
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="hello", id=f"run--{run_id}", chunk_position="last"
+            )
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_id is None
+
+    def test_llm_output_takes_precedence(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(content="hello"),
+            generation_info={"model_name": "from-generation"},
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(
+                generations=[[gen]],
+                llm_output={"model_name": "from-llm-output"},
+            ),
+            run_id=run_id,
+        )
+
+        assert llm_inv.response_model_name == "from-llm-output"
+
+    def test_served_model_header_takes_precedence(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen = ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="hello",
+                response_metadata={
+                    "headers": {"x-ms-served-model": "served-from-header"}
+                },
+            ),
+            generation_info={"model_name": "from-generation"},
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name == "served-from-header"
+
+    def test_no_model_reported_leaves_attribute_unset(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        llm_inv.response_model_name = None
+
+        gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_model_name is None
+
+    def test_no_id_reported_leaves_attribute_unset(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        llm_inv.response_id = None
+
+        gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        assert llm_inv.response_id is None
 
 
 # ---------------------------------------------------------------------------

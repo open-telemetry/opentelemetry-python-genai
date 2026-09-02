@@ -22,7 +22,10 @@ from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    ExpectedViolation,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
@@ -37,6 +40,12 @@ class InferenceRawResponseScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
+    )
+    expected_violations = (
+        ExpectedViolation(
+            advice_id="missing_attribute",
+            message_substring="gen_ai.usage.cache_creation.input_tokens",
+        ),
     )
 
     def run(
@@ -80,6 +89,12 @@ class InferenceRawResponseStreamingScenario(Scenario):
         "gen_ai.client.token.usage",
         "gen_ai.client.operation.time_to_first_chunk",
         "gen_ai.client.operation.time_per_output_chunk",
+    )
+    expected_violations = (
+        ExpectedViolation(
+            advice_id="missing_attribute",
+            message_substring="gen_ai.usage.cache_creation.input_tokens",
+        ),
     )
 
     def run(

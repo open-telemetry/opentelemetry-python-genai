@@ -325,3 +325,60 @@ def test_arguments_omitted_when_content_capture_disabled():
 
     attrs = span_exporter.get_finished_spans()[0].attributes
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+
+
+# ---------------------------------------------------------------------------
+# agent_name propagation onto execute_tool spans (semconv Conditionally
+# Required "When applicable")
+# ---------------------------------------------------------------------------
+
+
+def test_tool_span_carries_agent_name_when_set():
+    """When agent_name is passed, `gen_ai.agent.name` is on the execute_tool span."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    handler.tool("get_weather", agent_name="weather_agent").stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
+
+
+def test_tool_span_omits_agent_name_when_absent():
+    """`gen_ai.agent.name` must not appear on the span when no agent context."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    handler.tool("get_weather").stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert GenAI.GEN_AI_AGENT_NAME not in attrs
+
+
+def test_tool_start_attributes_omit_agent_name_at_sampling_time():
+    """`gen_ai.agent.name` is not sampling-relevant for `execute_tool` in
+    current semconv"""
+    captured_attributes: dict[str, object] = {}
+
+    class AttributeCapturingSampler:  # pylint: disable=no-self-use
+        def should_sample(
+            self,
+            parent_context,
+            trace_id,
+            name,
+            kind=None,
+            attributes=None,
+            links=None,
+        ):
+            captured_attributes.update(attributes or {})
+            return SamplingResult(Decision.RECORD_AND_SAMPLE, attributes)
+
+        def get_description(self):
+            return "AttributeCapturingSampler"
+
+    span_exporter = InMemorySpanExporter()
+    sampler_provider = TracerProvider(sampler=AttributeCapturingSampler())
+    sampler_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=sampler_provider)
+
+    handler.tool("get_weather", agent_name="weather_agent").stop()
+
+    assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
+    finalized = span_exporter.get_finished_spans()[0].attributes
+    assert finalized[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"

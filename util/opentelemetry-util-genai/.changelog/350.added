@@ -1,0 +1,1 @@
+Add `conversation_id` attribute to `WorkflowInvocation` to capture `gen_ai.conversation.id` on workflow spans.

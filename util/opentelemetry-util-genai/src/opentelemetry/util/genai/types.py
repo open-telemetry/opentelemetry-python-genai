@@ -300,6 +300,14 @@ FinishReason = Literal[
 ]
 
 
+# Semconv schemas: model/gen-ai/gen-ai-{input,output}-messages.json (pinned by SEMCONV_GENAI_REF).
+class Role(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
 @dataclass()
 class InputMessage:
     role: str

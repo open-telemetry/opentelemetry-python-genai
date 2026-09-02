@@ -34,6 +34,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     make_last_output_message,
     normalize_provider,
     prepare_tool_definitions,
+    resolve_response_model_and_id,
+    response_fields_from_generation,
     split_system_and_input_messages,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -48,6 +50,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
 )
@@ -358,11 +361,22 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         output_messages: list[OutputMessage] = []
         served_model: str | None = None
+        generation_model: str | None = None
+        generation_response_id: str | None = None
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
                 message = chat_generation.message
                 if message is None:
                     continue
+
+                if generation_model is None or generation_response_id is None:
+                    gen_model, gen_response_id = (
+                        response_fields_from_generation(chat_generation)
+                    )
+                    generation_model = generation_model or gen_model
+                    generation_response_id = (
+                        generation_response_id or gen_response_id
+                    )
 
                 # Resolve finish_reason from generation_info or response
                 # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
@@ -428,7 +442,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                             tool_calls.append(tool_call_request)
                         output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message),
+                            role=_normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
                         )
@@ -441,7 +456,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         # ``additional_kwargs`` — surface it as a tool-call
                         # request part like the modern ``tool_calls`` path.
                         output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message),
+                            role=_normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
                         )
@@ -452,7 +468,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 type="text",
                             )
                         ]
-                        role = _normalize_role(chat_generation.message)
+                        role = (
+                            _normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value
+                        )
                         output_message = OutputMessage(
                             role=role,
                             parts=cast(list[MessagePart], parts),
@@ -504,20 +523,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         llm_invocation.output_messages = output_messages
 
-        llm_output = getattr(response, "llm_output", None)
-        if llm_output is not None:
-            response_model = llm_output.get("model_name") or llm_output.get(
-                "model"
-            )
-            if response_model is not None:
-                llm_invocation.response_model_name = str(response_model)
-
-            response_id = llm_output.get("id")
-            if response_id is not None:
-                llm_invocation.response_id = str(response_id)
-
-        if served_model:
-            llm_invocation.response_model_name = served_model
+        response_model, response_id = resolve_response_model_and_id(
+            llm_output=getattr(response, "llm_output", None),
+            served_model=served_model,
+            generation_model=generation_model,
+            generation_response_id=generation_response_id,
+        )
+        if response_model is not None:
+            llm_invocation.response_model_name = response_model
+        if response_id is not None:
+            llm_invocation.response_id = response_id
 
         llm_invocation.stop()
         if not llm_invocation.span.is_recording():
@@ -569,8 +584,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 arguments = json.loads(input_str)
             except (json.JSONDecodeError, ValueError):
                 arguments = input_str
+        nearest_agent = self._find_nearest_agent(parent_run_id)
+        agent_name = nearest_agent.agent_name if nearest_agent else None
+
         tool_invocation = self._telemetry_handler.tool(
-            name=name, tool_description=description, tool_type="function"
+            name=name,
+            tool_description=description,
+            tool_type="function",
+            agent_name=agent_name,
         )
         tool_invocation.arguments = arguments
         tool_call_id = kwargs.get("tool_call_id")
