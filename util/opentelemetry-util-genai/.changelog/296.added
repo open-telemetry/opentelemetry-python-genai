@@ -1,0 +1,1 @@
+Add ``decode_base64`` and ``image_from_url`` helpers for converting provider image payloads and ``data:`` URLs into ``Blob``/``Uri`` message parts.

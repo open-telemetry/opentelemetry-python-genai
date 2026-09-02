@@ -68,6 +68,25 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert server_attributes.SERVER_ADDRESS not in attrs
         assert server_attributes.SERVER_PORT not in attrs
 
+    def test_conversation_id_on_span_but_not_metrics(self):
+        """conversation id is high cardinality, so it must stay off metrics."""
+        invocation = self.handler.invoke_local_agent(agent_name="Researcher")
+        invocation.conversation_id = "conv-456"
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-456"
+        assert (
+            GenAI.GEN_AI_CONVERSATION_ID
+            not in invocation._get_metric_attributes()
+        )
+
+    def test_no_conversation_id(self):
+        invocation = self.handler.invoke_local_agent()
+        invocation.stop()
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
+
     def test_all_attributes(self):
         invocation = self.handler.invoke_local_agent(
             request_model="gpt-4",

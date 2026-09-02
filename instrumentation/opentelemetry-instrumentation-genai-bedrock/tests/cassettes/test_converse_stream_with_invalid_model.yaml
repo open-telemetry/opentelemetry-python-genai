@@ -1,0 +1,60 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "text": "Say this is a test"
+              }
+            ]
+          }
+        ]
+      }
+    headers:
+      Content-Length:
+      - '77'
+      Content-Type:
+      - !!binary |
+        YXBwbGljYXRpb24vanNvbg==
+      User-Agent:
+      - !!binary |
+        Qm90bzMvMS40My44MCBtZC9Cb3RvY29yZSMxLjQzLjgwIHVhLzIuMSBvcy9saW51eCM3LjEuNi0x
+        cm9kZXRlMS1hbWQ2NCBtZC9hcmNoI3g4Nl82NCBsYW5nL3B5dGhvbiMzLjEyLjkgbWQvcHlpbXBs
+        I0NQeXRob24gbS9iLFosZyxEIGNmZy9yZXRyeS1tb2RlI2xlZ2FjeSBCb3RvY29yZS8xLjQzLjgw
+      X-Amz-Date:
+      - !!binary |
+        MjAyNjA4MzFUMTgyMzEyWg==
+      amz-sdk-invocation-id:
+      - !!binary |
+        MDA4NjY0ZjYtNDY1Yy00MGQ5LTk3NTktMzQ5ZmQ2OTA4Yjlj
+      amz-sdk-request:
+      - !!binary |
+        YXR0ZW1wdD0x
+      authorization:
+      - Bearer test_aws_authorization
+    method: POST
+    uri: https://bedrock-runtime.us-east-1.amazonaws.com/model/does-not-exist/converse-stream
+  response:
+    body:
+      string: |-
+        {
+          "message": "The provided model identifier is invalid."
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '55'
+      Content-Type:
+      - application/json
+      Date:
+      - Mon, 31 Aug 2026 18:23:12 GMT
+      x-amzn-ErrorType:
+      - ValidationException:http://internal.amazon.com/coral/com.amazon.bedrock/
+    status:
+      code: 400
+      message: Bad Request
+version: 1
