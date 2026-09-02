@@ -122,9 +122,7 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
     assert [
         (msg.role, [part.content for part in msg.parts]) for msg in from_string
     ] == [("user", ["Hello"])]
-    assert [
-        (msg.role, msg.parts) for msg in from_list
-    ] == [
+    assert [(msg.role, msg.parts) for msg in from_list] == [
         ("user", [TextPart(content="First")]),
         (
             "assistant",

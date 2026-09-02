@@ -109,7 +109,10 @@ def test_chat_content_parts_capture_text_and_image_url():
     "content,expected",
     [
         ("Plain text", [TextPart(content="Plain text")]),
-        (["First", "Second"], [TextPart(content="First"), TextPart(content="Second")]),
+        (
+            ["First", "Second"],
+            [TextPart(content="First"), TextPart(content="Second")],
+        ),
         (
             [{"type": "input_text", "text": "Responses text"}],
             [TextPart(content="Responses text")],
@@ -130,9 +133,7 @@ def test_chat_content_parts_capture_data_url_as_blob():
         [
             {
                 "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{_REAL_PNG_B64}"
-                },
+                "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
             }
         ]
     )
