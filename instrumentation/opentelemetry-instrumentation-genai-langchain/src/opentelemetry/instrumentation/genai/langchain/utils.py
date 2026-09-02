@@ -368,10 +368,11 @@ def split_system_and_input_messages(
             system_parts.extend(_content_to_parts(message.content))
         else:
             parts = _message_parts(message)
-            if parts:
-                input_messages.append(
-                    InputMessage(role=_normalize_role(message), parts=parts)
-                )
+            if not parts and not _has_content(message):
+                continue
+            input_messages.append(
+                InputMessage(role=_normalize_role(message), parts=parts)
+            )
 
     return system_parts, input_messages
 

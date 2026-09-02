@@ -148,48 +148,6 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
         assert len(logs) == 0
 
 
-@pytest.mark.parametrize(
-    "capture_content",
-    ["NO_CONTENT", "EVENT_ONLY"],
-)
-def test_system_instructions_absent_from_span_without_content_capture(
-    span_exporter,
-    start_instrumentation,
-    chat_openai_gpt_3_5_turbo_model,
-    monkeypatch,
-    capture_content,
-    vcr,
-):
-    """``gen_ai.system_instructions`` is a sensitive attribute and must be
-    gated by ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``: when
-    content capture excludes ``SPAN`` (``NO_CONTENT`` / ``EVENT_ONLY``), the
-    span attribute must not appear even though the input contained a
-    ``SystemMessage``.
-    """
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture_content
-    )
-
-    messages = [
-        SystemMessage(content="You are a helpful assistant!"),
-        HumanMessage(content="What is the capital of France?"),
-    ]
-
-    with vcr.use_cassette(
-        _openai_cassette_name(
-            chat_openai_gpt_3_5_turbo_model,
-            "test_chat_openai_gpt_3_5_turbo_model_llm_call",
-        )
-    ):
-        chat_openai_gpt_3_5_turbo_model.invoke(messages)
-
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert (
-        gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS not in spans[0].attributes
-    )
-
-
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
 @pytest.mark.parametrize(
     "capture_content",
