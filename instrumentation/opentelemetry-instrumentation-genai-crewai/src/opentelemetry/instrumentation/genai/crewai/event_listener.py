@@ -31,7 +31,12 @@ from opentelemetry.util.genai.invocation import (
     GenAIInvocation,
     WorkflowInvocation,
 )
-from opentelemetry.util.genai.types import Error, InputMessage, OutputMessage, Text
+from opentelemetry.util.genai.types import (
+    Error,
+    InputMessage,
+    OutputMessage,
+    Text,
+)
 
 EventT = TypeVar("EventT", bound=BaseEvent)
 RegisteredHandler = Callable[..., object]

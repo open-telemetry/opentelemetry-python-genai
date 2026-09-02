@@ -44,7 +44,9 @@ def test_crew_inputs_are_preserved_as_separate_messages() -> None:
     messages = _input_messages({"topic": "otel", "limit": 3})
 
     assert [message.role for message in messages] == ["user", "user"]
-    assert [part.content for message in messages for part in message.parts] == [
+    assert [
+        part.content for message in messages for part in message.parts
+    ] == [
         '{"topic": "otel"}',
         '{"limit": 3}',
     ]
