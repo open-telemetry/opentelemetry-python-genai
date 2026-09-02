@@ -6,8 +6,14 @@ OpenTelemetry LlamaIndex Instrumentation
 .. |pypi| image:: https://badge.fury.io/py/opentelemetry-instrumentation-genai-llama-index.svg
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-llama-index/
 
-This package contains the OpenTelemetry instrumentor scaffold for
+This package contains OpenTelemetry instrumentation for
 `LlamaIndex <https://github.com/run-llama/llama_index>`_.
+
+It emits ``invoke_agent`` spans for LlamaIndex ``FunctionAgent`` and
+``ReActAgent`` runs, and ``execute_tool`` spans when LlamaIndex executes
+function tools. Model calls
+delegated to provider SDKs are intentionally left to those SDKs' OpenTelemetry
+instrumentations.
 
 Installation
 ------------
@@ -36,8 +42,11 @@ Supported values are ``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, and
 ``SPAN_AND_EVENT``.
 
 Prompts and completions can also be redirected via a completion hook by
-setting ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`` or by passing
-``instrument(completion_hook=...)``.
+setting ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` together with
+``OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH``, or by passing a custom hook
+directly with ``instrument(completion_hook=...)``. See
+`examples/manual/custom_hook.py <examples/manual/custom_hook.py>`_ for a
+programmatic example.
 
 References
 ----------

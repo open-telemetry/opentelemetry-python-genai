@@ -1,17 +1,21 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import (
+    AIMessageChunk,
     FunctionMessage,
     HumanMessage,
     SystemMessage,
 )
+from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from openai import AuthenticationError
 
 from opentelemetry.instrumentation.genai.langchain import (
@@ -1299,4 +1303,91 @@ def test_chat_anthropic_claude_sonnet_cache_token_details(
 
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+    )
+
+
+def test_chat_openai_streamed_response_model(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_gpt_3_5_turbo_model,
+    monkeypatch,
+):
+    """A streamed call reports the response model.
+
+    Driving a real ``.stream()`` matters here: the model is reported only in
+    ``generation_info``, and it is LangChain that copies that into the
+    message's ``response_metadata`` where the instrumentation reads it. A
+    hand-built ``LLMResult`` would skip that copy and prove nothing.
+
+    The provider stream is patched rather than replayed from a cassette: what
+    is under test is the shape LangChain hands to ``on_llm_end`` for a streamed
+    call — merged chunks with no ``llm_output`` — which is the same either way.
+    """
+
+    def fake_stream(self, messages, stop=None, run_manager=None, **kwargs):
+        yield ChatGenerationChunk(message=AIMessageChunk(content="Paris"))
+        # langchain-openai reports the model only on the chunk that also
+        # carries the finish reason.
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(content=""),
+            generation_info={
+                "finish_reason": "stop",
+                "model_name": "gpt-3.5-turbo-0125",
+            },
+        )
+
+    monkeypatch.setattr(ChatOpenAI, "_stream", fake_stream)
+
+    chunks = list(
+        chat_openai_gpt_3_5_turbo_model.stream(
+            [HumanMessage(content="What is the capital of France?")]
+        )
+    )
+    assert "".join(chunk.content for chunk in chunks) == "Paris"
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_RESPONSE_MODEL)
+        == "gpt-3.5-turbo-0125"
+    )
+    assert span.attributes.get(gen_ai_attributes.GEN_AI_RESPONSE_ID) is None
+
+
+def test_chat_openai_astreamed_response_model(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_gpt_3_5_turbo_model,
+    monkeypatch,
+):
+    """``.astream()`` reports the response model, as ``.stream()`` does."""
+
+    async def fake_astream(
+        self, messages, stop=None, run_manager=None, **kwargs
+    ):
+        yield ChatGenerationChunk(message=AIMessageChunk(content="Paris"))
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(content=""),
+            generation_info={
+                "finish_reason": "stop",
+                "model_name": "gpt-3.5-turbo-0125",
+            },
+        )
+
+    monkeypatch.setattr(ChatOpenAI, "_astream", fake_astream)
+
+    async def drain():
+        return [
+            chunk
+            async for chunk in chat_openai_gpt_3_5_turbo_model.astream(
+                [HumanMessage(content="What is the capital of France?")]
+            )
+        ]
+
+    chunks = asyncio.run(drain())
+    assert "".join(chunk.content for chunk in chunks) == "Paris"
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes.get(gen_ai_attributes.GEN_AI_RESPONSE_MODEL)
+        == "gpt-3.5-turbo-0125"
     )
