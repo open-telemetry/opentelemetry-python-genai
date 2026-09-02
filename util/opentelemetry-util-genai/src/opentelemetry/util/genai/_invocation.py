@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
@@ -127,6 +127,25 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             return
         self._request_stream = True
         self._on_stream_chunk(timeit.default_timer())
+
+    def emit_event(
+        self,
+        event_name: str,
+        attributes: Mapping[str, AttributeValue],
+        *,
+        body: str | None = None,
+    ) -> None:
+        """Emit an event correlated with this active invocation."""
+        if self._context_token is None:
+            return
+        self._logger.emit(
+            LogRecord(
+                event_name=event_name,
+                body=body,
+                attributes=dict(attributes),
+                context=self._span_context,
+            )
+        )
 
     def _on_stream_chunk(self, chunk_at: float) -> None:
         """Record streaming timing for one output chunk as it arrives.

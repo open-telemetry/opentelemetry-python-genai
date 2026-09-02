@@ -1,0 +1,20 @@
+from collections.abc import Mapping, Sequence
+
+    def emit_event(
+        self,
+        event_name: str,
+        attributes: Mapping[str, AttributeValue],
+        *,
+        body: str | None = None,
+    ) -> None:
+        """Emit an event correlated with this active invocation."""
+        if self._context_token is None:
+            return
+        self._logger.emit(
+            LogRecord(
+                event_name=event_name,
+                body=body,
+                attributes=dict(attributes),
+                context=self._span_context,
+            )
+        )

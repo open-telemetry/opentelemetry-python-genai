@@ -34,6 +34,10 @@ from wrapt import wrap_function_wrapper
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
+from opentelemetry.instrumentation.genai.langchain.lifecycle import (
+    instrument_checkpointers,
+    uninstrument_checkpointers,
+)
 from opentelemetry.instrumentation.genai.langchain.package import _instruments
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
@@ -81,11 +85,16 @@ class LangChainInstrumentor(BaseInstrumentor):
             _BaseCallbackManagerInitWrapper(otel_callback_handler),
         )
 
+        # LangGraph only: report every checkpoint the graph's saver persists.
+        # No-op when LangGraph is not installed.
+        instrument_checkpointers(otel_callback_handler)
+
     def _uninstrument(self, **kwargs: Any):
         """
         Cleanup instrumentation (unwrap).
         """
         unwrap("langchain_core.callbacks.base.BaseCallbackManager", "__init__")
+        uninstrument_checkpointers()
         # Clear the TelemetryHandler singleton so the next instrument() uses
         # the provided tracer_provider/meter_provider/logger_provider instead
         # of reusing the previous handler.

@@ -2598,3 +2598,59 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     assert any(isinstance(p, TextPart) for p in parts)
     blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.content == _REAL_PNG_BYTES
+
+
+class TestLangGraphThreadBinding:
+    """A LangGraph thread binding must not outlive its run."""
+
+    def _start_langgraph_workflow(self, handler, run_id):
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=run_id,
+            metadata={"ls_integration": "langgraph", "thread_id": "bound"},
+        )
+
+    def test_chain_error_unbinds_the_thread(self):
+        handler, _, _, _ = _make_handler()
+        run_id = _run_id()
+        self._start_langgraph_workflow(handler, run_id)
+
+        # The binding exists before the failure.
+        assert handler._invocation_manager._threads["bound"] == [("", run_id)]
+
+        handler.on_chain_error(ValueError("boom"), run_id=run_id)
+
+        assert "bound" not in handler._invocation_manager._threads
+        assert (
+            handler._invocation_manager.get_thread_invocation("bound") is None
+        )
+
+    def test_chain_end_unbinds_the_thread(self):
+        handler, _, _, _ = _make_handler()
+        run_id = _run_id()
+        self._start_langgraph_workflow(handler, run_id)
+
+        assert handler._invocation_manager._threads["bound"] == [("", run_id)]
+
+        handler.on_chain_end(outputs={}, run_id=run_id)
+
+        assert "bound" not in handler._invocation_manager._threads
+
+    def test_nested_graph_run_binds_its_own_checkpoint_namespace(self):
+        handler, _, _, _ = _make_handler()
+        run_id = _run_id()
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=run_id,
+            metadata={
+                "ls_integration": "langgraph",
+                "thread_id": "bound",
+                "langgraph_checkpoint_ns": "child:abc",
+            },
+        )
+
+        assert handler._invocation_manager._threads["bound"] == [
+            ("child:abc", run_id)
+        ]
