@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from crewai.events.base_event_listener import BaseEventListener
 from crewai.events.base_events import BaseEvent
@@ -53,17 +53,16 @@ def _error(value: object) -> Error:
     return Error(type=type(value).__name__, message=str(value))
 
 
-def _input_message(value: object) -> InputMessage | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        content = value
-    else:
-        try:
-            content = json.dumps(value, default=str)
-        except (TypeError, ValueError):
-            content = str(value)
-    return InputMessage(role="user", parts=[Text(content=content)])
+def _input_messages(inputs: dict[str, Any] | None) -> list[InputMessage]:
+    if not inputs:
+        return []
+    return [
+        InputMessage(
+            role="user",
+            parts=[Text(content=json.dumps({name: value}, default=str))],
+        )
+        for name, value in inputs.items()
+    ]
 
 
 def _output_message(value: object) -> OutputMessage | None:
@@ -210,9 +209,7 @@ class CrewAIEventListener(BaseEventListener):
         if not is_instrumentation_enabled():
             return
         invocation = self._telemetry_handler.workflow(event.crew_name)
-        message = _input_message(event.inputs)
-        if message is not None:
-            invocation.input_messages = [message]
+        invocation.input_messages = _input_messages(event.inputs)
         self._remember(event, invocation)
 
     def _on_crew_completed(

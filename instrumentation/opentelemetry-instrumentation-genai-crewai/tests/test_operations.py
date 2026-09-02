@@ -27,6 +27,9 @@ from crewai.memory.storage.kickoff_task_outputs_storage import (
 )
 
 from opentelemetry.instrumentation.genai.crewai import CrewAIInstrumentor
+from opentelemetry.instrumentation.genai.crewai.event_listener import (
+    _input_messages,
+)
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -35,6 +38,16 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import SpanKind, StatusCode
+
+
+def test_crew_inputs_are_preserved_as_separate_messages() -> None:
+    messages = _input_messages({"topic": "otel", "limit": 3})
+
+    assert [message.role for message in messages] == ["user", "user"]
+    assert [part.content for message in messages for part in message.parts] == [
+        '{"topic": "otel"}',
+        '{"limit": 3}',
+    ]
 
 
 @pytest.mark.vcr()
