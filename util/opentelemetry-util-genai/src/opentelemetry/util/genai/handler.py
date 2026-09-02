@@ -234,8 +234,8 @@ class TelemetryHandler:
         self,
         name: str,
         *,
-        tool_call_id: str | None = None,
         tool_type: str | None = None,
+        tool_call_id: str | None = None,
         tool_description: str | None = None,
     ) -> ToolInvocation:
         """Create and start a tool invocation.
@@ -252,8 +252,8 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            tool_call_id=tool_call_id,
             tool_type=tool_type,
+            tool_call_id=tool_call_id,
             tool_description=tool_description,
         )
 
@@ -403,12 +403,17 @@ class TelemetryHandler:
         self,
         name: str,
         *,
-        tool_call_id: str | None = None,
         tool_type: str | None = None,
-        tool_description: str | None = None,
         agent_name: str | None = None,
+        tool_call_id: str | None = None,
+        tool_description: str | None = None,
     ) -> ToolInvocation:
         """Returns a Tool invocation. Starts span when called.
+
+        .. deprecated:: 1.2b0
+            Passing ``tool_call_id`` or ``tool_description`` as keyword
+            arguments is deprecated. Set ``invocation.tool_call_id`` and
+            ``invocation.tool_description`` on the returned invocation instead.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
         to finalize the span upon exiting. If not used as a ContextManager, the caller is
@@ -424,10 +429,10 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            tool_call_id=tool_call_id,
             tool_type=tool_type,
-            tool_description=tool_description,
             agent_name=agent_name,
+            tool_call_id=tool_call_id,
+            tool_description=tool_description,
         )
 
     def start_invoke_local_agent(

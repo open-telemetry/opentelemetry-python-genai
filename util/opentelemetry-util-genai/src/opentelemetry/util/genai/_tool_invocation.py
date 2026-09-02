@@ -60,12 +60,18 @@ class ToolInvocation(GenAIInvocation):
         completion_hook: CompletionHook,
         name: str,
         *,
-        tool_call_id: str | None = None,
         tool_type: str | None = None,
-        tool_description: str | None = None,
         agent_name: str | None = None,
+        tool_call_id: str | None = None,
+        tool_description: str | None = None,
     ) -> None:
-        """Use handler.tool(name) instead of calling this directly."""
+        """Use handler.tool(name) instead of calling this directly.
+
+        .. deprecated:: 1.2b0
+            Passing ``tool_call_id`` or ``tool_description`` to the constructor
+            is deprecated. Set ``invocation.tool_call_id`` and
+            ``invocation.tool_description`` on the returned invocation instead.
+        """
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
         super().__init__(
             tracer,
@@ -84,30 +90,17 @@ class ToolInvocation(GenAIInvocation):
         # instrumentation library before assigning these attributes
         # to the invocation.
         self.arguments: AnyValue | None = None
-        self._tool_call_id: str | None = tool_call_id
+        self.tool_call_id: str | None = tool_call_id
+        self.tool_description: str | None = tool_description
         self._tool_type: str | None = tool_type
-        self._tool_description: str | None = tool_description
         self._agent_name: str | None = agent_name
         self._start(self._get_start_attributes())
-
-    @property
-    def tool_call_id(self) -> str | None:
-        """The tool call identifier."""
-        return self._tool_call_id
-
-    @tool_call_id.setter
-    def tool_call_id(self, value: str | None) -> None:
-        self._tool_call_id = value
-        if value is not None and self.span.is_recording():
-            self.span.set_attribute(GenAI.GEN_AI_TOOL_CALL_ID, value)
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self._name),
-            (GenAI.GEN_AI_TOOL_CALL_ID, self._tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
-            (GenAI.GEN_AI_TOOL_DESCRIPTION, self._tool_description),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -125,6 +118,8 @@ class ToolInvocation(GenAIInvocation):
         if error is not None:
             self._apply_error_attributes(error)
         optional_attrs = (
+            (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
+            (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
             (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,

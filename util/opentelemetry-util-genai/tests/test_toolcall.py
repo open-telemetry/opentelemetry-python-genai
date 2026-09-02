@@ -198,7 +198,7 @@ def test_tool_span_is_internal_kind():
 
 
 def test_start_tool_passes_sampling_attributes_at_span_creation():
-    """Verify that sampling-relevant attributes are available at start_span() time for tools."""
+    """Verify that only sampling-relevant attributes are available at start_span() time for tools."""
     captured_attributes = {}
 
     class AttributeCapturingSampler:  # pylint: disable=no-self-use
@@ -232,12 +232,28 @@ def test_start_tool_passes_sampling_attributes_at_span_creation():
 
     assert captured_attributes[GenAI.GEN_AI_OPERATION_NAME] == "execute_tool"
     assert captured_attributes[GenAI.GEN_AI_TOOL_NAME] == "get_weather"
-    assert captured_attributes[GenAI.GEN_AI_TOOL_CALL_ID] == "call_123"
     assert captured_attributes[GenAI.GEN_AI_TOOL_TYPE] == "function"
+    assert GenAI.GEN_AI_TOOL_CALL_ID not in captured_attributes
+    assert GenAI.GEN_AI_TOOL_DESCRIPTION not in captured_attributes
+
+    finished_attrs = span_exporter.get_finished_spans()[0].attributes
+    assert finished_attrs[GenAI.GEN_AI_TOOL_CALL_ID] == "call_123"
     assert (
-        captured_attributes[GenAI.GEN_AI_TOOL_DESCRIPTION]
+        finished_attrs[GenAI.GEN_AI_TOOL_DESCRIPTION]
         == "Gets weather for a location"
     )
+
+
+def test_tool_call_id_and_description_on_invocation_instance():
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("get_weather", tool_type="function")
+    invocation.tool_call_id = "call_456"
+    invocation.tool_description = "Weather info"
+    invocation.stop()
+
+    finished_attrs = span_exporter.get_finished_spans()[0].attributes
+    assert finished_attrs[GenAI.GEN_AI_TOOL_CALL_ID] == "call_456"
+    assert finished_attrs[GenAI.GEN_AI_TOOL_DESCRIPTION] == "Weather info"
 
 
 # ---------------------------------------------------------------------------
