@@ -14,21 +14,25 @@ from langchain_core.messages import (
     ToolMessage,
     convert_to_messages,
 )
+from langchain_core.outputs import ChatGenerationChunk, GenerationChunk
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
     OutputMessage,
-    Reasoning,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    ReasoningPart,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 # Mapping from LangChain ``ls_provider`` metadata values to the well-known
 # ``gen_ai.provider.name`` values defined by the GenAI semantic conventions.
@@ -45,6 +49,17 @@ _PROVIDER_NAME_OVERRIDES: dict[str, str] = {
     "mistralai": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
     "mistral": GenAIAttributes.GenAiProviderNameValues.MISTRAL_AI.value,
 }
+
+
+def is_stream_end_marker(
+    token: str | list[str | dict[str, Any]],
+    chunk: GenerationChunk | ChatGenerationChunk | None,
+) -> bool:
+    """Whether an ``on_llm_new_token`` call carries LangChain's end-of-stream marker."""
+    if token:
+        return False
+    message = getattr(chunk, "message", None)
+    return getattr(message, "chunk_position", None) == "last"
 
 
 def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
@@ -75,32 +90,140 @@ def _normalize_role(message: BaseMessage) -> str:
     return _ROLE_MAP.get(message.type, message.type)
 
 
+def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
+    if not isinstance(data, str):
+        return None
+    decoded = decode_base64(data)
+    if decoded is None:
+        return None
+    return BlobPart(
+        mime_type=mime_type if isinstance(mime_type, str) else None,
+        modality="image",
+        content=decoded,
+    )
+
+
+def _file_from_id(file_id: Any, mime_type: Any) -> MessagePart | None:
+    """Build a :class:`FilePart` for a provider-hosted image reference."""
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    return FilePart(
+        mime_type=mime_type if isinstance(mime_type, str) else None,
+        modality="image",
+        file_id=file_id,
+    )
+
+
+def _media_part(item: dict[str, Any]) -> MessagePart | None:
+    """Convert a LangChain multimodal image content block into a media part.
+
+    Handles every image block shape LangChain chat models accept:
+
+    - OpenAI style ``{"type": "image_url", "image_url": {"url": ...}}`` (or a
+      bare ``"image_url": "..."`` string). A ``data:<mime>;base64,<payload>``
+      URL becomes a :class:`BlobPart`; any other URL becomes a :class:`UriPart`.
+    - OpenAI Responses API ``{"type": "input_image", "image_url": "..."}``,
+      which langchain-openai passes through verbatim.
+    - Anthropic style ``{"type": "image", "source": {...}}`` where ``source``
+      is either ``{"type": "base64", "media_type": ..., "data": ...}`` (→
+      :class:`BlobPart`) or ``{"type": "url", "url": ...}`` (→ :class:`UriPart`).
+    - langchain-core 0.3 standard blocks ``{"type": "image", "source_type":
+      "base64"|"url"|"id", "data"/"url"/"id": ..., "mime_type": ...}``.
+    - langchain-core 1.x standard blocks ``{"type": "image",
+      "base64"|"url"|"id": ..., "mime_type": ...}``.
+
+    A provider-hosted image, referenced by file id rather than carrying bytes
+    or a URL, becomes a :class:`FilePart`. Returns ``None`` only when the
+    block carries no recordable reference at all.
+    """
+    block_type = item.get("type")
+    # OpenAI style: {"type": "image_url", "image_url": {"url": ...}}
+    if block_type in ("image_url", "input_image"):
+        image_url = item.get("image_url")
+        url: str | None = None
+        if isinstance(image_url, str):
+            url = image_url
+        elif isinstance(image_url, dict):
+            image_url_dict = cast(dict[str, Any], image_url)
+            raw_url = image_url_dict.get("url")
+            url = raw_url if isinstance(raw_url, str) else None
+        if not url:
+            return _file_from_id(item.get("file_id"), item.get("mime_type"))
+        return image_from_url(url)
+    if block_type != "image":
+        return None
+
+    # Anthropic style: {"type": "image", "source": {...}}
+    source = item.get("source")
+    if isinstance(source, dict):
+        source_dict = cast(dict[str, Any], source)
+        source_type = source_dict.get("type")
+        if source_type == "base64":
+            return _blob_from_base64(
+                source_dict.get("data"), source_dict.get("media_type")
+            )
+        if source_type == "url":
+            source_url = source_dict.get("url")
+            if isinstance(source_url, str) and source_url:
+                return image_from_url(source_url)
+            return None
+        if source_type == "file":
+            return _file_from_id(
+                source_dict.get("file_id"), source_dict.get("media_type")
+            )
+        return None
+
+    # langchain-core 0.3 standard block: tagged with "source_type". Standard
+    # blocks name the MIME key ``mime_type``, not Anthropic's ``media_type``.
+    source_type = item.get("source_type")
+    if source_type == "base64":
+        return _blob_from_base64(item.get("data"), item.get("mime_type"))
+    if source_type == "url":
+        standard_url = item.get("url")
+        if isinstance(standard_url, str) and standard_url:
+            return image_from_url(standard_url)
+        return None
+    if source_type == "id":
+        return _file_from_id(item.get("id"), item.get("mime_type"))
+
+    # langchain-core 1.x standard block: payload keys sit at the top level.
+    base64_data = item.get("base64")
+    if isinstance(base64_data, str):
+        return _blob_from_base64(base64_data, item.get("mime_type"))
+    standard_url = item.get("url")
+    if isinstance(standard_url, str) and standard_url:
+        return image_from_url(standard_url)
+    return _file_from_id(
+        item.get("id") or item.get("file_id"), item.get("mime_type")
+    )
+
+
 def _content_to_parts(
     content: str | list[str | dict[str, Any]],
 ) -> list[MessagePart]:
     """Convert a LangChain message ``content`` payload into ``MessagePart`` s.
 
     Content may be a plain string or a list of provider-specific block dicts
-    (e.g. Anthropic structured content). We extract :class:`Text` and
-    :class:`Reasoning` parts; ``tool_use`` blocks are intentionally ignored
+    (e.g. Anthropic structured content). We extract :class:`TextPart` and
+    :class:`ReasoningPart` parts; ``tool_use`` blocks are intentionally ignored
     here because LangChain consolidates them into ``message.tool_calls`` which
     is read separately.
     """
     parts: list[MessagePart] = []
     if isinstance(content, str):
         if content:
-            parts.append(Text(content=content))
+            parts.append(TextPart(content=content))
         return parts
     for item in content:
         if isinstance(item, str):
             if item:
-                parts.append(Text(content=item))
+                parts.append(TextPart(content=item))
             continue
         block_type = item.get("type")
-        if block_type == "text":
+        if block_type in ("text", "input_text", "output_text"):
             text_value = item.get("text")
             if isinstance(text_value, str) and text_value:
-                parts.append(Text(content=text_value))
+                parts.append(TextPart(content=text_value))
         elif block_type in ("thinking", "reasoning"):
             reasoning_value = (
                 item.get("thinking")
@@ -108,14 +231,26 @@ def _content_to_parts(
                 or item.get("text")
             )
             if isinstance(reasoning_value, str) and reasoning_value:
-                parts.append(Reasoning(content=reasoning_value))
+                parts.append(ReasoningPart(content=reasoning_value))
+        elif block_type in ("image_url", "image", "input_image"):
+            media = _media_part(item)
+            if media is not None:
+                parts.append(media)
     return parts
+
+
+def _has_content(message: BaseMessage) -> bool:
+    # Whether the message carried content we failed to convert.
+    content = message.content
+    if isinstance(content, str):
+        return bool(content)
+    return any(bool(block) for block in content)
 
 
 def _legacy_function_call_request(
     message: AIMessage,
-) -> ToolCallRequest | None:
-    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequest`.
+) -> ToolCallRequestPart | None:
+    """Extract a legacy OpenAI ``function_call`` as a :class:`ToolCallRequestPart`.
 
     Pre-tools OpenAI models return a single call under
     ``additional_kwargs['function_call']`` (``{"name", "arguments"}``) rather
@@ -136,14 +271,14 @@ def _legacy_function_call_request(
             arguments = json.loads(raw_arguments)
         except (json.JSONDecodeError, ValueError):
             arguments = raw_arguments
-    return ToolCallRequest(arguments=arguments, name=name, id=None)
+    return ToolCallRequestPart(arguments=arguments, name=name, id=None)
 
 
 def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for an :class:`AIMessage`.
 
     Includes any text/reasoning content followed by a
-    :class:`ToolCallRequest` for each entry in ``message.tool_calls``, plus a
+    :class:`ToolCallRequestPart` for each entry in ``message.tool_calls``, plus a
     legacy ``additional_kwargs['function_call']`` when present.
     """
     parts: list[MessagePart] = _content_to_parts(message.content)
@@ -152,7 +287,7 @@ def _ai_message_parts(message: AIMessage) -> list[MessagePart]:
         if not name:
             continue
         parts.append(
-            ToolCallRequest(
+            ToolCallRequestPart(
                 arguments=call["args"],
                 name=name,
                 id=call["id"],
@@ -169,7 +304,7 @@ def _tool_message_parts(message: ToolMessage) -> list[MessagePart]:
     """Build :class:`MessagePart` s for a :class:`ToolMessage` (tool result)."""
     tool_call_id = getattr(message, "tool_call_id", None)
     return [
-        ToolCallResponse(
+        ToolCallResponsePart(
             response=message.content,
             id=tool_call_id if isinstance(tool_call_id, str) else None,
         )
@@ -187,7 +322,11 @@ def _message_parts(message: BaseMessage) -> list[MessagePart]:
 def to_input_messages(
     messages: Iterable[Any],
 ) -> list[InputMessage]:
-    """Convert LangChain messages into spec-conformant ``InputMessage`` s."""
+    """Convert LangChain messages into spec-conformant ``InputMessage`` s.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
+    """
     try:
         normalized_messages: Iterable[BaseMessage] = convert_to_messages(
             list(messages)
@@ -199,7 +338,7 @@ def to_input_messages(
     result: list[InputMessage] = []
     for message in normalized_messages:
         parts = _message_parts(message)
-        if not parts:
+        if not parts and not _has_content(message):
             continue
         result.append(InputMessage(role=_normalize_role(message), parts=parts))
     return result
@@ -216,13 +355,16 @@ def to_output_messages(
     as ``gen_ai.output.messages``. Tool execution results belong on the
     *input* side of the next inference call, not the output side of the
     previous one.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     result: list[OutputMessage] = []
     for message in messages:
         if not isinstance(message, AIMessage):
             continue
         parts = _ai_message_parts(message)
-        if not parts:
+        if not parts and not _has_content(message):
             continue
         result.append(
             OutputMessage(
@@ -294,7 +436,10 @@ def make_input_message(data: Any) -> list[InputMessage]:
 
     When no ``messages`` key exists (common in LangGraph state dicts), the
     remaining state fields are serialized as JSON and emitted as a single
-    user-role :class:`Text` part.
+    user-role :class:`TextPart` part.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     if not isinstance(data, dict):
         return []
@@ -318,7 +463,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
     if input_data:
         serialized = serialize(input_data)
         if serialized:
-            return [InputMessage(role="user", parts=[Text(serialized)])]
+            return [InputMessage(role="user", parts=[TextPart(serialized)])]
     return []
 
 
@@ -329,6 +474,9 @@ def make_output_message(data: Any) -> list[OutputMessage]:
     empty: the underlying per-LLM-call finish reasons are recorded on child
     inference spans, and util-genai filters empty values out of
     ``gen_ai.response.finish_reasons``.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     if not isinstance(data, dict):
         return []
@@ -349,6 +497,9 @@ def make_last_output_message(data: Any) -> list[OutputMessage]:
     For Workflow and AgentInvocation spans, the final AI message best represents
     the actual output. Intermediate AI messages (e.g., tool-call decisions) are
     already captured in child LLM invocation spans.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
     """
     all_messages = make_output_message(data)
     if all_messages:

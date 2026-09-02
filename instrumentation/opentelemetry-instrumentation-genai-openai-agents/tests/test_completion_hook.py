@@ -14,12 +14,12 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 def test_completion_hook_forwarded_to_handler(
     tracer_provider, logger_provider, meter_provider
 ) -> None:
-    """A hook passed to instrument() reaches get_telemetry_handler()."""
+    """A hook passed to instrument() reaches TelemetryHandler()."""
     hook = MagicMock()
     with (
         patch(
-            "opentelemetry.instrumentation.genai.openai_agents.get_telemetry_handler"
-        ) as get_handler,
+            "opentelemetry.instrumentation.genai.openai_agents.TelemetryHandler"
+        ) as handler_cls,
         instrument(
             OpenAIAgentsInstrumentor(),
             tracer_provider=tracer_provider,
@@ -28,7 +28,7 @@ def test_completion_hook_forwarded_to_handler(
             completion_hook=hook,
         ),
     ):
-        assert get_handler.call_args.kwargs["completion_hook"] is hook
+        assert handler_cls.call_args.kwargs["completion_hook"] is hook
 
 
 def test_completion_hook_defaults_to_load_completion_hook(
@@ -37,8 +37,8 @@ def test_completion_hook_defaults_to_load_completion_hook(
     """Without an explicit hook, the one from load_completion_hook() is used."""
     with (
         patch(
-            "opentelemetry.instrumentation.genai.openai_agents.get_telemetry_handler"
-        ) as get_handler,
+            "opentelemetry.instrumentation.genai.openai_agents.TelemetryHandler"
+        ) as handler_cls,
         patch(
             "opentelemetry.instrumentation.genai.openai_agents.load_completion_hook",
             return_value=sentinel.default_hook,
@@ -52,6 +52,6 @@ def test_completion_hook_defaults_to_load_completion_hook(
     ):
         load_hook.assert_called_once()
         assert (
-            get_handler.call_args.kwargs["completion_hook"]
+            handler_cls.call_args.kwargs["completion_hook"]
             is sentinel.default_hook
         )

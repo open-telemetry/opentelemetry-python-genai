@@ -1,0 +1,1 @@
+Add `GenAIInvocation.record_stream_chunk()` so callback-based instrumentations can report streaming timing without wrapping the SDK's stream.

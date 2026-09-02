@@ -33,7 +33,7 @@ def _any_value_to_attribute_value(value: AnyValue) -> AttributeValue | None:
 class ToolInvocation(GenAIInvocation):
     """Represents a tool call invocation for execute_tool span tracking.
 
-    Not used as a message part — use ToolCallRequest for that purpose.
+    Not used as a message part — use ToolCallRequestPart for that purpose.
 
     Use handler.tool(name) rather than constructing this directly.
 

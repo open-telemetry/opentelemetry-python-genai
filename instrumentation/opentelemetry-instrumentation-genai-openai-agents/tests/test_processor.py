@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -217,6 +218,50 @@ def test_no_content_captured_when_capture_env_unset(
     assert "gen_ai.tool.call.result" not in tool_span.attributes
     # The non-content tool attributes are still present.
     assert tool_span.attributes["gen_ai.tool.name"] == "get_weather"
+
+
+def test_tool_span_error_sets_error_status_and_type(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """A tool the agents library recorded as failed must not look successful.
+
+    The agents library reports tool failures on ``Span.error``. If the
+    processor ignores it the exported span is byte-identical to a
+    successful one, and a backend cannot filter or count failed tool
+    calls.
+    """
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
+    span.error = {"message": "Error running tool", "data": {}}
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (tool_span,) = span_exporter.get_finished_spans()
+    assert tool_span.status.status_code is StatusCode.ERROR
+    assert tool_span.attributes is not None
+    assert tool_span.attributes["error.type"] == "_OTHER"
+
+
+def test_agent_span_error_sets_error_status_and_type(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """A fatal tool also ends the surrounding agent span with an error."""
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(AgentSpanData(name="weather_agent"))
+    span.error = {"message": "Error in agent run", "data": {}}
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (agent_span,) = span_exporter.get_finished_spans()
+    assert agent_span.status.status_code is StatusCode.ERROR
+    assert agent_span.attributes is not None
+    assert agent_span.attributes["error.type"] == "_OTHER"
 
 
 def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:

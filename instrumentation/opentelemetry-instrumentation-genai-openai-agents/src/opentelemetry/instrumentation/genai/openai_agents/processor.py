@@ -44,11 +44,15 @@ from agents.tracing.span_data import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+from opentelemetry.semconv._incubating.attributes.error_attributes import (
+    ErrorTypeValues,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     GenAIInvocation,
     ToolInvocation,
 )
+from opentelemetry.util.genai.types import Error
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
@@ -130,6 +134,17 @@ class GenAITracingProcessor(TracingProcessor):
                 invocation.tool_result = (
                     output if isinstance(output, str) else str(output)
                 )
+        # SpanError is a mapping, not a raised exception, so it never
+        # reaches util-genai's exception path on its own.
+        span_error = getattr(span, "error", None)
+        if span_error is not None:
+            invocation.fail(
+                Error(
+                    type=ErrorTypeValues.OTHER.value,
+                    message=str(span_error),
+                )
+            )
+            return
         invocation.stop()
 
     def shutdown(self) -> None:

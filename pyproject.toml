@@ -13,6 +13,7 @@ dependencies = [
   "opentelemetry-util-genai",
   "opentelemetry-instrumentation-genai-agno[instruments]",
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
+  "opentelemetry-instrumentation-genai-bedrock[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
   "opentelemetry-instrumentation-genai-crewai[instruments]",
   "opentelemetry-instrumentation-genai-dspy[instruments]",
@@ -47,6 +48,7 @@ opentelemetry-test-util-genai = { workspace = true }
 opentelemetry-util-genai = { workspace = true }
 opentelemetry-instrumentation-genai-agno = { workspace = true }
 opentelemetry-instrumentation-genai-anthropic = { workspace = true }
+opentelemetry-instrumentation-genai-bedrock = { workspace = true }
 opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
 opentelemetry-instrumentation-genai-crewai = { workspace = true }
 opentelemetry-instrumentation-genai-dspy = { workspace = true }
@@ -118,12 +120,14 @@ reportDeprecated = false  # Ignore deprecation on GenAI enums in opentelemetry.s
 include = [
   "instrumentation/opentelemetry-instrumentation-genai-agno",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
   "instrumentation/opentelemetry-instrumentation-genai-crewai",
   "instrumentation/opentelemetry-instrumentation-genai-dspy",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
+  "instrumentation/opentelemetry-instrumentation-genai-portkey",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
@@ -137,6 +141,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-agno/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-anthropic/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-crewai/tests/**/*.py",
@@ -149,6 +155,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-llama-index/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/examples/**",
+  "instrumentation/opentelemetry-instrumentation-genai-portkey/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-portkey/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",

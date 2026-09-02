@@ -26,24 +26,27 @@ runs:
     - name: Verify branch matches operation
       shell: bash
       run: |
-        case "${{ inputs.operation }}" in
+        case "${INPUTS_OPERATION}" in
           drop-dev)
             if [[ "$GITHUB_REF_NAME" != "main" ]]; then
-              echo "operation '${{ inputs.operation }}' must run on main, got '$GITHUB_REF_NAME'"
+              echo "operation '${INPUTS_OPERATION}' must run on main, got '$GITHUB_REF_NAME'"
               exit 1
             fi
             ;;
           bump-patch)
-            if [[ "$GITHUB_REF_NAME" != package-release/${{ inputs.package }}/v* ]]; then
-              echo "operation 'bump-patch' must run on a package-release/${{ inputs.package }}/v* backport branch, got '$GITHUB_REF_NAME'"
+            if [[ "$GITHUB_REF_NAME" != package-release/${INPUTS_PACKAGE}/v* ]]; then
+              echo "operation 'bump-patch' must run on a package-release/${INPUTS_PACKAGE}/v* backport branch, got '$GITHUB_REF_NAME'"
               exit 1
             fi
             ;;
           *)
-            echo "unknown operation: '${{ inputs.operation }}'"
+            echo "unknown operation: '${INPUTS_OPERATION}'"
             exit 1
             ;;
         esac
+      env:
+        INPUTS_OPERATION: ${{ inputs.operation }}
+        INPUTS_PACKAGE: ${{ inputs.package }}
 
     - name: Install uv
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -51,19 +54,25 @@ runs:
     - name: Run drop-dev
       if: inputs.operation == 'drop-dev'
       shell: bash
-      run: ./scripts/prepare_package_for_release.sh "${{ inputs.package }}"
+      run: ./scripts/prepare_package_for_release.sh "${INPUTS_PACKAGE}"
+      env:
+        INPUTS_PACKAGE: ${{ inputs.package }}
 
     - name: Run bump-patch
       if: inputs.operation == 'bump-patch'
       shell: bash
-      run: ./scripts/prepare_package_for_patch_release.sh "${{ inputs.package }}"
+      run: ./scripts/prepare_package_for_patch_release.sh "${INPUTS_PACKAGE}"
+      env:
+        INPUTS_PACKAGE: ${{ inputs.package }}
 
     - name: Compute resulting version
       shell: bash
-      run: |
-        version=$(./scripts/eachdist.py version --package "${{ inputs.package }}")
+      run: | # zizmor: ignore[github-env] package is a fixed dispatch choice and version comes from a trusted repository script
+        version=$(./scripts/eachdist.py version --package "${INPUTS_PACKAGE}")
         echo "VERSION=${version}" >> "$GITHUB_ENV"
-        echo "PACKAGE_NAME=${{ inputs.package }}" >> "$GITHUB_ENV"
+        echo "PACKAGE_NAME=${INPUTS_PACKAGE}" >> "$GITHUB_ENV"
+      env:
+        INPUTS_PACKAGE: ${{ inputs.package }}
 
     - name: Configure CLA-approved git bot
       shell: bash
@@ -74,13 +83,15 @@ runs:
       with:
         client-id: ${{ inputs.otelbot-client-id }}
         private-key: ${{ inputs.otelbot-private-key }}
+        permission-pull-requests: write
 
     - name: Create pull request
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+        INPUTS_OPERATION: ${{ inputs.operation }}
       run: |
-        case "${{ inputs.operation }}" in
+        case "${INPUTS_OPERATION}" in
           drop-dev)
             title="Prepare release for ${PACKAGE_NAME} v${VERSION}"
             branch="otelbot/prepare-${PACKAGE_NAME}-v${VERSION}"

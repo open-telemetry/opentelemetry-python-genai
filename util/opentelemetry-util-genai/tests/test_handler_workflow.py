@@ -25,7 +25,7 @@ from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
     OutputMessage,
-    Text,
+    TextPart,
 )
 
 
@@ -71,6 +71,23 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         spans = self._get_finished_spans()
         self.assertEqual(len(spans), 1)
         self.assertEqual(spans[0].name, "invoke_workflow")
+
+    def test_workflow_conversation_id(self) -> None:
+        invocation = self.handler.workflow(name="wf")
+        invocation.conversation_id = "conv-456"
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertEqual(
+            spans[0].attributes[GenAI.GEN_AI_CONVERSATION_ID], "conv-456"
+        )
+
+    def test_workflow_without_conversation_id(self) -> None:
+        invocation = self.handler.workflow(name="wf")
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertNotIn(GenAI.GEN_AI_CONVERSATION_ID, spans[0].attributes)
 
     def test_start_workflow_span_kind_is_internal(self) -> None:
         invocation = self.handler.workflow(name="wf")
@@ -273,9 +290,11 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
         self.assertEqual(spans[0].status.status_code, StatusCode.UNSET)
 
     def test_workflow_context_manager_with_messages(self) -> None:
-        inp = InputMessage(role="user", parts=[Text(content="hello")])
+        inp = InputMessage(role="user", parts=[TextPart(content="hello")])
         out = OutputMessage(
-            role="assistant", parts=[Text(content="hi")], finish_reason="stop"
+            role="assistant",
+            parts=[TextPart(content="hi")],
+            finish_reason="stop",
         )
         with self.handler.workflow("msg_wf") as inv:
             inv.input_messages = [inp]

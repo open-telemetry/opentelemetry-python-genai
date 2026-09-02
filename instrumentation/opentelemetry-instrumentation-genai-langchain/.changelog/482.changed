@@ -1,0 +1,2 @@
+Raised the opentelemetry-util-genai dependency floor to 1.2b0 for
+``GenAIInvocation.record_stream_chunk``

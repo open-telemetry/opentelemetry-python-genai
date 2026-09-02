@@ -23,5 +23,8 @@
 #
 # The instrumented model classes run inference in this process and the tests stub their
 # runtimes, so there is no model backend to pin here.
+#
+# Drop this once opentelemetry-util-genai 1.2b0 is published.
+-e util/opentelemetry-util-genai
 
 

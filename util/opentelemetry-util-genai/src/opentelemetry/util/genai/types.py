@@ -50,7 +50,7 @@ class GenericPart:
 
 
 @dataclass()
-class ToolCallRequest:
+class ToolCallRequestPart:
     """Represents a tool call requested by the model (message part only).
 
     Use this for tool calls in message history. For execution tracking with spans
@@ -67,7 +67,7 @@ class ToolCallRequest:
 
 
 @dataclass()
-class ToolCallResponse:
+class ToolCallResponsePart:
     """Represents a tool call result sent to the model or a built-in tool call outcome and details
 
     This model is specified as part of semconv in `GenAI messages Python models - ToolCallResponsePart
@@ -80,7 +80,7 @@ class ToolCallResponse:
 
 
 @dataclass()
-class ServerToolCall:
+class ServerToolCallPart:
     """Represents a server-side tool call.
 
     Server tool calls are executed by the model provider on the server side rather
@@ -98,7 +98,7 @@ class ServerToolCall:
 
 
 @dataclass()
-class ServerToolCallResponse:
+class ServerToolCallResponsePart:
     """Represents a server-side tool call response.
 
     Contains the outcome and details of a server tool execution. Provider-specific
@@ -115,7 +115,7 @@ class ServerToolCallResponse:
 
 
 @dataclass()
-class Text:
+class TextPart:
     """Represents text content sent to or received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - TextPart
@@ -127,7 +127,7 @@ class Text:
 
 
 @dataclass()
-class Reasoning:
+class ReasoningPart:
     """Represents reasoning/thinking content received from the model
 
     This model is specified as part of semconv in `GenAI messages Python models - ReasoningPart
@@ -161,7 +161,7 @@ Modality = Literal["image", "video", "audio", "document"]
 
 
 @dataclass()
-class Blob:
+class BlobPart:
     """Represents blob binary data sent inline to the model
 
     This model is specified as part of semconv in `GenAI messages Python models - BlobPart
@@ -175,7 +175,7 @@ class Blob:
 
 
 @dataclass()
-class File:
+class FilePart:
     """Represents an external referenced file sent to the model by file id
 
     This model is specified as part of semconv in `GenAI messages Python models - FilePart
@@ -189,7 +189,7 @@ class File:
 
 
 @dataclass()
-class Uri:
+class UriPart:
     """Represents an external referenced file sent to the model by URI
 
     This model is specified as part of semconv in `GenAI messages Python models - UriPart
@@ -200,6 +200,64 @@ class Uri:
     modality: Modality | str
     uri: str
     type: Literal["uri"] = "uri"
+
+
+# Deprecated names for the message part classes, kept for backwards compatibility.
+# Delete this block once the deprecation period ends.
+
+ToolCallRequest = ToolCallRequestPart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`ToolCallRequestPart`, kept for backwards compatibility.
+"""
+
+ToolCallResponse = ToolCallResponsePart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`ToolCallResponsePart`, kept for backwards compatibility.
+"""
+
+ServerToolCall = ServerToolCallPart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`ServerToolCallPart`, kept for backwards compatibility.
+"""
+
+ServerToolCallResponse = ServerToolCallResponsePart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`ServerToolCallResponsePart`, kept for backwards compatibility.
+"""
+
+Text = TextPart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`TextPart`, kept for backwards compatibility.
+"""
+
+Reasoning = ReasoningPart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`ReasoningPart`, kept for backwards compatibility.
+"""
+
+Blob = BlobPart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`BlobPart`, kept for backwards compatibility.
+"""
+
+File = FilePart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`FilePart`, kept for backwards compatibility.
+"""
+
+Uri = UriPart
+"""
+.. deprecated:: 1.2b0
+    Alias of :class:`UriPart`, kept for backwards compatibility.
+"""
 
 
 @dataclass()
@@ -223,15 +281,15 @@ class GenericToolDefinition:
 ToolDefinition = Union[FunctionToolDefinition, GenericToolDefinition]
 
 MessagePart = Union[
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
-    ServerToolCall,
-    ServerToolCallResponse,
-    Blob,
-    File,
-    Uri,
-    Reasoning,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
+    BlobPart,
+    FilePart,
+    UriPart,
+    ReasoningPart,
     CompactionPart,
     GenericPart,  # For provider-specific types; prefer standard types above
 ]

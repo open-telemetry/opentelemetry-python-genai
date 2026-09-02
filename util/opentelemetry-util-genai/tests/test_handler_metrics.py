@@ -291,6 +291,74 @@ class TelemetryHandlerMetricsTest(TestBase):
         (span,) = self.get_finished_spans()
         self.assertNotIn(GenAI.GEN_AI_REQUEST_STREAM, span.attributes)
 
+    def test_record_stream_chunk_marks_stream_and_records_timing(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = handler.inference("prov", request_model="model")
+        invocation.response_model_name = "model-2025"
+
+        # The public entry point timestamps each chunk itself: first chunk
+        # 0.35s after start -> TTFC, then gaps of 0.05, 0.08, 0.12.
+        with patch(
+            "timeit.default_timer",
+            side_effect=iter([1000.35, 1000.40, 1000.48, 1000.60]),
+        ):
+            for _ in range(4):
+                invocation.record_stream_chunk()
+
+        with patch("timeit.default_timer", return_value=1002.0):
+            invocation.stop()
+
+        metrics = self._harvest_metrics()
+
+        ttfc_points = metrics["gen_ai.client.operation.time_to_first_chunk"]
+        self.assertEqual(len(ttfc_points), 1)
+        self.assertEqual(ttfc_points[0].count, 1)
+        self.assertAlmostEqual(ttfc_points[0].sum, 0.35, places=6)
+        self.assertEqual(
+            ttfc_points[0].attributes[GenAI.GEN_AI_RESPONSE_MODEL],
+            "model-2025",
+        )
+
+        chunk_points = metrics["gen_ai.client.operation.time_per_output_chunk"]
+        self.assertEqual(len(chunk_points), 1)
+        self.assertEqual(chunk_points[0].count, 3)
+        self.assertAlmostEqual(chunk_points[0].sum, 0.25, places=6)
+
+        (span,) = self.get_finished_spans()
+        self.assertIs(span.attributes[GenAI.GEN_AI_REQUEST_STREAM], True)
+        self.assertAlmostEqual(
+            span.attributes[GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK],
+            0.35,
+            places=6,
+        )
+
+    def test_record_stream_chunk_single_chunk_records_no_gap(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = handler.inference("prov", request_model="model")
+
+        with patch("timeit.default_timer", return_value=1000.5):
+            invocation.record_stream_chunk()
+        with patch("timeit.default_timer", return_value=1002.0):
+            invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.client.operation.time_to_first_chunk", metrics)
+        # A single chunk has no predecessor, so there is no gap to record.
+        self.assertNotIn(
+            "gen_ai.client.operation.time_per_output_chunk", metrics
+        )
+
+        (span,) = self.get_finished_spans()
+        self.assertIs(span.attributes[GenAI.GEN_AI_REQUEST_STREAM], True)
+
     def test_no_streaming_timing_metrics_without_chunks(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,

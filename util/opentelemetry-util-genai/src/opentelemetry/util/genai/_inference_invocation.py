@@ -71,6 +71,7 @@ class InferenceInvocation(GenAIInvocation):
         self._request_model: str | None = request_model
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
+        self.conversation_id: str | None = None
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -147,6 +148,7 @@ class InferenceInvocation(GenAIInvocation):
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
         optional_attrs = (
+            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
             (GenAI.GEN_AI_REQUEST_STREAM, self._request_stream),
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
             (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),

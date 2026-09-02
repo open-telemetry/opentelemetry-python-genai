@@ -25,9 +25,9 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
-    Text,
-    ToolCallRequest,
-    ToolCallResponse,
+    TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     ToolDefinition,
 )
 
@@ -205,22 +205,22 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             if tool_calls:
                 chat_message.parts += extract_tool_calls_new(tool_calls)
             if _is_text_part(content):
-                chat_message.parts.append(Text(content=str(content)))
+                chat_message.parts.append(TextPart(content=str(content)))
 
         elif role == "tool":
             tool_call_id = get_property_value(message, "tool_call_id")
             chat_message.parts.append(
-                ToolCallResponse(id=tool_call_id, response=content)
+                ToolCallResponsePart(id=tool_call_id, response=content)
             )
 
         else:
             # system, developer, user, fallback
             if _is_text_part(content):
-                chat_message.parts.append(Text(content=str(content)))
+                chat_message.parts.append(TextPart(content=str(content)))
     return chat_messages
 
 
-def extract_tool_calls_new(tool_calls) -> list[ToolCallRequest]:
+def extract_tool_calls_new(tool_calls) -> list[ToolCallRequestPart]:
     parts = []
     for tool_call in tool_calls:
         call_id = get_property_value(tool_call, "id")
@@ -239,7 +239,9 @@ def extract_tool_calls_new(tool_calls) -> list[ToolCallRequest]:
 
         # TODO: support custom
         parts.append(
-            ToolCallRequest(id=call_id, name=func_name, arguments=arguments)
+            ToolCallRequestPart(
+                id=call_id, name=func_name, arguments=arguments
+            )
         )
     return parts
 
@@ -274,7 +276,7 @@ def _prepare_output_messages(choices) -> list[OutputMessage]:
                 parts += extract_tool_calls_new(tool_calls)
             content = get_property_value(choice.message, "content")
             if _is_text_part(content):
-                parts.append(Text(content=str(content)))
+                parts.append(TextPart(content=str(content)))
 
             message = OutputMessage(
                 finish_reason=choice.finish_reason or "error",
