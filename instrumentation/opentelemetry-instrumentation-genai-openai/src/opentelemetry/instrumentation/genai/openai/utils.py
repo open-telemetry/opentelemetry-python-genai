@@ -22,9 +22,11 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.types import (
+    FilePart,
     FinishReason,
     FunctionToolDefinition,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
     TextPart,
@@ -32,6 +34,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponsePart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import image_from_url
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -193,6 +196,50 @@ def _is_text_part(content: Any) -> bool:
     )
 
 
+def _content_to_parts(content: Any) -> list[MessagePart]:
+    if isinstance(content, str):
+        return [TextPart(content=content)]
+    if not isinstance(content, Iterable) or isinstance(content, Mapping):
+        return []
+
+    parts: list[MessagePart] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(TextPart(content=item))
+            continue
+
+        part_type = get_property_value(item, "type")
+        text = get_property_value(item, "text")
+        if part_type in ("text", "input_text") or (
+            part_type is None and isinstance(text, str)
+        ):
+            if isinstance(text, str):
+                parts.append(TextPart(content=text))
+            continue
+        if part_type not in ("image_url", "input_image"):
+            continue
+
+        image_url = get_property_value(item, "image_url")
+        if isinstance(image_url, Mapping):
+            image_url = get_property_value(image_url, "url")
+        if isinstance(image_url, str) and image_url:
+            image_part = image_from_url(image_url)
+            if image_part is not None:
+                parts.append(image_part)
+            continue
+
+        file_id = get_property_value(item, "file_id")
+        if part_type == "input_image" and isinstance(file_id, str) and file_id:
+            parts.append(
+                FilePart(
+                    mime_type=None,
+                    modality="image",
+                    file_id=file_id,
+                )
+            )
+    return parts
+
+
 def _prepare_input_messages(messages) -> list[InputMessage]:
     chat_messages = []
     for message in messages:
@@ -206,8 +253,7 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
                 chat_message.parts += extract_tool_calls_new(tool_calls)
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            chat_message.parts += _content_to_parts(content)
 
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
@@ -217,8 +263,7 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
 
         else:
             # system, developer, user, fallback
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            chat_message.parts += _content_to_parts(content)
     return chat_messages
 
 

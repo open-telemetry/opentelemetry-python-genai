@@ -26,6 +26,10 @@ from opentelemetry.test_util_genai.conformance import (
 from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
+from .conformance.multimodal import (
+    ChatCompletionsMultimodalScenario,
+    ResponsesMultimodalScenario,
+)
 from .conformance.responses_conversation import ResponsesConversationScenario
 from .conformance.responses_fetch import ResponsesFetchScenario
 from .conformance.responses_stream import ResponsesStreamScenario
@@ -38,6 +42,8 @@ from .conformance.tool_calling import ToolCallingScenario
     [
         InferenceScenario(),
         InferenceStreamingScenario(),
+        ChatCompletionsMultimodalScenario(),
+        ResponsesMultimodalScenario(),
         EmbeddingScenario(),
         ToolCallingScenario(),
         ResponsesConversationScenario(),

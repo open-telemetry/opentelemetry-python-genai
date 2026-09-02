@@ -17,6 +17,7 @@ from opentelemetry.semconv._incubating.attributes import (
 
 from ._raw_response import ParsableResponse
 from .utils import (
+    _content_to_parts,
     _openai_response_format_to_output_type,
     get_property_value,
     get_served_model,
@@ -207,18 +208,7 @@ def get_input_messages(
         if not isinstance(role, str):
             continue
 
-        content = _get_field(item, "content")
-        if isinstance(content, str):
-            messages.append(
-                InputMessage(role=role, parts=[TextPart(content=content)])
-            )
-            continue
-
-        parts = []
-        for part in _get_sequence(content):
-            text = _get_field(part, "text")
-            if isinstance(text, str):
-                parts.append(TextPart(content=text))
+        parts = _content_to_parts(_get_field(item, "content"))
         if parts:
             messages.append(InputMessage(role=role, parts=parts))
 
