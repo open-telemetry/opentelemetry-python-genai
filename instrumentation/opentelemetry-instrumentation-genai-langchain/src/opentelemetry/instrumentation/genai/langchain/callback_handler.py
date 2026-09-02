@@ -34,6 +34,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     make_last_output_message,
     normalize_provider,
     prepare_tool_definitions,
+    resolve_response_model_and_id,
+    response_fields_from_generation,
     to_input_messages,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -355,11 +357,22 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         output_messages: list[OutputMessage] = []
         served_model: str | None = None
+        generation_model: str | None = None
+        generation_response_id: str | None = None
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
                 message = chat_generation.message
                 if message is None:
                     continue
+
+                if generation_model is None or generation_response_id is None:
+                    gen_model, gen_response_id = (
+                        response_fields_from_generation(chat_generation)
+                    )
+                    generation_model = generation_model or gen_model
+                    generation_response_id = (
+                        generation_response_id or gen_response_id
+                    )
 
                 # Resolve finish_reason from generation_info or response
                 # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
@@ -501,20 +514,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         llm_invocation.output_messages = output_messages
 
-        llm_output = getattr(response, "llm_output", None)
-        if llm_output is not None:
-            response_model = llm_output.get("model_name") or llm_output.get(
-                "model"
-            )
-            if response_model is not None:
-                llm_invocation.response_model_name = str(response_model)
-
-            response_id = llm_output.get("id")
-            if response_id is not None:
-                llm_invocation.response_id = str(response_id)
-
-        if served_model:
-            llm_invocation.response_model_name = served_model
+        response_model, response_id = resolve_response_model_and_id(
+            llm_output=getattr(response, "llm_output", None),
+            served_model=served_model,
+            generation_model=generation_model,
+            generation_response_id=generation_response_id,
+        )
+        if response_model is not None:
+            llm_invocation.response_model_name = response_model
+        if response_id is not None:
+            llm_invocation.response_id = response_id
 
         llm_invocation.stop()
         if not llm_invocation.span.is_recording():

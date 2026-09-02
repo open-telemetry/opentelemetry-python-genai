@@ -1,9 +1,14 @@
 OpenTelemetry Amazon Bedrock Instrumentation
 ============================================
 
-This package provides the setup for instrumenting Amazon Bedrock with OpenTelemetry
-Generative AI semantic conventions. Amazon Bedrock operation instrumentation will be
-added in follow-up changes.
+This package provides OpenTelemetry instrumentation for Amazon Bedrock (via the AWS SDK for Python, ``boto3``),
+implementing the OpenTelemetry Generative AI semantic conventions.
+
+Supported Operations
+--------------------
+
+* Synchronous chat via the Converse API (``client.converse``)
+* Streaming chat via the ConverseStream API (``client.converse_stream``)
 
 Installation
 ------------
@@ -15,11 +20,20 @@ Installation
 Usage
 -----
 
-::
+.. code-block:: python
 
+    import boto3
     from opentelemetry.instrumentation.genai.bedrock import BedrockInstrumentor
 
+    # Enable instrumentation
     BedrockInstrumentor().instrument()
+
+    # Use Bedrock runtime client normally
+    client = boto3.client("bedrock-runtime", region_name="us-east-1")
+    response = client.converse(
+        modelId="amazon.nova-micro-v1:0",
+        messages=[{"role": "user", "content": [{"text": "Hello, Bedrock!"}]}],
+    )
 
 Configuration
 -------------

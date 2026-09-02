@@ -257,10 +257,6 @@ class OpenAIResponsesInputImageScenario(Scenario):
             advice_id="genai_expected_attribute_missing",
             message_substring="server.address",
         ),
-        ExpectedViolation(
-            advice_id="genai_expected_attribute_missing",
-            message_substring="gen_ai.response.id",
-        ),
     )
 
     def run(

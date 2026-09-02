@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from langchain_core.messages import (
@@ -520,6 +520,72 @@ def serialize(obj: Any) -> str | None:
         return json.dumps(obj, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         return None
+
+
+def _first_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def response_fields_from_generation(
+    chat_generation: Any,
+) -> tuple[str | None, str | None]:
+    """Return the ``(response_model, response_id)`` a generation carries."""
+    message = getattr(chat_generation, "message", None)
+    response_metadata: Mapping[str, Any] = (
+        getattr(message, "response_metadata", None) or {}
+    )
+    generation_info: Mapping[str, Any] = (
+        getattr(chat_generation, "generation_info", None) or {}
+    )
+
+    response_model = _first_string(
+        response_metadata.get("model_name"),
+        response_metadata.get("model"),
+        generation_info.get("model_name"),
+        generation_info.get("model"),
+    )
+    response_id = _first_string(
+        response_metadata.get("id"),
+        generation_info.get("id"),
+    )
+    return response_model, response_id
+
+
+def resolve_response_model_and_id(
+    *,
+    llm_output: Mapping[str, Any] | None,
+    served_model: str | None,
+    generation_model: str | None,
+    generation_response_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Return the ``gen_ai.response.model`` and ``gen_ai.response.id`` to record.
+
+    The model comes from the Responses API header if there is one, else
+    ``llm_output``, else the generation. The id comes from ``llm_output``, else
+    the generation.
+    """
+    response_model: str | None = None
+    response_id: str | None = None
+
+    if llm_output is not None:
+        raw_model = llm_output.get("model_name") or llm_output.get("model")
+        if raw_model is not None:
+            response_model = str(raw_model)
+        raw_id = llm_output.get("id")
+        if raw_id is not None:
+            response_id = str(raw_id)
+
+    if response_model is None:
+        response_model = generation_model
+    if response_id is None:
+        response_id = generation_response_id
+    if served_model:
+        response_model = served_model
+
+    return response_model, response_id
 
 
 def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:

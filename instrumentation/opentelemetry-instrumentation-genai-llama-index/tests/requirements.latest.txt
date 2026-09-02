@@ -38,7 +38,9 @@
 # the newest supported version of external dependencies.
 
 llama-index-core~=0.14.24
+llama-index-llms-openai
 wrapt==2.2.2
+-e instrumentation/opentelemetry-instrumentation-genai-openai
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e util/opentelemetry-util-genai
