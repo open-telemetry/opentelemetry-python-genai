@@ -351,8 +351,9 @@ def test_tool_span_omits_agent_name_when_absent():
     assert GenAI.GEN_AI_AGENT_NAME not in attrs
 
 
-def test_tool_start_attributes_include_agent_name_at_sampling_time():
-    """agent_name must be visible to the sampler at span-creation time."""
+def test_tool_start_attributes_omit_agent_name_at_sampling_time():
+    """`gen_ai.agent.name` is not sampling-relevant for `execute_tool` in
+    current semconv"""
     captured_attributes: dict[str, object] = {}
 
     class AttributeCapturingSampler:  # pylint: disable=no-self-use
@@ -378,4 +379,6 @@ def test_tool_start_attributes_include_agent_name_at_sampling_time():
 
     handler.tool("get_weather", agent_name="weather_agent").stop()
 
-    assert captured_attributes[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
+    assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
+    finalized = span_exporter.get_finished_spans()[0].attributes
+    assert finalized[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"

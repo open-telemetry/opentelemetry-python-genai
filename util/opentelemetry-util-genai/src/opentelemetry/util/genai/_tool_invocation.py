@@ -105,7 +105,6 @@ class ToolInvocation(GenAIInvocation):
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self._name),
-            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (GenAI.GEN_AI_TOOL_CALL_ID, self._tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self._tool_description),
@@ -126,6 +125,7 @@ class ToolInvocation(GenAIInvocation):
         if error is not None:
             self._apply_error_attributes(error)
         optional_attrs = (
+            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
                 _any_value_to_attribute_value(self.arguments)
