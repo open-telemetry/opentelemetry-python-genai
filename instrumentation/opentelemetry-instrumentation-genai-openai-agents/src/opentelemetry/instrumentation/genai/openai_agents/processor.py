@@ -138,7 +138,7 @@ class GenAITracingProcessor(TracingProcessor):
         if (
             isinstance(invocation, ToolInvocation)
             and isinstance(span.span_data, FunctionSpanData)
-            and invocation.should_capture_content_on_span
+            and invocation.should_capture_content
         ):
             arguments = span.span_data.input
             if arguments:

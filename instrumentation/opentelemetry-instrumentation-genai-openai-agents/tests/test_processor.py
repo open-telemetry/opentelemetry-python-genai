@@ -91,7 +91,7 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
     handler.tool.return_value = MagicMock(
         spec=ToolInvocation,
         metric_attributes={},
-        should_capture_content_on_span=True,
+        should_capture_content=True,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(
@@ -129,7 +129,7 @@ def test_function_span_skips_content_when_capture_disabled() -> None:
     handler.tool.return_value = MagicMock(
         spec=ToolInvocation,
         metric_attributes={},
-        should_capture_content_on_span=False,
+        should_capture_content=False,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
@@ -154,7 +154,7 @@ def test_function_span_without_output_still_stops() -> None:
     handler.tool.return_value = MagicMock(
         spec=ToolInvocation,
         metric_attributes={},
-        should_capture_content_on_span=True,
+        should_capture_content=True,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(FunctionSpanData(name="noop", input=None, output=None))
