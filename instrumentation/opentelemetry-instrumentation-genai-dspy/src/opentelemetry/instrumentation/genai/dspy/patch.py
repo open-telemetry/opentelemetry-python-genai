@@ -432,7 +432,7 @@ def _extract_retrieval_k(
     instance: Any,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> float | None:
+) -> int | None:
     k = kwargs.get("k")
     if k is None and len(args) > 1:
         k = args[1]
@@ -440,7 +440,7 @@ def _extract_retrieval_k(
         k = getattr(instance, "k", None)
     if k is not None:
         try:
-            return float(k)
+            return int(k)
         except (ValueError, TypeError):
             return None
     return None
