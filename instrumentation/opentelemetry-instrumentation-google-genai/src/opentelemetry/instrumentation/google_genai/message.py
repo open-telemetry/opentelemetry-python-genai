@@ -121,7 +121,7 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
 
 
 def _to_role(role: str | None) -> str:
-    if role == "user":
+    if role == Role.USER.value:
         return Role.USER.value
     if role == "model":
         return Role.ASSISTANT.value
