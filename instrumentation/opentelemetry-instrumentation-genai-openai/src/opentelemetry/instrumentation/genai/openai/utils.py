@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+import logging
+import mimetypes
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,14 +24,20 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.types import (
+    FilePart,
     FunctionToolDefinition,
+    GenericPart,
     InputMessage,
+    MessagePart,
     OutputMessage,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import image_from_url
+
+_logger = logging.getLogger(__name__)
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -54,7 +62,7 @@ def get_served_model(headers: Mapping[str, str] | None) -> str | None:
 
 
 def get_property_value(obj, property_name):
-    if isinstance(obj, dict):
+    if isinstance(obj, Mapping):
         return obj.get(property_name, None)
 
     return getattr(obj, property_name, None)
@@ -191,6 +199,108 @@ def _is_text_part(content: Any) -> bool:
     )
 
 
+def _as_plain_value(item: Any) -> Any:
+    """Return a JSON-safe representation of a content part.
+
+    Never raises: pydantic models are dumped in JSON mode, the result is
+    round-tripped through ``json`` so only JSON-native values remain, and any
+    failure falls back to ``str(item)``.
+    """
+    try:
+        model_dump = getattr(item, "model_dump", None)
+        if callable(model_dump):
+            try:
+                value = model_dump(mode="json")
+            except Exception:  # pylint: disable=broad-exception-caught
+                value = model_dump()  # pydantic v1 has no ``mode``
+        elif isinstance(item, Mapping):
+            value = dict(item)
+        else:
+            value = item
+        return json.loads(json.dumps(value, default=str))
+    except Exception:  # pylint: disable=broad-exception-caught
+        return str(item)
+
+
+def _image_url_part(item: Any) -> MessagePart | None:
+    """Map an ``image_url`` content part to a ``UriPart`` or ``BlobPart``."""
+    image_url = get_property_value(item, "image_url")
+    url = (
+        image_url
+        if isinstance(image_url, str)
+        else get_property_value(image_url, "url")
+    )
+    if not isinstance(url, str) or not url:
+        return None
+    return image_from_url(url)
+
+
+def _file_part(item: Any) -> MessagePart | None:
+    """Map a ``file`` content part with a ``file_id`` to a ``FilePart``.
+
+    Inline ``file_data`` is intentionally not captured: a single document can
+    be megabytes, and it would be base64-inlined into the span attribute.
+    """
+    file_ref = get_property_value(item, "file")
+    file_id = get_property_value(file_ref, "file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    filename = get_property_value(file_ref, "filename")
+    mime_type = None
+    if isinstance(filename, str) and filename:
+        mime_type = mimetypes.guess_type(filename)[0]
+    return FilePart(mime_type=mime_type, modality="document", file_id=file_id)
+
+
+def _convert_content_part(item: Any) -> MessagePart | None:
+    """Map one OpenAI content part to a semconv message part; typed parts
+    with no semconv mapping become ``GenericPart`` rather than being dropped.
+    Inline media payloads (``input_audio``, ``file_data``) are the exception
+    and are never captured."""
+    if isinstance(item, str):
+        return TextPart(content=item)
+    item_type = get_property_value(item, "type")
+    if not isinstance(item_type, str):
+        return None
+    if item_type == "text":
+        text = get_property_value(item, "text")
+        return TextPart(content=text) if isinstance(text, str) else None
+    if item_type == "image_url":
+        return _image_url_part(item)
+    if item_type == "input_audio":
+        # Inline audio is intentionally not captured: a single clip can be
+        # megabytes, and it would be base64-inlined into the span attribute.
+        return None
+    if item_type == "file":
+        return _file_part(item)
+    return GenericPart(type=item_type, value=_as_plain_value(item))
+
+
+def _content_to_parts(content: Any) -> list[MessagePart]:
+    """Map message ``content`` to message parts.
+
+    A string is a single text part and a bare mapping is a single content
+    part. Only sequences are walked as content-part arrays: iterating any
+    other iterable (e.g. a generator) would consume the caller's input before
+    the SDK sends it, so those are left untouched and not captured.
+    Conversion never raises; a part that fails to convert is skipped.
+    """
+    if isinstance(content, (str, Mapping)):
+        content = [content]
+    if not isinstance(content, Sequence):
+        return []
+    parts: list[MessagePart] = []
+    for item in content:
+        try:
+            part = _convert_content_part(item)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug("Failed to convert content part", exc_info=True)
+            continue
+        if part is not None:
+            parts.append(part)
+    return parts
+
+
 def _prepare_input_messages(messages) -> list[InputMessage]:
     chat_messages = []
     for message in messages:
@@ -204,8 +314,7 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
                 chat_message.parts += extract_tool_calls_new(tool_calls)
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            chat_message.parts += _content_to_parts(content)
 
         elif role == "tool":
             tool_call_id = get_property_value(message, "tool_call_id")
@@ -215,8 +324,7 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
 
         else:
             # system, developer, user, fallback
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            chat_message.parts += _content_to_parts(content)
     return chat_messages
 
 

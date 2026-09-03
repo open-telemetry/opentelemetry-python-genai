@@ -1,0 +1,5 @@
+Capture multimodal content-part arrays on input messages instead of dropping
+them: ``image_url`` parts map to ``UriPart``/``BlobPart``, ``file`` parts with
+a ``file_id`` to ``FilePart``, and any other typed part is preserved as a
+``GenericPart``. Inline ``input_audio`` and ``file_data`` payloads are
+intentionally not captured.
