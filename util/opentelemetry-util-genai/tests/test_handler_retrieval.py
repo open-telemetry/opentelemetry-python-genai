@@ -19,7 +19,11 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.trace import INVALID_SPAN, SpanKind
+from opentelemetry.trace import (
+    INVALID_SPAN,
+    SpanKind,
+    set_span_in_context,
+)
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -53,6 +57,24 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         invocation = self.handler.retrieval()
         self.assertIsNot(invocation.span, INVALID_SPAN)
         invocation.stop()
+
+    def test_retrieval_span_parents_to_explicit_parent_context(self) -> None:
+        parent_span = self.tracer_provider.get_tracer("parent").start_span(
+            "parent"
+        )
+        invocation = self.handler.retrieval(
+            data_source_id="H7STPQYOND",
+            parent_context=set_span_in_context(parent_span),
+        )
+        child_span = invocation.span
+        self.assertIsNot(child_span, INVALID_SPAN)
+        invocation.stop()
+        parent_span.end()
+
+        spans = self._get_finished_spans()
+        child = next(s for s in spans if s.name == "retrieval H7STPQYOND")
+        parent = next(s for s in spans if s.name == "parent")
+        self.assertEqual(child.parent.span_id, parent.context.span_id)
 
     def test_retrieval_span_name_with_data_source_id(self) -> None:
         invocation = self.handler.retrieval(data_source_id="H7STPQYOND")

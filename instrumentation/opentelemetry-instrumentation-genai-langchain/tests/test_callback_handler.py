@@ -1384,7 +1384,7 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model=None
+            provider="Chroma", request_model=None, parent_context=None
         )
 
     def test_provider_none_when_metadata_absent(self):
@@ -1398,7 +1398,7 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider=None, request_model=None
+            provider=None, request_model=None, parent_context=None
         )
 
     def test_request_model_passed_from_ls_embedding_model(self):
@@ -1416,7 +1416,9 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model="text-embedding-3-small"
+            provider="Chroma",
+            request_model="text-embedding-3-small",
+            parent_context=None,
         )
 
     def test_request_model_none_when_ls_embedding_model_absent(self):
@@ -1431,7 +1433,7 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model=None
+            provider="Chroma", request_model=None, parent_context=None
         )
 
     def test_registered_in_invocation_manager(self):

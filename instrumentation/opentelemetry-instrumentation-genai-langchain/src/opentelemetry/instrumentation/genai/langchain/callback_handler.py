@@ -97,13 +97,17 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         emits no telemetry. Walk up the run hierarchy to the nearest live
         invocation and parent to its span so child spans nest under their
         caller instead of becoming their own root trace.
+
+        A parent is usable as long as its span context is valid even when the
+        span itself is not recorded (e.g. downstream sampling); parenting to it
+        keeps the trace tree's shape and depth correct.
         """
         current = parent_run_id
         visited: set[UUID] = set()
         while current is not None and current not in visited:
             visited.add(current)
             parent = self._invocation_manager.get_invocation(current)
-            if parent is not None and parent.span.is_recording():
+            if parent is not None and parent.span.get_span_context().is_valid:
                 return set_span_in_context(parent.span)
             current = self._invocation_manager.get_parent_run_id(current)
         return None
@@ -673,7 +677,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         provider = meta.get("ls_vector_store_provider") or None
         request_model = meta.get("ls_embedding_model") or None
         retrieval = self._telemetry_handler.retrieval(
-            provider=provider, request_model=request_model
+            provider=provider,
+            request_model=request_model,
+            parent_context=self._parent_context(parent_run_id),
         )
         retrieval.query_text = query
         self._invocation_manager.add_invocation_state(

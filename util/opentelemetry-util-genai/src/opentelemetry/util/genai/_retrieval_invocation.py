@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -54,6 +55,7 @@ class RetrievalInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
+        parent_context: Context | None = None,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
@@ -67,6 +69,7 @@ class RetrievalInvocation(GenAIInvocation):
             if data_source_id
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            parent_context=parent_context,
         )
         self._data_source_id: str | None = data_source_id
         self._provider: str | None = provider

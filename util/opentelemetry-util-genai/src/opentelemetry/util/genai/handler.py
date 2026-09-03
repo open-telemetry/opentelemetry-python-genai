@@ -210,6 +210,7 @@ class TelemetryHandler:
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
+        parent_context: Context | None = None,
     ) -> RetrievalInvocation:
         """Returns a Retrieval invocation. Starts span when called.
 
@@ -229,6 +230,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            parent_context=parent_context,
         )
 
     def start_tool(
