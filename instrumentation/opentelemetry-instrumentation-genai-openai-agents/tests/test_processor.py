@@ -89,7 +89,9 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
 ):
     handler = _build_handler()
     handler.tool.return_value = MagicMock(
-        spec=ToolInvocation, metric_attributes={}
+        spec=ToolInvocation,
+        metric_attributes={},
+        should_capture_content_on_span=True,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(
@@ -122,10 +124,37 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
     tool_invocation.stop.assert_called_once_with()
 
 
+def test_function_span_skips_content_when_capture_disabled() -> None:
+    handler = _build_handler()
+    handler.tool.return_value = MagicMock(
+        spec=ToolInvocation,
+        metric_attributes={},
+        should_capture_content_on_span=False,
+    )
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
+
+    processor.on_span_start(span)
+    span.span_data.input = '{"city":"BCN"}'
+    span.span_data.output = "sunny"
+    processor.on_span_end(span)
+
+    tool_invocation = handler.tool.return_value
+    # A spec'd mock rejects reads of attributes nothing assigned, so these
+    # assert the processor skipped the serialization work entirely.
+    with pytest.raises(AttributeError):
+        _ = tool_invocation.arguments
+    with pytest.raises(AttributeError):
+        _ = tool_invocation.tool_result
+    tool_invocation.stop.assert_called_once_with()
+
+
 def test_function_span_without_output_still_stops() -> None:
     handler = _build_handler()
     handler.tool.return_value = MagicMock(
-        spec=ToolInvocation, metric_attributes={}
+        spec=ToolInvocation,
+        metric_attributes={},
+        should_capture_content_on_span=True,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(FunctionSpanData(name="noop", input=None, output=None))

@@ -135,8 +135,10 @@ class GenAITracingProcessor(TracingProcessor):
         invocation = self._invocations.pop(span, None)
         if invocation is None:
             return
-        if isinstance(invocation, ToolInvocation) and isinstance(
-            span.span_data, FunctionSpanData
+        if (
+            isinstance(invocation, ToolInvocation)
+            and isinstance(span.span_data, FunctionSpanData)
+            and invocation.should_capture_content_on_span
         ):
             arguments = span.span_data.input
             if arguments:
