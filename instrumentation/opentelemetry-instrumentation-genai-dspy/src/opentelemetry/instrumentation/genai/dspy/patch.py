@@ -485,20 +485,20 @@ def _start_retrieval_invocation(
 def _set_retrieval_invocation_documents(
     handler: TelemetryHandler,
     invocation: RetrievalInvocation,
-    result: Any,
+    result: object,
 ) -> None:
     if not handler.should_capture_content():
         return
 
-    passages: Sequence[Any] | None = None
+    passages: Sequence[object] | None = None
     if hasattr(result, "passages"):
-        attr_val: Any = getattr(result, "passages")
+        attr_val = getattr(result, "passages")
         if isinstance(attr_val, Sequence) and not isinstance(
             attr_val, (str, bytes)
         ):
-            passages = cast(Sequence[Any], attr_val)
+            passages = cast(Sequence[object], attr_val)
     elif isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
-        passages = cast(Sequence[Any], result)
+        passages = cast(Sequence[object], result)
     elif isinstance(result, str):
         passages = [result]
 
@@ -506,19 +506,18 @@ def _set_retrieval_invocation_documents(
         return
 
     documents: list[dict[str, Any]] = []
-    for raw_psg in passages:
-        psg: Any = raw_psg
+    for psg in passages:
         if isinstance(psg, str):
             documents.append({"content": psg})
         elif isinstance(psg, Mapping):
-            mapping_psg: Mapping[Any, Any] = cast(Mapping[Any, Any], psg)
-            content_val: Any = mapping_psg.get("long_text") or mapping_psg.get(
+            mapping_psg = cast(Mapping[str, Any], psg)
+            content_val = mapping_psg.get("long_text") or mapping_psg.get(
                 "content"
             )
             doc: dict[str, Any] = {
-                "content": str(content_val)
-                if content_val is not None
-                else str(cast(object, psg))
+                "content": str(
+                    content_val if content_val is not None else mapping_psg
+                )
             }
             if "id" in mapping_psg:
                 doc["id"] = str(mapping_psg["id"])
@@ -529,15 +528,13 @@ def _set_retrieval_invocation_documents(
                     pass
             documents.append(doc)
         elif hasattr(psg, "long_text"):
-            long_text: Any = getattr(psg, "long_text")
+            long_text = getattr(psg, "long_text")
             doc = {"content": str(long_text)}
             if hasattr(psg, "id"):
-                doc_id: Any = getattr(psg, "id")
-                doc["id"] = str(doc_id)
+                doc["id"] = str(getattr(psg, "id"))
             if hasattr(psg, "score"):
-                score: Any = getattr(psg, "score")
                 try:
-                    doc["score"] = float(score)
+                    doc["score"] = float(getattr(psg, "score"))
                 except (ValueError, TypeError):
                     pass
             documents.append(doc)
