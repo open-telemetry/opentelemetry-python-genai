@@ -32,7 +32,9 @@ the openai SDK directly and produces those.
 
 from __future__ import annotations
 
+import json
 import weakref
+from collections.abc import Mapping
 from typing import Any
 
 from agents.tracing import Span, Trace, TracingProcessor
@@ -53,11 +55,20 @@ from opentelemetry.util.genai.invocation import (
     ToolInvocation,
 )
 from opentelemetry.util.genai.types import Error
+from opentelemetry.util.types import AnyValue
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
 # only puts the name in the span name, not as an attribute.
 _WORKFLOW_NAME_ATTR = "gen_ai.workflow.name"
+
+
+def _tool_arguments(raw: str) -> AnyValue:
+    try:
+        parsed: AnyValue = json.loads(raw)
+    except ValueError:
+        return raw
+    return parsed if isinstance(parsed, Mapping) else raw
 
 
 class GenAITracingProcessor(TracingProcessor):
@@ -107,8 +118,6 @@ class GenAITracingProcessor(TracingProcessor):
                 tool_type="function",
             )
 
-            invocation.arguments = span_data.input
-
             # ToolInvocation does not include provider in metric attributes
             # by default; set it so gen_ai.client.operation.duration carries
             # the required gen_ai.provider.name attribute.
@@ -126,9 +135,14 @@ class GenAITracingProcessor(TracingProcessor):
         invocation = self._invocations.pop(span, None)
         if invocation is None:
             return
-        if isinstance(invocation, ToolInvocation) and isinstance(
-            span.span_data, FunctionSpanData
+        if (
+            isinstance(invocation, ToolInvocation)
+            and isinstance(span.span_data, FunctionSpanData)
+            and invocation.should_capture_content_on_span
         ):
+            arguments = span.span_data.input
+            if arguments:
+                invocation.arguments = _tool_arguments(arguments)
             output = span.span_data.output
             if output is not None:
                 invocation.tool_result = (
