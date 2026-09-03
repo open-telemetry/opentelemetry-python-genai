@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -518,3 +519,118 @@ def test_workflow_session_id_sets_conversation_id(
     _set_invocation_output(invocation, _WorkflowResult(), capture_content=True)
     invocation.stop()
     assert invocation.conversation_id == "wf-session-456"
+
+
+def test_format_content_structured_types() -> None:
+    import json
+    from dataclasses import dataclass
+
+    from pydantic import BaseModel
+
+    from opentelemetry.instrumentation.genai.agno.utils import format_content
+
+    class MyModel(BaseModel):
+        name: str
+        count: int
+
+    @dataclass
+    class MyDataClass:
+        item: str
+
+    assert format_content("plain text") == "plain text"
+    assert format_content(None) == ""
+    assert format_content(42) == "42"
+    assert json.loads(format_content(MyModel(name="test", count=5))) == {
+        "name": "test",
+        "count": 5,
+    }
+    assert json.loads(format_content(MyDataClass(item="val"))) == {
+        "item": "val"
+    }
+    assert json.loads(format_content({"a": 1, "b": "c"})) == {"a": 1, "b": "c"}
+    assert json.loads(format_content([1, "x"])) == [1, "x"]
+    assert json.loads(
+        format_content({"nested": MyModel(name="sub", count=1)})
+    ) == {"nested": {"name": "sub", "count": 1}}
+
+    class MockV1Model:
+        def __init__(self, key: str) -> None:
+            self.key = key
+
+        def dict(self) -> dict[str, Any]:
+            return {"key": self.key}
+
+    assert json.loads(format_content(MockV1Model("v1"))) == {"key": "v1"}
+    assert json.loads(
+        format_content({"nested_v1": MockV1Model("v1_nested")})
+    ) == {"nested_v1": {"key": "v1_nested"}}
+    assert json.loads(format_content([MockV1Model("v1_list")])) == [
+        {"key": "v1_list"}
+    ]
+    assert format_content(MockV1Model) == str(MockV1Model)
+
+
+def test_set_invocation_output_pydantic_structured_content(
+    tracer_provider,
+) -> None:
+    import json
+
+    from pydantic import BaseModel
+
+    from opentelemetry.instrumentation.genai.agno.patch import (
+        _set_invocation_output,
+    )
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    class Movie(BaseModel):
+        title: str
+        year: int
+
+    class _OutputResult:
+        def __init__(self, content: object) -> None:
+            self.content = content
+            self.session_id = "sess-123"
+
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.invoke_local_agent(agent_name="agent")
+    _set_invocation_output(
+        invocation,
+        _OutputResult(content=Movie(title="Inception", year=2010)),
+        capture_content=True,
+    )
+    invocation.stop()
+    msg = invocation.output_messages[0]
+    assert json.loads(msg.parts[0].content) == {
+        "title": "Inception",
+        "year": 2010,
+    }
+
+
+def test_set_tool_invocation_output_structured_result(
+    tracer_provider,
+) -> None:
+    import json
+
+    from pydantic import BaseModel
+
+    from opentelemetry.instrumentation.genai.agno.patch import (
+        _set_tool_invocation_output,
+    )
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    class ToolOutput(BaseModel):
+        status: str
+        code: int
+
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.tool(name="sample_tool")
+    _set_tool_invocation_output(
+        invocation,
+        ToolOutput(status="ok", code=200),
+        capture_content=True,
+    )
+    invocation.stop()
+    assert json.loads(invocation.tool_result) == {
+        "status": "ok",
+        "code": 200,
+    }

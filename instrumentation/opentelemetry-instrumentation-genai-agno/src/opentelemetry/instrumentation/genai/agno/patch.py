@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-import json
+import functools
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -19,7 +19,15 @@ if TYPE_CHECKING:
 
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.genai.agno.stream import (
+    AgnoAgentStreamWrapper,
+    AgnoWorkflowStreamWrapper,
+    AsyncAgnoAgentStreamWrapper,
+    AsyncAgnoWorkflowStreamWrapper,
+)
 from opentelemetry.instrumentation.genai.agno.utils import (
+    _get_property_value,
+    format_content,
     prepare_tool_definitions,
 )
 from opentelemetry.instrumentation.utils import unwrap
@@ -134,38 +142,28 @@ def unpatch_agent() -> None:
 
 
 def _extract_input_content(input_val: Any) -> str:
-    if isinstance(input_val, str):
-        return input_val
-    if hasattr(input_val, "content"):
-        return str(getattr(input_val, "content"))
-    return str(input_val)
+    if input_val is None:
+        return ""
+    content = _get_property_value(input_val, "content")
+    if content is not None:
+        return format_content(content)
+    return format_content(input_val)
 
 
 def _extract_output_content(result: Any) -> str:
     if result is None:
         return ""
-    if hasattr(result, "content") and getattr(result, "content") is not None:
-        content = getattr(result, "content")
-        if isinstance(content, str):
-            return content
-        return str(content)
-    if hasattr(result, "result") and getattr(result, "result") is not None:
-        val = getattr(result, "result")
-        if isinstance(val, str):
-            return val
-        return str(val)
-    return str(result)
+    content = _get_property_value(result, "content")
+    if content is not None:
+        return format_content(content)
+    val = _get_property_value(result, "result")
+    if val is not None:
+        return format_content(val)
+    return format_content(result)
 
 
 def _extract_arguments_str(args_val: Any) -> str:
-    if isinstance(args_val, str):
-        return args_val
-    if isinstance(args_val, (dict, list)):
-        try:
-            return json.dumps(args_val, ensure_ascii=False)
-        except Exception:
-            pass
-    return str(cast(object, args_val))
+    return format_content(args_val)
 
 
 def _set_tool_invocation_input(
@@ -206,7 +204,7 @@ def _set_invocation_input(
             ]
 
 
-def _extract_finish_reason(result: AgnoRunOutput) -> str:
+def _extract_finish_reason(result: object) -> str:
     if "error" in str(getattr(result, "status", "")).lower():
         return "error"
     return "stop"
@@ -214,7 +212,7 @@ def _extract_finish_reason(result: AgnoRunOutput) -> str:
 
 def _set_invocation_output(
     invocation: AgentInvocation | WorkflowInvocation,
-    result: AgnoRunOutput | None,
+    result: object | None,
     capture_content: bool,
 ) -> None:
     if capture_content and result is not None:
@@ -226,8 +224,9 @@ def _set_invocation_output(
                 finish_reason=_extract_finish_reason(result),
             )
         ]
-    if result and result.session_id:
-        invocation.conversation_id = str(result.session_id)
+    session_id = getattr(result, "session_id", None)
+    if session_id:
+        invocation.conversation_id = str(session_id)
 
 
 def _start_agent_invocation(
@@ -279,12 +278,21 @@ def _agent_run(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        with _start_agent_invocation(
+        invocation = _start_agent_invocation(
             handler, instance, args, kwargs, capture_content
-        ) as invocation:
+        )
+        try:
             result = wrapped(*args, **kwargs)
-            _set_invocation_output(invocation, result, capture_content)
-            return result
+        except Exception as error:
+            invocation.fail(error)
+            raise
+
+        if isinstance(result, Iterator):
+            return AgnoAgentStreamWrapper(result, invocation, capture_content)
+
+        _set_invocation_output(invocation, result, capture_content)
+        invocation.stop()
+        return result
 
     return traced_method
 
@@ -294,20 +302,53 @@ def _agent_arun(
 ) -> Callable[..., Any]:
     capture_content = handler.should_capture_content()
 
-    async def traced_method(
-        wrapped: Callable[..., Awaitable[Any]],
+    def traced_method(
+        wrapped: Callable[..., Any],
         instance: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        with _start_agent_invocation(
+        invocation = _start_agent_invocation(
             handler, instance, args, kwargs, capture_content
-        ) as invocation:
-            result = await wrapped(*args, **kwargs)
-            _set_invocation_output(invocation, result, capture_content)
-            return result
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+        except Exception as error:
+            invocation.fail(error)
+            raise
 
-    return cast(Callable[..., Any], traced_method)
+        if isinstance(result, AsyncIterator):
+            return AsyncAgnoAgentStreamWrapper(
+                result, invocation, capture_content
+            )
+
+        if isinstance(result, Awaitable):
+
+            @functools.wraps(wrapped)
+            async def _await_result() -> object:
+                try:
+                    awaitable = cast(Awaitable[object], result)
+                    response: object = await awaitable
+                    if isinstance(response, AsyncIterator):
+                        return AsyncAgnoAgentStreamWrapper(
+                            response, invocation, capture_content
+                        )
+                    _set_invocation_output(
+                        invocation, response, capture_content
+                    )
+                    invocation.stop()
+                    return response
+                except Exception as error:
+                    invocation.fail(error)
+                    raise
+
+            return _await_result()
+
+        _set_invocation_output(invocation, result, capture_content)
+        invocation.stop()
+        return result
+
+    return traced_method
 
 
 def _tool_call_execute(
@@ -376,12 +417,23 @@ def _workflow_run(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        with _start_workflow_invocation(
+        invocation = _start_workflow_invocation(
             handler, instance, args, kwargs, capture_content
-        ) as invocation:
+        )
+        try:
             result = wrapped(*args, **kwargs)
-            _set_invocation_output(invocation, result, capture_content)
-            return result
+        except Exception as error:
+            invocation.fail(error)
+            raise
+
+        if isinstance(result, Iterator):
+            return AgnoWorkflowStreamWrapper(
+                result, invocation, capture_content
+            )
+
+        _set_invocation_output(invocation, result, capture_content)
+        invocation.stop()
+        return result
 
     return traced_method
 
@@ -391,17 +443,50 @@ def _workflow_arun(
 ) -> Callable[..., Any]:
     capture_content = handler.should_capture_content()
 
-    async def traced_method(
-        wrapped: Callable[..., Awaitable[Any]],
+    def traced_method(
+        wrapped: Callable[..., Any],
         instance: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        with _start_workflow_invocation(
+        invocation = _start_workflow_invocation(
             handler, instance, args, kwargs, capture_content
-        ) as invocation:
-            result = await wrapped(*args, **kwargs)
-            _set_invocation_output(invocation, result, capture_content)
-            return result
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+        except Exception as error:
+            invocation.fail(error)
+            raise
 
-    return cast(Callable[..., Any], traced_method)
+        if isinstance(result, AsyncIterator):
+            return AsyncAgnoWorkflowStreamWrapper(
+                result, invocation, capture_content
+            )
+
+        if isinstance(result, Awaitable):
+
+            @functools.wraps(wrapped)
+            async def _await_result() -> object:
+                try:
+                    awaitable = cast(Awaitable[object], result)
+                    response: object = await awaitable
+                    if isinstance(response, AsyncIterator):
+                        return AsyncAgnoWorkflowStreamWrapper(
+                            response, invocation, capture_content
+                        )
+                    _set_invocation_output(
+                        invocation, response, capture_content
+                    )
+                    invocation.stop()
+                    return response
+                except Exception as error:
+                    invocation.fail(error)
+                    raise
+
+            return _await_result()
+
+        _set_invocation_output(invocation, result, capture_content)
+        invocation.stop()
+        return result
+
+    return traced_method
