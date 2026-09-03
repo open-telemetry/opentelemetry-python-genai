@@ -3652,7 +3652,7 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dspy", marker = "extra == 'instruments'", specifier = ">=2.5.0,<4" },
+    { name = "dspy", marker = "extra == 'instruments'", specifier = ">=2.6.0,<4" },
     { name = "opentelemetry-api", specifier = "~=1.43" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
