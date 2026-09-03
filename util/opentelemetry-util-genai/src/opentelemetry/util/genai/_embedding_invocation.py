@@ -33,7 +33,7 @@ class EmbeddingInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
-        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value

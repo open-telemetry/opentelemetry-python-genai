@@ -51,7 +51,7 @@ class InferenceInvocation(GenAIInvocation):
         server_port: int | None = None,
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
-        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -304,6 +304,8 @@ class LLMInvocation:
         metrics_recorder: InvocationMetricsRecorder,
         logger: Logger,
         completion_hook: CompletionHook,
+        *,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
         inv = InferenceInvocation(
@@ -315,6 +317,7 @@ class LLMInvocation:
             request_model=self.request_model,
             server_address=self.server_address,
             server_port=self.server_port,
+            content_capturing_mode=content_capturing_mode,
         )
         inv.input_messages = self.input_messages
         inv.output_messages = self.output_messages

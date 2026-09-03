@@ -173,6 +173,7 @@ class TelemetryHandler:
             self._metrics_recorder,
             self._logger,
             self._completion_hook,
+            content_capturing_mode=self._content_capturing_mode,
         )
         return invocation
 

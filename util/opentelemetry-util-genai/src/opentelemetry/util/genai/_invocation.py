@@ -73,7 +73,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         metric_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         *,
-        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
@@ -82,7 +82,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
         self._content_capturing_mode: ContentCapturingMode = (
-            content_capturing_mode
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
         )
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
@@ -114,6 +116,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             ContentCapturingMode.EVENT_ONLY,
             ContentCapturingMode.SPAN_AND_EVENT,
         ) or not isinstance(self._completion_hook, _NoOpCompletionHook)
+
+    @property
+    def _should_capture_content_on_span(self) -> bool:
+        return self._content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None

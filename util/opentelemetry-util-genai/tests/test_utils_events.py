@@ -147,6 +147,12 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(log_record.trace_id, span.context.trace_id)
         self.assertEqual(log_record.span_id, span.context.span_id)
 
+        # In EVENT_ONLY mode, messages must not be attached to span
+        span_attrs = span.attributes or {}
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, span_attrs)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, span_attrs)
+        self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
+
     @patch.dict(
         os.environ,
         {

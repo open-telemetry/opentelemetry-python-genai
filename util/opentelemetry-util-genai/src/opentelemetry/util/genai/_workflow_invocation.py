@@ -41,7 +41,7 @@ class WorkflowInvocation(GenAIInvocation):
         completion_hook: CompletionHook,
         name: str | None,
         *,
-        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = "invoke_workflow"
@@ -72,10 +72,7 @@ class WorkflowInvocation(GenAIInvocation):
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:
-        if self._content_capturing_mode not in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        ):
+        if not self._should_capture_content_on_span:
             return {}
         optional_attrs = (
             (

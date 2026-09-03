@@ -31,6 +31,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._inference_invocation import LLMInvocation
 from opentelemetry.util.genai.handler import (
     TelemetryHandler,
     get_telemetry_handler,
@@ -443,6 +444,46 @@ class TestTelemetryHandler(unittest.TestCase):
                 "extra_manual": "yes",
             },
         )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_start_llm_captures_content_on_span(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        inv = LLMInvocation(request_model="legacy-model")
+        handler.start_llm(inv)
+        inv.input_messages = [_create_input_message("hi")]
+        inv.output_messages = [_create_output_message("hello")]
+        handler.stop_llm(inv)
+
+        span = _get_single_span(self.span_exporter)
+        attrs = _get_span_attributes(span)
+        assert GenAI.GEN_AI_INPUT_MESSAGES in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES in attrs
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_inference_messages_omitted_from_span_in_event_only_mode(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.inference(
+            "test-provider", request_model="test-model"
+        ) as inv:
+            inv.input_messages = [_create_input_message("hi")]
+            inv.output_messages = [_create_output_message("hello")]
+
+        span = _get_single_span(self.span_exporter)
+        attrs = _get_span_attributes(span)
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
     def test_start_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""

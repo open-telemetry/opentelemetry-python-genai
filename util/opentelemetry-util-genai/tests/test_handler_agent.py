@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,9 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import INVALID_SPAN, SpanKind
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
@@ -411,6 +415,34 @@ class TestAgentInvocationContent(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+    )
+    def test_messages_omitted_from_span_in_event_only_mode(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.invoke_local_agent()
+        assert invocation.should_capture_content is True
+        invocation.system_instruction = [
+            TextPart(content="You are a helpful assistant."),
+        ]
+        invocation.input_messages = [
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
+        ]
+        invocation.output_messages = [
+            OutputMessage(
+                role="assistant",
+                parts=[TextPart(content="Hi!")],
+                finish_reason="stop",
+            )
+        ]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes or {}
+        assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
 class TestRemoteAgentInvocation(unittest.TestCase):

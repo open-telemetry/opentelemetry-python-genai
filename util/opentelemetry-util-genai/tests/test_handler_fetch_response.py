@@ -330,3 +330,18 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
         attrs = self._get_finished_spans()[0].attributes
         self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, attrs)
         self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, attrs)
+
+    def test_content_suppressed_on_span_in_event_only_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+        ):
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                meter_provider=self.meter_provider,
+            )
+            self._fetch_with_content(handler)
+
+        attrs = self._get_finished_spans()[0].attributes
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, attrs)
+        self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, attrs)

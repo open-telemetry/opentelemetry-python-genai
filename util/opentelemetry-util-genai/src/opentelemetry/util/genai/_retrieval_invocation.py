@@ -54,7 +54,7 @@ class RetrievalInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
-        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
@@ -112,11 +112,7 @@ class RetrievalInvocation(GenAIInvocation):
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
         if (
             not self.span.is_recording()
-            or self._content_capturing_mode
-            not in (
-                ContentCapturingMode.SPAN_ONLY,
-                ContentCapturingMode.SPAN_AND_EVENT,
-            )
+            or not self._should_capture_content_on_span
         ):
             return {}
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (

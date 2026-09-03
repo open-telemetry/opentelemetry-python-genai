@@ -64,7 +64,7 @@ class ToolInvocation(GenAIInvocation):
         agent_name: str | None = None,
         tool_call_id: str | None = None,
         tool_description: str | None = None,
-        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.tool(name) instead of calling this directly.
 
@@ -104,10 +104,7 @@ class ToolInvocation(GenAIInvocation):
         .. deprecated:: 1.2b0
             Use :attr:`should_capture_content` instead.
         """
-        return self._content_capturing_mode in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
+        return self._should_capture_content_on_span
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
@@ -130,10 +127,7 @@ class ToolInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        capture_content_on_span = self._content_capturing_mode in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
+        capture_content_on_span = self._should_capture_content_on_span
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
