@@ -1,0 +1,1 @@
+Nest LangChain child spans (agent, workflow, chat, tool) under their caller instead of emitting each as its own root trace when callbacks run outside the ambient context (e.g. async LangGraph task loops).

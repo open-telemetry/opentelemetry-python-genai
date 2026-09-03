@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -49,6 +50,7 @@ class AgentInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
+        parent_context: Context | None = None,
     ) -> None:
         """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
@@ -62,6 +64,7 @@ class AgentInvocation(GenAIInvocation):
             if agent_name
             else _operation_name,
             span_kind=span_kind,
+            parent_context=parent_context,
         )
         self._provider: str | None = provider
         self._request_model: str | None = request_model

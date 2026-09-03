@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from opentelemetry._logs import Logger, LogRecord
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -50,6 +51,7 @@ class InferenceInvocation(GenAIInvocation):
         server_port: int | None = None,
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        parent_context: Context | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -66,6 +68,7 @@ class InferenceInvocation(GenAIInvocation):
             else operation_name,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            parent_context=parent_context,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
