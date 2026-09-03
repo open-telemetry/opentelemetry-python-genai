@@ -507,6 +507,7 @@ def _set_retrieval_invocation_documents(
 
     documents: list[dict[str, Any]] = []
     for psg in passages:
+        # Standard dspy.Retrieve flattens RM passages to strings via psg.long_text.
         if isinstance(psg, str):
             documents.append({"content": psg})
         elif isinstance(psg, Mapping):
