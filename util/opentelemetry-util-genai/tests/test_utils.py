@@ -296,8 +296,8 @@ class TestShouldCaptureContent(unittest.TestCase):
 class TestTelemetryHandler(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
         self.log_exporter = InMemoryLogRecordExporter()
@@ -306,7 +306,8 @@ class TestTelemetryHandler(unittest.TestCase):
             SimpleLogRecordProcessor(self.log_exporter)
         )
         self.telemetry_handler = get_telemetry_handler(
-            tracer_provider=tracer_provider, logger_provider=logger_provider
+            tracer_provider=self.tracer_provider,
+            logger_provider=logger_provider,
         )
 
     def tearDown(self):
@@ -328,7 +329,8 @@ class TestTelemetryHandler(unittest.TestCase):
         chat_generation = _create_output_message("hello back")
         system_instruction = _create_system_instruction()
 
-        with self.telemetry_handler.inference(
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.inference(
             "test-provider",
             request_model="test-model",
             server_address="custom.server.com",
@@ -411,7 +413,8 @@ class TestTelemetryHandler(unittest.TestCase):
         message = _create_input_message("hi")
         chat_generation = _create_output_message("ok")
 
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.inference(
             "test-provider", request_model="manual-model"
         )
         invocation.input_messages = [message]

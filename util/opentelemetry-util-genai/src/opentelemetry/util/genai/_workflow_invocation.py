@@ -17,7 +17,10 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
 )
-from opentelemetry.util.genai.utils import gen_ai_json_dumps
+from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
+    gen_ai_json_dumps,
+)
 from opentelemetry.util.types import AttributeValue
 
 
@@ -38,7 +41,7 @@ class WorkflowInvocation(GenAIInvocation):
         completion_hook: CompletionHook,
         name: str | None,
         *,
-        should_capture_content: bool = False,
+        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = "invoke_workflow"
@@ -50,7 +53,7 @@ class WorkflowInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
-            should_capture_content=should_capture_content,
+            content_capturing_mode=content_capturing_mode,
         )
         self._name: str | None = name
         self.conversation_id: str | None = None
@@ -69,7 +72,10 @@ class WorkflowInvocation(GenAIInvocation):
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:
-        if not self.should_capture_content:
+        if self._content_capturing_mode not in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ):
             return {}
         optional_attrs = (
             (

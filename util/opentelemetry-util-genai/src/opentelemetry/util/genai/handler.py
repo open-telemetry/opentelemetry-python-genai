@@ -102,9 +102,10 @@ class TelemetryHandler:
             logger_provider,
             schema_url=schema_url,
         )
+        self._content_capturing_mode = get_content_capturing_mode()
         self._completion_hook = completion_hook or _NoOpCompletionHook()
         self._capture_content = (
-            get_content_capturing_mode()
+            self._content_capturing_mode
             in (
                 ContentCapturingMode.SPAN_ONLY,
                 ContentCapturingMode.EVENT_ONLY,
@@ -158,7 +159,7 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             operation_name=operation_name,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_llm(self, invocation: LLMInvocation) -> LLMInvocation:
@@ -200,7 +201,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def retrieval(
@@ -230,7 +231,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_tool(
@@ -258,7 +259,7 @@ class TelemetryHandler:
             tool_type=tool_type,
             tool_call_id=tool_call_id,
             tool_description=tool_description,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_workflow(
@@ -280,7 +281,7 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def stop_llm(self, invocation: LLMInvocation) -> LLMInvocation:  # pylint: disable=no-self-use
@@ -340,7 +341,7 @@ class TelemetryHandler:
             server_port=server_port,
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def embedding(
@@ -368,7 +369,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def fetch_response(
@@ -404,7 +405,7 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             error_type_resolver=error_type_resolver,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def tool(
@@ -441,7 +442,7 @@ class TelemetryHandler:
             agent_name=agent_name,
             tool_call_id=tool_call_id,
             tool_description=tool_description,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_invoke_local_agent(
@@ -468,7 +469,7 @@ class TelemetryHandler:
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_invoke_remote_agent(
@@ -501,7 +502,7 @@ class TelemetryHandler:
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def invoke_local_agent(
@@ -528,7 +529,7 @@ class TelemetryHandler:
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def invoke_remote_agent(
@@ -561,7 +562,7 @@ class TelemetryHandler:
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def workflow(
@@ -582,7 +583,7 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            should_capture_content=self._capture_content,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
 

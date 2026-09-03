@@ -22,6 +22,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 
@@ -49,7 +50,7 @@ class AgentInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-        should_capture_content: bool = False,
+        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
     ) -> None:
         """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
@@ -63,7 +64,7 @@ class AgentInvocation(GenAIInvocation):
             if agent_name
             else _operation_name,
             span_kind=span_kind,
-            should_capture_content=should_capture_content,
+            content_capturing_mode=content_capturing_mode,
         )
         self._provider: str | None = provider
         self._request_model: str | None = request_model
@@ -173,6 +174,7 @@ class AgentInvocation(GenAIInvocation):
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
             for_span=True,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:

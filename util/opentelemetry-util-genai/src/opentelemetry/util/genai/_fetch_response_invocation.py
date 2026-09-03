@@ -24,6 +24,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 # TODO: Migrate to gen_ai_attributes constants once available in the semconv
@@ -87,7 +88,7 @@ class FetchResponseInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
-        should_capture_content: bool = False,
+        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
         super().__init__(
@@ -101,7 +102,7 @@ class FetchResponseInvocation(GenAIInvocation):
             span_name=_FETCH_RESPONSE_OPERATION_NAME,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
-            should_capture_content=should_capture_content,
+            content_capturing_mode=content_capturing_mode,
         )
         self._provider: str = provider
         self._response_id: str = response_id
@@ -180,6 +181,7 @@ class FetchResponseInvocation(GenAIInvocation):
                 system_instruction=self.system_instruction,
                 tool_definitions=self.tool_definitions,
                 for_span=True,
+                content_capturing_mode=self._content_capturing_mode,
             )
         )
         attributes.update(self.attributes)

@@ -26,6 +26,7 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
     should_emit_event,
 )
 from opentelemetry.util.types import AttributeValue
@@ -50,7 +51,7 @@ class InferenceInvocation(GenAIInvocation):
         server_port: int | None = None,
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
-        should_capture_content: bool = False,
+        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.NO_CONTENT,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -67,7 +68,7 @@ class InferenceInvocation(GenAIInvocation):
             else operation_name,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
-            should_capture_content=should_capture_content,
+            content_capturing_mode=content_capturing_mode,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
@@ -121,6 +122,7 @@ class InferenceInvocation(GenAIInvocation):
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
             for_span=for_span,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def _get_finish_reasons(self) -> list[str] | None:

@@ -4,7 +4,7 @@
 """Tests for ToolCallRequestPart and ToolInvocation inheritance structure"""
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,6 +18,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind
+from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -418,3 +419,48 @@ def test_tool_should_capture_content_enabled():
     assert invocation.should_capture_content is True
     assert invocation.should_capture_content_on_span is True
     invocation.stop()
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+)
+def test_tool_content_not_on_span_in_event_only_mode():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is False
+    invocation.arguments = {"city": "Paris"}
+    invocation.tool_result = "sunny"
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+
+
+def test_tool_content_not_on_span_with_completion_hook():
+    mock_hook = MagicMock(spec=CompletionHook)
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=mock_hook
+    )
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is False
+    invocation.arguments = {"city": "Paris"}
+    invocation.tool_result = "sunny"
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs

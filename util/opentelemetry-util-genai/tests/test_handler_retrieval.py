@@ -198,6 +198,29 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         self.assertIsInstance(raw, str)
         self.assertEqual(json.loads(raw), docs)
 
+    @patch.dict(
+        os.environ,
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY",
+        },
+    )
+    def test_stop_suppresses_query_text_and_docs_in_event_only_mode(
+        self,
+    ) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        docs = [{"id": "doc_1", "score": 0.95}]
+        invocation = handler.retrieval()
+        assert invocation.should_capture_content is True
+        invocation.query_text = "What is the capital of France?"
+        invocation.documents = docs
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertNotIn(
+            GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT, spans[0].attributes
+        )
+        self.assertNotIn(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS, spans[0].attributes)
+
     def test_stop_suppresses_documents_when_content_capture_disabled(
         self,
     ) -> None:

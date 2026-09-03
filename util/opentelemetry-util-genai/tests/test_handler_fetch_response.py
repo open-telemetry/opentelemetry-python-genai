@@ -269,8 +269,15 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
     # opt-in content
     # ------------------------------------------------------------------
 
-    def _fetch_with_content(self) -> None:
-        invocation = self._fetch_response()
+    def _fetch_with_content(
+        self, handler: TelemetryHandler | None = None
+    ) -> None:
+        if handler is not None:
+            invocation = handler.fetch_response(
+                "openai", response_id=RESPONSE_ID
+            )
+        else:
+            invocation = self._fetch_response()
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
@@ -293,7 +300,11 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
             os.environ,
             {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
         ):
-            self._fetch_with_content()
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                meter_provider=self.meter_provider,
+            )
+            self._fetch_with_content(handler)
 
         attrs = self._get_finished_spans()[0].attributes
         self.assertEqual(
