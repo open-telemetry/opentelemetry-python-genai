@@ -475,14 +475,8 @@ def _start_retrieval_invocation(
         provider=str(provider) if provider is not None else None,
     )
 
-    query = _extract_retrieval_query(args, kwargs)
-    if query is not None:
-        invocation.query_text = query
-
-    k = _extract_retrieval_k(instance, args, kwargs)
-    if k is not None:
-        invocation.top_k = k
-
+    invocation.query_text = _extract_retrieval_query(args, kwargs)
+    invocation.top_k = _extract_retrieval_k(instance, args, kwargs)
     return invocation
 
 
