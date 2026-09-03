@@ -21,12 +21,14 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.agent import AgentScenario
+from .conformance.workflow import WorkflowScenario
 
 
 @pytest.mark.parametrize(
     "scenario",
     [
         pytest.param(AgentScenario()),
+        pytest.param(WorkflowScenario()),
     ],
     ids=lambda s: type(s).__name__,
 )

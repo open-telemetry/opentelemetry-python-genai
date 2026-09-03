@@ -50,6 +50,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
 )
@@ -438,7 +439,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                             tool_calls.append(tool_call_request)
                         output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message),
+                            role=_normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
                         )
@@ -451,7 +453,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         # ``additional_kwargs`` — surface it as a tool-call
                         # request part like the modern ``tool_calls`` path.
                         output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message),
+                            role=_normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
                         )
@@ -462,7 +465,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 type="text",
                             )
                         ]
-                        role = _normalize_role(chat_generation.message)
+                        role = (
+                            _normalize_role(chat_generation.message)
+                            or Role.ASSISTANT.value
+                        )
                         output_message = OutputMessage(
                             role=role,
                             parts=cast(list[MessagePart], parts),
@@ -575,8 +581,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 arguments = json.loads(input_str)
             except (json.JSONDecodeError, ValueError):
                 arguments = input_str
+        nearest_agent = self._find_nearest_agent(parent_run_id)
+        agent_name = nearest_agent.agent_name if nearest_agent else None
+
         tool_invocation = self._telemetry_handler.tool(
-            name=name, tool_description=description, tool_type="function"
+            name=name,
+            tool_description=description,
+            tool_type="function",
+            agent_name=agent_name,
         )
         tool_invocation.arguments = arguments
         tool_call_id = kwargs.get("tool_call_id")

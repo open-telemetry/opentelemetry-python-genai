@@ -6,6 +6,7 @@ import json
 import os
 import unittest
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -45,6 +46,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
     ReasoningPart,
+    Role,
     Text,
     TextPart,
     Uri,
@@ -52,6 +54,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     decode_base64,
+    gen_ai_json_dumps,
     get_content_capturing_mode,
     image_from_url,
     should_capture_content_on_spans,
@@ -1012,6 +1015,26 @@ class TestTelemetryHandler(unittest.TestCase):
 class AnyNonNone:
     def __eq__(self, other):
         return other is not None
+
+
+class TestRole(unittest.TestCase):
+    def test_values_match_semantic_conventions(self):
+        self.assertEqual(
+            {role.value for role in Role},
+            {"system", "user", "assistant", "tool"},
+        )
+
+    def test_serializes_as_a_bare_string(self):
+        """A member set on a message must reach the wire as its value."""
+        message = OutputMessage(
+            role=Role.ASSISTANT,
+            parts=[TextPart(content="hi")],
+            finish_reason="stop",
+        )
+
+        serialized = json.loads(gen_ai_json_dumps(asdict(message)))
+
+        self.assertEqual(serialized["role"], "assistant")
 
 
 _REAL_PNG_BYTES = (
