@@ -1,0 +1,1 @@
+Capture Anthropic image and document inputs as GenAI ``BlobPart``, ``UriPart``, ``FilePart``, and ``GenericPart`` message parts
