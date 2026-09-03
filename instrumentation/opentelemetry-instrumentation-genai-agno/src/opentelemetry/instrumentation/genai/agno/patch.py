@@ -258,10 +258,12 @@ def _start_tool_invocation(
 
     invocation = handler.tool(
         name=str(tool_name),
-        tool_call_id=str(tool_call_id) if tool_call_id else None,
         tool_type="function",
-        tool_description=str(tool_desc) if tool_desc else None,
     )
+    if tool_call_id:
+        invocation.tool_call_id = str(tool_call_id)
+    if tool_desc:
+        invocation.tool_description = str(tool_desc)
     _set_tool_invocation_input(invocation, instance, capture_content)
     return invocation
 

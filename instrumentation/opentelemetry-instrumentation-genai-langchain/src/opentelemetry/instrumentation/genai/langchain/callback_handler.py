@@ -586,10 +586,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         tool_invocation = self._telemetry_handler.tool(
             name=name,
-            tool_description=description,
             tool_type="function",
             agent_name=agent_name,
         )
+        tool_invocation.tool_description = description
         tool_invocation.arguments = arguments
         tool_call_id = kwargs.get("tool_call_id")
         if tool_call_id:
