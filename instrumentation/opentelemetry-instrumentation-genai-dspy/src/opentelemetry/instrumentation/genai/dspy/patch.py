@@ -7,9 +7,16 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
+from copy import copy, deepcopy
+from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from wrapt import wrap_function_wrapper
+from wrapt import (
+    BoundFunctionWrapper,
+    FunctionWrapper,
+    apply_patch,
+    resolve_path,
+)
 
 from opentelemetry.instrumentation.genai.dspy.utils import (
     extract_input_content,
@@ -40,6 +47,120 @@ _REACT_V2_MODULE = "dspy.predict.react_v2"
 _REACT_V2_CLASS = "ReActV2"
 
 
+if TYPE_CHECKING:
+    _BoundFunctionWrapper = BoundFunctionWrapper[Any, Any]
+    _FunctionWrapper = FunctionWrapper[Any, Any]
+else:
+    _BoundFunctionWrapper = BoundFunctionWrapper
+    _FunctionWrapper = FunctionWrapper
+
+
+class _CopyableBoundFunctionWrapper(_BoundFunctionWrapper):
+    """BoundFunctionWrapper that supports copy and deepcopy."""
+
+    def __init__(
+        self,
+        wrapped: Any,
+        instance: Any = None,
+        wrapper: Any = None,
+        enabled: Any = None,
+        binding: str = "callable",
+        parent: Any = None,
+        owner: Any = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        init_args: tuple[Any, ...] = (
+            wrapped,
+            instance,
+            wrapper,
+            enabled,
+            binding,
+            parent,
+            owner,
+            *args,
+        )
+        super().__init__(*init_args, **kwargs)
+
+    def __copy__(self) -> _CopyableBoundFunctionWrapper:
+        return _CopyableBoundFunctionWrapper(
+            self.__wrapped__,
+            self._self_instance,
+            self._self_wrapper,
+            self._self_enabled,
+            self._self_binding,
+            self._self_parent,
+            self._self_owner,
+        )
+
+    def __deepcopy__(self, memo: dict[Any, Any]) -> Any:
+        if self._self_instance is not None:
+            copied_instance: Any = deepcopy(self._self_instance, memo)
+            attr_name: str | None = getattr(self, "__name__", None)
+            if attr_name and hasattr(copied_instance, attr_name):
+                return getattr(copied_instance, attr_name)
+            return _CopyableBoundFunctionWrapper(
+                deepcopy(self.__wrapped__, memo),
+                copied_instance,
+                self._self_wrapper,
+                self._self_enabled,
+                self._self_binding,
+                self._self_parent,
+                self._self_owner,
+            )
+        return _CopyableBoundFunctionWrapper(
+            deepcopy(self.__wrapped__, memo),
+            None,
+            self._self_wrapper,
+            self._self_enabled,
+            self._self_binding,
+            self._self_parent,
+            self._self_owner,
+        )
+
+
+class _CopyableFunctionWrapper(_FunctionWrapper):
+    """FunctionWrapper that supports copy and deepcopy."""
+
+    __bound_function_wrapper__ = _CopyableBoundFunctionWrapper
+
+    def __copy__(self) -> _CopyableFunctionWrapper:
+        wrapped: Any = self.__wrapped__
+        wrapper: Any = self._self_wrapper
+        return _CopyableFunctionWrapper(
+            copy(wrapped),
+            wrapper,
+            self._self_enabled,
+        )
+
+    def __deepcopy__(self, memo: dict[Any, Any]) -> _CopyableFunctionWrapper:
+        wrapped: Any = self.__wrapped__
+        wrapper: Any = self._self_wrapper
+        return _CopyableFunctionWrapper(
+            deepcopy(wrapped, memo),
+            wrapper,
+            self._self_enabled,
+        )
+
+
+def _wrap_function(
+    target: Any,
+    name: str,
+    wrapper: Callable[..., Any],
+) -> None:
+    """Wrap a target attribute with _CopyableFunctionWrapper.
+
+    Resolves target if given as a module name string, traverses dotted attribute
+    paths to find the owning object, and applies the wrapper.
+    """
+    if isinstance(target, str):
+        target = import_module(target)
+
+    parent, attribute, original = resolve_path(target, name)
+    wrapped = _CopyableFunctionWrapper(original, wrapper)
+    apply_patch(parent, attribute, wrapped)
+
+
 def patch_dspy(handler: TelemetryHandler) -> None:
     """Apply patches to DSPy Tool and ReAct classes."""
     import dspy
@@ -47,25 +168,25 @@ def patch_dspy(handler: TelemetryHandler) -> None:
 
     tool_module = dspy.Tool.__module__
     tool_name = dspy.Tool.__name__
-    wrap_function_wrapper(
+    _wrap_function(
         tool_module,
         f"{tool_name}.__call__",
         _tool_call(handler),
     )
     if hasattr(dspy.Tool, "acall"):
-        wrap_function_wrapper(
+        _wrap_function(
             tool_module,
             f"{tool_name}.acall",
             _tool_acall(handler),
         )
 
-    wrap_function_wrapper(
+    _wrap_function(
         _REACT_MODULE,
         f"{_REACT_CLASS}.forward",
         _react_forward(handler, "dspy.ReAct"),
     )
     if hasattr(dspy.predict.react.ReAct, "aforward"):
-        wrap_function_wrapper(
+        _wrap_function(
             _REACT_MODULE,
             f"{_REACT_CLASS}.aforward",
             _react_aforward(handler, "dspy.ReAct"),
@@ -78,13 +199,13 @@ def patch_dspy(handler: TelemetryHandler) -> None:
         react_v2_cls = getattr(dspy.predict.react_v2, "ReActV2", None)
         if react_v2_cls is not None:
             if hasattr(react_v2_cls, "forward"):
-                wrap_function_wrapper(
+                _wrap_function(
                     _REACT_V2_MODULE,
                     f"{_REACT_V2_CLASS}.forward",
                     _react_forward(handler, "dspy.ReActV2"),
                 )
             if "aforward" in getattr(react_v2_cls, "__dict__", {}):
-                wrap_function_wrapper(
+                _wrap_function(
                     _REACT_V2_MODULE,
                     f"{_REACT_V2_CLASS}.aforward",
                     _react_aforward(handler, "dspy.ReActV2"),
