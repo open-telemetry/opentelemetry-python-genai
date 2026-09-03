@@ -90,7 +90,9 @@ class CrewAIEventListener(BaseEventListener):
         self._pending_completions: dict[str, CompletionEvent] = {}
         self._handlers: list[tuple[type[BaseEvent], RegisteredHandler]] = []
         self._event_bus: CrewAIEventsBus | None = None
-        self._lock = threading.RLock()
+        # CrewAI dispatches synchronous event handlers through a thread pool,
+        # so callbacks for separate events can update correlation state concurrently.
+        self._lock = threading.Lock()
         super().__init__()
 
     def setup_listeners(self, crewai_event_bus: CrewAIEventsBus) -> None:
