@@ -87,6 +87,132 @@ def _load_span_messages(span, attribute):
     return parsed
 
 
+def _multimodal_input_message():
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe these images."},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "QUJD",
+                },
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/image.png",
+                },
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "QUJD",
+                },
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/document.pdf",
+                },
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "text",
+                    "media_type": "text/plain",
+                    "data": "Document text",
+                },
+            },
+            {
+                "type": "document",
+                "title": "Reference",
+                "context": "Use the nested content.",
+                "citations": {"enabled": True},
+                "source": {
+                    "type": "content",
+                    "content": [
+                        {"type": "text", "text": "Nested text"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.com/nested.png",
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
+
+def _assert_multimodal_input(span):
+    messages = _load_span_messages(span, GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+
+    parts = messages[0]["parts"]
+    assert len(parts) == 7
+    assert parts[0] == {
+        "type": "text",
+        "content": "Describe these images.",
+    }
+    assert parts[1] == {
+        "type": "blob",
+        "mime_type": "image/png",
+        "modality": "image",
+        "content": "QUJD",
+    }
+    assert parts[2] == {
+        "type": "uri",
+        "mime_type": None,
+        "modality": "image",
+        "uri": "https://example.com/image.png",
+    }
+    assert parts[3] == {
+        "type": "blob",
+        "mime_type": "application/pdf",
+        "modality": "document",
+        "content": "QUJD",
+    }
+    assert parts[4] == {
+        "type": "uri",
+        "mime_type": "application/pdf",
+        "modality": "document",
+        "uri": "https://example.com/document.pdf",
+    }
+    assert parts[5] == {
+        "type": "blob",
+        "mime_type": "text/plain",
+        "modality": "document",
+        "content": "RG9jdW1lbnQgdGV4dA==",
+    }
+    assert parts[6] == {
+        "type": "document",
+        "value": {
+            "parts": [
+                {"content": "Nested text", "type": "text"},
+                {
+                    "mime_type": None,
+                    "modality": "image",
+                    "uri": "https://example.com/nested.png",
+                    "type": "uri",
+                },
+            ],
+            "title": "Reference",
+            "context": "Use the nested content.",
+            "citations": {"enabled": True},
+        },
+    }
+
+
 class _AsyncErrorInjectingStreamDelegate:
     def __init__(self, inner):
         self._inner = inner
@@ -223,6 +349,25 @@ async def test_async_messages_create_captures_content(
     assert input_messages[0]["parts"][0]["type"] == "text"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"][0]["type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_captures_multimodal_content(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette("test_async_messages_create_captures_content.yaml"):
+        await async_anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[_multimodal_input_message()],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio
@@ -432,6 +577,31 @@ async def test_async_messages_create_streaming_captures_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_streaming_captures_multimodal_content(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_async_messages_create_streaming_captures_content.yaml"
+    ):
+        stream = await async_anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[_multimodal_input_message()],
+            stream=True,
+        )
+        async with stream:
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio
