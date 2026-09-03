@@ -455,7 +455,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             )
             tool_invocation.tool_call_id = tool_call.tool_id
             tool_invocation.tool_description = tool_description
-            if tool_invocation.should_capture_content_on_span:
+            if tool_invocation.should_capture_content:
                 tool_invocation.arguments = cast(
                     dict[str, Any], cast(Any, tool_call).tool_kwargs
                 )
@@ -477,7 +477,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 tool_type="function",
             )
             tool_invocation.tool_description = metadata.description or None
-            if tool_invocation.should_capture_content_on_span:
+            if tool_invocation.should_capture_content:
                 tool_invocation.arguments = _tool_arguments(
                     instance, bound_args
                 )
@@ -519,7 +519,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             elif isinstance(result, ToolOutput):
                 tool_output = result
             if tool_output is not None:
-                if span._invocation.should_capture_content_on_span:
+                if span._invocation.should_capture_content:
                     span._invocation.tool_result = tool_output.raw_output
                 if tool_output.is_error:
                     # LlamaIndex reports failures such as unknown tools without an

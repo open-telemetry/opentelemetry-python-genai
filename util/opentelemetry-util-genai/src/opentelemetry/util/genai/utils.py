@@ -127,7 +127,17 @@ def should_emit_event() -> bool:
 
 
 def should_capture_content_on_spans() -> bool:
-    """Returns whether capture content is enabled on spans."""
+    """Returns whether capture content is enabled on spans.
+
+    .. warning::
+        This function reads environment variables on every call and should NOT
+        be called on the hot path.
+
+    .. deprecated:: 1.2b0
+        Use :attr:`~opentelemetry.util.genai.invocation.GenAIInvocation.should_capture_content`
+        or :meth:`~opentelemetry.util.genai.handler.TelemetryHandler.should_capture_content`
+        instead.
+    """
     return get_content_capturing_mode() in (
         ContentCapturingMode.SPAN_ONLY,
         ContentCapturingMode.SPAN_AND_EVENT,

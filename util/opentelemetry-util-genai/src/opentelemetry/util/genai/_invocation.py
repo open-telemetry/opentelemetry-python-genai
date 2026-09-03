@@ -69,6 +69,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        *,
+        should_capture_content: bool = False,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
@@ -76,6 +78,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
+        self._should_capture_content: bool = should_capture_content
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
         )
@@ -97,6 +100,11 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._request_stream: bool | None = None
         self._ttfc_seconds: float | None = None
         self._stream_last_chunk_at: float | None = None
+
+    @property
+    def should_capture_content(self) -> bool:
+        """Return True when message content should be captured for this invocation."""
+        return self._should_capture_content
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None

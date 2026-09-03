@@ -50,6 +50,7 @@ class InferenceInvocation(GenAIInvocation):
         server_port: int | None = None,
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        should_capture_content: bool = False,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -66,6 +67,7 @@ class InferenceInvocation(GenAIInvocation):
             else operation_name,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            should_capture_content=should_capture_content,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model

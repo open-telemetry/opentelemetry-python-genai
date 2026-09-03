@@ -32,6 +32,7 @@ class EmbeddingInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
+        should_capture_content: bool = False,
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
@@ -45,6 +46,7 @@ class EmbeddingInvocation(GenAIInvocation):
             if request_model
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            should_capture_content=should_capture_content,
         )
         # e.g., azure.ai.openai, openai, aws.bedrock
         self._provider: str = provider

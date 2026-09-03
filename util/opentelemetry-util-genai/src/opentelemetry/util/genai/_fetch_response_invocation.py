@@ -87,6 +87,7 @@ class FetchResponseInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        should_capture_content: bool = False,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
         super().__init__(
@@ -100,6 +101,7 @@ class FetchResponseInvocation(GenAIInvocation):
             span_name=_FETCH_RESPONSE_OPERATION_NAME,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            should_capture_content=should_capture_content,
         )
         self._provider: str = provider
         self._response_id: str = response_id

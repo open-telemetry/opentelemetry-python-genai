@@ -340,9 +340,9 @@ def fixture_otel_mocker():
     autouse=True,
     params=["SPAN_AND_EVENT", "NO_CONTENT"],
 )
-def fixture_setup_content_recording(request):
-    os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
-        request.param
+def fixture_setup_content_recording(request, monkeypatch):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, request.param
     )
     return request.param
 

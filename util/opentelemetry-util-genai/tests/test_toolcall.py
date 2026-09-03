@@ -398,3 +398,23 @@ def test_tool_start_attributes_omit_agent_name_at_sampling_time():
     assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
     finalized = span_exporter.get_finished_spans()[0].attributes
     assert finalized[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
+
+
+def test_tool_should_capture_content_defaults_to_false():
+    handler = _make_handler()
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is False
+    assert invocation.should_capture_content_on_span is False
+    invocation.stop()
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_tool_should_capture_content_enabled():
+    handler = _make_handler()
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is True
+    invocation.stop()

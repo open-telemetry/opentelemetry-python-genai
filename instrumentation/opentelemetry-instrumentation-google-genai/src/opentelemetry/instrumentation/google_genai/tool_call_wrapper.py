@@ -84,12 +84,12 @@ def _wrap_tool_function(
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
                 # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.arguments = json.dumps(
                         _get_function_args(tool_function, args, kwargs)
                     )
                 result = await tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.tool_result = json.dumps(
                         _to_otel_value(result)
                     )
@@ -103,12 +103,12 @@ def _wrap_tool_function(
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
                 # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.arguments = json.dumps(
                         _get_function_args(tool_function, args, kwargs)
                     )
                 result = tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.tool_result = json.dumps(
                         _to_otel_value(result)
                     )

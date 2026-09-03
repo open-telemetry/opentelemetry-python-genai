@@ -158,6 +158,7 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             operation_name=operation_name,
+            should_capture_content=self._capture_content,
         )
 
     def start_llm(self, invocation: LLMInvocation) -> LLMInvocation:
@@ -199,6 +200,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            should_capture_content=self._capture_content,
         )
 
     def retrieval(
@@ -228,6 +230,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            should_capture_content=self._capture_content,
         )
 
     def start_tool(
@@ -255,6 +258,7 @@ class TelemetryHandler:
             tool_type=tool_type,
             tool_call_id=tool_call_id,
             tool_description=tool_description,
+            should_capture_content=self._capture_content,
         )
 
     def start_workflow(
@@ -276,6 +280,7 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
+            should_capture_content=self._capture_content,
         )
 
     def stop_llm(self, invocation: LLMInvocation) -> LLMInvocation:  # pylint: disable=no-self-use
@@ -335,6 +340,7 @@ class TelemetryHandler:
             server_port=server_port,
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
+            should_capture_content=self._capture_content,
         )
 
     def embedding(
@@ -362,6 +368,7 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            should_capture_content=self._capture_content,
         )
 
     def fetch_response(
@@ -397,6 +404,7 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             error_type_resolver=error_type_resolver,
+            should_capture_content=self._capture_content,
         )
 
     def tool(
@@ -421,7 +429,7 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         Recommended to set ``invocation.arguments`` and ``invocation.tool_result`` on the
-        invocation object but only if `invocation.should_capture_content_on_span` is True.
+        invocation object but only if `invocation.should_capture_content` is True.
         """
         return ToolInvocation(
             self._tracer,
@@ -433,6 +441,7 @@ class TelemetryHandler:
             agent_name=agent_name,
             tool_call_id=tool_call_id,
             tool_description=tool_description,
+            should_capture_content=self._capture_content,
         )
 
     def start_invoke_local_agent(
@@ -459,6 +468,7 @@ class TelemetryHandler:
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
+            should_capture_content=self._capture_content,
         )
 
     def start_invoke_remote_agent(
@@ -491,6 +501,7 @@ class TelemetryHandler:
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
+            should_capture_content=self._capture_content,
         )
 
     def invoke_local_agent(
@@ -517,6 +528,7 @@ class TelemetryHandler:
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
+            should_capture_content=self._capture_content,
         )
 
     def invoke_remote_agent(
@@ -549,6 +561,7 @@ class TelemetryHandler:
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
+            should_capture_content=self._capture_content,
         )
 
     def workflow(
@@ -569,6 +582,7 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
+            should_capture_content=self._capture_content,
         )
 
 

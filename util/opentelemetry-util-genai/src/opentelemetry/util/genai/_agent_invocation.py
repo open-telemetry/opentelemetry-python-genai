@@ -49,6 +49,7 @@ class AgentInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
+        should_capture_content: bool = False,
     ) -> None:
         """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
@@ -62,6 +63,7 @@ class AgentInvocation(GenAIInvocation):
             if agent_name
             else _operation_name,
             span_kind=span_kind,
+            should_capture_content=should_capture_content,
         )
         self._provider: str | None = provider
         self._request_model: str | None = request_model

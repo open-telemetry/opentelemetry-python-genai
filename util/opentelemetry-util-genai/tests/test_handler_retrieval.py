@@ -158,7 +158,8 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         },
     )
     def test_stop_sets_query_text_when_content_capture_enabled(self) -> None:
-        invocation = self.handler.retrieval()
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.retrieval()
         invocation.query_text = "What is the capital of France?"
         invocation.stop()
 
@@ -186,8 +187,9 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         },
     )
     def test_stop_sets_documents_when_content_capture_enabled(self) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
         docs = [{"id": "doc_1", "score": 0.95}, {"id": "doc_2", "score": 0.87}]
-        invocation = self.handler.retrieval()
+        invocation = handler.retrieval()
         invocation.documents = docs
         invocation.stop()
 
