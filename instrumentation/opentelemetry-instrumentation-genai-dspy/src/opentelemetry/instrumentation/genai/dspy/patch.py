@@ -455,6 +455,8 @@ def _start_retrieval_invocation(
     if rm is None:
         rm = getattr(dspy.settings, "rm", None)
 
+    # DSPy retrieval models lack a uniform identifier schema, so inspect common index and provider
+    # attributes across the Retrieve instance and configured RM.
     data_source_id: str | None = (
         getattr(instance, "data_source_id", None)
         or getattr(instance, "index_name", None)
