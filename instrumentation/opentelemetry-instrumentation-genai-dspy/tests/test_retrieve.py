@@ -143,10 +143,7 @@ def test_retrieve_with_positional_k(
     assert len(spans) == 1
     attrs = spans[0].attributes or {}
     assert attrs.get(GenAI.GEN_AI_REQUEST_TOP_K) == 4.0
-    assert (
-        attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT)
-        == "Positional k query"
-    )
+    assert attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "Positional k query"
 
 
 def test_retrieve_without_content_capture(
