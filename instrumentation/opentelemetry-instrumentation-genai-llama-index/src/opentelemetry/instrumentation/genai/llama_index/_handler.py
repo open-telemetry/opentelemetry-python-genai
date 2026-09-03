@@ -44,6 +44,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolDefinition,
@@ -207,7 +208,9 @@ def _agent_input(bound_args: inspect.BoundArguments) -> list[InputMessage]:
         messages.append(_input_message(user_message))
     elif isinstance(user_message, str) and user_message:
         messages.append(
-            InputMessage(role="user", parts=[TextPart(content=user_message)])
+            InputMessage(
+                role=Role.USER.value, parts=[TextPart(content=user_message)]
+            )
         )
     return messages
 

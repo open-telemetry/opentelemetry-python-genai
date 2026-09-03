@@ -28,6 +28,8 @@ from opentelemetry.test_util_genai.conformance import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ._shared import span_attribute_values
+
 
 class InferenceStreamingScenario(Scenario):
     expected_spans = {"chat": 1}
@@ -53,16 +55,21 @@ class InferenceStreamingScenario(Scenario):
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
-        stream_values = [
-            attr["value"]
-            for entry in report["samples"]
-            if "span" in entry
-            for attr in entry["span"]["attributes"]
-            if attr["name"] == "gen_ai.request.stream"
-        ]
+        stream_values = span_attribute_values(report, "gen_ai.request.stream")
         assert stream_values == [True], (
             "streaming chat should set gen_ai.request.stream=true on the chat "
             f"span; saw {stream_values}"
+        )
+        system_instructions = span_attribute_values(
+            report, "gen_ai.system_instructions"
+        )
+        assert len(system_instructions) == 1, (
+            "streaming chat span with a SystemMessage input should set "
+            f"gen_ai.system_instructions once; saw {system_instructions}"
+        )
+        assert "You are a helpful assistant!" in system_instructions[0], (
+            "gen_ai.system_instructions should carry the SystemMessage "
+            f"content; got {system_instructions[0]}"
         )
 
     def run(

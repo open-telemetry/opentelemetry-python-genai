@@ -13,7 +13,8 @@ workflows, and internal plumbing alike.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 from uuid import UUID
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -54,7 +55,10 @@ _META_AGENT_SPAN = "otel_agent_span"
 _META_WORKFLOW_SPAN = "otel_workflow_span"
 _META_AGENT_NAME = "agent_name"
 _META_AGENT_TYPE = "agent_type"
+_META_LANGCHAIN_AGENT_NAME = "lc_agent_name"
+_META_LANGCHAIN_INTEGRATION = "ls_integration"
 _META_OTEL_TRACE = "otel_trace"
+_LANGCHAIN_CREATE_AGENT = "langchain_create_agent"
 
 
 # ---------------------------------------------------------------------------
@@ -62,23 +66,58 @@ _META_OTEL_TRACE = "otel_trace"
 # ---------------------------------------------------------------------------
 
 
+def create_agent_graph_name(config: Any) -> str | None:
+    """Return the agent name if ``config`` is a compiled ``create_agent`` graph's.
+
+    Unlike the metadata reaching the callbacks, a graph's own bound config is
+    never merged with an enclosing agent's, so this identifies nested agents.
+    """
+    if not isinstance(config, Mapping):
+        return None
+    metadata = cast("Mapping[str, Any]", config).get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    typed_metadata = cast("Mapping[str, Any]", metadata)
+    if (
+        typed_metadata.get(_META_LANGCHAIN_INTEGRATION)
+        != _LANGCHAIN_CREATE_AGENT
+    ):
+        return None
+    name = typed_metadata.get(_META_LANGCHAIN_AGENT_NAME)
+    return str(name) if name else None
+
+
 def resolve_agent_name(
     serialized: dict[str, Any],
     metadata: dict[str, Any] | None,
     kwargs: dict[str, Any],
+    declared_agent_name: str | None = None,
+    ancestor_agent_names: set[str] | None = None,
+    announced_agent: bool = False,
 ) -> str | None:
     """Derive the best-effort agent name from callback arguments.
 
     Checks (in priority order):
-    1. ``metadata["agent_name"]``
-    2. ``kwargs["name"]``
-    3. ``serialized["name"]``
-    4. ``metadata["langgraph_node"]`` (if present and not a start node)
+    1. ``metadata["agent_name"]`` unless inherited from an enclosing agent
+    2. ``declared_agent_name`` (the name a ``create_agent`` graph announced)
+    3. ``kwargs["name"]``
+    4. ``serialized["name"]``
+    5. ``metadata["langgraph_node"]`` (if present and not a start node)
     """
     if metadata:
         name = metadata.get(_META_AGENT_NAME)
         if name:
-            return str(name)
+            metadata_name = str(name)
+            if not (
+                ancestor_agent_names
+                and metadata_name.lower() in ancestor_agent_names
+            ):
+                return metadata_name
+
+    if declared_agent_name:
+        return declared_agent_name
+    if announced_agent:
+        return None
 
     name = kwargs.get("name")
     if name:
@@ -96,13 +135,26 @@ def resolve_agent_name(
     return None
 
 
-def _has_agent_signals(metadata: dict[str, Any] | None) -> bool:
-    """Return True when metadata contains any signal that the chain is an agent."""
+def _has_agent_signals(
+    metadata: dict[str, Any] | None,
+    ancestor_agent_names: set[str] | None = None,
+) -> bool:
+    """Return True when metadata contains any signal that the chain is an agent.
+
+    ``create_agent`` graphs are recognized by their announcement instead - the
+    metadata reaching a nested agent's callbacks describes its enclosing agent.
+    """
     if not metadata:
         return False
+    metadata_name = metadata.get(_META_AGENT_NAME)
+    inherited_name = bool(
+        metadata_name
+        and ancestor_agent_names
+        and str(metadata_name).lower() in ancestor_agent_names
+    )
     return bool(
         metadata.get(_META_AGENT_SPAN)
-        or metadata.get(_META_AGENT_NAME)
+        or (metadata_name and not inherited_name)
         or metadata.get(_META_AGENT_TYPE)
     )
 
@@ -148,6 +200,7 @@ def _should_ignore_chain(
     metadata: dict[str, Any] | None,
     agent_name: str | None,
     kwargs: dict[str, Any],
+    declared_agent_name: str | None = None,
 ) -> bool:
     """Return True if the chain callback should be silently suppressed.
 
@@ -173,14 +226,15 @@ def _should_ignore_chain(
         ):
             return True
 
-    if agent_name and agent_name.startswith(MIDDLEWARE_PREFIX):
-        return True
+    if not declared_agent_name:
+        if agent_name and agent_name.startswith(MIDDLEWARE_PREFIX):
+            return True
 
-    name_from_kwargs = kwargs.get("name", "")
-    if isinstance(name_from_kwargs, str) and name_from_kwargs.startswith(
-        MIDDLEWARE_PREFIX
-    ):
-        return True
+        name_from_kwargs = kwargs.get("name", "")
+        if isinstance(name_from_kwargs, str) and name_from_kwargs.startswith(
+            MIDDLEWARE_PREFIX
+        ):
+            return True
 
     return False
 
@@ -190,6 +244,9 @@ def classify_chain_run(
     metadata: dict[str, Any] | None,
     kwargs: dict[str, Any],
     parent_run_id: UUID | None = None,
+    declared_agent_name: str | None = None,
+    announced_agent: bool = False,
+    ancestor_agent_names: set[str] | None = None,
 ) -> str | None:
     """Classify a ``on_chain_start`` callback into a semconv operation.
 
@@ -202,14 +259,25 @@ def classify_chain_run(
     3. Check for workflow signals → ``invoke_workflow``.
     4. Default: ``None`` (suppress – unclassified chains are not emitted).
     """
-    agent_name = resolve_agent_name(serialized, metadata, kwargs)
+    agent_name = resolve_agent_name(
+        serialized,
+        metadata,
+        kwargs,
+        declared_agent_name,
+        ancestor_agent_names,
+        announced_agent,
+    )
 
     # 1. Suppress known noise.
-    if _should_ignore_chain(metadata, agent_name, kwargs):
+    if _should_ignore_chain(metadata, agent_name, kwargs, declared_agent_name):
         return None
 
     # 2. Agent detection.
-    if _has_agent_signals(metadata):
+    if (
+        announced_agent
+        or declared_agent_name
+        or _has_agent_signals(metadata, ancestor_agent_names)
+    ):
         return OperationName.INVOKE_AGENT
 
     # 3. Workflow / orchestration detection.

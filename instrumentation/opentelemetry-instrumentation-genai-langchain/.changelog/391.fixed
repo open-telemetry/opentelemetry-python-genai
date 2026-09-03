@@ -1,0 +1,1 @@
+Emit invoke_agent spans for LangChain create_agent graph roots, including nested agents, which get their own spans.

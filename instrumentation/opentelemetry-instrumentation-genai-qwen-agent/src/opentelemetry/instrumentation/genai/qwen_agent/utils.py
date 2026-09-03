@@ -16,6 +16,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -98,7 +99,7 @@ def find_tool_call_id(
         function_id = (
             _field_value(extra, "function_id") if extra is not None else None
         )
-        if _field_value(msg, "role") in ("function", "tool"):
+        if _field_value(msg, "role") in ("function", Role.TOOL.value):
             if function_id:
                 responded.add(str(function_id))
             continue
@@ -152,7 +153,7 @@ def convert_to_input_messages(
     input_messages: list[InputMessage] = []
     for msg in messages:
         try:
-            role = _field_value(msg, "role") or "user"
+            role = _field_value(msg, "role") or Role.USER.value
             content = _field_value(msg, "content") or ""
             function_call = _field_value(msg, "function_call")
 
@@ -163,7 +164,7 @@ def convert_to_input_messages(
 
             # qwen-agent uses role="function" internally, but the DashScope
             # API converts it to role="tool"; handle both.
-            if role in ("function", "tool") and content:
+            if role in ("function", Role.TOOL.value) and content:
                 parts.append(
                     ToolCallResponsePart(
                         id=_tool_call_response_id(msg),
@@ -217,7 +218,7 @@ def convert_to_output_messages(
 
             output_messages.append(
                 OutputMessage(
-                    role="assistant",
+                    role=Role.ASSISTANT.value,
                     parts=parts,
                     finish_reason=finish_reason,
                 )
@@ -246,11 +247,11 @@ def convert_to_final_output_messages(
 
     for msg in reversed(messages):
         try:
-            role = _field_value(msg, "role") or "assistant"
+            role = _field_value(msg, "role") or Role.ASSISTANT.value
             function_call = _field_value(msg, "function_call")
             content = _field_value(msg, "content") or ""
 
-            if role in ("function", "tool") or function_call:
+            if role in ("function", Role.TOOL.value) or function_call:
                 continue
 
             if _extract_content_text(content):

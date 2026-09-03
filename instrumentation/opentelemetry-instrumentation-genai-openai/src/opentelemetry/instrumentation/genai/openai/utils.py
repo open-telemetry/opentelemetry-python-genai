@@ -25,6 +25,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -200,14 +201,14 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
 
         content = get_property_value(message, "content")
 
-        if role == "assistant":
+        if role == Role.ASSISTANT.value:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
                 chat_message.parts += extract_tool_calls_new(tool_calls)
             if _is_text_part(content):
                 chat_message.parts.append(TextPart(content=str(content)))
 
-        elif role == "tool":
+        elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
             chat_message.parts.append(
                 ToolCallResponsePart(id=tool_call_id, response=content)
