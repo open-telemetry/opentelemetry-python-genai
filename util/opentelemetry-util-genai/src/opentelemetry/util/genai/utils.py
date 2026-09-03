@@ -133,8 +133,8 @@ def should_capture_content_on_spans() -> bool:
     be called on the hot path.
 
     .. deprecated:: 1.2b0
-        Use :attr:`~opentelemetry.util.genai.invocation.GenAIInvocation.should_capture_content`
-        or :meth:`~opentelemetry.util.genai.handler.TelemetryHandler.should_capture_content`
+        Use ``GenAIInvocation.should_capture_content``
+        or ``TelemetryHandler.should_capture_content``
         instead.
     """
     return get_content_capturing_mode() in (
