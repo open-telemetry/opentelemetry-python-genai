@@ -21,6 +21,7 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.react import ReActScenario
+from .conformance.retrieve import RetrieveScenario
 from .conformance.tool import ToolScenario
 
 
@@ -28,6 +29,7 @@ from .conformance.tool import ToolScenario
     "scenario",
     [
         pytest.param(ReActScenario()),
+        pytest.param(RetrieveScenario()),
         pytest.param(ToolScenario()),
     ],
     ids=lambda s: type(s).__name__,
