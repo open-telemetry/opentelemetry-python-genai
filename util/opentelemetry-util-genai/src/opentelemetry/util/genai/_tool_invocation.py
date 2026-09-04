@@ -3,19 +3,40 @@
 
 from __future__ import annotations
 
+import timeit
+from typing import Final
+
 from opentelemetry._logs import Logger
+from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
     should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AnyValue, AttributeValue
+
+_GEN_AI_EXECUTE_TOOL_DURATION: Final = "gen_ai.execute_tool.duration"
+_GEN_AI_EXECUTE_TOOL_DURATION_BUCKETS: Final = [
+    0.01,
+    0.02,
+    0.04,
+    0.08,
+    0.16,
+    0.32,
+    0.64,
+    1.28,
+    2.56,
+    5.12,
+    10.24,
+    20.48,
+    40.96,
+    81.92,
+]
 
 
 def _any_value_to_attribute_value(value: AnyValue) -> AttributeValue | None:
@@ -55,7 +76,7 @@ class ToolInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         name: str,
@@ -75,7 +96,7 @@ class ToolInvocation(GenAIInvocation):
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
         super().__init__(
             tracer,
-            metrics_recorder,
+            meter,
             logger,
             completion_hook,
             operation_name=_operation_name,
@@ -109,8 +130,12 @@ class ToolInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+            GenAI.GEN_AI_TOOL_NAME: self._name,
         }
+        if self._tool_type is not None:
+            attrs[GenAI.GEN_AI_TOOL_TYPE] = self._tool_type
+        if self._agent_name is not None:
+            attrs[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
         attrs.update(self.metric_attributes)
         return attrs
 
@@ -141,4 +166,21 @@ class ToolInvocation(GenAIInvocation):
         }
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_metrics()
+
+    def _record_metrics(self) -> None:
+        duration_seconds = max(
+            timeit.default_timer() - self._monotonic_start_s,
+            0.0,
+        )
+        histogram = self._meter.create_histogram(
+            name=_GEN_AI_EXECUTE_TOOL_DURATION,
+            description="Measures the duration of a tool execution.",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_GEN_AI_EXECUTE_TOOL_DURATION_BUCKETS,
+        )
+        histogram.record(
+            duration_seconds,
+            attributes=self._get_metric_attributes(),
+            context=self._span_context,
+        )

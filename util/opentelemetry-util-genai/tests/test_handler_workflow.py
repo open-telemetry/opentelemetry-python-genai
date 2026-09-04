@@ -345,10 +345,6 @@ class TestWorkflowInvocationMetrics(TestBase):
         self.assertEqual(len(duration_points), 1)
         duration_point = duration_points[0]
         self.assertEqual(
-            duration_point.attributes[GenAI.GEN_AI_OPERATION_NAME],
-            "invoke_workflow",
-        )
-        self.assertEqual(
             duration_point.attributes[GenAI.GEN_AI_WORKFLOW_NAME],
             "test-workflow",
         )

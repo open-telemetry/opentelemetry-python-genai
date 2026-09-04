@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -17,7 +18,6 @@ from opentelemetry.util.genai._invocation import (
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     MessagePart,
@@ -78,7 +78,7 @@ class FetchResponseInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -92,7 +92,7 @@ class FetchResponseInvocation(GenAIInvocation):
         """Use handler.fetch_response() rather than calling this directly."""
         super().__init__(
             tracer,
-            metrics_recorder,
+            meter,
             logger,
             completion_hook,
             operation_name=_FETCH_RESPONSE_OPERATION_NAME,
@@ -186,7 +186,7 @@ class FetchResponseInvocation(GenAIInvocation):
         )
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()
         self._call_completion_hook(
             outputs=self.output_messages,
             system_instruction=self.system_instruction,

@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -17,7 +18,6 @@ from opentelemetry.util.genai._invocation import (
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
@@ -46,7 +46,7 @@ class AgentInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         *,
@@ -61,7 +61,7 @@ class AgentInvocation(GenAIInvocation):
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
         super().__init__(
             tracer,
-            metrics_recorder,
+            meter,
             logger,
             completion_hook,
             operation_name=_operation_name,
@@ -247,4 +247,4 @@ class AgentInvocation(GenAIInvocation):
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
         )
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()

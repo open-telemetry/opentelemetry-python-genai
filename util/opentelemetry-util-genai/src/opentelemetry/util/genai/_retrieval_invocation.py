@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -14,7 +15,6 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
     should_capture_content_on_spans,
@@ -47,7 +47,7 @@ class RetrievalInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         *,
@@ -61,7 +61,7 @@ class RetrievalInvocation(GenAIInvocation):
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
         super().__init__(
             tracer,
-            metrics_recorder,
+            meter,
             logger,
             completion_hook,
             operation_name=_operation_name,
@@ -135,4 +135,4 @@ class RetrievalInvocation(GenAIInvocation):
         attributes.update(self._get_content_attributes_for_span())
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()

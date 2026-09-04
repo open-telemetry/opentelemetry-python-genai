@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import timeit
 from dataclasses import asdict
+from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -15,7 +18,6 @@ from opentelemetry.util.genai._invocation import (
     GenAIInvocation,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
@@ -25,6 +27,21 @@ from opentelemetry.util.genai.utils import (
     should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AttributeValue
+
+_GEN_AI_INVOKE_WORKFLOW_DURATION: Final = "gen_ai.invoke_workflow.duration"
+_GEN_AI_INVOKE_WORKFLOW_DURATION_BUCKETS: Final = [
+    1,
+    5,
+    10,
+    30,
+    60,
+    120,
+    300,
+    600,
+    1800,
+    3600,
+    7200,
+]
 
 
 class WorkflowInvocation(GenAIInvocation):
@@ -39,16 +56,16 @@ class WorkflowInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         name: str | None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
-        _operation_name = "invoke_workflow"
+        _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
         super().__init__(
             tracer,
-            metrics_recorder,
+            meter,
             logger,
             completion_hook,
             operation_name=_operation_name,
@@ -59,7 +76,6 @@ class WorkflowInvocation(GenAIInvocation):
         self.conversation_id: str | None = None
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self.conversation_id: str | None = None
         self._start(self._get_start_attributes())
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
@@ -93,9 +109,7 @@ class WorkflowInvocation(GenAIInvocation):
         }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-        }
+        attrs: dict[str, AttributeValue] = {}
         if self._name is not None:
             attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._name
         attrs.update(self.metric_attributes)
@@ -107,12 +121,27 @@ class WorkflowInvocation(GenAIInvocation):
             attributes[GenAI.GEN_AI_CONVERSATION_ID] = self.conversation_id
         if error is not None:
             self._apply_error_attributes(error)
-        if self.conversation_id is not None:
-            attributes[GenAI.GEN_AI_CONVERSATION_ID] = self.conversation_id
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._call_completion_hook(
             inputs=self.input_messages,
             outputs=self.output_messages,
         )
-        self._metrics_recorder.record_workflow(self)
+        self._record_metrics()
+
+    def _record_metrics(self) -> None:
+        duration_seconds = max(
+            timeit.default_timer() - self._monotonic_start_s,
+            0.0,
+        )
+        histogram = self._meter.create_histogram(
+            name=_GEN_AI_INVOKE_WORKFLOW_DURATION,
+            description="Measures the duration of a workflow execution.",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_WORKFLOW_DURATION_BUCKETS,
+        )
+        histogram.record(
+            duration_seconds,
+            attributes=self._get_metric_attributes(),
+            context=self._span_context,
+        )
