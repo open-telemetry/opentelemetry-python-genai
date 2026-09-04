@@ -216,51 +216,51 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
                 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-                self.cache_write_input_tokens,
+                self.cache_write_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.cache_read_input_tokens,
+                self.cache_read_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-                self.thinking_tokens,
+                self.thinking_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
-                self.text_input_tokens,
+                self.text_input_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
-                self.image_input_tokens,
+                self.image_input_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
-                self.audio_input_tokens,
+                self.audio_input_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
-                self.text_output_tokens,
+                self.text_output_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
-                self.image_output_tokens,
+                self.image_output_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
-                self.audio_output_tokens,
+                self.audio_output_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
-                self.text_cache_read_input_tokens,
+                self.text_cache_read_input_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
-                self.image_cache_read_input_tokens,
+                self.image_cache_read_input_tokens or None,
             ),
             (
                 _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
-                self.audio_cache_read_input_tokens,
+                self.audio_cache_read_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,

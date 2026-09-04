@@ -190,11 +190,11 @@ class AgentInvocation(GenAIInvocation):
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
             (
                 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-                self.cache_write_input_tokens,
+                self.cache_write_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.cache_read_input_tokens,
+                self.cache_read_input_tokens or None,
             ),
         )
         return {k: v for k, v in optional_attrs if v is not None}
