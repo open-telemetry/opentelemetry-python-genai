@@ -162,8 +162,9 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 100
-        assert attrs["gen_ai.usage.cache_write.input_tokens"] == 25
-        assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 50
+        assert "gen_ai.usage.cache_write.input_tokens" not in attrs
+        assert "gen_ai.usage.cache_creation.input_tokens" not in attrs
+        assert GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
 
     def test_fail_sets_error_status(self):
         invocation = self.handler.invoke_local_agent()
