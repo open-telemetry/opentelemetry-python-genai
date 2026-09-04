@@ -1,0 +1,1 @@
+Do not unconditionally set OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT during instrumentation.
