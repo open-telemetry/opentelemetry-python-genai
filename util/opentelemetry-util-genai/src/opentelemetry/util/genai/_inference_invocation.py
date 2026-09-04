@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from opentelemetry._logs import Logger, LogRecord
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -17,6 +18,10 @@ from opentelemetry.util.genai._invocation import (
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.context import (
+    INFERENCE_EVENT_KEY,
+    INFERENCE_SPAN_KEY,
+)
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
@@ -28,7 +33,7 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.genai.utils import (
     should_emit_event,
 )
-from opentelemetry.util.types import AttributeValue
+from opentelemetry.util.types import AnyValue, AttributeValue
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -36,6 +41,9 @@ class InferenceInvocation(GenAIInvocation):
 
     Use handler.inference(provider) rather than constructing this directly.
     """
+
+    _context_span_key: str | None = INFERENCE_SPAN_KEY
+    _context_event_key: str | None = INFERENCE_EVENT_KEY
 
     def __init__(
         self,
@@ -99,6 +107,35 @@ class InferenceInvocation(GenAIInvocation):
         # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
         self._start(self._get_start_attributes())
+
+    def _enrich_reused_span(self) -> None:
+        super()._enrich_reused_span()
+        enrich_attrs: dict[str, AttributeValue] = {}
+        if self._server_address is not None:
+            enrich_attrs[server_attributes.SERVER_ADDRESS] = (
+                self._server_address
+            )
+        if self._server_port is not None:
+            enrich_attrs[server_attributes.SERVER_PORT] = self._server_port
+        if enrich_attrs:
+            if self.span.is_recording():
+                self.span.set_attributes(enrich_attrs)
+            if self._event_log_record is not None:
+                current_attrs = (
+                    dict(self._event_log_record.attributes)
+                    if self._event_log_record.attributes
+                    else {}
+                )
+                current_attrs.update(enrich_attrs)
+                self._event_log_record.attributes = current_attrs
+
+    def _init_event_log_record(self, context: Context) -> None:
+        if should_emit_event():
+            self._event_log_record = LogRecord(
+                event_name="gen_ai.client.inference.operation.details",
+                attributes=dict(self._get_start_attributes()),
+                context=context,
+            )
 
     @property
     def response_model_name(self) -> str | None:
@@ -220,6 +257,31 @@ class InferenceInvocation(GenAIInvocation):
         return counts
 
     def _apply_finish(self, error: Error | None = None) -> None:
+        if self._already_started:
+            if error is not None:
+                self._apply_error_attributes(error)
+            finish_attrs = self._get_attributes()
+            finish_attrs.update(self._get_message_attributes(for_span=True))
+            finish_attrs.update(self.attributes)
+            if finish_attrs:
+                self.span.set_attributes(finish_attrs)
+            if self._event_log_record is not None:
+                event_attrs: dict[str, AnyValue] = {}
+                event_attrs.update(self._get_attributes())
+                event_attrs.update(
+                    self._get_message_attributes(for_span=False)
+                )
+                event_attrs.update(self.attributes)
+                if event_attrs:
+                    current_attrs = (
+                        dict(self._event_log_record.attributes)
+                        if self._event_log_record.attributes
+                        else {}
+                    )
+                    current_attrs.update(event_attrs)
+                    self._event_log_record.attributes = current_attrs
+            return
+
         if error is not None:
             self._apply_error_attributes(error)
         attributes = self._get_attributes()
@@ -227,7 +289,20 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._metrics_recorder.record(self)
-        log_record = self._maybe_create_event()
+        log_record = self._event_log_record
+        if log_record is not None:
+            event_attrs = dict(self._get_start_attributes())
+            event_attrs.update(self._get_attributes())
+            event_attrs.update(self._get_message_attributes(for_span=False))
+            event_attrs.update(self.attributes)
+            current_attrs = (
+                dict(log_record.attributes) if log_record.attributes else {}
+            )
+            current_attrs.update(event_attrs)
+            log_record.attributes = current_attrs
+        else:
+            log_record = self._maybe_create_event()
+
         self._call_completion_hook(
             inputs=self.input_messages,
             outputs=self.output_messages,
@@ -362,4 +437,12 @@ class LLMInvocation:
             self._inference_invocation.span
             if self._inference_invocation is not None
             else INVALID_SPAN
+        )
+
+    @property
+    def already_started(self) -> bool:
+        return (
+            self._inference_invocation.already_started
+            if self._inference_invocation is not None
+            else False
         )

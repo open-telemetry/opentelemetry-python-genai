@@ -497,6 +497,31 @@ class TelemetryHandlerMetricsTest(TestBase):
             "embed-response-model",
         )
 
+    def test_nested_inference_does_not_double_count_metrics(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with patch("timeit.default_timer", return_value=1000.0):
+            with handler.inference(
+                "upstream", request_model="parent-model"
+            ) as parent:
+                parent.input_tokens = 10
+                parent.output_tokens = 20
+                with handler.inference(
+                    "downstream", request_model="child-model"
+                ) as child:
+                    child.input_tokens = 5
+                    child.output_tokens = 10
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertEqual(len(duration_points), 1)
+        self.assertEqual(
+            duration_points[0].attributes[GenAI.GEN_AI_PROVIDER_NAME],
+            "upstream",
+        )
+
     def test_fail_embedding_records_error_and_duration(self) -> None:
         """Verify embedding failure records error type and duration."""
         handler = TelemetryHandler(

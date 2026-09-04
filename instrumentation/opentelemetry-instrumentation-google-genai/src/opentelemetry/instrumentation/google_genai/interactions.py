@@ -402,6 +402,9 @@ def _start_interactions_invocation(
             server_address=server_address,
             error_type_resolver=resolve_error_type,
         )
+    if invocation.already_started:
+        return invocation
+
     invocation.tool_definitions = _maybe_get_tool_definitions(
         kwargs.get("tools")
     )
@@ -438,6 +441,11 @@ def _create_instrumented_interactions_create(
         invocation = _start_interactions_invocation(
             telemetry_handler, instance, kwargs
         )
+        if invocation.already_started:
+            # Example attribute to show that setting/overwriting attributes on an existing invocation works.
+            invocation.attributes["google_genai.inference_suppressed"] = True
+            invocation.stop()
+            return wrapped(*args, **kwargs)
 
         try:
             if kwargs.get("stream", False):
@@ -479,6 +487,11 @@ def _create_instrumented_async_interactions_create(
         invocation = _start_interactions_invocation(
             telemetry_handler, instance, kwargs
         )
+        if invocation.already_started:
+            # Example attribute to show that setting/overwriting attributes on an existing invocation works.
+            invocation.attributes["google_genai.inference_suppressed"] = True
+            invocation.stop()
+            return await wrapped(*args, **kwargs)
 
         try:
             if kwargs.get("stream", False):

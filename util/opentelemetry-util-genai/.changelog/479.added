@@ -1,0 +1,1 @@
+Add `get_current_inference_span` and `set_inference_span_in_context` helpers and automatically attach active inference spans to context under `opentelemetry.genai.inference_span`.

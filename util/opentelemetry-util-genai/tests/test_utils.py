@@ -729,25 +729,23 @@ class TestTelemetryHandler(unittest.TestCase):
         message = _create_input_message("hi")
         chat_generation = _create_output_message("ok")
 
-        with self.telemetry_handler.inference(
-            "test-provider", request_model="parent-model"
-        ) as parent_invocation:
-            parent_invocation.input_messages = [message]
+        with self.telemetry_handler.workflow(name="parent-workflow"):
             with self.telemetry_handler.inference(
-                "test-provider", request_model="child-model"
+                "test-provider",
+                request_model="child-model",
             ) as child_invocation:
                 child_invocation.input_messages = [message]
                 # Stop child first by exiting inner context
                 child_invocation.output_messages = [chat_generation]
-            # Then stop parent by exiting outer context
-            parent_invocation.output_messages = [chat_generation]
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
 
         # Identify spans irrespective of export order
         child_span = next(s for s in spans if s.name == "chat child-model")
-        parent_span = next(s for s in spans if s.name == "chat parent-model")
+        parent_span = next(
+            s for s in spans if s.name == "invoke_workflow parent-workflow"
+        )
 
         # Same trace
         assert child_span.context.trace_id == parent_span.context.trace_id
@@ -756,6 +754,41 @@ class TestTelemetryHandler(unittest.TestCase):
         assert child_span.parent.span_id == parent_span.context.span_id
         # Parent should not have a parent (root)
         assert parent_span.parent is None
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_nested_inference_deduplication(self):
+        message = _create_input_message("hi")
+        chat_generation = _create_output_message("ok")
+
+        with self.telemetry_handler.inference(
+            "test-provider", request_model="parent-model"
+        ) as parent_invocation:
+            self.assertFalse(parent_invocation.already_started)
+            parent_invocation.input_messages = [message]
+
+            with self.telemetry_handler.inference(
+                "downstream-provider",
+                request_model="child-model",
+                server_address="generativelanguage.googleapis.com",
+            ) as child_invocation:
+                self.assertTrue(child_invocation.already_started)
+                self.assertIs(child_invocation.span, parent_invocation.span)
+                child_invocation.output_messages = [chat_generation]
+
+            parent_invocation.output_messages = [chat_generation]
+
+        spans = self.span_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(
+            spans[0].attributes.get("server.address"),
+            "generativelanguage.googleapis.com",
+        )
 
     @patch.dict(
         os.environ,

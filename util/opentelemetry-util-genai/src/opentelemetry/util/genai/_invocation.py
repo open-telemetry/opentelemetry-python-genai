@@ -15,7 +15,14 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 from typing_extensions import Self
 
 from opentelemetry._logs import Logger, LogRecord
-from opentelemetry.context import Context, attach, detach
+from opentelemetry.context import (
+    Context,
+    attach,
+    detach,
+    get_current,
+    get_value,
+    set_value,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -55,6 +62,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     workflow, tool) rather than constructing invocations directly.
     """
 
+    _context_span_key: str | None = None
+    _context_event_key: str | None = None
+
     def __init__(
         self,
         # Individual components instead of TelemetryHandler to avoid a circular
@@ -90,6 +100,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_kind: SpanKind = span_kind
         self._context_token: ContextToken | None = None
         self._monotonic_start_s: float
+        self._already_started: bool = False
+        self._event_log_record: LogRecord | None = None
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
         # (gen_ai.request.stream); the timing fields are populated by
@@ -98,20 +110,73 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._ttfc_seconds: float | None = None
         self._stream_last_chunk_at: float | None = None
 
+    @property
+    def already_started(self) -> bool:
+        """True if an invocation was already started in the current context."""
+        return self._already_started
+
+    def _init_event_log_record(self, context: Context) -> None:
+        """Hook for subclasses to initialize an event LogRecord before context attach."""
+
+    def _enrich_reused_span(self) -> None:
+        """Hook for subclasses to enrich a reused span or event when already_started is True."""
+        if self.attributes:
+            if self.span.is_recording():
+                self.span.set_attributes(self.attributes)
+            if self._event_log_record is not None:
+                current = (
+                    dict(self._event_log_record.attributes)
+                    if self._event_log_record.attributes
+                    else {}
+                )
+                current.update(self.attributes)
+                self._event_log_record.attributes = current
+
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None
     ) -> None:
         """Start the invocation span and attach it to the current context.
 
+        If a span already exists in context under ``_context_span_key``, this
+        invocation reuses that span and marks ``already_started = True``.
+
         Args:
             attributes: Initial span attributes available for sampling decisions.
         """
+        if self._context_span_key is not None:
+            existing_span = get_value(self._context_span_key)
+            if isinstance(existing_span, Span):
+                self._already_started = True
+                self.span = existing_span
+                if self._context_event_key is not None:
+                    event = get_value(self._context_event_key)
+                    if isinstance(event, LogRecord):
+                        self._event_log_record = event
+                self._enrich_reused_span()
+                self._monotonic_start_s = timeit.default_timer()
+                self._span_context = get_current()
+                self._context_token = attach(self._span_context)
+                return
+
         self.span = self._tracer.start_span(
             name=self._span_name,
             kind=self._span_kind,
             attributes=attributes,
         )
-        self._span_context = set_span_in_context(self.span)
+        ctx = set_span_in_context(self.span)
+        if self._context_span_key is not None:
+            ctx = set_value(self._context_span_key, self.span, context=ctx)
+        self._init_event_log_record(ctx)
+        if (
+            self._context_event_key is not None
+            and self._event_log_record is not None
+        ):
+            ctx = set_value(
+                self._context_event_key,
+                self._event_log_record,
+                context=ctx,
+            )
+        self._span_context = ctx
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)
 
@@ -149,17 +214,19 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         attributes = self._get_metric_attributes()
         if self._ttfc_seconds is None:
             self._ttfc_seconds = delta
-            self._metrics_recorder.record_time_to_first_chunk(
-                delta,
-                attributes=attributes,
-                context=self._span_context,
-            )
+            if not self._already_started:
+                self._metrics_recorder.record_time_to_first_chunk(
+                    delta,
+                    attributes=attributes,
+                    context=self._span_context,
+                )
         else:
-            self._metrics_recorder.record_time_per_chunk(
-                delta,
-                attributes=attributes,
-                context=self._span_context,
-            )
+            if not self._already_started:
+                self._metrics_recorder.record_time_per_chunk(
+                    delta,
+                    attributes=attributes,
+                    context=self._span_context,
+                )
 
     def _apply_error_attributes(self, error: Error) -> None:
         """Apply error status and error.type attribute to the span, events, and metrics."""
@@ -208,7 +275,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 detach(context_token)
             except Exception:  # pylint: disable=broad-except
                 pass
-            self.span.end()
+            if not self._already_started:
+                self.span.end()
 
     def stop(self) -> None:
         """Finalize the invocation successfully and end its span."""
