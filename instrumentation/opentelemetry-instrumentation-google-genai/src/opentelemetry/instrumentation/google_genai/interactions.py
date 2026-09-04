@@ -147,9 +147,37 @@ def _apply_interaction_response_attributes(
 
     invocation.input_tokens = usage.total_input_tokens
     invocation.output_tokens = usage.total_output_tokens
+    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
     if isinstance(invocation, InferenceInvocation):
         invocation.thinking_tokens = usage.total_thought_tokens
-    invocation.cache_read_input_tokens = usage.total_cached_tokens
+        input_by_modality = _get_field(usage, "input_tokens_by_modality") or []
+        for entry in input_by_modality:
+            modality = _get_field(entry, "modality")
+            tokens = _get_field(entry, "tokens")
+            if modality and tokens is not None:
+                m = str(modality).lower()
+                if m == "text":
+                    invocation.text_input_tokens = tokens
+                elif m == "image":
+                    invocation.image_input_tokens = tokens
+                elif m == "audio":
+                    invocation.audio_input_tokens = tokens
+
+        output_by_modality = (
+            _get_field(usage, "output_tokens_by_modality") or []
+        )
+        for entry in output_by_modality:
+            modality = _get_field(entry, "modality")
+            tokens = _get_field(entry, "tokens")
+            if modality and tokens is not None:
+                m = str(modality).lower()
+                if m == "text":
+                    invocation.text_output_tokens = tokens
+                elif m == "image":
+                    invocation.image_output_tokens = tokens
+                elif m == "audio":
+                    invocation.audio_output_tokens = tokens
 
     if telemetry_handler.should_capture_content():
         invocation.output_messages = _interactions_response_to_messages(

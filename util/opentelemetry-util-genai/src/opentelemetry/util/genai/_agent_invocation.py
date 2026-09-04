@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -25,6 +27,10 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
+
+_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
+    "gen_ai.usage.cache_write.input_tokens"
+)
 
 
 class AgentInvocation(GenAIInvocation):
@@ -94,7 +100,7 @@ class AgentInvocation(GenAIInvocation):
 
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
-        self.cache_creation_input_tokens: int | None = None
+        self._cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
 
         self.input_messages: list[InputMessage] = []
@@ -106,6 +112,28 @@ class AgentInvocation(GenAIInvocation):
         self.tool_definitions: list[ToolDefinition] | None = None
 
         self._start(self._get_start_attributes())
+
+    @property
+    def cache_write_input_tokens(self) -> int | None:
+        """The number of cache write input tokens."""
+        return self._cache_write_input_tokens
+
+    @cache_write_input_tokens.setter
+    def cache_write_input_tokens(self, value: int | None) -> None:
+        self._cache_write_input_tokens = value
+
+    @property
+    def cache_creation_input_tokens(self) -> int | None:
+        """The number of cache creation input tokens.
+
+        .. deprecated:: 1.3b0
+            Use :attr:`cache_write_input_tokens` instead.
+        """
+        return self._cache_write_input_tokens
+
+    @cache_creation_input_tokens.setter
+    def cache_creation_input_tokens(self, value: int | None) -> None:
+        self._cache_write_input_tokens = value
 
     @property
     def agent_name(self) -> str | None:
@@ -161,8 +189,8 @@ class AgentInvocation(GenAIInvocation):
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
             (
-                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-                self.cache_creation_input_tokens,
+                _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+                self.cache_write_input_tokens,
             ),
             (
                 GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
