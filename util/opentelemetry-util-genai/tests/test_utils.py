@@ -60,6 +60,7 @@ from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
     get_content_capturing_mode,
     image_from_url,
+    should_capture_content_on_events,
     should_capture_content_on_spans,
     should_emit_event,
 )
@@ -259,6 +260,25 @@ class TestShouldCaptureContent(unittest.TestCase):
             ):
                 assert (
                     should_capture_content_on_spans() is span_content_enabled
+                )
+
+    def test_should_capture_content_on_events_against_various_env_var_combinations(
+        self,
+    ):  # pylint: disable=no-self-use
+        for content_capture, event_content_enabled in [
+            ("NO_CONTENT", False),
+            ("EVENT_ONLY", True),
+            ("SPAN_ONLY", False),
+            ("SPAN_AND_EVENT", True),
+        ]:
+            with patch.dict(
+                os.environ,
+                {
+                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
+                },
+            ):
+                assert (
+                    should_capture_content_on_events() is event_content_enabled
                 )
 
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
@@ -1195,8 +1215,37 @@ class TestTelemetryHandler(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
         assert attrs["gen_ai.prompt.version"] == "1.0.0"
-        assert attrs["gen_ai.prompt.variable.user"] == "Alice"
-        assert attrs["gen_ai.prompt.variable.style"] == "formal"
+        # Prompt variables are gated by content capturing
+        assert "gen_ai.prompt.variable.user" not in attrs
+        assert "gen_ai.prompt.variable.style" not in attrs
+
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+            },
+        ):
+            invocation = self.telemetry_handler.inference(
+                "test-provider", request_model="test-model"
+            )
+            invocation.prompt_name = "chat_prompt"
+            invocation.prompt_version = "1.0.0"
+            invocation.prompt_variables = {"user": "Alice", "style": "formal"}
+            invocation.stop()
+
+            attrs = self.span_exporter.get_finished_spans()[-1].attributes
+            assert attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
+            assert attrs["gen_ai.prompt.version"] == "1.0.0"
+            assert attrs["gen_ai.prompt.variable.user"] == "Alice"
+            assert attrs["gen_ai.prompt.variable.style"] == "formal"
+
+            event_attrs = self.log_exporter.get_finished_logs()[
+                -1
+            ].log_record.attributes
+            assert event_attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
+            assert event_attrs["gen_ai.prompt.version"] == "1.0.0"
+            assert event_attrs["gen_ai.prompt.variable.user"] == "Alice"
+            assert event_attrs["gen_ai.prompt.variable.style"] == "formal"
 
 
 class AnyNonNone:
