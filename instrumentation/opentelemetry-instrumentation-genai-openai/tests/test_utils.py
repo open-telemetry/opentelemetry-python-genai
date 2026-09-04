@@ -360,7 +360,7 @@ def assert_cache_attributes(span, usage):
     assert details is not None
 
     cached_tokens = getattr(details, "cached_tokens", None)
-    if cached_tokens is None:
+    if not cached_tokens:
         assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in span.attributes
     else:
         assert (
@@ -369,7 +369,7 @@ def assert_cache_attributes(span, usage):
         )
 
     cache_creation = getattr(details, "cache_creation_input_tokens", None)
-    if cache_creation is None:
+    if not cache_creation:
         assert GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS not in span.attributes
     else:
         assert (
