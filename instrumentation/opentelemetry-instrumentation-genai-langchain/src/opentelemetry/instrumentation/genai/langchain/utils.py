@@ -387,10 +387,12 @@ def split_system_and_input_messages(
             parts = _message_parts(message)
             if not parts and not _has_content(message):
                 continue
+            msg_name = getattr(message, "name", None)
             input_messages.append(
                 InputMessage(
                     role=_normalize_role(message) or Role.USER.value,
                     parts=parts,
+                    name=str(msg_name) if msg_name is not None else None,
                 )
             )
 

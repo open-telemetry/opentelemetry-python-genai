@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
 import pytest
 from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models.fake_chat_models import (
+    FakeMessagesListChatModel,
+)
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -793,6 +797,60 @@ def test_split_system_and_input_messages_normalizes_shorthand_inputs():
     )
     assert [part.content for part in system] == ["You are helpful."]
     assert [msg.role for msg in inputs] == ["user"]
+
+
+def test_split_system_and_input_messages_preserves_name():
+    system, inputs = split_system_and_input_messages(
+        [
+            HumanMessage(content="Hi", name="Alice"),
+            AIMessage(content="Hello", name="Bob"),
+        ]
+    )
+    assert len(inputs) == 2
+    assert inputs[0].name == "Alice"
+    assert inputs[1].name == "Bob"
+
+
+def test_chat_model_preserves_input_and_output_message_names(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    class _TestModel(FakeMessagesListChatModel):
+        model_name: str = "test-model"
+
+        @property
+        def _identifying_params(self):
+            return {"model_name": self.model_name}
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        model = _TestModel(
+            responses=[AIMessage(content="Hello there!", name="assistant_bob")]
+        )
+        model.invoke([HumanMessage(content="Hi!", name="user_alice")])
+
+    (span,) = span_exporter.get_finished_spans()
+    input_messages = json.loads(
+        span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
+    )
+    output_messages = json.loads(
+        span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
+    )
+
+    assert len(input_messages) == 1
+    assert input_messages[0]["name"] == "user_alice"
+    assert input_messages[0]["role"] == "user"
+
+    assert len(output_messages) == 1
+    assert output_messages[0]["name"] == "assistant_bob"
+    assert output_messages[0]["role"] == "assistant"
 
 
 def assert_openai_completion_attributes(

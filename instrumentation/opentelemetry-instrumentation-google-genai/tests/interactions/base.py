@@ -264,11 +264,11 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello interactions!","type":"text"}]}]',
+            '[{"role":"user","parts":[{"content":"Hello interactions!","type":"text"}],"name":null}]',
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":"stop"}]',
+            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":"stop","name":null}]',
         )
 
     @patch.dict(

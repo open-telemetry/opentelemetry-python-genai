@@ -320,7 +320,7 @@ class OutputMessage:
     role: str
     parts: list[MessagePart]
     finish_reason: str | FinishReason | None = None
-    """Deprecated: report finish reasons in ``gen_ai.response.finish_reasons`` instead."""
+    """Deprecated. Report finish reasons in ``gen_ai.response.finish_reasons`` instead."""
     name: str | None = None
 
 

@@ -1288,6 +1288,48 @@ class TestOnLlmEndToolCalls:
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
 
+    def test_on_llm_end_preserves_message_name(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="Hello!", name="assistant_bot")
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].name == "assistant_bot"
+
+    def test_on_llm_end_tool_calls_preserves_message_name(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_123",
+            "args": {"location": "Paris"},
+        }
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[tool_call],
+            name="tool_caller_bot",
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].name == "tool_caller_bot"
+
 
 # ---------------------------------------------------------------------------
 # on_retriever_start / on_retriever_end / on_retriever_error
@@ -2645,3 +2687,19 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     assert any(isinstance(p, TextPart) for p in parts)
     blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.content == _REAL_PNG_BYTES
+
+
+def test_on_chat_model_start_preserves_message_name():
+    run_id = _run_id()
+    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+    telemetry.should_capture_content.return_value = True
+
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content="Hello", name="Alice")]],
+        run_id=run_id,
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    assert len(llm_inv.input_messages) == 1
+    assert llm_inv.input_messages[0].name == "Alice"

@@ -470,6 +470,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                         )
 
+                    msg_name = getattr(chat_generation.message, "name", None)
+                    name_str = str(msg_name) if msg_name is not None else None
+
                     if finish_reason in ("tool_calls", "tool_use"):
                         tool_calls: list[ToolCallRequestPart] = []
                         for tool_call in chat_generation.message.tool_calls:
@@ -484,6 +487,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     elif (
                         legacy_call := _legacy_function_call_request(
@@ -498,6 +502,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     else:
                         parts = [
@@ -514,6 +519,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             role=role,
                             parts=cast(list[MessagePart], parts),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     output_messages.append(output_message)
 

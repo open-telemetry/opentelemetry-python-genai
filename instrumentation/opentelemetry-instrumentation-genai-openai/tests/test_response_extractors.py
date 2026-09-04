@@ -119,6 +119,21 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
     ]
 
 
+def test_extract_input_messages_extracts_name(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {"role": "user", "content": "Hello", "name": "Alice"},
+            SimpleNamespace(role="assistant", content="Hi", name="Bob"),
+            {"role": "user", "content": "How are you?"},
+        ]
+    )
+    assert [(msg.role, msg.name) for msg in messages] == [
+        ("user", "Alice"),
+        ("assistant", "Bob"),
+        ("user", None),
+    ]
+
+
 def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
     response = _make_response(
         output=[
