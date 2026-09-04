@@ -175,6 +175,11 @@ class RawResponseStreamProxy(ObjectProxy):
 
     def _wrap_parsed(self, stream: Any) -> object:
         if isinstance(stream, (Stream, AsyncStream)):
+            if self._self_finalize is None:
+                # The close fallback ended the span while parse() was still
+                # pending. A wrapper would collect attributes with nowhere left
+                # to record them, so hand the stream back uninstrumented.
+                return stream
             self._self_parsed = self._self_wrap_stream(stream)
             return self._self_parsed
         # Not a stream we can drive; hand it back untouched. The close fallback

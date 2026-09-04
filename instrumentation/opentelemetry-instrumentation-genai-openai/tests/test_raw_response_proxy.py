@@ -9,6 +9,7 @@ hands anything else back untouched — and the close fallback that finalizes the
 span when the caller never parses, so the span never leaks.
 """
 
+import asyncio
 import inspect
 import logging
 
@@ -201,6 +202,38 @@ async def test_close_before_awaiting_parse_finalizes_once():
     assert finalize_calls == [True]  # span closed, did not leak
 
     await pending  # tidy up the coroutine so it is not left un-awaited
+
+
+@pytest.mark.asyncio()
+async def test_close_while_parse_pending_does_not_wrap():
+    # Same race as above, but the coroutine resolves to a stream we could wrap.
+    # The close fallback has already ended the span by then, so a wrapper would
+    # accumulate attributes that silently go nowhere -- worse than no wrapper.
+    resume = asyncio.Event()
+    stream = _FakeAsyncStream()
+
+    class _SlowAsyncRawResponse(_AsyncRawResponse):
+        async def parse(self, *, to=None):
+            await resume.wait()
+            return self._parse_result
+
+    raw = _SlowAsyncRawResponse(stream)
+    finalize_calls, wrap_calls = [], []
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: wrap_calls.append(s) or ("wrapped", s),
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    pending = proxy.parse()
+    raw.http_response.close()
+    assert finalize_calls == [True]  # close fallback already finalized
+
+    resume.set()
+    result = await pending
+
+    assert wrap_calls == []  # no wrapper built against a finished span
+    assert result is stream  # caller still gets a usable stream
 
 
 def test_close_without_parse_finalizes_once():
