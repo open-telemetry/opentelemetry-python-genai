@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from os import PathLike
 from typing import TYPE_CHECKING, cast
@@ -198,6 +198,8 @@ def _extract_document_source(source: object) -> list[MessagePart]:
         content = source_dict.get("content")
         if isinstance(content, str):
             return [TextPart(content=content)]
+        if isinstance(content, Iterator):
+            return []
         if isinstance(content, Iterable):
             return convert_content_to_parts(
                 cast("Iterable[ContentBlock | ContentBlockParam]", content)
@@ -208,7 +210,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
     return []
 
 
-def _convert_document_block(block: Mapping[str, Any]) -> list[MessagePart]:
+def _convert_document_block(block: Mapping[str, Any]) -> MessagePart | None:
     parts = _extract_document_source(block.get("source"))
     metadata = {
         key: block[key]
@@ -225,16 +227,14 @@ def _convert_document_block(block: Mapping[str, Any]) -> list[MessagePart]:
         source_mapping is not None and source_mapping.get("type") == "content"
     )
     if metadata or (is_nested and parts):
-        return [
-            GenericPart(
-                type="document",
-                value={
-                    "parts": [asdict(part) for part in parts],
-                    **metadata,
-                },
-            )
-        ]
-    return parts
+        return GenericPart(
+            type="document",
+            value={
+                "parts": [asdict(part) for part in parts],
+                **metadata,
+            },
+        )
+    return parts[0] if parts else None
 
 
 def _convert_dict_block_to_part(
@@ -301,8 +301,7 @@ def _convert_dict_block_to_part(
         return _extract_image_source(block.get("source"))
 
     if block_type == "document":
-        parts = _convert_document_block(block)
-        return parts[0] if len(parts) == 1 else None
+        return _convert_document_block(block)
 
     if block_type in ("audio", "video", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))
@@ -351,11 +350,6 @@ def convert_content_to_parts(
         return [TextPart(content=content)]
     parts: list[MessagePart] = []
     for item in content:
-        if isinstance(item, Mapping):
-            item_mapping = cast(Mapping[str, Any], item)
-            if item_mapping.get("type") == "document":
-                parts.extend(_convert_document_block(item_mapping))
-                continue
         part = _convert_content_block_to_part(item)
         if part is not None:
             parts.append(part)
