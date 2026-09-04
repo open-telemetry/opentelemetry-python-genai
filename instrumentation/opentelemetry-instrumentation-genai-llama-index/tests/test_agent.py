@@ -905,6 +905,107 @@ async def test_agent_workflow_emits_span_hierarchy(
 
 
 @pytest.mark.asyncio
+async def test_agent_workflow_uses_configured_workflow_name(
+    span_exporter, instrument_llama_index
+) -> None:
+    def response_generator(messages, **kwargs):
+        return ChatMessage(role="assistant", content="workflow complete")
+
+    agent = FunctionAgent(
+        name="named-workflow-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(
+        agents=[agent],
+        workflow_name="customer-support-workflow",
+    )
+
+    await workflow.run(user_msg="Run the workflow")
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow customer-support-workflow"
+    )[0]
+    assert workflow_span.attributes[GenAIAttributes.GEN_AI_WORKFLOW_NAME] == (
+        "customer-support-workflow"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_uses_executing_agent_tool_metadata(
+    span_exporter, instrument_llama_index
+) -> None:
+    def response_generator(messages, **kwargs):
+        if any(message.role.value == "tool" for message in messages):
+            return ChatMessage(role="assistant", content="workflow complete")
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="duplicate-tool-call",
+                    tool_name="lookup",
+                    tool_kwargs={"value": "hello"},
+                )
+            ],
+        )
+
+    def first_lookup(value: str) -> str:
+        return f"first: {value}"
+
+    def second_lookup(value: str) -> str:
+        return f"second: {value}"
+
+    first_agent = FunctionAgent(
+        name="first-agent",
+        description="First agent.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=lambda messages, **kwargs: ChatMessage(
+                role="assistant", content="first complete"
+            ),
+        ),
+        tools=[
+            FunctionTool.from_defaults(
+                first_lookup,
+                name="lookup",
+                description="First lookup description.",
+            )
+        ],
+        streaming=False,
+    )
+    second_agent = FunctionAgent(
+        name="second-agent",
+        description="Second agent.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        tools=[
+            FunctionTool.from_defaults(
+                second_lookup,
+                name="lookup",
+                description="Second lookup description.",
+            )
+        ],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(
+        agents=[first_agent, second_agent],
+        root_agent="second-agent",
+    )
+
+    await workflow.run(user_msg="Use lookup")
+
+    tool_span = _spans_named(span_exporter, "execute_tool lookup")[0]
+    assert tool_span.attributes[GenAIAttributes.GEN_AI_TOOL_DESCRIPTION] == (
+        "Second lookup description."
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_workflow_captures_content(
     span_exporter, instrument_llama_index_with_content
 ) -> None:
