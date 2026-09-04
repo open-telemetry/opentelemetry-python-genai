@@ -304,13 +304,13 @@ class TestTelemetryHandler(unittest.TestCase):
             SimpleSpanProcessor(self.span_exporter)
         )
         self.log_exporter = InMemoryLogRecordExporter()
-        logger_provider = LoggerProvider()
-        logger_provider.add_log_record_processor(
+        self.logger_provider = LoggerProvider()
+        self.logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(self.log_exporter)
         )
         self.telemetry_handler = get_telemetry_handler(
             tracer_provider=self.tracer_provider,
-            logger_provider=logger_provider,
+            logger_provider=self.logger_provider,
         )
 
     def tearDown(self):
@@ -1168,6 +1168,74 @@ class TestTelemetryHandler(unittest.TestCase):
             "gen_ai.usage.audio.cache_read.input_tokens",
         ):
             assert key not in attrs
+
+    def test_inference_reasoning_and_continuation_and_compaction(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.reasoning_level = "high"
+        invocation.previous_response_id = "resp_123"
+        invocation.conversation_compacted = True
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs["gen_ai.request.reasoning.level"] == "high"
+        assert attrs["gen_ai.request.previous_response.id"] == "resp_123"
+        assert attrs["gen_ai.conversation.compacted"] is True
+
+    def test_inference_prompt_template_attributes(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.prompt_name = "chat_prompt"
+        invocation.prompt_version = "1.0.0"
+        invocation.prompt_variables = {"user": "Alice", "style": "formal"}
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
+        assert attrs["gen_ai.prompt.version"] == "1.0.0"
+        # Prompt variables are gated by content capturing
+        assert "gen_ai.prompt.variable.user" not in attrs
+        assert "gen_ai.prompt.variable.style" not in attrs
+
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+            },
+        ):
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                logger_provider=self.logger_provider,
+            )
+            invocation = handler.inference(
+                "test-provider", request_model="test-model"
+            )
+            invocation.prompt_name = "chat_prompt"
+            invocation.prompt_version = "1.0.0"
+            invocation.prompt_variables = {
+                "user": "Alice",
+                "style": "formal",
+                "tags": ["a", "b"],
+            }
+            invocation.stop()
+
+            attrs = self.span_exporter.get_finished_spans()[-1].attributes
+            assert attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
+            assert attrs["gen_ai.prompt.version"] == "1.0.0"
+            assert attrs["gen_ai.prompt.variable.user"] == "Alice"
+            assert attrs["gen_ai.prompt.variable.style"] == "formal"
+            assert attrs["gen_ai.prompt.variable.tags"] == '["a","b"]'
+
+            event_attrs = self.log_exporter.get_finished_logs()[
+                -1
+            ].log_record.attributes
+            assert event_attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
+            assert event_attrs["gen_ai.prompt.version"] == "1.0.0"
+            assert event_attrs["gen_ai.prompt.variable.user"] == "Alice"
+            assert event_attrs["gen_ai.prompt.variable.style"] == "formal"
+            assert event_attrs["gen_ai.prompt.variable.tags"] == '["a","b"]'
 
 
 class AnyNonNone:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -51,6 +52,12 @@ _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
 _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
     "gen_ai.usage.audio.cache_read.input_tokens"
 )
+_GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
+_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
+    "gen_ai.request.previous_response.id"
+)
+_GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
+_GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -127,6 +134,12 @@ class InferenceInvocation(GenAIInvocation):
         self.text_cache_read_input_tokens: int | None = None
         self.image_cache_read_input_tokens: int | None = None
         self.audio_cache_read_input_tokens: int | None = None
+        self.reasoning_level: str | None = None
+        self.previous_response_id: str | None = None
+        self.conversation_compacted: bool | None = None
+        self.prompt_name: str | None = None
+        self.prompt_version: str | None = None
+        self.prompt_variables: Mapping[str, object] | None = None
         self.tool_definitions: list[ToolDefinition] | None = None
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
@@ -166,6 +179,7 @@ class InferenceInvocation(GenAIInvocation):
             output_messages=self.output_messages,
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
+            prompt_variables=self.prompt_variables,
             for_span=for_span,
             content_capturing_mode=self._content_capturing_mode,
         )
@@ -261,6 +275,26 @@ class InferenceInvocation(GenAIInvocation):
             (
                 _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
                 self.audio_cache_read_input_tokens or None,
+            ),
+            (
+                _GEN_AI_REQUEST_REASONING_LEVEL,
+                self.reasoning_level,
+            ),
+            (
+                _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+                self.previous_response_id,
+            ),
+            (
+                _GEN_AI_CONVERSATION_COMPACTED,
+                True if self.conversation_compacted else None,
+            ),
+            (
+                GenAI.GEN_AI_PROMPT_NAME,
+                self.prompt_name,
+            ),
+            (
+                _GEN_AI_PROMPT_VERSION,
+                self.prompt_version,
             ),
             (
                 GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
@@ -363,6 +397,7 @@ class LLMInvocation:
     finish_reasons: list[str] | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+
     attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Additional attributes to set on spans and/or events. Not set on metrics."""
     metric_attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
@@ -410,6 +445,7 @@ class LLMInvocation:
         inv.finish_reasons = self.finish_reasons
         inv.input_tokens = self.input_tokens
         inv.output_tokens = self.output_tokens
+
         inv.temperature = self.temperature
         inv.top_p = self.top_p
         inv.frequency_penalty = self.frequency_penalty
@@ -435,6 +471,7 @@ class LLMInvocation:
         inv.finish_reasons = self.finish_reasons
         inv.input_tokens = self.input_tokens
         inv.output_tokens = self.output_tokens
+
         inv.temperature = self.temperature
         inv.top_p = self.top_p
         inv.frequency_penalty = self.frequency_penalty
