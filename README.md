@@ -28,6 +28,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 | --------------- | ----------------- | ------- | ------ |
 | [opentelemetry-instrumentation-genai-bedrock](./instrumentation/opentelemetry-instrumentation-genai-bedrock) | boto3 >= 1.40.46, < 2 | 1.2b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-claude-agent-sdk](./instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14, < 1 | 1.2b0.dev | skeleton |
+| [opentelemetry-instrumentation-genai-cohere](./instrumentation/opentelemetry-instrumentation-genai-cohere) | cohere >= 5.13.0, < 8 | 1.2b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-crewai](./instrumentation/opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1, < 2 | 1.2b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-dspy](./instrumentation/opentelemetry-instrumentation-genai-dspy) | dspy >= 2.5.0, < 4 | 1.2b0.dev | skeleton |
 | [opentelemetry-instrumentation-genai-llama-index](./instrumentation/opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19, < 1 | 1.2b0.dev | skeleton |
