@@ -1,0 +1,1 @@
+Record `function_call` and `function_call_output` input items on Responses API spans, so a turn that follows a tool call keeps its tool-loop history in `gen_ai.input.messages`.

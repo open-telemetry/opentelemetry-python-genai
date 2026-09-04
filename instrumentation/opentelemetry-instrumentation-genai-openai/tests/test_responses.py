@@ -35,8 +35,13 @@ from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    CUSTOM_TOOL_CALL_ID,
+    CUSTOM_TOOL_INPUT,
+    CUSTOM_TOOL_MODEL,
     DEFAULT_MODEL,
+    EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
     EXPECTED_TOOL_DEFINITIONS,
+    EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
     GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
@@ -45,6 +50,9 @@ from .test_utils import (
     assert_fetch_response_attributes,
     assert_messages_attribute,
     format_simple_expected_output_message,
+    get_responses_custom_tool_definition,
+    get_responses_custom_tool_loop_input,
+    get_responses_tool_loop_input,
     get_responses_weather_tool_definition,
 )
 
@@ -1196,6 +1204,93 @@ def test_responses_create_streaming_user_exception(
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+def test_responses_create_captures_tool_loop_history(
+    request, span_exporter, openai_client, instrument_with_content
+):
+    _skip_if_not_latest()
+
+    openai_client.responses.create(
+        model=DEFAULT_MODEL,
+        input=get_responses_tool_loop_input(),
+        tools=[get_responses_weather_tool_definition()],
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+def test_responses_create_captures_custom_tool_call_output(
+    request, span_exporter, openai_client, instrument_with_content
+):
+    """A custom tool call the model requests is recorded on the output side too."""
+    _skip_if_not_latest()
+
+    openai_client.responses.create(
+        model=CUSTOM_TOOL_MODEL,
+        input="Use the run_sql tool to count the rows in the users table.",
+        tools=[get_responses_custom_tool_definition()],
+        tool_choice="auto",
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_calls",
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    tool_calls = [
+        part
+        for message in output_messages
+        for part in message.get("parts", [])
+        if part.get("type") == "tool_call"
+    ]
+    (tool_call,) = tool_calls
+    assert tool_call["name"] == "run_sql"
+    assert tool_call["id"] == CUSTOM_TOOL_CALL_ID
+    # The same id the replayed history correlates on, so the two spans join up.
+    assert tool_call["arguments"] == CUSTOM_TOOL_INPUT
+
+
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+def test_responses_create_captures_custom_tool_history(
+    request, span_exporter, openai_client, instrument_with_content
+):
+    _skip_if_not_latest()
+
+    openai_client.responses.create(
+        model=CUSTOM_TOOL_MODEL,
+        input=get_responses_custom_tool_loop_input(),
+        tools=[get_responses_custom_tool_definition()],
+        tool_choice="auto",
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    # The replayed `reasoning` item is not recorded: it carries no readable
+    # text, and the response path drops such items too.
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
+    )
 
 
 @pytest.mark.vcr()

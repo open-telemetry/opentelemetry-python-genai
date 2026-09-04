@@ -36,8 +36,11 @@ from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_responses import assert_responses_streaming_timing_metrics
 from .test_utils import (
+    CUSTOM_TOOL_MODEL,
     DEFAULT_MODEL,
+    EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
     EXPECTED_TOOL_DEFINITIONS,
+    EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
     GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
@@ -46,6 +49,9 @@ from .test_utils import (
     assert_fetch_response_attributes,
     assert_messages_attribute,
     format_simple_expected_output_message,
+    get_responses_custom_tool_definition,
+    get_responses_custom_tool_loop_input,
+    get_responses_tool_loop_input,
     get_responses_weather_tool_definition,
 )
 
@@ -1204,6 +1210,59 @@ async def test_async_responses_create_streaming_user_exception(
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+async def test_async_responses_create_captures_custom_tool_history(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_captures_custom_tool_history[content_mode0].yaml"
+    ):
+        await async_openai_client.responses.create(
+            model=CUSTOM_TOOL_MODEL,
+            input=get_responses_custom_tool_loop_input(),
+            tools=[get_responses_custom_tool_definition()],
+            tool_choice="auto",
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+async def test_async_responses_create_captures_tool_loop_history(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_captures_tool_loop_history[content_mode0].yaml"
+    ):
+        await async_openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            input=get_responses_tool_loop_input(),
+            tools=[get_responses_weather_tool_definition()],
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
+    )
 
 
 @pytest.mark.asyncio()
