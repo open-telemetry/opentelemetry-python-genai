@@ -93,6 +93,7 @@ class ResponseRequestParams:
     service_tier: str | None = None
     temperature: float | None = None
     output_type: str | None = None
+    tools: Sequence[object] | None = None
     top_p: float | None = None
 
 
@@ -150,6 +151,7 @@ def extract_params(
     service_tier: str | None = None,
     temperature: float | None = None,
     text: object | None = None,
+    tools: object | None = None,
     top_p: float | None = None,
     **_kwargs: object,
 ) -> ResponseRequestParams:
@@ -176,6 +178,7 @@ def extract_params(
         ),
         temperature=_get_float(temperature),
         output_type=_extract_output_type_from_value(text),
+        tools=_get_sequence(tools) or None,
         top_p=_get_float(top_p),
     )
 
@@ -291,10 +294,10 @@ def _finish_reason_from_status(
     return None
 
 
-def get_tool_definitions_from_response(
-    response: Response | None,
+def get_tool_definitions(
+    tools: Sequence[object] | None,
 ) -> list[ToolDefinition] | None:
-    """Return the tool definitions carried on a fetched response.
+    """Map Responses API tool entries onto tool definition models.
 
     Responses API tools are flat -- a function tool holds ``name``,
     ``description`` and ``parameters`` directly, unlike the Chat Completions
@@ -303,15 +306,10 @@ def get_tool_definitions_from_response(
     so they are reported as generic definitions keyed by their type.
     """
     if (
-        Response is None
-        or not isinstance(response, Response)
+        not tools
         or FunctionToolDefinition is None
         or GenericToolDefinition is None
     ):
-        return None
-
-    tools = response.tools
-    if not tools:
         return None
 
     definitions: list[ToolDefinition] = []
@@ -336,6 +334,15 @@ def get_tool_definitions_from_response(
                 )
             )
     return definitions or None
+
+
+def get_tool_definitions_from_response(
+    response: Response | None,
+) -> list[ToolDefinition] | None:
+    """Return the tool definitions carried on a fetched response."""
+    if Response is None or not isinstance(response, Response):
+        return None
+    return get_tool_definitions(response.tools)
 
 
 def _response_types_available() -> bool:
@@ -538,6 +545,7 @@ def apply_request_attributes(
             params.instructions
         )
         invocation.input_messages = get_input_messages(params.input)
+        invocation.tool_definitions = get_tool_definitions(params.tools)
 
 
 def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
