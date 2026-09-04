@@ -1,0 +1,1 @@
+Record `top_k` on retrieval spans as integer `gen_ai.retrieval.top_k`.
