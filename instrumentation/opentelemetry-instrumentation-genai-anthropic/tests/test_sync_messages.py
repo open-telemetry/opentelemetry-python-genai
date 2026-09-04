@@ -165,6 +165,118 @@ def _load_span_messages(span, attribute):
     return parsed
 
 
+def _multimodal_input_message():
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe these images."},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "QUJD",
+                },
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/image.png",
+                },
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "QUJD",
+                },
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/document.pdf",
+                },
+            },
+            {
+                "type": "document",
+                "source": {
+                    "type": "text",
+                    "media_type": "text/plain",
+                    "data": "Document text",
+                },
+            },
+            {
+                "type": "document",
+                "title": "Reference",
+                "context": "Use the nested content.",
+                "citations": {"enabled": True},
+                "source": {
+                    "type": "content",
+                    "content": [
+                        {"type": "text", "text": "Nested text"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.com/nested.png",
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
+
+def _assert_multimodal_input(span):
+    messages = _load_span_messages(span, GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+
+    parts = messages[0]["parts"]
+    assert len(parts) == 7
+    assert parts[0] == {
+        "type": "text",
+        "content": "Describe these images.",
+    }
+    assert parts[1] == {
+        "type": "blob",
+        "mime_type": "image/png",
+        "modality": "image",
+        "content": "QUJD",
+    }
+    assert parts[2] == {
+        "type": "uri",
+        "mime_type": None,
+        "modality": "image",
+        "uri": "https://example.com/image.png",
+    }
+    assert parts[3] == {
+        "type": "blob",
+        "mime_type": "application/pdf",
+        "modality": "document",
+        "content": "QUJD",
+    }
+    assert parts[4] == {
+        "type": "uri",
+        "mime_type": "application/pdf",
+        "modality": "document",
+        "uri": "https://example.com/document.pdf",
+    }
+    assert parts[5] == {
+        "type": "blob",
+        "mime_type": "text/plain",
+        "modality": "document",
+        "content": "RG9jdW1lbnQgdGV4dA==",
+    }
+    assert parts[6] == {
+        "type": "document",
+    }
+
+
 def _skip_if_cassette_missing_and_no_real_key(request):
     cassette_path = (
         Path(__file__).parent / "cassettes" / f"{request.node.name}.yaml"
@@ -426,6 +538,81 @@ def test_sync_messages_create_captures_content(
     assert input_messages[0]["parts"][0]["type"] == "text"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"][0]["type"] == "text"
+
+
+def test_sync_messages_create_captures_multimodal_content(
+    span_exporter,
+    anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette("test_sync_messages_create_captures_content.yaml"):
+        anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[_multimodal_input_message()],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_multimodal_input(spans[0])
+
+
+def test_sync_messages_create_preserves_generator_document_content(
+    instrument_with_content,
+):
+    received_content = None
+
+    def handle_request(request):
+        nonlocal received_content
+        body = json.loads(request.content)
+        received_content = body["messages"][0]["content"][0]["source"][
+            "content"
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_generator_content",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "Received."}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    def document_content():
+        yield {"type": "text", "text": "First"}
+        yield {"type": "text", "text": "Second"}
+
+    transport = httpx.MockTransport(handle_request)
+    with httpx.Client(transport=transport) as http_client:
+        client = Anthropic(http_client=http_client)
+        client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "content",
+                                "content": document_content(),
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+    assert received_content == [
+        {"type": "text", "text": "First"},
+        {"type": "text", "text": "Second"},
+    ]
 
 
 @pytest.mark.vcr()
@@ -745,6 +932,29 @@ def test_sync_messages_create_streaming_captures_content(
     assert output_messages[0]["parts"] == [
         {"type": "text", "content": "Hello!"}
     ]
+
+
+def test_sync_messages_create_streaming_captures_multimodal_content(
+    span_exporter,
+    anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_sync_messages_create_streaming_captures_content.yaml"
+    ):
+        with anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[_multimodal_input_message()],
+            stream=True,
+        ) as stream:
+            for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_multimodal_input(spans[0])
 
 
 @pytest.mark.vcr()
