@@ -79,6 +79,7 @@ def _make_agent_inv_mock() -> mock.MagicMock:
     # agent_name is an instance attribute set in AgentInvocation.__init__ via the
     # constructor arg; pre-configure it so spec-restricted attribute access works.
     agent_inv.agent_name = None
+    agent_inv.agent_id = None
     return agent_inv
 
 
@@ -256,7 +257,7 @@ class TestOnChainStartAgent:
             },
         )
 
-        assert agent_inv.agent_id == "agent-123"
+        assert agent_inv.agent_id is None
         assert agent_inv.agent_description == "does math"
         assert agent_inv.conversation_id == "thread-abc"
 

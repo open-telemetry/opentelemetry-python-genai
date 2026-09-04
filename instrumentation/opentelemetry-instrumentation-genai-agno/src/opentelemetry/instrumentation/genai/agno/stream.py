@@ -13,6 +13,7 @@ from opentelemetry.instrumentation.genai.agno.utils import (
 )
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
+    RemoteAgentInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.stream import (
@@ -56,14 +57,15 @@ class _AgentStreamMixin:
                 self._self_agent_invocation.output_tokens = (
                     metrics.output_tokens
                 )
-            if getattr(metrics, "cache_read_tokens", None) is not None:
-                self._self_agent_invocation.cache_read_input_tokens = (
-                    metrics.cache_read_tokens
-                )
-            if getattr(metrics, "cache_write_tokens", None) is not None:
-                self._self_agent_invocation.cache_write_input_tokens = (
-                    metrics.cache_write_tokens
-                )
+            if isinstance(self._self_agent_invocation, RemoteAgentInvocation):
+                if getattr(metrics, "cache_read_tokens", None) is not None:
+                    self._self_agent_invocation.cache_read_input_tokens = (
+                        metrics.cache_read_tokens
+                    )
+                if getattr(metrics, "cache_write_tokens", None) is not None:
+                    self._self_agent_invocation.cache_write_input_tokens = (
+                        metrics.cache_write_tokens
+                    )
 
         event_name = str(getattr(chunk, "event", ""))
         chunk_type = type(chunk).__name__
