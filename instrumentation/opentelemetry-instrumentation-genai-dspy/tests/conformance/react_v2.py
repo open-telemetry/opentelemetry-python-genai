@@ -1,14 +1,14 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conformance scenario: basic ReAct agent run with tool execution for DSPy."""
+"""Conformance scenario: basic ReActV2 agent run with tool execution for DSPy."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import dspy
-
+from dspy.adapters.types.tool import ToolCalls
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
@@ -25,32 +25,37 @@ def add(x: int, y: int) -> int:
     return x + y
 
 
-class MockSyncPredict:
+class MockSyncPredictV2:
     def __init__(self) -> None:
         self.count = 0
 
     def __call__(self, **kwargs: object) -> object:
         self.count += 1
 
-        class Pred:
-            next_thought = "Need to calculate 2 + 2"
-            next_tool_name = "add"
-            next_tool_args = {"x": 2, "y": 2}
+        class CallPred:
+            next_thought = "Add 2 and 2"
+            tool_calls = ToolCalls(
+                tool_calls=[
+                    ToolCalls.ToolCall(
+                        id="call_1", name="add", args={"x": 2, "y": 2}
+                    )
+                ]
+            )
 
-        class FinishPred:
-            next_thought = "Done calculation"
-            next_tool_name = "finish"
-            next_tool_args = {}
+        class SubmitPred:
+            next_thought = "Submit answer"
+            tool_calls = ToolCalls(
+                tool_calls=[
+                    ToolCalls.ToolCall(
+                        id="call_2", name="submit", args={"answer": "4"}
+                    )
+                ]
+            )
 
-        return Pred() if self.count == 1 else FinishPred()
+        return CallPred() if self.count == 1 else SubmitPred()
 
 
-class MockExtract:
-    def __call__(self, **kwargs: object) -> dict[str, str]:
-        return {"answer": "4"}
-
-
-class ReActScenario(Scenario):
+class ReActV2Scenario(Scenario):
     expected_spans = {"invoke_agent": 1, "execute_tool": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
     expected_violations = (
@@ -75,9 +80,6 @@ class ReActScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            tool = dspy.Tool(add, name="add", desc="Add two numbers.")
-            react = dspy.ReAct("question -> answer", tools=[tool])
-            react.react = MockSyncPredict()
-            react.extract = MockExtract()
-
-            react(question="What is 2 + 2?")
+            react_v2 = dspy.ReActV2("question -> answer", tools=[add])
+            react_v2.react = MockSyncPredictV2()
+            react_v2(question="What is 2 + 2?")

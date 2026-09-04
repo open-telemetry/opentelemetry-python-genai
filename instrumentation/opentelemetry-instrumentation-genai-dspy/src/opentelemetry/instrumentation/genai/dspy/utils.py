@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
     from dspy.primitives.prediction import Prediction
 
+SENTINEL_TOOL_NAMES: frozenset[str] = frozenset({"finish", "submit"})
+
 
 def extract_input_content(input_args: dict[str, Any]) -> str:
     """Extract input content string from agent invocation arguments."""
@@ -124,7 +126,7 @@ def prepare_tool_definitions(
             tool_name = "tool"
 
         name_str = str(tool_name)
-        if name_str in ("finish", "submit"):
+        if name_str in SENTINEL_TOOL_NAMES:
             continue
 
         desc = (

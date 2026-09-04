@@ -9,11 +9,7 @@ import json
 
 import dspy
 import pytest
-
-try:
-    from dspy.adapters.types.tool import ToolCalls
-except ImportError:
-    ToolCalls = None  # type: ignore[assignment,misc]
+from dspy.adapters.types.tool import ToolCalls
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
@@ -29,11 +25,6 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 
-pytestmark = pytest.mark.skipif(
-    not hasattr(dspy, "ReActV2") or ToolCalls is None,
-    reason="dspy.ReActV2 not available in this DSPy version",
-)
-
 
 def add(x: int, y: int) -> int:
     """Add two numbers."""
@@ -47,29 +38,27 @@ class MockSyncPredictV2:
     def __call__(self, **kwargs: object) -> object:
         self.count += 1
 
-        class Pred:
-            pass
-
-        p = Pred()
-        if self.count == 1:
-            p.next_thought = "Add 2 and 2"  # type: ignore[attr-defined]
-            p.tool_calls = ToolCalls(  # type: ignore[misc]
+        class CallPred:
+            next_thought = "Add 2 and 2"
+            tool_calls = ToolCalls(
                 tool_calls=[
-                    ToolCalls.ToolCall(  # type: ignore[misc]
+                    ToolCalls.ToolCall(
                         id="call_1", name="add", args={"x": 2, "y": 2}
                     )
                 ]
             )
-        else:
-            p.next_thought = "Submit answer"  # type: ignore[attr-defined]
-            p.tool_calls = ToolCalls(  # type: ignore[misc]
+
+        class SubmitPred:
+            next_thought = "Submit answer"
+            tool_calls = ToolCalls(
                 tool_calls=[
-                    ToolCalls.ToolCall(  # type: ignore[misc]
+                    ToolCalls.ToolCall(
                         id="call_2", name="submit", args={"answer": "4"}
                     )
                 ]
             )
-        return p
+
+        return CallPred() if self.count == 1 else SubmitPred()
 
 
 def test_react_v2_sync_execution(
@@ -92,8 +81,8 @@ def test_react_v2_sync_execution(
         assert res.answer == "4"
 
     spans = span_exporter.get_finished_spans()
-    # Expect 1 execute_tool add, 1 execute_tool submit, 1 invoke_agent dspy.ReActV2
-    assert len(spans) == 3
+    # Expect 1 execute_tool add, 1 invoke_agent dspy.ReActV2 (submit sentinel skipped)
+    assert len(spans) == 2
 
     agent_spans = [s for s in spans if s.name == "invoke_agent dspy.ReActV2"]
     tool_spans = [s for s in spans if s.name.startswith("execute_tool")]
@@ -124,11 +113,12 @@ def test_react_v2_sync_execution(
     tool_defs = json.loads(str(tool_defs_raw))
     assert any(t["name"] == "add" for t in tool_defs)
 
-    # Verify child tool spans reference agent span
-    assert len(tool_spans) == 2
-    for t_span in tool_spans:
-        assert t_span.parent is not None
-        assert t_span.parent.span_id == agent_span.context.span_id
+    # Verify child tool spans reference agent span and submit is skipped
+    assert len(tool_spans) == 1
+    assert tool_spans[0].name == "execute_tool add"
+    assert not any(s.name == "execute_tool submit" for s in spans)
+    assert tool_spans[0].parent is not None
+    assert tool_spans[0].parent.span_id == agent_span.context.span_id
 
 
 def test_react_v2_no_content_capture(

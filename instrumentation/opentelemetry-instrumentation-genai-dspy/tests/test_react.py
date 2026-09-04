@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from unittest import mock
 
 import dspy
 import pytest
@@ -105,8 +106,8 @@ def test_react_sync_execution(
         assert res.answer == "4"
 
     spans = span_exporter.get_finished_spans()
-    # Expect 1 execute_tool add, 1 execute_tool finish, 1 invoke_agent dspy.ReAct
-    assert len(spans) == 3
+    # Expect 1 execute_tool add, 1 invoke_agent dspy.ReAct (finish sentinel skipped)
+    assert len(spans) == 2
 
     agent_spans = [s for s in spans if s.name == "invoke_agent dspy.ReAct"]
     tool_spans = [s for s in spans if s.name.startswith("execute_tool")]
@@ -137,17 +138,14 @@ def test_react_sync_execution(
     tool_defs = json.loads(str(tool_defs_raw))
     assert any(t["name"] == "add" for t in tool_defs)
 
-    # Verify child tool spans reference agent span
-    assert len(tool_spans) == 2
-    for t_span in tool_spans:
-        assert t_span.parent is not None
-        assert t_span.parent.span_id == agent_span.context.span_id
+    # Verify child tool spans reference agent span and finish is skipped
+    assert len(tool_spans) == 1
+    assert tool_spans[0].name == "execute_tool add"
+    assert not any(s.name == "execute_tool finish" for s in spans)
+    assert tool_spans[0].parent is not None
+    assert tool_spans[0].parent.span_id == agent_span.context.span_id
 
 
-@pytest.mark.skipif(
-    not hasattr(dspy.ReAct, "aforward"),
-    reason="dspy.ReAct.aforward not available in this DSPy version",
-)
 @pytest.mark.anyio
 async def test_react_async_execution(
     tracer_provider: TracerProvider,
@@ -174,11 +172,16 @@ async def test_react_async_execution(
         assert res.answer == "15"
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 3
+    assert len(spans) == 2
 
     agent_spans = [s for s in spans if s.name == "invoke_agent dspy.ReAct"]
     assert len(agent_spans) == 1
     agent_span = agent_spans[0]
+
+    tool_spans = [s for s in spans if s.name.startswith("execute_tool")]
+    assert len(tool_spans) == 1
+    assert tool_spans[0].name == "execute_tool multiply"
+    assert not any(s.name == "execute_tool finish" for s in spans)
 
     agent_attrs = agent_span.attributes or {}
     assert agent_attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "invoke_agent"
@@ -191,20 +194,30 @@ def test_react_no_content_capture(
     meter_provider: MeterProvider,
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    with instrument(
-        DSPyInstrumentor(),
-        tracer_provider=tracer_provider,
-        logger_provider=logger_provider,
-        meter_provider=meter_provider,
-        content_capture="NO_CONTENT",
+    with (
+        mock.patch(
+            "opentelemetry.instrumentation.genai.dspy.patch.extract_input_content"
+        ) as mock_input_extract,
+        mock.patch(
+            "opentelemetry.instrumentation.genai.dspy.patch.extract_output_content"
+        ) as mock_output_extract,
     ):
-        tool = dspy.Tool(add, name="add", desc="Add two numbers.")
-        react = dspy.ReAct("question -> answer", tools=[tool])
-        react.react = MockSyncPredict()
-        react.extract = MockExtract()
+        with instrument(
+            DSPyInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="NO_CONTENT",
+        ):
+            tool = dspy.Tool(add, name="add", desc="Add two numbers.")
+            react = dspy.ReAct("question -> answer", tools=[tool])
+            react.react = MockSyncPredict()
+            react.extract = MockExtract()
 
-        res = react(question="What is 2 + 2?")
-        assert res.answer == "4"
+            res = react(question="What is 2 + 2?")
+            assert res.answer == "4"
+        mock_input_extract.assert_not_called()
+        mock_output_extract.assert_not_called()
 
     spans = span_exporter.get_finished_spans()
     agent_spans = [s for s in spans if s.name == "invoke_agent dspy.ReAct"]
