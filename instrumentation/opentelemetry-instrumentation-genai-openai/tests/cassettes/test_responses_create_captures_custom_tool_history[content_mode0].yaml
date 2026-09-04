@@ -1,0 +1,238 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": [
+          {
+            "id": "rs_021487c99c6b4d6f006a9e6ccb6af887d0b12a2253b8e3e3f8",
+            "summary": [],
+            "type": "reasoning",
+            "content": [],
+            "encrypted_content": "gAAAAABqnmzMN9RqmH9jGxjmoJdoO3LaIIcMZ1j0Yio_nIMq2thpkY9n1LQOLbXrbdT2UlvDU95br-S_sg5L3lo8nBUvhUQz2eRXkaLByWorK8h0kPLbog1FNy4xMvMWFe-gCC6hl126EFsY610_FmHjfzNNu1LfKcIsoJMq0q7HR2aNL4eMAq97cNhadufiEFp-PrgAcWgSZhjQB5jg51KFT0Y0nhRjiheQwBSXWyjWvALfsG_17--FNMdGRW0TD2xpsQ0_32vmK-EptT0pwsAhTuZw5yHzxIJLSUbQSoRg9KsNs2TCXhV7CIm6zt8588Hzzf3sKeappyU-f-2YC7cHBIJxYI4KRmkhEw8PHDdshx02np6GTa2pJa-yp9SmWwt1S93XzLR2P6QeW2E3EEurBeVScZFDkbNDE-d2n-n7IXQQoVh9G9wa3Sl2IzinRc8JhVCT7nVvHd7Q8HTaSEd7aVvrk3OedbOquWSUxwrqeixwT9OImGXj0IHksB8DMAoT7V8iSrOMkPuDmzAOY-Hf_s89-wb0tAxlcb7ZG8RkJhLy7gBuyFNqFot48CXPJW2J8SxJpMzCNjJ_GseyHaZSG5ctKet18Pf_GigaE0rXtKrQJpnK7Nt-2w3hX0IcLNjagamC35VFqVQfm3LL7zhzAhQm0m8DLTraZnD5YE_JKiiDuKoEzOzPrhuivlLAyv8xLc6_-ISfR_s6uPR7AzLnyPn4QkKcm2rfyIsMYMgJ3TsCHQFmAYS-uE5z9v8APKm_FJp7FrO9RVIS-1ubMrafgagrrCCMUL_jilG53NY4o75wliaQolenN9HHL8stm6ENhaJM9JOpKa2clK40IVDP8qc42Kgy1UgbRKKIq8pf0KNXehDx5KrzvpXDCgM0UlHpZYWprXyCG3fTomT1xRc9YwImlaXaUebW04TpDlh7WxSjEFkg-wnvYjr01nuHhdRjzqSzikGQMG_2JZXjQVWFKe60paazCgSvSEgmVRCw94LJcU0zZ-IJ8n3DQxI3Cz50fEPB5_HXHcGyYUyz9pAi2WYL4kmsxrT-ra6qmNNQnQeWXN2UATPJ3r8cIRMQl61d5Kr8e1VlJxxpObnpuw5_TuzN9rVDRRAC3cg5So0c9Qvrg3FccVYsJU_oItxkMLthhm4hZF4CKI-oOj3wQNjQi4VKraz1IbhUN6Gn-cG1ZAm0hh3hE_2FX7zT3yz0CCjIT-0TiJ1xeOdFU_GkjGKn5jz6C5_9i1fOG1Jw8yxLSOGrT47EF-s5ubMmBCuhWHAN4LmjbHg3XKLomHl8gco8Vq3eoQ0oMrxu4SbC8338Y8T9Br8zm3HDHUHjg9zM7ECWDwBcTS3hXGQ0oSxgQkvYgt05fUlgxiwIFCqi11n4BiYPYeH7SzyL4Y7a2udqFgdU3G7JcUufvVXk96BYXlR874L1JYmDu_XzOCGcLgFkskq75kYoxE3XxsPGqVre3zhQctdqPeFLN2oNJzLvMoj6m1uLIbvP1YQjgevSc_zEe0ddCDKEtB8G-qqu44n2lH_tAEQPNWjq"
+          },
+          {
+            "call_id": "call_d4JQwp4PqjmpNV4fiBLCvack",
+            "input": "SELECT COUNT(*) AS count FROM users;\n",
+            "name": "run_sql",
+            "type": "custom_tool_call",
+            "id": "ctc_021487c99c6b4d6f006a9e6ccc0f2c87d09587d31dc59b609c",
+            "status": "completed"
+          },
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_d4JQwp4PqjmpNV4fiBLCvack",
+            "output": "42 rows"
+          }
+        ],
+        "model": "gpt-5-mini",
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "type": "custom",
+            "name": "run_sql",
+            "description": "Run a read-only SQL query and return rows."
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '2151'
+      content-type:
+      - application/json
+      cookie:
+      - test_cookie
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.1.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_021487c99c6b4d6f006a9e6ccc99d887d09ba31604aee2770b",
+          "object": "response",
+          "created_at": 1788767436,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1788767438,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-5-mini-2025-08-07",
+          "moderation": null,
+          "output": [
+            {
+              "id": "rs_021487c99c6b4d6f006a9e6cccf86887d096bce1a09a3eea29",
+              "type": "reasoning",
+              "content": [],
+              "encrypted_content": "gAAAAABqnmzOM87-92a5JIeDh7cwJrkRqQSYRYjLxa7afQP3c62_VY-PI8_EW9t660YY7FJALtMUkoH1AI2Emq4CE13vDthuBZAHIA6urazCviX2LjeeV1JOFI5VKLS0EBR78xpVrhd_tqRpaXLRxa9FZxCmFDAHrcbylLNewZHqLK_I7NQM0ZU5MKV5WXGSjLuEG7bu5mzmHXGagsDABXpIM9WYy1vlKVGQYPmnwcti3WynHE5hKV4SooITIol-qwcbbVQWrBju0rUXwjgIDcHiQ-ZKF-6w3LaHshvmU74N686PAHmPWOl4sumAS_f36r4bC4p08CYhGSGmGR1miWSeOfQNEEnnvnId0R9LuduRzA5qK_4xbMjU8A_9RCF5ljnMbXSt_iuj6WR5eWlGDmHT_C00ma3svIVAltlDqTKQRpRU6UpcjfVMPBXjxmmhXYAaS4anhU_hha4mT0Kuq4XiheA3zZbrAz5XQ5wkfseXHsBH2Ypyz_tXbyI90iR6xmAK6MmRYpt2lBbbumI7e3iyhlZX6h8x8eLmHfjABOCmBEwbfFals0ZmDpdUA5a9GNcqDkPC1TUSkpy1Uy-Uye64er-whCR1fsaPc4IUMrLfNHzwDOcWLIx26GWmnz6TOOMtALAVdGjDHawqFb_Mzck9f1UZmWtgCVIYJDLUHz8tz1XH8KYA_fi5K291efa2PPCxeieF0u24Kk154M0JD7RukN3_x-1k5pnCR6Z9xQxOlz1N7LfZ5dr6qSu4qfGjwpjreTrirkhrVLmop-58rMuVB1oJ3k1tlaLLipoIlRsEoniLA7aDJQT1oYUoKYtPt539PbFCIkqbRV8nJ4gClC23HfktW7xkn40JdGmYckDEmI5jmCGH5WoIjB63PQwprdfuj9xaqS6ofMZoulKgChB4e4u1MVZoqxbmg5M-xd5MiF_Eo7ve8qJE-1d9AHt1ExhYM7WJ9INpP3_nr9d5-0ahsOmycGDk80rO7d6t-jZqkVeepc9EAJd7OdrV1UstGvF0PhWdEE7_6CRkpajBiMOluYIXGB0cBixRLilcdKIivQrwaIk5eVgOKf69-aM2KGv3MAut5sToggQtYrShgExv7ItM6Cp1mWyo-GTOvUh9kSHsiB_EoYMw5G3ObivqZ0-JQ4S70w7-ybMf7vCl766p-gmn_jGuQxm7GG0OaJn8ZgHb20-uRdCcLTKG8yvNo5JTTYpU1PDQ_9dUMbgdvPVaH7AgJNqyLTiTw9Z94gBlqB1iepvyIyn6l5nuV-kfo9iqKhKgDyebtDhI_XeM-_IRZG1X_cXR1RCATAbXjQLwDa4wagiBcYLFLksDDxf91wPg7_1c9e1jGc01y6pIPQmoIZHbnF8sqZR18nn9W41b0vQTtldw3-trfIl1OEj1OQ3jz5uZKgQUaYc-wTLrirXnoIVR5R_y4ytbowLF2ZnbuAxv9hi7sCGIpDg07SUXu-hSxOYptwnqq-vvEUKxq_iGNWBfnI1AE2OUyP4X8DeZA_h5j3YCyrQKPrqAW-JnirejoMoosUIZLDzfBXcgzY7bPyqk0EK7bKKbrFEUdjiM0pvx6xNiRSsOv5bqZF0Zffcqdq_K-qD2",
+              "summary": []
+            },
+            {
+              "id": "msg_021487c99c6b4d6f006a9e6ccdaaa887d08116bafcd61a58e6",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "There are 42 users in the users table.\n\nWould you like any further breakdowns (e.g., by signup date, status, role) or an export of the results?"
+                }
+              ],
+              "role": "assistant"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": "current_turn",
+            "effort": "medium",
+            "mode": "standard",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "custom",
+              "description": "Run a read-only SQL query and return rows.",
+              "format": {
+                "type": "text"
+              },
+              "name": "run_sql"
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 147,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 112,
+            "output_tokens_details": {
+              "reasoning_tokens": 64
+            },
+            "total_tokens": 259
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a3741f9e6b4ba724-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '4129'
+      content-type:
+      - application/json
+      date:
+      - Mon, 07 Sep 2026 07:50:38 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1717'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '4000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '4000000'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 0s
+      x-request-id:
+      - req_a7e8e31fd41741cd87ae3ed7f4860d1f
+    status:
+      code: 200
+      message: OK
+version: 1
