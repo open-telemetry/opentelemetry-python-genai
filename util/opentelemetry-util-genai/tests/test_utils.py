@@ -1134,6 +1134,41 @@ class TestTelemetryHandler(unittest.TestCase):
         assert attrs["gen_ai.usage.image.cache_read.input_tokens"] == 6
         assert attrs["gen_ai.usage.audio.cache_read.input_tokens"] == 7
 
+    def test_inference_modality_and_cache_tokens_omitted_when_zero(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.cache_write_input_tokens = 0
+        invocation.cache_read_input_tokens = 0
+        invocation.thinking_tokens = 0
+        invocation.text_input_tokens = 0
+        invocation.image_input_tokens = 0
+        invocation.audio_input_tokens = 0
+        invocation.text_output_tokens = 0
+        invocation.image_output_tokens = 0
+        invocation.audio_output_tokens = 0
+        invocation.text_cache_read_input_tokens = 0
+        invocation.image_cache_read_input_tokens = 0
+        invocation.audio_cache_read_input_tokens = 0
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        for key in (
+            "gen_ai.usage.cache_write.input_tokens",
+            "gen_ai.usage.cache_read.input_tokens",
+            "gen_ai.usage.reasoning.output_tokens",
+            "gen_ai.usage.text.input_tokens",
+            "gen_ai.usage.image.input_tokens",
+            "gen_ai.usage.audio.input_tokens",
+            "gen_ai.usage.text.output_tokens",
+            "gen_ai.usage.image.output_tokens",
+            "gen_ai.usage.audio.output_tokens",
+            "gen_ai.usage.text.cache_read.input_tokens",
+            "gen_ai.usage.image.cache_read.input_tokens",
+            "gen_ai.usage.audio.cache_read.input_tokens",
+        ):
+            assert key not in attrs
+
 
 class AnyNonNone:
     def __eq__(self, other):
