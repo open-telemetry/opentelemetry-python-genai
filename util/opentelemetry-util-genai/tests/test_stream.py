@@ -4,6 +4,7 @@
 # pylint: disable=abstract-class-instantiated
 
 import asyncio
+import gc
 import inspect
 import timeit
 from unittest.mock import patch
@@ -399,9 +400,13 @@ class _FakeTimingInvocation:
     def __init__(self):
         self.chunk_times = []
         self._request_stream = None
+        self.stop_count = 0
 
     def _on_stream_chunk(self, chunk_at):
         self.chunk_times.append(chunk_at)
+
+    def stop(self):
+        self.stop_count += 1
 
 
 class _TimingSyncWrapper(SyncStreamWrapper):
@@ -488,6 +493,81 @@ def test_sync_wrapper_error_before_first_chunk_no_report():
         next(wrapper)
 
     assert invocation.chunk_times == []
+
+
+class _FakeFinalizeInvocation:
+    """Stand-in for a started-but-unfinalized invocation: has a live context
+    token until stopped, mirroring GenAIInvocation's finalized-once signal."""
+
+    def __init__(self):
+        self.stop_count = 0
+        self._context_token = object()
+        self._request_stream = None
+
+    def _on_stream_chunk(self, chunk_at):
+        pass
+
+    def stop(self):
+        if self._context_token is not None:
+            self._context_token = None
+            self.stop_count += 1
+
+    def fail(self, error):
+        pass
+
+
+def test_sync_wrapper_abandoned_before_drain_ends_invocation():
+    """Issue repro: a stream abandoned before draining now ends the span via
+    the wrapper's GC finalizer instead of leaking it."""
+    invocation = _FakeFinalizeInvocation()
+
+    wrapper = _TestSyncStreamWrapper(
+        _FakeSyncStream(chunks=["a", "b"]), invocation=invocation
+    )
+    del wrapper
+    gc.collect()
+
+    assert invocation.stop_count == 1
+
+
+def test_sync_wrapper_abandoned_pattern_b_ends_invocation():
+    """Subclasses that set ``_self_invocation`` after ``super().__init__``
+    still get the abandonment finalizer."""
+    invocation = _FakeFinalizeInvocation()
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(chunks=["a"]))
+    wrapper._self_invocation = invocation
+
+    del wrapper
+    gc.collect()
+
+    assert invocation.stop_count == 1
+
+
+def test_sync_wrapper_drained_then_collected_no_double_stop():
+    """A fully drained stream finalizes exactly once; the abandonment
+    finalizer firing on collection afterwards does not stop it again."""
+    invocation = _FakeFinalizeInvocation()
+    wrapper = _TestSyncStreamWrapper(
+        _FakeSyncStream(chunks=["a"]), invocation=invocation
+    )
+
+    list(wrapper)
+    assert invocation.stop_count == 1
+
+    del wrapper
+    gc.collect()
+
+    assert invocation.stop_count == 1
+
+
+def test_sync_wrapper_without_invocation_collected_untouched():
+    stream = _FakeSyncStream(chunks=["a"])
+    wrapper = _TestSyncStreamWrapper(stream)
+    assert wrapper._self_invocation is None
+
+    # Collection of a wrapper with no invocation must not raise.
+    del wrapper
+    gc.collect()
 
 
 def test_sync_wrapper_captures_arrival_before_processing():

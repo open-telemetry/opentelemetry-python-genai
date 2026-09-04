@@ -126,6 +126,28 @@ class SyncStreamWrapper(
             invocation._request_stream = True
         self._bind_stream(stream)
 
+    def __del__(self) -> None:
+        """End a streamed invocation abandoned without draining.
+
+        The wrapper going out of scope before the stream was fully consumed is
+        the only signal for "the caller walked away". A properly drained,
+        closed, or failed stream has already finalized, so this is a no-op for
+        it. Interpreter shutdown tears down modules before instances, so
+        attribute access and finalization are wrapped defensively.
+        """
+        try:
+            finalized = self._self_finalized
+            invocation = self._self_invocation
+        except Exception:  # pragma: no cover - interpreter-shutdown only
+            return
+        if finalized or invocation is None:
+            return
+        if getattr(invocation, "_context_token", None) is not None:
+            try:
+                invocation.stop()
+            except Exception:  # pragma: no cover - interpreter-shutdown only
+                pass
+
     # The SDK stream, held loosely typed: subclasses re-expose it through a
     # ``stream`` property carrying the SDK's own type.
     _self_stream: Any
