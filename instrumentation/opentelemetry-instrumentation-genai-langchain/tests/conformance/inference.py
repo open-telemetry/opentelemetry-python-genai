@@ -16,11 +16,14 @@ from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
     ExpectedViolation,
     Scenario,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
+
+from ._shared import span_attribute_values
 
 
 class InferenceScenario(Scenario):
@@ -36,6 +39,20 @@ class InferenceScenario(Scenario):
             message_substring="server.address",
         ),
     )
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        system_instructions = span_attribute_values(
+            report, "gen_ai.system_instructions"
+        )
+        assert len(system_instructions) == 1, (
+            "chat span with a SystemMessage input should set "
+            f"gen_ai.system_instructions once; saw {system_instructions}"
+        )
+        assert "You are a helpful assistant!" in system_instructions[0], (
+            "gen_ai.system_instructions should carry the SystemMessage "
+            f"content; got {system_instructions[0]}"
+        )
 
     def run(
         self,

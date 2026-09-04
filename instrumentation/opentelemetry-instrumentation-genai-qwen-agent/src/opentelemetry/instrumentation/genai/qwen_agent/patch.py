@@ -97,10 +97,12 @@ def wrap_agent_call_tool(
 
     invocation = handler.tool(
         tool_name,
-        tool_call_id=find_tool_call_id(kwargs.get("messages"), tool_name),
         tool_type="function",
-        tool_description=getattr(tool, "description", None),
     )
+    invocation.tool_call_id = find_tool_call_id(
+        kwargs.get("messages"), tool_name
+    )
+    invocation.tool_description = getattr(tool, "description", None)
     if invocation.should_capture_content_on_span and tool_args is not None:
         invocation.arguments = tool_args
 

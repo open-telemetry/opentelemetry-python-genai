@@ -209,6 +209,25 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(span.attributes["error.type"], "ValueError")
         self.assertEqual(event.attributes["error.type"], "ValueError")
 
+    def test_streaming_request_exception_records_error(self) -> None:
+        self.configure_exception(ValueError("stream request failed"))
+        with self.assertRaises(ValueError):
+            self.run_streaming_interaction(
+                model="gemini-2.5-flash",
+                input="Does this work?",
+                stream=True,
+            )
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(span.attributes["error.type"], "ValueError")
+        self.assertEqual(event.attributes["error.type"], "ValueError")
+
     def test_generated_span_has_vertex_ai_system_when_configured(self) -> None:
         self.set_use_vertex(True)
         self.configure_valid_interaction()

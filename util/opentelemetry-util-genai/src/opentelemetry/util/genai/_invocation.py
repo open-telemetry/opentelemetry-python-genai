@@ -12,6 +12,8 @@ from dataclasses import asdict
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from typing_extensions import Self
+
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach
 from opentelemetry.semconv._incubating.attributes import (
@@ -218,7 +220,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             error = Error.from_exception(error, self._error_type_resolver)
         self._finish(error)
 
-    def __enter__(self) -> GenAIInvocation:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(

@@ -89,13 +89,15 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
 ):
     handler = _build_handler()
     handler.tool.return_value = MagicMock(
-        spec=ToolInvocation, metric_attributes={}
+        spec=ToolInvocation,
+        metric_attributes={},
+        should_capture_content_on_span=True,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(
         FunctionSpanData(
             name="get_weather",
-            input='{"city":"BCN"}',
+            input=None,
             output=None,
         )
     )
@@ -107,23 +109,52 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
     )
     tool_invocation = handler.tool.return_value
 
-    assert tool_invocation.arguments == '{"city":"BCN"}'
     assert (
         tool_invocation.metric_attributes["gen_ai.provider.name"] == "openai"
     )
 
-    # Output gets populated on the agents library span_data after the
-    # tool runs; our on_span_end reads it.
+    # Input and output both get populated on the agents library span_data
+    # while the tool runs, i.e. after on_span_start; our on_span_end reads
+    # them.
+    span.span_data.input = '{"city":"BCN"}'
     span.span_data.output = "sunny"
     processor.on_span_end(span)
+    assert tool_invocation.arguments == {"city": "BCN"}
     assert tool_invocation.tool_result == "sunny"
+    tool_invocation.stop.assert_called_once_with()
+
+
+def test_function_span_skips_content_when_capture_disabled() -> None:
+    handler = _build_handler()
+    handler.tool.return_value = MagicMock(
+        spec=ToolInvocation,
+        metric_attributes={},
+        should_capture_content_on_span=False,
+    )
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
+
+    processor.on_span_start(span)
+    span.span_data.input = '{"city":"BCN"}'
+    span.span_data.output = "sunny"
+    processor.on_span_end(span)
+
+    tool_invocation = handler.tool.return_value
+    # A spec'd mock rejects reads of attributes nothing assigned, so these
+    # assert the processor skipped the serialization work entirely.
+    with pytest.raises(AttributeError):
+        _ = tool_invocation.arguments
+    with pytest.raises(AttributeError):
+        _ = tool_invocation.tool_result
     tool_invocation.stop.assert_called_once_with()
 
 
 def test_function_span_without_output_still_stops() -> None:
     handler = _build_handler()
     handler.tool.return_value = MagicMock(
-        spec=ToolInvocation, metric_attributes={}
+        spec=ToolInvocation,
+        metric_attributes={},
+        should_capture_content_on_span=True,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(FunctionSpanData(name="noop", input=None, output=None))
@@ -191,6 +222,78 @@ def test_shutdown_stops_open_invocations() -> None:
     assert len(processor._invocations) == 0
 
 
+def test_tool_content_captured_from_span_end(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Arguments the agents library fills in mid-span still land on the span."""
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
+
+    processor.on_span_start(span)
+    span.span_data.input = '{"city":"Barcelona"}'
+    span.span_data.output = "sunny"
+    processor.on_span_end(span)
+
+    (tool_span,) = span_exporter.get_finished_spans()
+    assert tool_span.attributes is not None
+    assert (
+        tool_span.attributes["gen_ai.tool.call.arguments"]
+        == '{"city":"Barcelona"}'
+    )
+    assert tool_span.attributes["gen_ai.tool.call.result"] == "sunny"
+
+
+@pytest.mark.parametrize(
+    ("span_data_input", "expected"),
+    [
+        # The spacing LiteLLM produces for Anthropic normalizes to the same
+        # value as the compact JSON the OpenAI APIs forward.
+        ('{"city": "Barcelona"}', '{"city":"Barcelona"}'),
+        ('{"city":"Barcelona"}', '{"city":"Barcelona"}'),
+        # A provider may emit something that isn't valid JSON, or valid JSON
+        # that isn't an object; neither may change the attribute's type.
+        ("city=Barcelona", "city=Barcelona"),
+        ("[1,2]", "[1,2]"),
+        ("42", "42"),
+        ("null", "null"),
+        # No arguments to record: `trace_include_sensitive_data=False` leaves
+        # `input` None, and tool types without arguments leave it empty.
+        (None, None),
+        ("", None),
+    ],
+)
+def test_tool_arguments_value_shapes(
+    span_data_input: str | None,
+    expected: str | None,
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
+
+    processor.on_span_start(span)
+    span.span_data.input = span_data_input
+    processor.on_span_end(span)
+
+    (tool_span,) = span_exporter.get_finished_spans()
+    assert tool_span.attributes is not None
+    if expected is None:
+        assert "gen_ai.tool.call.arguments" not in tool_span.attributes
+    else:
+        assert tool_span.attributes["gen_ai.tool.call.arguments"] == expected
+
+
 def test_no_content_captured_when_capture_env_unset(
     tracer_provider: TracerProvider,
     span_exporter: InMemorySpanExporter,
@@ -201,15 +304,11 @@ def test_no_content_captured_when_capture_env_unset(
     )
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     processor = GenAITracingProcessor(handler, provider="openai")
-    span = _Span(
-        FunctionSpanData(
-            name="get_weather",
-            input='{"city":"Barcelona"}',
-            output="sunny",
-        )
-    )
+    span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
 
     processor.on_span_start(span)
+    span.span_data.input = '{"city":"Barcelona"}'
+    span.span_data.output = "sunny"
     processor.on_span_end(span)
 
     (tool_span,) = span_exporter.get_finished_spans()

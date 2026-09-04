@@ -296,8 +296,16 @@ MessagePart = Union[
 
 
 FinishReason = Literal[
-    "content_filter", "error", "length", "stop", "tool_calls", "compaction"
+    "content_filter", "error", "length", "stop", "tool_call", "compaction"
 ]
+
+
+# Semconv schemas: model/gen-ai/gen-ai-{input,output}-messages.json (pinned by SEMCONV_GENAI_REF).
+class Role(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 @dataclass()

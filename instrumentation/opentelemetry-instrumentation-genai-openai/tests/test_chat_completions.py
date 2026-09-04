@@ -899,7 +899,7 @@ def chat_completion_tool_call(
                             "arguments": {"location": "San Francisco, CA"},
                         },
                     ],
-                    "finish_reason": "tool_calls",
+                    "finish_reason": "tool_call",
                 }
             ]
 
@@ -1668,7 +1668,7 @@ def chat_completion_multiple_tools_streaming(
                             "arguments": {"location": "San Francisco, CA"},
                         },
                     ],
-                    "finish_reason": "tool_calls",
+                    "finish_reason": "tool_call",
                 }
             ]
             assert_messages_attribute(

@@ -56,6 +56,7 @@ class WorkflowInvocation(GenAIInvocation):
         self.conversation_id: str | None = None
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
+        self.conversation_id: str | None = None
         self._start(self._get_start_attributes())
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
@@ -88,8 +89,19 @@ class WorkflowInvocation(GenAIInvocation):
             key: value for key, value in optional_attrs if value is not None
         }
 
+    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
+        attrs: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+        }
+        if self._name is not None:
+            attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._name
+        attrs.update(self.metric_attributes)
+        return attrs
+
     def _apply_finish(self, error: Error | None = None) -> None:
         attributes: dict[str, AttributeValue] = self._get_messages_for_span()
+        if self.conversation_id is not None:
+            attributes[GenAI.GEN_AI_CONVERSATION_ID] = self.conversation_id
         if error is not None:
             self._apply_error_attributes(error)
         if self.conversation_id is not None:
@@ -100,4 +112,4 @@ class WorkflowInvocation(GenAIInvocation):
             inputs=self.input_messages,
             outputs=self.output_messages,
         )
-        # TODO: Add workflow metrics when supported
+        self._metrics_recorder.record_workflow(self)

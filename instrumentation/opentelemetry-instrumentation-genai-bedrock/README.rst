@@ -9,6 +9,8 @@ Supported Operations
 
 * Synchronous chat via the Converse API (``client.converse``)
 * Streaming chat via the ConverseStream API (``client.converse_stream``)
+* Model invocation via the InvokeModel API (``client.invoke_model``)
+* Streaming model invocation via the InvokeModelWithResponseStream API (``client.invoke_model_with_response_stream``)
 
 Installation
 ------------

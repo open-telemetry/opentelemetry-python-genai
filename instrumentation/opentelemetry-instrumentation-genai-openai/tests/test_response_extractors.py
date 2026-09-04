@@ -181,7 +181,7 @@ def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
     assert [(msg.role, msg.finish_reason) for msg in messages] == [
         ("assistant", "stop"),
         ("assistant", "incomplete"),
-        ("assistant", "tool_calls"),
+        ("assistant", "tool_call"),
         ("assistant", "stop"),
     ]
     assert [part.content for part in messages[0].parts] == [

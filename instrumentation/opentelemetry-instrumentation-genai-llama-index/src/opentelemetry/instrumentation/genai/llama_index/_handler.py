@@ -44,6 +44,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolDefinition,
@@ -207,7 +208,9 @@ def _agent_input(bound_args: inspect.BoundArguments) -> list[InputMessage]:
         messages.append(_input_message(user_message))
     elif isinstance(user_message, str) and user_message:
         messages.append(
-            InputMessage(role="user", parts=[TextPart(content=user_message)])
+            InputMessage(
+                role=Role.USER.value, parts=[TextPart(content=user_message)]
+            )
         )
     return messages
 
@@ -451,10 +454,10 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             )
             tool_invocation = self._handler.tool(
                 tool_call.tool_name,
-                tool_call_id=tool_call.tool_id,
                 tool_type=tool_type,
-                tool_description=tool_description,
             )
+            tool_invocation.tool_call_id = tool_call.tool_id
+            tool_invocation.tool_description = tool_description
             if tool_invocation.should_capture_content_on_span:
                 tool_invocation.arguments = cast(
                     dict[str, Any], cast(Any, tool_call).tool_kwargs
@@ -475,8 +478,8 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             tool_invocation = self._handler.tool(
                 metadata.get_name(),
                 tool_type="function",
-                tool_description=metadata.description or None,
             )
+            tool_invocation.tool_description = metadata.description or None
             if tool_invocation.should_capture_content_on_span:
                 tool_invocation.arguments = _tool_arguments(
                     instance, bound_args

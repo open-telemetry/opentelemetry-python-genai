@@ -22,9 +22,11 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.types import (
+    FinishReason,
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -200,14 +202,14 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
 
         content = get_property_value(message, "content")
 
-        if role == "assistant":
+        if role == Role.ASSISTANT.value:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
                 chat_message.parts += extract_tool_calls_new(tool_calls)
             if _is_text_part(content):
                 chat_message.parts.append(TextPart(content=str(content)))
 
-        elif role == "tool":
+        elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
             chat_message.parts.append(
                 ToolCallResponsePart(id=tool_call_id, response=content)
@@ -266,6 +268,12 @@ def _prepare_tool_definitions(tools) -> list[ToolDefinition] | None:
     return definitions
 
 
+def map_finish_reason(finish_reason: str | None) -> FinishReason | str:
+    if finish_reason in ("tool_calls", "function_call"):
+        return "tool_call"
+    return finish_reason or "error"
+
+
 def _prepare_output_messages(choices) -> list[OutputMessage]:
     output_messages = []
     for choice in choices:
@@ -279,7 +287,7 @@ def _prepare_output_messages(choices) -> list[OutputMessage]:
                 parts.append(TextPart(content=str(content)))
 
             message = OutputMessage(
-                finish_reason=choice.finish_reason or "error",
+                finish_reason=map_finish_reason(choice.finish_reason),
                 role=(
                     choice.message.role
                     if choice.message and choice.message.role

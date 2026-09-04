@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from collections.abc import Callable
 from typing import Any, cast
 
 from botocore.client import BaseClient
+from botocore.response import StreamingBody
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.utils import unwrap
@@ -20,9 +22,14 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from .extractors import (
     extract_converse_request,
     extract_converse_response,
+    extract_invoke_model_request,
+    extract_invoke_model_response,
     extract_server_address_and_port,
 )
-from .stream import BedrockConverseStreamWrapper
+from .stream import (
+    BedrockConverseStreamWrapper,
+    BedrockInvokeModelStreamWrapper,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -82,6 +89,70 @@ def _handle_converse(
     return response
 
 
+def _handle_invoke_model(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+    *,
+    is_stream: bool = False,
+) -> Any:
+    endpoint_url = getattr(
+        getattr(instance, "meta", None), "endpoint_url", None
+    )
+    server_address, server_port = extract_server_address_and_port(endpoint_url)
+    raw_model_id = api_params.get("modelId")
+    model_id = str(raw_model_id) if raw_model_id else None
+    invocation = handler.inference(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        request_model=model_id,
+        server_address=server_address,
+        server_port=server_port,
+    )
+    capture_content = handler.should_capture_content()
+    extract_invoke_model_request(
+        api_params, invocation, capture_content=capture_content
+    )
+    try:
+        response: Any = wrapped(*args, **kwargs)
+    except Exception as exc:
+        invocation.fail(exc)
+        raise
+
+    if is_stream:
+        if "body" in response:
+            response["body"] = BedrockInvokeModelStreamWrapper(
+                response["body"],
+                invocation=invocation,
+                capture_content=capture_content,
+            )
+            return response
+    else:
+        raw_bytes = b""
+        body_stream = response.get("body")
+        if hasattr(body_stream, "read"):
+            raw_bytes = body_stream.read()
+            response["body"] = StreamingBody(
+                io.BytesIO(raw_bytes), len(raw_bytes)
+            )
+        elif isinstance(body_stream, (bytes, bytearray)):
+            raw_bytes = bytes(body_stream)
+        elif isinstance(body_stream, str):
+            raw_bytes = body_stream.encode("utf-8")
+
+        extract_invoke_model_response(
+            response,
+            raw_bytes,
+            invocation,
+            capture_content=capture_content,
+        )
+
+    invocation.stop()
+    return response
+
+
 def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
     def _wrapper(
         wrapped: Callable[..., Any],
@@ -112,6 +183,17 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
                 api_params,
                 handler,
                 is_stream=(operation_name == "ConverseStream"),
+            )
+
+        if operation_name in ("InvokeModel", "InvokeModelWithResponseStream"):
+            return _handle_invoke_model(
+                wrapped,
+                instance,
+                args,
+                kwargs,
+                api_params,
+                handler,
+                is_stream=(operation_name == "InvokeModelWithResponseStream"),
             )
 
         return wrapped(*args, **kwargs)
