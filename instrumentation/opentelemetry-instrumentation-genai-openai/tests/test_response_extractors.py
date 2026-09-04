@@ -390,10 +390,35 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
     assert invocation.input_tokens == 11
     assert invocation.output_tokens == 7
     assert invocation.cache_read_input_tokens == 3
-    assert invocation.cache_creation_input_tokens == 5
+    assert invocation.cache_write_input_tokens == 0
     assert invocation.attributes == {
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER: "scale",
     }
+
+
+def test_set_invocation_response_attributes_falls_back_to_cache_creation(
+    loaded_module,
+):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    usage = loaded_module.ResponseUsage.model_construct(
+        input_tokens=11,
+        output_tokens=7,
+        input_tokens_details=SimpleNamespace(cache_creation_input_tokens=5),
+        output_tokens_details=None,
+    )
+    result = loaded_module.Response.model_construct(
+        id="resp_123",
+        model="gpt-4.1",
+        usage=usage,
+        output=[],
+        service_tier=None,
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, result, capture_content=False
+    )
+
+    assert invocation.cache_write_input_tokens == 5
 
 
 def test_set_invocation_response_attributes_prefers_raw_served_model_header(

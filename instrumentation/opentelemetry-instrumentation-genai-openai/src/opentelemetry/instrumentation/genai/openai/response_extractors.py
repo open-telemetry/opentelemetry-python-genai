@@ -104,6 +104,7 @@ class UsageTokens:
     output_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
 
 
 def _get_field(value: object, field_name: str) -> object | None:
@@ -562,20 +563,28 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
         return UsageTokens()
 
     details = usage.input_tokens_details
+    cache_creation = (
+        details.cache_creation_input_tokens
+        if details is not None
+        and hasattr(details, "cache_creation_input_tokens")
+        else None
+    )
+    cache_write = (
+        getattr(details, "cache_write_tokens", None)
+        if details is not None
+        else None
+    )
+    if cache_write is None:
+        cache_write = cache_creation
     return UsageTokens(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        # `cache_creation_input_tokens` is not present on every SDK version's
-        # input token details model, so keep this attribute access guarded for
-        # compatibility across the supported OpenAI range.
-        cache_creation_input_tokens=(
-            details.cache_creation_input_tokens
-            if details is not None
-            and hasattr(details, "cache_creation_input_tokens")
-            else None
-        ),
+        cache_creation_input_tokens=cache_creation,
+        cache_write_input_tokens=cache_write,
         cache_read_input_tokens=(
-            details.cached_tokens if details is not None else None
+            getattr(details, "cached_tokens", None)
+            if details is not None
+            else None
         ),
     )
 
@@ -634,7 +643,7 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(response.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
-    invocation.cache_creation_input_tokens = tokens.cache_creation_input_tokens
+    invocation.cache_write_input_tokens = tokens.cache_write_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
     finish_reasons = extract_finish_reasons(response)

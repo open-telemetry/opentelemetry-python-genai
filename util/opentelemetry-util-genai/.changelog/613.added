@@ -1,0 +1,1 @@
+Add `cache_write_input_tokens` and modality token breakdown attributes (`text_*`, `image_*`, `audio_*`) to invocations.
