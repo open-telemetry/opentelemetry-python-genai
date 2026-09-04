@@ -363,17 +363,6 @@ class LLMInvocation:
     finish_reasons: list[str] | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
-    cache_write_input_tokens: int | None = None
-    cache_read_input_tokens: int | None = None
-    text_input_tokens: int | None = None
-    image_input_tokens: int | None = None
-    audio_input_tokens: int | None = None
-    text_output_tokens: int | None = None
-    image_output_tokens: int | None = None
-    audio_output_tokens: int | None = None
-    text_cache_read_input_tokens: int | None = None
-    image_cache_read_input_tokens: int | None = None
-    audio_cache_read_input_tokens: int | None = None
     attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Additional attributes to set on spans and/or events. Not set on metrics."""
     metric_attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
@@ -391,18 +380,6 @@ class LLMInvocation:
     _inference_invocation: InferenceInvocation | None = field(
         default=None, init=False, repr=False
     )
-
-    @property
-    def cache_creation_input_tokens(self) -> int | None:
-        """
-        .. deprecated:: 1.3b0
-            Use :attr:`cache_write_input_tokens` instead.
-        """
-        return self.cache_write_input_tokens
-
-    @cache_creation_input_tokens.setter
-    def cache_creation_input_tokens(self, value: int | None) -> None:
-        self.cache_write_input_tokens = value
 
     def _start_with_handler(
         self,
@@ -433,17 +410,6 @@ class LLMInvocation:
         inv.finish_reasons = self.finish_reasons
         inv.input_tokens = self.input_tokens
         inv.output_tokens = self.output_tokens
-        inv.cache_write_input_tokens = self.cache_write_input_tokens
-        inv.cache_read_input_tokens = self.cache_read_input_tokens
-        inv.text_input_tokens = self.text_input_tokens
-        inv.image_input_tokens = self.image_input_tokens
-        inv.audio_input_tokens = self.audio_input_tokens
-        inv.text_output_tokens = self.text_output_tokens
-        inv.image_output_tokens = self.image_output_tokens
-        inv.audio_output_tokens = self.audio_output_tokens
-        inv.text_cache_read_input_tokens = self.text_cache_read_input_tokens
-        inv.image_cache_read_input_tokens = self.image_cache_read_input_tokens
-        inv.audio_cache_read_input_tokens = self.audio_cache_read_input_tokens
         inv.temperature = self.temperature
         inv.top_p = self.top_p
         inv.frequency_penalty = self.frequency_penalty
@@ -469,17 +435,6 @@ class LLMInvocation:
         inv.finish_reasons = self.finish_reasons
         inv.input_tokens = self.input_tokens
         inv.output_tokens = self.output_tokens
-        inv.cache_write_input_tokens = self.cache_write_input_tokens
-        inv.cache_read_input_tokens = self.cache_read_input_tokens
-        inv.text_input_tokens = self.text_input_tokens
-        inv.image_input_tokens = self.image_input_tokens
-        inv.audio_input_tokens = self.audio_input_tokens
-        inv.text_output_tokens = self.text_output_tokens
-        inv.image_output_tokens = self.image_output_tokens
-        inv.audio_output_tokens = self.audio_output_tokens
-        inv.text_cache_read_input_tokens = self.text_cache_read_input_tokens
-        inv.image_cache_read_input_tokens = self.image_cache_read_input_tokens
-        inv.audio_cache_read_input_tokens = self.audio_cache_read_input_tokens
         inv.temperature = self.temperature
         inv.top_p = self.top_p
         inv.frequency_penalty = self.frequency_penalty
