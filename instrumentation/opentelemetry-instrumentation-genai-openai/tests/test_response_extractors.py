@@ -636,6 +636,33 @@ def test_extract_params_captures_request_tools(loaded_module):
     assert loaded_module.extract_params(tools=NOT_GIVEN).tools is None
 
 
+def test_extract_params_accepts_reusable_non_sequence_tool_iterables(
+    loaded_module,
+):
+    """The SDK takes any `Iterable[ToolParam]`, not just a list."""
+    tool = {"type": "function", "name": "get_weather"}
+
+    from_set = loaded_module.extract_params(
+        tools={"unhashable": tool}.values()
+    )
+    assert list(from_set.tools) == [tool]
+
+    from_tuple = loaded_module.extract_params(tools=(tool,))
+    assert list(from_tuple.tools) == [tool]
+
+
+def test_extract_params_does_not_drain_a_one_shot_tools_iterable(
+    loaded_module,
+):
+    """Consuming the caller's iterator would leave the SDK with no tools."""
+    tool = {"type": "function", "name": "get_weather"}
+    tools = iter([tool])
+
+    assert loaded_module.extract_params(tools=tools).tools is None
+    # The SDK still gets to read it.
+    assert list(tools) == [tool]
+
+
 def test_get_tool_definitions_maps_request_tools(loaded_module):
     """Request tools use the same flat shape as the ones echoed on a response."""
     definitions = loaded_module.get_tool_definitions(

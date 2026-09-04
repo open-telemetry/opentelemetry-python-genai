@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -26,6 +26,7 @@ from .utils import (
 if TYPE_CHECKING:
     from openai.types.responses.response import Response
     from openai.types.responses.response_usage import ResponseUsage
+    from openai.types.responses.tool_param import ToolParam
 
     from opentelemetry.util.genai.types import (
         Error,
@@ -95,7 +96,7 @@ class ResponseRequestParams:
     service_tier: str | None = None
     temperature: float | None = None
     output_type: str | None = None
-    tools: Sequence[object] | None = None
+    tools: Sequence[ToolParam] | None = None
     top_p: float | None = None
 
 
@@ -119,6 +120,21 @@ def _get_sequence(value: object) -> Sequence[object]:
     ):
         return value
     return ()
+
+
+def _get_tools(value: object) -> Sequence[ToolParam] | None:
+    """Materialize a request's ``tools`` without draining a one-shot iterable.
+
+    The SDK accepts any ``Iterable[ToolParam]``, so a plain ``Sequence`` check
+    would drop set- and view-backed collections. An ``Iterator`` is skipped
+    rather than consumed: draining it here would leave the SDK with no tools to
+    send.
+    """
+    if isinstance(value, (str, bytes, bytearray, Iterator)):
+        return None
+    if isinstance(value, Iterable):
+        return cast("Sequence[ToolParam]", list(value)) or None
+    return None
 
 
 def _get_int(value: object) -> int | None:
@@ -153,7 +169,7 @@ def extract_params(
     service_tier: str | None = None,
     temperature: float | None = None,
     text: object | None = None,
-    tools: object | None = None,
+    tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
     **_kwargs: object,
 ) -> ResponseRequestParams:
@@ -180,7 +196,7 @@ def extract_params(
         ),
         temperature=_get_float(temperature),
         output_type=_extract_output_type_from_value(text),
-        tools=_get_sequence(tools) or None,
+        tools=_get_tools(tools),
         top_p=_get_float(top_p),
     )
 
@@ -299,7 +315,7 @@ def _finish_reason_from_status(
 
 
 def get_tool_definitions(
-    tools: Sequence[object] | None,
+    tools: Iterable[ToolParam] | None,
 ) -> list[ToolDefinition] | None:
     """Map Responses API tool entries onto tool definition models.
 
