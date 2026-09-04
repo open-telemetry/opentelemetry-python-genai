@@ -165,8 +165,6 @@ violate:
    add an `expected_violation` in the scenario that covers the missing piece.
    All these must be documented in `MIGRATION_REPORT.md` as well, with links to the skipped scenario and the expected violation.
 
-8. **Do not modify weaver policies.**
-
 ## Augment mode: the package already exists
 
 The package already has a working, conformant implementation; OpenInference
@@ -527,23 +525,24 @@ Add current `util/opentelemetry-util-genai` and `instrumentation/opentelemetry-i
 
 ### 8. Conformance scenarios
 
-Author conformance scenarios using the **`write-conformance-tests`** skill —
-it's the generic procedure (scenario modules, the `test_conformance.py`
-runner, declared gaps, lib-specific assertions, weaver policies) and applies
-to any instrumentation. Migration-specific notes on top of that skill:
+Author conformance scenarios using the **`write-conformance-tests`** skill -
+it's the generic procedure (`conformance.yaml`, standalone scenario scripts,
+declared gaps, and `genai-mock-server`) and applies to any instrumentation.
+Migration-specific notes on top of that skill:
 
-- Drop OpenInference's `examples/` tree — its end-to-end demos are replaced
+- Drop OpenInference's `examples/` tree - its end-to-end demos are replaced
   by conformance scenarios, not migrated.
 - For an operation blocked by a util-genai/semconv gap, point the
-  `expected_violations` / `xfail` `reason=` at the gap row in
+  `expected_violations` `reason=` in `conformance.yaml` at the gap row in
   `MIGRATION_REPORT.md`.
 
-### 9. Cassettes (or a transport proxy)
+### 9. Cassettes (for unit tests)
 
 - Copy cassettes from OpenInference's `tests/cassettes/` (or wherever the OpenInference package
   parks them) into the migrated package's `tests/cassettes/`. Reuse names so existing
   unit tests keep loading them.
-- Reuse existing cassettes for conformance scenarios when they are applicable.
+- Conformance scenarios run against `genai-mock-server` (or mock transport / model), not cassettes.
+  Cassettes are used only for unit tests.
 - **AI-generated cassettes.** For a cassette OpenInference lacks and you
   can't record (no provider access), you may synthesize one from the
   provider's API reference via AI. Start it with a

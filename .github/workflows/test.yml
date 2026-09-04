@@ -73,3 +73,13 @@ jobs:
         run: uvx --with tox-uv tox -e "${MATRIX_TOX_ENV}" -- -ra
         env:
           MATRIX_TOX_ENV: ${{ matrix.tox_env }}
+
+      # A complete conformance run rewrites the coverage data file, so a diff
+      # here means the committed one no longer describes what is emitted.
+      - name: Check conformance coverage data is up to date
+        if: ${{ matrix.needs_weaver }}
+        run: |
+          if ! git diff --exit-code -- '**/tests/conformance/data.json'; then
+            echo "::error::tests/conformance/data.json is stale - re-run the conformance env and commit the result"
+            exit 1
+          fi

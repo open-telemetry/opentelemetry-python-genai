@@ -27,25 +27,12 @@ Parametrized fixtures
 the test and restores the previous value afterwards. ``SPAN_AND_EVENT`` and
 ``EVENT_ONLY`` coverage lives in targeted per-package tests rather than the
 default matrix.
-
-Conformance fixture
--------------------
-
-``weaver_live_check`` yields a started ``WeaverLiveCheck`` for a single
-conformance scenario. Consumed by ``tests/test_conformance.py`` via
-``opentelemetry.test_util_genai.conformance.run_conformance``. Auto-skips
-when the OTLP/gRPC exporter or the ``weaver`` binary aren't available —
-local runs typically skip; CI installs ``weaver`` ahead of the
-``*-conformance`` tox envs.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
-import tarfile
 from collections.abc import Iterator
-from typing import Any
 
 import pytest
 
@@ -62,12 +49,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
-)
-from opentelemetry.test_util_genai._setup_weaver import (
-    advice_data_glob,
-    policies_dir,
-    semconv_registry,
-    weaver_config_file,
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -174,52 +155,3 @@ def content_capture(
             os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
                 previous
             )
-
-
-# ─── Weaver live-check ──────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def weaver_live_check() -> Iterator[Any]:
-    """Yield a started ``WeaverLiveCheck`` for one conformance scenario.
-
-    Function-scoped so violations don't leak across scenarios. Auto-skips
-    when the OTLP/gRPC exporter, the ``weaver`` binary, or the
-    semantic-conventions registry can't be resolved.
-    """
-    try:
-        import opentelemetry.exporter.otlp.proto.grpc.trace_exporter  # noqa: F401
-    except ImportError:
-        pytest.skip("opentelemetry-exporter-otlp-proto-grpc not installed")
-
-    if shutil.which("weaver") is None:
-        pytest.skip(
-            "weaver binary not on PATH — install it from "
-            "https://github.com/open-telemetry/weaver/releases (CI installs "
-            "it via the test.yml conformance setup step)"
-        )
-
-    # WeaverLiveCheck transitively imports the OTLP/gRPC exporter, so it
-    # stays inside the function body — the probe above is what gates this.
-    from opentelemetry.test.weaver_live_check import (
-        WeaverLiveCheck,
-    )
-
-    try:
-        policies = str(policies_dir())
-        registry = str(semconv_registry())
-        advice_data = advice_data_glob()
-    except (OSError, RuntimeError, ValueError, tarfile.TarError) as exc:
-        pytest.skip(f"could not provision semantic-conventions: {exc}")
-
-    with WeaverLiveCheck(
-        registry=registry,
-        policies_dir=policies,
-        extra_args=[
-            "--config",
-            str(weaver_config_file()),
-            "--advice-data",
-            advice_data,
-        ],
-    ) as weaver:
-        yield weaver

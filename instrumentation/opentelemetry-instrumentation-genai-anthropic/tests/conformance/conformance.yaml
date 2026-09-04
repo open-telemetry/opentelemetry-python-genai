@@ -1,0 +1,128 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: anthropic
+instrumentation_library: opentelemetry-instrumentation-genai-anthropic
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  ANTHROPIC_BASE_URL: ${MOCK_SERVER_URL}
+  ANTHROPIC_API_KEY: test_anthropic_api_key
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  inference:
+    run: opentelemetry-instrument python inference.py
+    expected_violations:
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  streaming:
+    run: opentelemetry-instrument python streaming.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  inference_raw_response:
+    run: opentelemetry-instrument python inference_raw_response.py
+    expected_violations:
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  inference_raw_response_streaming:
+    run: opentelemetry-instrument python inference_raw_response_streaming.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    expected_violations:
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal:
+    run: opentelemetry-instrument python multimodal.py
+    expected_violations:
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage

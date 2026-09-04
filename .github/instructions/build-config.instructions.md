@@ -21,8 +21,8 @@ these, not just the first:
 - `[testenv] deps`: the factor-conditional `-r …/tests/requirements.<factor>.txt` lines plus
   `{[testenv]test_deps}` / `{[testenv]pytest_deps}`. Requirements install here, **not** in
   `commands_pre`.
-- `[testenv] commands`: the pytest line (which must `--ignore` `tests/test_conformance.py`) and the
-  separate `-conformance` pytest line.
+- `[testenv] commands`: the pytest line (which must `--ignore` `tests/conformance`) and the
+  separate `-conformance` pytest line (targeting `conformance.yaml`).
 - `[testenv:typecheck] deps`: `{toxinidir}/instrumentation/<pkg>[instruments]`.
 
 The uv workspace picks up new packages via the `instrumentation/*` glob in root `pyproject.toml`,

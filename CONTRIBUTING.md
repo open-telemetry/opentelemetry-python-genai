@@ -141,8 +141,8 @@ you start one of these tasks:
   package with the coverage OpenInference adds on top.
 - [**`review-migration`**](.github/skills/review-migration/SKILL.md) — review a ported or augmented package against its
   upstream implementation and write `MIGRATION_REPORT.md`.
-- [**`write-conformance-tests`**](.github/skills/write-conformance-tests/SKILL.md) — author conformance scenarios and the
-  `test_conformance.py` runner for an instrumentation package.
+- [**`write-conformance-tests`**](.github/skills/write-conformance-tests/SKILL.md) - author conformance scenarios,
+  `conformance.yaml`, and expectations for an instrumentation package.
 
 Please contribute back anything you learn while using the skills that could help improve them!
 
