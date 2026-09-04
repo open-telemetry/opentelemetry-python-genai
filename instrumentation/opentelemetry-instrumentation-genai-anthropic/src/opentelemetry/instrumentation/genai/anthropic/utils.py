@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from os import PathLike
 from typing import TYPE_CHECKING, Any, cast
 
@@ -102,19 +102,7 @@ def _extract_base64_blob(source: object, modality: str) -> MessagePart | None:
     data = source_dict.get("data")
     if not isinstance(data, str):
         if isinstance(data, PathLike) or callable(getattr(data, "read", None)):
-            media_type = source_dict.get("media_type")
-            return GenericPart(
-                type=modality,
-                value={
-                    "source_type": "base64_file",
-                    "mime_type": media_type
-                    if isinstance(media_type, str)
-                    else None,
-                    "input_type": "path"
-                    if isinstance(data, PathLike)
-                    else "stream",
-                },
-            )
+            return GenericPart(type=modality)
         return None
     decoded = decode_base64(data)
     if decoded is None:
@@ -217,13 +205,7 @@ def _convert_document_block(block: Mapping[str, Any]) -> MessagePart | None:
         source_mapping is not None and source_mapping.get("type") == "content"
     )
     if metadata or (is_nested and parts):
-        return GenericPart(
-            type="document",
-            value={
-                "parts": [asdict(part) for part in parts],
-                **metadata,
-            },
-        )
+        return GenericPart(type="document")
     return parts[0] if parts else None
 
 
