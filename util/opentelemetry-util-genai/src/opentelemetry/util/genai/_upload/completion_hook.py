@@ -17,7 +17,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
 )
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from functools import partial
 from time import time
 from typing import Any, Final, Literal
