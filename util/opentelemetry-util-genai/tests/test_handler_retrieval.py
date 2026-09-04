@@ -143,13 +143,13 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
     def test_stop_sets_top_k(self) -> None:
         invocation = self.handler.retrieval()
-        invocation.top_k = 10.0
+        invocation.top_k = 10
         invocation.stop()
 
         spans = self._get_finished_spans()
-        value = spans[0].attributes[GenAI.GEN_AI_REQUEST_TOP_K]
-        self.assertIsInstance(value, float)
-        self.assertEqual(value, 10.0)
+        value = spans[0].attributes["gen_ai.retrieval.top_k"]
+        self.assertIsInstance(value, int)
+        self.assertEqual(value, 10)
 
     @patch.dict(
         os.environ,
@@ -305,13 +305,13 @@ class TelemetryHandlerRetrievalContextManagerTest(_RetrievalTestBase):
 
     def test_context_manager_sets_attributes_on_span(self) -> None:
         with self.handler.retrieval(provider="weaviate") as inv:
-            inv.top_k = 5.0
+            inv.top_k = 5
 
         spans = self._get_finished_spans()
         attrs = spans[0].attributes
         self.assertEqual(attrs[GenAI.GEN_AI_PROVIDER_NAME], "weaviate")
-        self.assertIsInstance(attrs[GenAI.GEN_AI_REQUEST_TOP_K], float)
-        self.assertEqual(attrs[GenAI.GEN_AI_REQUEST_TOP_K], 5.0)
+        self.assertIsInstance(attrs["gen_ai.retrieval.top_k"], int)
+        self.assertEqual(attrs["gen_ai.retrieval.top_k"], 5)
 
 
 class TelemetryHandlerRetrievalSamplingTest(_RetrievalTestBase):

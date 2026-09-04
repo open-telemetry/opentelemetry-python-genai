@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Final
 
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
@@ -21,6 +21,8 @@ from opentelemetry.util.genai.utils import (
 )
 from opentelemetry.util.types import AttributeValue
 
+_GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
+
 
 class RetrievalInvocation(GenAIInvocation):
     """Represents a single retrieval invocation (retrieval span).
@@ -36,7 +38,7 @@ class RetrievalInvocation(GenAIInvocation):
     - gen_ai.provider.name: Provider name (Conditionally Required, when applicable)
     - gen_ai.request.model: Model name if applicable (Conditionally Required, if available)
     - server.port: Server port (Conditionally Required, if server.address is set)
-    - gen_ai.request.top_k: Top-k sampling setting (Recommended)
+    - gen_ai.retrieval.top_k: Top-k sampling setting (Recommended)
     - server.address: Server address (Recommended)
     - gen_ai.retrieval.documents: Retrieved documents (Opt-In, may contain sensitive data)
     - gen_ai.retrieval.query.text: Query text (Opt-In, may contain sensitive data)
@@ -73,7 +75,7 @@ class RetrievalInvocation(GenAIInvocation):
         self._request_model: str | None = request_model
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
-        self.top_k: float | None = None
+        self.top_k: int | None = None
         self.query_text: str | None = None
         self.documents: Sequence[Mapping[str, Any]] | None = None
         self._start(self._get_start_attributes())
@@ -129,7 +131,7 @@ class RetrievalInvocation(GenAIInvocation):
             self._apply_error_attributes(error)
         attributes: dict[str, AttributeValue] = {}
         if self.top_k is not None:
-            attributes[GenAI.GEN_AI_REQUEST_TOP_K] = self.top_k
+            attributes[_GEN_AI_RETRIEVAL_TOP_K] = int(self.top_k)
         attributes.update(self._get_content_attributes_for_span())
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)

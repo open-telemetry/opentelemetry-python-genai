@@ -134,6 +134,14 @@ def should_capture_content_on_spans() -> bool:
     )
 
 
+def should_capture_content_on_events() -> bool:
+    """Returns whether capture content is enabled on events."""
+    return get_content_capturing_mode() in (
+        ContentCapturingMode.EVENT_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
+
+
 def fq_exception_type(exception: BaseException) -> str:
     """Return the fully qualified name of an exception's type.
 
