@@ -75,7 +75,10 @@ class OrchestrationScenario(Scenario):
         "invoke_agent": 2,
         "execute_tool": 1,
     }
-    expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.invoke_workflow.duration",
+    )
     expected_violations = (
         # `FunctionSpanData` in the openai-agents library doesn't expose
         # `tool_call_id`, so our `execute_tool` spans can't set

@@ -686,6 +686,134 @@ def test_tool_call_id_absent_when_neither_start_nor_end_provides_it():
 
 
 # ---------------------------------------------------------------------------
+# gen_ai.agent.name propagation onto execute_tool spans (semconv
+# Conditionally Required "When applicable"). The nearest enclosing
+# invoke_agent's name flows onto every child execute_tool span.
+# ---------------------------------------------------------------------------
+
+
+def test_on_tool_start_carries_nearest_agent_name():
+    """A tool run under an invoke_agent chain gets `gen_ai.agent.name` on its span."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    agent_run_id = uuid4()
+    handler.on_chain_start(
+        serialized={"name": "weather_agent"},
+        inputs={},
+        run_id=agent_run_id,
+        parent_run_id=None,
+        metadata={"agent_name": "weather_agent"},
+    )
+
+    tool_run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "get_weather"},
+        input_str="",
+        run_id=tool_run_id,
+        parent_run_id=agent_run_id,
+        inputs={"city": "Paris"},
+    )
+    output = MagicMock()
+    output.content = "sunny"
+    output.tool_call_id = None
+    handler.on_tool_end(output=output, run_id=tool_run_id)
+
+    tool_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "execute_tool"
+    ]
+    assert len(tool_spans) == 1
+    assert (
+        tool_spans[0].attributes[gen_ai_attributes.GEN_AI_AGENT_NAME]
+        == "weather_agent"
+    )
+
+
+def test_on_tool_start_no_agent_omits_agent_name():
+    """Root-level tool call (no enclosing agent) omits `gen_ai.agent.name`."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "get_weather"},
+        input_str="",
+        run_id=run_id,
+        inputs={"city": "Paris"},
+    )
+    output = MagicMock()
+    output.content = "sunny"
+    output.tool_call_id = None
+    handler.on_tool_end(output=output, run_id=run_id)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert gen_ai_attributes.GEN_AI_AGENT_NAME not in span.attributes
+
+
+def test_on_tool_start_uses_nearest_when_nested_agents():
+    """With nested agents, the tool span carries the *nearest* agent name."""
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    outer_agent_id = uuid4()
+    handler.on_chain_start(
+        serialized={"name": "coordinator"},
+        inputs={},
+        run_id=outer_agent_id,
+        parent_run_id=None,
+        metadata={"agent_name": "coordinator"},
+    )
+    inner_agent_id = uuid4()
+    handler.on_chain_start(
+        serialized={"name": "flight_specialist"},
+        inputs={},
+        run_id=inner_agent_id,
+        parent_run_id=outer_agent_id,
+        metadata={"agent_name": "flight_specialist"},
+    )
+
+    tool_run_id = uuid4()
+    handler.on_tool_start(
+        serialized={"name": "search_flights"},
+        input_str="",
+        run_id=tool_run_id,
+        parent_run_id=inner_agent_id,
+        inputs={"origin": "SFO"},
+    )
+    output = MagicMock()
+    output.content = "ok"
+    output.tool_call_id = None
+    handler.on_tool_end(output=output, run_id=tool_run_id)
+
+    tool_spans = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "execute_tool"
+    ]
+    assert len(tool_spans) == 1
+    assert (
+        tool_spans[0].attributes[gen_ai_attributes.GEN_AI_AGENT_NAME]
+        == "flight_specialist"
+    )
+
+
+# ---------------------------------------------------------------------------
 # on_chat_model_start with tool_definitions
 # ---------------------------------------------------------------------------
 

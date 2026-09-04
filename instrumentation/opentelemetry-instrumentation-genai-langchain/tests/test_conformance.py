@@ -20,7 +20,7 @@ from opentelemetry.test_util_genai.conformance import (
     run_conformance,
 )
 
-from .conformance.agent import AgentScenario
+from .conformance.agent import AgentScenario, NamedAgentScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
 from .conformance.multimodal import (
@@ -46,6 +46,7 @@ from .conformance.workflow import WorkflowScenario
         AnthropicMultimodalScenario(),
         AnthropicFileRefMultimodalScenario(),
         AgentScenario(),
+        NamedAgentScenario(),
         ToolCallingScenario(),
         WorkflowScenario(),
         RetrievalScenario(),

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from enum import Enum
 
 from google.genai import types as genai_types
 
@@ -14,19 +13,12 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
     UriPart,
 )
-
-
-class Role(str, Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
 
 _logger = logging.getLogger(__name__)
 
@@ -129,7 +121,7 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
 
 
 def _to_role(role: str | None) -> str:
-    if role == "user":
+    if role == Role.USER.value:
         return Role.USER.value
     if role == "model":
         return Role.ASSISTANT.value

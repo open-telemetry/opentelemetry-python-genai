@@ -14,6 +14,9 @@ from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_converse_response,
 )
 from opentelemetry.semconv._incubating.attributes import (
+    aws_attributes as AwsAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -381,6 +384,16 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
     )
     assert invocation3.top_k == 20.0
 
+    invocation4 = handler.inference(provider="aws.bedrock")
+    extract_converse_request(
+        {
+            "inferenceConfig": {"topK": 0, "seed": 0},
+        },
+        invocation4,
+    )
+    assert invocation4.top_k == 0.0
+    assert invocation4.seed == 0
+
 
 def test_extract_content_block_reasoning() -> None:
     part = extract_content_block(
@@ -466,3 +479,120 @@ def test_extract_content_block_generic_parts() -> None:
         part = extract_content_block({key: {"foo": "bar"}})
         assert part is not None
         assert part.type == key
+
+
+def test_extract_content_block_anthropic_blocks() -> None:
+    # Anthropic tool_use block
+    tool_use_part = extract_content_block(
+        {
+            "type": "tool_use",
+            "id": "toolu_123",
+            "name": "get_weather",
+            "input": {"city": "Paris"},
+        }
+    )
+    assert tool_use_part is not None
+    assert tool_use_part.type == "tool_call"
+    assert getattr(tool_use_part, "id") == "toolu_123"
+    assert getattr(tool_use_part, "name") == "get_weather"
+    assert getattr(tool_use_part, "arguments") == {"city": "Paris"}
+
+    # Anthropic tool_result block
+    tool_result_part = extract_content_block(
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_123",
+            "content": "20 degrees",
+        }
+    )
+    assert tool_result_part is not None
+    assert tool_result_part.type == "tool_call_response"
+    assert getattr(tool_result_part, "id") == "toolu_123"
+    assert getattr(tool_result_part, "response") == "20 degrees"
+
+    # Anthropic thinking block
+    thinking_part = extract_content_block(
+        {"type": "thinking", "thinking": "Thinking about the weather"}
+    )
+    assert thinking_part is not None
+    assert thinking_part.type == "reasoning"
+    assert getattr(thinking_part, "content") == "Thinking about the weather"
+
+    # Anthropic base64 image block
+    image_part = extract_content_block(
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "QUJD",
+            },
+        }
+    )
+    assert image_part is not None
+    assert image_part.type == "blob"
+    assert getattr(image_part, "mime_type") == "image/png"
+    assert getattr(image_part, "content") == b"ABC"
+
+
+def test_extract_converse_request_guardrail_and_prompt_variables(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    extract_converse_request(
+        {
+            "guardrailConfig": {
+                "guardrailIdentifier": "sgi5gkybzqak",
+                "guardrailVersion": "1",
+            },
+            "outputConfig": {"textFormat": "json"},
+            "promptVariables": {
+                "user_name": {"text": "Alice"},
+                "language": {"text": "French"},
+            },
+        },
+        invocation,
+        capture_content=True,
+    )
+
+    assert (
+        invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
+        == "sgi5gkybzqak"
+    )
+    assert invocation.output_type == "json"
+    assert (
+        invocation.attributes.get("gen_ai.prompt.variable.user_name")
+        == "Alice"
+    )
+    assert (
+        invocation.attributes.get("gen_ai.prompt.variable.language")
+        == "French"
+    )
+
+
+def test_extract_converse_request_prompt_variables_no_content(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    extract_converse_request(
+        {
+            "guardrailConfig": {
+                "guardrailIdentifier": "sgi5gkybzqak",
+            },
+            "promptVariables": {
+                "user_name": {"text": "Alice"},
+            },
+        },
+        invocation,
+        capture_content=False,
+    )
+
+    assert (
+        invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
+        == "sgi5gkybzqak"
+    )
+    assert "gen_ai.prompt.variable.user_name" not in invocation.attributes

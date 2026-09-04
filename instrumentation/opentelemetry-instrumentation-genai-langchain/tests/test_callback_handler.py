@@ -17,7 +17,17 @@ from langchain_core.documents import Document
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
+    ChatMessage,
+    ChatMessageChunk,
+    FunctionMessage,
+    FunctionMessageChunk,
     HumanMessage,
+    HumanMessageChunk,
+    RemoveMessage,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
 )
 from langchain_core.outputs import (
     ChatGeneration,
@@ -31,6 +41,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _media_part,
+    _normalize_role,
     extract_token_details,
     make_input_message,
     make_last_output_message,
@@ -407,12 +418,13 @@ class TestOnChainStartAgent:
         assert run_id in handler._invocation_manager._invocations
         assert handler._invocation_manager.get_invocation(run_id) is None
 
-    def test_no_agent_name_child_can_still_find_ancestor_agent(self):
+    def test_same_name_grandchild_finds_agent_through_unnamed_parent(self):
         """Even when an intermediate node has no agent name, a deeper child
         must still be able to walk up and find a grandparent AgentInvocation."""
-        handler, telemetry, _, agent_inv = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         grandparent_id = _run_id()
         parent_id = _run_id()
+        child_id = _run_id()
 
         # Grandparent: a known agent
         handler.on_chain_start(
@@ -433,9 +445,17 @@ class TestOnChainStartAgent:
             metadata={"otel_agent_span": True},
         )
 
-        # Child: should find the grandparent agent via _find_nearest_agent
-        found = handler._find_nearest_agent(parent_id)
-        assert found is agent_inv
+        # A same-name grandchild must deduplicate against the grandparent agent.
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=child_id,
+            parent_run_id=parent_id,
+            metadata={"agent_name": "math_agent"},
+        )
+
+        telemetry.invoke_local_agent.assert_not_called()
+        assert handler._invocation_manager.get_invocation(child_id) is None
 
 
 # ---------------------------------------------------------------------------
@@ -637,68 +657,30 @@ class TestOnChainError:
         assert run_id not in handler._invocation_manager._invocations
 
 
-# ---------------------------------------------------------------------------
-# _find_nearest_agent
-# ---------------------------------------------------------------------------
-
-
-class TestFindNearestAgent:
-    def test_returns_none_when_no_agent_in_ancestry(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
+class TestAgentAncestryPublicBehavior:
+    def test_named_child_under_workflow_opens_agent_layer(self):
+        handler, telemetry, _, _ = _make_handler()
+        workflow_id = _run_id()
+        child_id = _run_id()
 
         handler.on_chain_start(
             serialized={"name": "LangGraph"},
             inputs={},
-            run_id=run_id,
+            run_id=workflow_id,
             parent_run_id=None,
         )
-
-        assert handler._find_nearest_agent(run_id) is None
-
-    def test_finds_direct_parent_agent(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        parent_id = _run_id()
-        child_id = _run_id()
-
+        telemetry.invoke_local_agent.reset_mock()
         handler.on_chain_start(
             serialized={"name": "math_agent"},
             inputs={},
-            run_id=parent_id,
-            parent_run_id=None,
+            run_id=child_id,
+            parent_run_id=workflow_id,
             metadata={"agent_name": "math_agent"},
         )
 
-        # Register the child as unclassified so it links to the parent
-        handler._invocation_manager.add_invocation_state(
-            child_id, parent_id, None
+        telemetry.invoke_local_agent.assert_called_once_with(
+            agent_name="math_agent"
         )
-
-        found = handler._find_nearest_agent(child_id)
-        assert found is agent_inv
-
-    def test_finds_grandparent_agent(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        grandparent_id = _run_id()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=grandparent_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-        handler._invocation_manager.add_invocation_state(
-            parent_id, grandparent_id, None
-        )
-        handler._invocation_manager.add_invocation_state(
-            child_id, parent_id, None
-        )
-
-        found = handler._find_nearest_agent(child_id)
-        assert found is agent_inv
 
 
 # ---------------------------------------------------------------------------
@@ -1859,6 +1841,71 @@ class TestOnLlmEndResponseModel:
 
 
 # ---------------------------------------------------------------------------
+# on_llm_end – streamed output messages
+# ---------------------------------------------------------------------------
+
+
+def test_streamed_output_message_role_is_assistant():
+    run_id = _run_id()
+    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+    gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+
+    handler.on_llm_end(response=LLMResult(generations=[[gen]]), run_id=run_id)
+
+    (output_message,) = llm_inv.output_messages
+    assert output_message.role == "assistant"
+
+
+# ---------------------------------------------------------------------------
+# utils._normalize_role
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message,expected_role",
+    [
+        (AIMessage(content="hi"), "assistant"),
+        (AIMessageChunk(content="hi"), "assistant"),
+        (HumanMessage(content="hi"), "user"),
+        (HumanMessageChunk(content="hi"), "user"),
+        (SystemMessage(content="hi"), "system"),
+        (SystemMessageChunk(content="hi"), "system"),
+        (ToolMessage(content="hi", tool_call_id="call_1"), "tool"),
+        (ToolMessageChunk(content="hi", tool_call_id="call_1"), "tool"),
+        (FunctionMessage(content="hi", name="f"), "tool"),
+        (FunctionMessageChunk(content="hi", name="f"), "tool"),
+    ],
+)
+def test_normalize_role_resolves_chunk_variants(message, expected_role):
+    """Chunk classes report their class name as ``.type``
+    (``AIMessageChunk.type == "AIMessageChunk"``), so they only resolve to a
+    spec role when matched by class."""
+    assert _normalize_role(message) == expected_role
+
+
+@pytest.mark.parametrize(
+    "message,expected_role",
+    [
+        (ChatMessage(content="hi", role="assistant"), "assistant"),
+        (ChatMessage(content="hi", role="custom"), "custom"),
+        (ChatMessageChunk(content="hi", role="custom"), "custom"),
+    ],
+)
+def test_normalize_role_reads_the_chat_message_role(message, expected_role):
+    """``ChatMessage`` keeps its speaker in ``role`` rather than in the class."""
+    assert _normalize_role(message) == expected_role
+
+
+def test_normalize_role_returns_none_for_unmapped_class():
+    assert _normalize_role(RemoveMessage(id="abc")) is None
+
+
+def test_chat_message_role_reaches_the_input_side():
+    (message,) = to_input_messages([ChatMessage(content="hi", role="custom")])
+    assert message.role == "custom"
+
+
 # on_llm_end – streamed responses
 #
 # Streaming reaches on_llm_end with an LLMResult that LangChain assembles from

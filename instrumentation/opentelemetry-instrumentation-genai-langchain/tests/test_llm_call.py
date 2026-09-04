@@ -8,10 +8,12 @@ from typing import Optional
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import (
+    AIMessage,
     AIMessageChunk,
     FunctionMessage,
     HumanMessage,
     SystemMessage,
+    SystemMessageChunk,
 )
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.tools import tool
@@ -22,6 +24,7 @@ from opentelemetry.instrumentation.genai.langchain import (
     LangChainInstrumentor,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    split_system_and_input_messages,
     to_input_messages,
 )
 from opentelemetry.sdk.trace import ReadableSpan
@@ -719,6 +722,79 @@ def test_function_message_role_maps_to_tool():
     assert result[0].role == "tool"
 
 
+def test_split_system_and_input_messages_diverts_system_instructions():
+    system, inputs = split_system_and_input_messages(
+        [
+            SystemMessage(content="You are helpful."),
+            HumanMessage(content="Hi"),
+        ]
+    )
+    assert len(system) == 1
+    assert system[0].content == "You are helpful."
+    assert system[0].type == "text"
+    assert len(inputs) == 1
+    assert inputs[0].role == "user"
+
+
+def test_split_system_and_input_messages_position_independent():
+    # A ``SystemMessage`` interleaved between non-system messages still lands
+    # in ``system_instruction`` — semconv treats it as a top-level list rather
+    # than an interleaved role, and combining multiple system chunks in order
+    # matches how providers deliver them.
+    system, inputs = split_system_and_input_messages(
+        [
+            SystemMessage(content="First guidance."),
+            HumanMessage(content="Hi"),
+            AIMessage(content="Hello"),
+            SystemMessage(content="Second guidance."),
+            HumanMessage(content="Follow-up"),
+        ]
+    )
+    assert [part.content for part in system] == [
+        "First guidance.",
+        "Second guidance.",
+    ]
+    assert [msg.role for msg in inputs] == ["user", "assistant", "user"]
+
+
+def test_split_system_and_input_messages_handles_system_message_chunk():
+    # ``SystemMessageChunk`` (streaming) subclasses ``SystemMessage`` — the
+    # helper matches by ``isinstance`` so streamed system content is diverted
+    # too instead of leaking into ``gen_ai.input.messages``.
+    system, inputs = split_system_and_input_messages(
+        [
+            SystemMessageChunk(content="Streamed system prompt."),
+            HumanMessage(content="Hi"),
+        ]
+    )
+    assert len(system) == 1
+    assert system[0].content == "Streamed system prompt."
+    assert [msg.role for msg in inputs] == ["user"]
+
+
+def test_split_system_and_input_messages_empty_when_no_system_message():
+    system, inputs = split_system_and_input_messages(
+        [HumanMessage(content="Hi")]
+    )
+    assert system == []
+    assert [msg.role for msg in inputs] == ["user"]
+
+
+def test_split_system_and_input_messages_normalizes_shorthand_inputs():
+    # Short-hand tuple / dict forms are normalized via ``convert_to_messages``
+    # before the ``isinstance`` partition so that a short-hand system entry is
+    # diverted to ``system_instruction`` instead of leaking into
+    # ``gen_ai.input.messages`` as ``role: "system"``.
+    system, inputs = split_system_and_input_messages(
+        [
+            ("system", "You are helpful."),
+            {"role": "user", "content": "Hi"},
+        ]
+    )
+    assert [part.content for part in system] == ["You are helpful."]
+    assert [msg.role for msg in inputs] == ["user"]
+
+
 def assert_openai_completion_attributes(
     span: ReadableSpan, response: Optional, verify_content: bool = True
 ):
@@ -782,10 +858,17 @@ def assert_openai_completion_attributes(
     if verify_content:
         input_message = attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
         assert input_message is not None
-        assert '"role":"system"' in input_message
-        assert '"content":"You are a helpful assistant!"' in input_message
+        assert '"role":"system"' not in input_message
         assert '"role":"user"' in input_message
         assert '"content":"What is the capital of France?"' in input_message
+
+        system_instructions = attributes[
+            gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS
+        ]
+        assert system_instructions is not None
+        assert (
+            '"content":"You are a helpful assistant!"' in system_instructions
+        )
 
         # Assert output message
         output_message = attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
@@ -796,6 +879,7 @@ def assert_openai_completion_attributes(
     else:
         assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS not in attributes
 
 
 def assert_openai_completion_attributes_with_error(
@@ -832,16 +916,24 @@ def assert_openai_completion_attributes_with_error(
     if verify_content:
         input_message = attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
         assert input_message is not None
-        assert '"role":"system"' in input_message
-        assert '"content":"You are a helpful assistant!"' in input_message
+        assert '"role":"system"' not in input_message
         assert '"role":"user"' in input_message
         assert '"content":"What is the capital of France?"' in input_message
+
+        system_instructions = attributes[
+            gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS
+        ]
+        assert system_instructions is not None
+        assert (
+            '"content":"You are a helpful assistant!"' in system_instructions
+        )
 
         # Assert output message
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
     else:
         assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS not in attributes
 
 
 def assert_bedrock_completion_attributes(
@@ -1083,22 +1175,23 @@ def assert_log_record(log_record, parent_span, response=None):
     expected_input = [
         {
             "parts": [
-                {"content": "You are a helpful assistant!", "type": "text"}
-            ],
-            "role": "system",
-        },
-        {
-            "parts": [
                 {"content": "What is the capital of France?", "type": "text"}
             ],
             "role": "user",
         },
     ]
-    assert len(input_msgs) == 2
+    assert len(input_msgs) == 1
     for i, exp in enumerate(expected_input):
         got = _normalize_to_dict(input_msgs[i])
         assert got["role"] == exp["role"]
         assert _normalize_to_list(got["parts"]) == exp["parts"]
+
+    system_instructions = _normalize_to_list(
+        attrs.get(gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS, [])
+    )
+    assert system_instructions == [
+        {"content": "You are a helpful assistant!", "type": "text"}
+    ]
 
     output_msgs = _normalize_to_list(
         attrs.get(gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES, [])
@@ -1147,22 +1240,23 @@ def assert_log_record_when_error(log_record, parent_span):
     expected_input = [
         {
             "parts": [
-                {"content": "You are a helpful assistant!", "type": "text"}
-            ],
-            "role": "system",
-        },
-        {
-            "parts": [
                 {"content": "What is the capital of France?", "type": "text"}
             ],
             "role": "user",
         },
     ]
-    assert len(input_msgs) == 2
+    assert len(input_msgs) == 1
     for i, exp in enumerate(expected_input):
         got = _normalize_to_dict(input_msgs[i])
         assert got["role"] == exp["role"]
         assert _normalize_to_list(got["parts"]) == exp["parts"]
+
+    system_instructions = _normalize_to_list(
+        attrs.get(gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS, [])
+    )
+    assert system_instructions == [
+        {"content": "You are a helpful assistant!", "type": "text"}
+    ]
 
     assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attrs
     assert_log_parent(log_record, parent_span)

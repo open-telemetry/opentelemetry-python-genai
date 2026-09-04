@@ -79,6 +79,9 @@ def test_add_invocation_state_with_nonexistent_parent(
 
     assert invocation_manager.get_invocation(run_id) == mock_invocation
     assert len(invocation_manager._invocations) == 1
+    assert (
+        invocation_manager.get_parent_run_id(run_id) == nonexistent_parent_id
+    )
 
 
 def test_get_nonexistent_invocation(invocation_manager):

@@ -122,6 +122,49 @@ def _failing_tool() -> str:
     raise ValueError("database connection failed")
 
 
+@agents.function_tool
+def _get_weather(city: str) -> str:
+    """Return a canned forecast for the requested city."""
+
+    return f"The forecast for {city} is sunny."
+
+
+@pytest.mark.vcr
+@pytest.mark.asyncio
+async def test_runner_records_tool_call_arguments(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        agent = agents.Agent(
+            name="test_agent",
+            model="gpt-4o-mini",
+            tools=[_get_weather],
+        )
+        await agents.Runner.run(agent, "what is the weather in Barcelona?")
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "execute_tool _get_weather" in spans
+    tool_span = spans["execute_tool _get_weather"]
+    assert tool_span.attributes is not None
+    assert (
+        tool_span.attributes["gen_ai.tool.call.arguments"]
+        == '{"city":"Barcelona"}'
+    )
+    assert (
+        tool_span.attributes["gen_ai.tool.call.result"]
+        == "The forecast for Barcelona is sunny."
+    )
+
+
 @pytest.mark.vcr
 @pytest.mark.asyncio
 async def test_runner_failing_tool_records_span_error(

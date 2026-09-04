@@ -11,6 +11,10 @@ from typing import Any, cast
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    ChatMessage,
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
     ToolMessage,
     convert_to_messages,
 )
@@ -27,6 +31,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -76,18 +81,24 @@ def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
     return _PROVIDER_NAME_OVERRIDES.get(raw, raw)
 
 
-# LangChain ``BaseMessage.type`` -> spec ``role`` value. Anything not in the
-# map is passed through unchanged so future LangChain message types still emit
-# telemetry without code changes here.
-_ROLE_MAP: dict[str, str] = {
-    "human": "user",
-    "ai": "assistant",
-    "function": "tool",
-}
+_ROLE_BY_CLASS: tuple[tuple[type[BaseMessage], Role], ...] = (
+    (ToolMessage, Role.TOOL),
+    (FunctionMessage, Role.TOOL),
+    (AIMessage, Role.ASSISTANT),
+    (HumanMessage, Role.USER),
+    (SystemMessage, Role.SYSTEM),
+)
 
 
-def _normalize_role(message: BaseMessage) -> str:
-    return _ROLE_MAP.get(message.type, message.type)
+def _normalize_role(message: BaseMessage) -> str | None:
+    # ChatMessage is not binding to a specific role
+    # but it carries a role in the `role` field.
+    if isinstance(message, ChatMessage):
+        return message.role or None
+    for message_class, role in _ROLE_BY_CLASS:
+        if isinstance(message, message_class):
+            return role.value
+    return None
 
 
 def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
@@ -327,21 +338,61 @@ def to_input_messages(
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
+    materialized = list(messages)
     try:
         normalized_messages: Iterable[BaseMessage] = convert_to_messages(
-            list(messages)
+            materialized
         )
     except Exception:  # pylint: disable=broad-except
         normalized_messages = [
-            m for m in messages if isinstance(m, BaseMessage)
+            m for m in materialized if isinstance(m, BaseMessage)
         ]
     result: list[InputMessage] = []
     for message in normalized_messages:
         parts = _message_parts(message)
         if not parts and not _has_content(message):
             continue
-        result.append(InputMessage(role=_normalize_role(message), parts=parts))
+        result.append(
+            InputMessage(
+                role=_normalize_role(message) or Role.USER.value,
+                parts=parts,
+            )
+        )
     return result
+
+
+def split_system_and_input_messages(
+    messages: Iterable[Any],
+) -> tuple[list[MessagePart], list[InputMessage]]:
+    """Split ``messages`` into ``system_instruction`` parts and ``InputMessage`` s.
+
+    Called only when content capture is enabled
+    (``TelemetryHandler.should_capture_content()``).
+    """
+    materialized = list(messages)
+    try:
+        normalized: Iterable[BaseMessage] = convert_to_messages(materialized)
+    except Exception:  # pylint: disable=broad-except
+        normalized = [m for m in materialized if isinstance(m, BaseMessage)]
+
+    system_parts: list[MessagePart] = []
+    input_messages: list[InputMessage] = []
+
+    for message in normalized:
+        if isinstance(message, SystemMessage):
+            system_parts.extend(_content_to_parts(message.content))
+        else:
+            parts = _message_parts(message)
+            if not parts and not _has_content(message):
+                continue
+            input_messages.append(
+                InputMessage(
+                    role=_normalize_role(message) or Role.USER.value,
+                    parts=parts,
+                )
+            )
+
+    return system_parts, input_messages
 
 
 def to_output_messages(
@@ -368,7 +419,7 @@ def to_output_messages(
             continue
         result.append(
             OutputMessage(
-                role=_normalize_role(message),
+                role=_normalize_role(message) or Role.ASSISTANT.value,
                 parts=parts,
                 finish_reason=finish_reason,
             )
@@ -463,7 +514,11 @@ def make_input_message(data: Any) -> list[InputMessage]:
     if input_data:
         serialized = serialize(input_data)
         if serialized:
-            return [InputMessage(role="user", parts=[TextPart(serialized)])]
+            return [
+                InputMessage(
+                    role=Role.USER.value, parts=[TextPart(serialized)]
+                )
+            ]
     return []
 
 

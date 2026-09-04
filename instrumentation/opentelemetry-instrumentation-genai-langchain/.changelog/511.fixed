@@ -1,0 +1,1 @@
+Divert `SystemMessage` inputs to `gen_ai.system_instructions` instead of emitting them as `role="system"` inside `gen_ai.input.messages`.

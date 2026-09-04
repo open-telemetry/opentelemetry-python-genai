@@ -618,6 +618,25 @@ class TelemetryHandlerToolMetricsTest(TestBase):
         self.assertAlmostEqual(duration_point.sum, 1.5, places=3)
         self.assertNotIn("gen_ai.client.token.usage", metrics)
 
+    def test_stop_tool_omits_agent_name_from_client_operation_duration_metric(
+        self,
+    ) -> None:
+        """`gen_ai.agent.name` is not in `gen_ai.client.operation.duration`'s
+        semconv attribute set.
+        """
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        handler.tool("get_weather", agent_name="weather_agent").stop()
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertEqual(len(duration_points), 1)
+        self.assertNotIn(
+            GenAI.GEN_AI_AGENT_NAME, duration_points[0].attributes
+        )
+
 
 class TelemetryHandlerRetrievalMetricsTest(TestBase):
     def _harvest_metrics(self) -> dict[str, list[Any]]:

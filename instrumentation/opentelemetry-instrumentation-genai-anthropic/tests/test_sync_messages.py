@@ -87,7 +87,7 @@ def normalize_stop_reason(stop_reason):
         "end_turn": "stop",
         "stop_sequence": "stop",
         "max_tokens": "length",
-        "tool_use": "tool_calls",
+        "tool_use": "tool_call",
     }.get(stop_reason, stop_reason)
 
 

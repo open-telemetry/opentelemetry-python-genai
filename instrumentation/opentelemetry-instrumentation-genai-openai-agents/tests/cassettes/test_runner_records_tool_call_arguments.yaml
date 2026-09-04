@@ -1,0 +1,491 @@
+interactions:
+- request:
+    body: |-
+      {
+        "include": [],
+        "input": [
+          {
+            "content": "what is the weather in Barcelona?",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "prompt_cache_key": "agents-sdk:run:1c830f37632e4cdca8317169ce1fc896",
+        "tools": [
+          {
+            "name": "_get_weather",
+            "parameters": {
+              "properties": {
+                "city": {
+                  "title": "City",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "title": "_get_weather_args",
+              "type": "object",
+              "additionalProperties": false
+            },
+            "strict": true,
+            "type": "function",
+            "description": "Return a canned forecast for the requested city."
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '471'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - Agents/Python 0.22.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_049be054d2c264e3006a9910eef7c487d090a61248660132d9",
+          "object": "response",
+          "created_at": 1788416238,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1788416240,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
+            {
+              "id": "fc_049be054d2c264e3006a9910f0610c87d0a663161c77a94852",
+              "type": "function_call",
+              "status": "completed",
+              "arguments": "{\"city\":\"Barcelona\"}",
+              "call_id": "call_47t9aH50qU357sccNgrzt01I",
+              "name": "_get_weather"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": "agents-sdk:run:1c830f37632e4cdca8317169ce1fc896",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "function",
+              "description": "Return a canned forecast for the requested city.",
+              "name": "_get_weather",
+              "output_schema": null,
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "title": "City",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "title": "_get_weather_args",
+                "type": "object",
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 57,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 16,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 73
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a352a16facdfbe62-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '2465'
+      content-type:
+      - application/json
+      date:
+      - Thu, 03 Sep 2026 06:17:20 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1668'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '4000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '3999726'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_c8d31b7a1c984605980f38fb02796c87
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "include": [],
+        "input": [
+          {
+            "content": "what is the weather in Barcelona?",
+            "role": "user"
+          },
+          {
+            "arguments": "{\"city\":\"Barcelona\"}",
+            "call_id": "call_47t9aH50qU357sccNgrzt01I",
+            "name": "_get_weather",
+            "type": "function_call",
+            "id": "fc_049be054d2c264e3006a9910f0610c87d0a663161c77a94852",
+            "status": "completed"
+          },
+          {
+            "call_id": "call_47t9aH50qU357sccNgrzt01I",
+            "output": "The forecast for Barcelona is sunny.",
+            "type": "function_call_output"
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "prompt_cache_key": "agents-sdk:run:1c830f37632e4cdca8317169ce1fc896",
+        "tools": [
+          {
+            "name": "_get_weather",
+            "parameters": {
+              "properties": {
+                "city": {
+                  "title": "City",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "title": "_get_weather_args",
+              "type": "object",
+              "additionalProperties": false
+            },
+            "strict": true,
+            "type": "function",
+            "description": "Return a canned forecast for the requested city."
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '803'
+      content-type:
+      - application/json
+      cookie:
+      - test_cookie
+      host:
+      - api.openai.com
+      user-agent:
+      - Agents/Python 0.22.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_049be054d2c264e3006a9910f0e6dc87d0b214b3d55eb44d6a",
+          "object": "response",
+          "created_at": 1788416240,
+          "status": "completed",
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1788416242,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
+            {
+              "id": "msg_049be054d2c264e3006a9910f2bc1887d08e083ba37193607c",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "The weather in Barcelona is sunny. Enjoy your day!"
+                }
+              ],
+              "role": "assistant"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": "agents-sdk:run:1c830f37632e4cdca8317169ce1fc896",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "function",
+              "description": "Return a canned forecast for the requested city.",
+              "name": "_get_weather",
+              "output_schema": null,
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "title": "City",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "title": "_get_weather_args",
+                "type": "object",
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 89,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 13,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 102
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a352a181087cbe62-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '2568'
+      content-type:
+      - application/json
+      date:
+      - Thu, 03 Sep 2026 06:17:22 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '2077'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '4000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '3999694'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_ccd52e3fa4794384a8ea141f73194807
+    status:
+      code: 200
+      message: OK
+version: 1
