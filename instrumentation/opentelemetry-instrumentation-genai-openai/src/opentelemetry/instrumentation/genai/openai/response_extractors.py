@@ -207,10 +207,17 @@ def get_input_messages(
         if not isinstance(role, str):
             continue
 
+        name = _get_field(item, "name")
+        name_str = str(name) if name is not None else None
+
         content = _get_field(item, "content")
         if isinstance(content, str):
             messages.append(
-                InputMessage(role=role, parts=[TextPart(content=content)])
+                InputMessage(
+                    role=role,
+                    parts=[TextPart(content=content)],
+                    name=name_str,
+                )
             )
             continue
 
@@ -220,7 +227,9 @@ def get_input_messages(
             if isinstance(text, str):
                 parts.append(TextPart(content=text))
         if parts:
-            messages.append(InputMessage(role=role, parts=parts))
+            messages.append(
+                InputMessage(role=role, parts=parts, name=name_str)
+            )
 
     return messages
 
