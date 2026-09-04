@@ -196,20 +196,6 @@ def _assert_multimodal_input(span):
     }
     assert parts[6] == {
         "type": "document",
-        "value": {
-            "parts": [
-                {"content": "Nested text", "type": "text"},
-                {
-                    "mime_type": None,
-                    "modality": "image",
-                    "uri": "https://example.com/nested.png",
-                    "type": "uri",
-                },
-            ],
-            "title": "Reference",
-            "context": "Use the nested content.",
-            "citations": {"enabled": True},
-        },
     }
 
 

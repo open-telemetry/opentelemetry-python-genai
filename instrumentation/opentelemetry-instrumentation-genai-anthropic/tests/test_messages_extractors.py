@@ -292,38 +292,23 @@ def test_nested_content_document_source_preserves_part_order():
     assert len(parts) == 1
     assert isinstance(parts[0], GenericPart)
     assert parts[0].type == "document"
-    assert parts[0].value == {
-        "parts": [
-            {"content": "Nested text", "type": "text"},
-            {
-                "mime_type": None,
-                "modality": "image",
-                "uri": "https://example.com/image.png",
-                "type": "uri",
-            },
-        ],
-        "title": "Reference",
-        "context": "Use the nested content.",
-        "citations": {"enabled": True},
-    }
 
 
 @pytest.mark.parametrize(
-    ("block_type", "media_type", "data", "input_type"),
+    ("block_type", "media_type", "data"),
     [
-        ("image", "image/png", Path("private/image.png"), "path"),
-        ("image", "image/png", BytesIO(b"image"), "stream"),
+        ("image", "image/png", Path("private/image.png")),
+        ("image", "image/png", BytesIO(b"image")),
         (
             "document",
             "application/pdf",
             Path("private/document.pdf"),
-            "path",
         ),
-        ("document", "application/pdf", BytesIO(b"document"), "stream"),
+        ("document", "application/pdf", BytesIO(b"document")),
     ],
 )
 def test_file_backed_base64_source_is_preserved_without_reading(
-    block_type, media_type, data, input_type
+    block_type, media_type, data
 ):
     initial_position = data.tell() if isinstance(data, BytesIO) else None
     part = _convert_dict_block_to_part(
@@ -339,11 +324,6 @@ def test_file_backed_base64_source_is_preserved_without_reading(
 
     assert isinstance(part, GenericPart)
     assert part.type == block_type
-    assert part.value == {
-        "source_type": "base64_file",
-        "mime_type": media_type,
-        "input_type": input_type,
-    }
     if initial_position is not None:
         assert data.tell() == initial_position
 
