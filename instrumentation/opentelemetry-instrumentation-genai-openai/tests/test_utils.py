@@ -3,9 +3,17 @@
 
 """Shared test utilities for OpenAI instrumentation tests."""
 
+import base64
 import json
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from opentelemetry.instrumentation.genai.openai.utils import (
+    _content_to_parts,
+    _prepare_input_messages,
+)
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -17,6 +25,19 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.trace import SpanKind
+from opentelemetry.util.genai.types import (
+    BlobPart,
+    InputMessage,
+    TextPart,
+    UriPart,
+)
+
+_REAL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
+    "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
+    "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
+)
+_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -39,6 +60,32 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
                 "type": "text",
                 "content": USER_ONLY_PROMPT[0]["content"],
             }
+        ],
+    }
+]
+MULTIMODAL_PROMPT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe the image"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+            },
+        ],
+    }
+]
+MULTIMODAL_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [
+            {"type": "text", "content": "Describe the image"},
+            {
+                "mime_type": "image/png",
+                "modality": "image",
+                "content": _REAL_PNG_B64,
+                "type": "blob",
+            },
         ],
     }
 ]
@@ -69,6 +116,159 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
         ],
     },
 ]
+
+
+def test_chat_content_parts_capture_text_and_image_url():
+    parts = _content_to_parts(
+        [
+            {"type": "text", "text": "Describe the image"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image.png"},
+            },
+        ]
+    )
+
+    assert parts == [
+        TextPart(content="Describe the image"),
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        ),
+    ]
+
+
+def test_chat_content_parts_capture_image_url_object():
+    parts = _content_to_parts(
+        [
+            SimpleNamespace(
+                type="image_url",
+                image_url=SimpleNamespace(url="https://example.com/image.png"),
+            )
+        ]
+    )
+
+    assert parts == [
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        ("Plain text", [TextPart(content="Plain text")]),
+        (
+            ["First", "Second"],
+            [TextPart(content="First"), TextPart(content="Second")],
+        ),
+        (
+            [{"type": "input_text", "text": "Responses text"}],
+            [TextPart(content="Responses text")],
+        ),
+        (None, []),
+        (42, []),
+        ({"type": "text", "text": "Not a content sequence"}, []),
+    ],
+)
+def test_content_parts_support_text_forms_and_reject_invalid_content(
+    content, expected
+):
+    assert _content_to_parts(content) == expected
+
+
+def test_chat_content_parts_capture_data_url_as_blob():
+    parts = _content_to_parts(
+        [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+            }
+        ]
+    )
+
+    assert parts == [
+        BlobPart(
+            mime_type="image/png",
+            modality="image",
+            content=_REAL_PNG_BYTES,
+        )
+    ]
+
+
+def test_content_parts_preserve_order_around_image():
+    parts = _content_to_parts(
+        [
+            {"type": "text", "text": "Before"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image.png"},
+            },
+            {"type": "text", "text": "After"},
+        ]
+    )
+
+    assert parts == [
+        TextPart(content="Before"),
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        ),
+        TextPart(content="After"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "image_part",
+    [
+        {"type": "image_url", "image_url": {}},
+        {"type": "image_url", "image_url": {"url": 42}},
+        {"type": "image_url", "file_id": "file-not-valid-for-chat"},
+        {"type": "input_image"},
+        {"type": "unsupported_image", "image_url": "https://example.com"},
+    ],
+)
+def test_content_parts_ignore_invalid_or_unsupported_images(image_part):
+    assert _content_to_parts([image_part]) == []
+
+
+def test_chat_content_parts_drop_malformed_image_and_keep_text():
+    parts = _content_to_parts(
+        [
+            {"type": "text", "text": "Keep this"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,@@@@"},
+            },
+        ]
+    )
+
+    assert parts == [TextPart(content="Keep this")]
+
+
+def test_prepare_input_messages_drops_messages_without_parts():
+    messages = _prepare_input_messages(
+        [
+            {"role": "user", "content": []},
+            {
+                "role": "user",
+                "content": [{"type": "unsupported", "value": "ignored"}],
+            },
+            {"role": "user", "content": "Keep this"},
+        ]
+    )
+
+    assert messages == [
+        InputMessage(
+            role="user",
+            parts=[TextPart(content="Keep this")],
+        )
+    ]
 
 
 def _assert_optional_attribute(span, attribute_name, expected_value):
