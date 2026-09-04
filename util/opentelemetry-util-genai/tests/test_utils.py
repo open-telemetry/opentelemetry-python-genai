@@ -1230,7 +1230,11 @@ class TestTelemetryHandler(unittest.TestCase):
             )
             invocation.prompt_name = "chat_prompt"
             invocation.prompt_version = "1.0.0"
-            invocation.prompt_variables = {"user": "Alice", "style": "formal"}
+            invocation.prompt_variables = {
+                "user": "Alice",
+                "style": "formal",
+                "tags": ["a", "b"],
+            }
             invocation.stop()
 
             attrs = self.span_exporter.get_finished_spans()[-1].attributes
@@ -1238,6 +1242,7 @@ class TestTelemetryHandler(unittest.TestCase):
             assert attrs["gen_ai.prompt.version"] == "1.0.0"
             assert attrs["gen_ai.prompt.variable.user"] == "Alice"
             assert attrs["gen_ai.prompt.variable.style"] == "formal"
+            assert attrs["gen_ai.prompt.variable.tags"] == '["a","b"]'
 
             event_attrs = self.log_exporter.get_finished_logs()[
                 -1
@@ -1246,6 +1251,7 @@ class TestTelemetryHandler(unittest.TestCase):
             assert event_attrs["gen_ai.prompt.version"] == "1.0.0"
             assert event_attrs["gen_ai.prompt.variable.user"] == "Alice"
             assert event_attrs["gen_ai.prompt.variable.style"] == "formal"
+            assert event_attrs["gen_ai.prompt.variable.tags"] == '["a","b"]'
 
 
 class AnyNonNone:

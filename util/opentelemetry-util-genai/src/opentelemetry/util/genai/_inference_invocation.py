@@ -30,6 +30,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
+    gen_ai_json_dumps,
     should_capture_content_on_events,
     should_capture_content_on_spans,
     should_emit_event,
@@ -308,18 +309,19 @@ class InferenceInvocation(GenAIInvocation):
 
     def _get_prompt_variable_attributes(
         self, *, for_span: bool
-    ) -> dict[str, AttributeValue]:
+    ) -> dict[str, str]:
         if not self.prompt_variables:
             return {}
-        should_capture = (
+        if not (
             should_capture_content_on_spans()
             if for_span
             else should_capture_content_on_events()
-        )
-        if not should_capture:
+        ):
             return {}
         return {
-            f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}": str(v)
+            f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}": (
+                v if isinstance(v, str) else gen_ai_json_dumps(v)
+            )
             for k, v in self.prompt_variables.items()
         }
 
