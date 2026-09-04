@@ -30,6 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
+    _message_name,
     _normalize_role,
     extract_token_details,
     is_stream_end_marker,
@@ -470,8 +471,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                         )
 
-                    msg_name = getattr(chat_generation.message, "name", None)
-                    name_str = str(msg_name) if msg_name is not None else None
+                    name_str = _message_name(chat_generation.message)
 
                     if finish_reason in ("tool_calls", "tool_use"):
                         tool_calls: list[ToolCallRequestPart] = []
