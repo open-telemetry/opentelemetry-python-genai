@@ -182,17 +182,21 @@ def test_image_only_input_message_is_preserved():
 
 
 def test_base64_document_source_converts_to_blob_part():
-    part = _convert_dict_block_to_part(
-        {
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": "application/pdf",
-                "data": "QUJD",
-            },
-        }
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "QUJD",
+                },
+            }
+        ]
     )
 
+    assert len(parts) == 1
+    part = parts[0]
     assert isinstance(part, BlobPart)
     assert part.content == b"ABC"
     assert part.mime_type == "application/pdf"
@@ -200,16 +204,20 @@ def test_base64_document_source_converts_to_blob_part():
 
 
 def test_url_document_source_converts_to_uri_part():
-    part = _convert_dict_block_to_part(
-        {
-            "type": "document",
-            "source": {
-                "type": "url",
-                "url": "https://example.com/document.pdf",
-            },
-        }
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/document.pdf",
+                },
+            }
+        ]
     )
 
+    assert len(parts) == 1
+    part = parts[0]
     assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/document.pdf"
     assert part.mime_type == "application/pdf"
@@ -217,13 +225,17 @@ def test_url_document_source_converts_to_uri_part():
 
 
 def test_file_document_source_converts_to_file_part():
-    part = _convert_dict_block_to_part(
-        {
-            "type": "document",
-            "source": {"type": "file", "file_id": "file-document"},
-        }
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {"type": "file", "file_id": "file-document"},
+            }
+        ]
     )
 
+    assert len(parts) == 1
+    part = parts[0]
     assert isinstance(part, FilePart)
     assert part.file_id == "file-document"
     assert part.mime_type is None
@@ -231,17 +243,21 @@ def test_file_document_source_converts_to_file_part():
 
 
 def test_plain_text_document_source_converts_to_blob_part():
-    part = _convert_dict_block_to_part(
-        {
-            "type": "document",
-            "source": {
-                "type": "text",
-                "media_type": "text/plain",
-                "data": "Document text",
-            },
-        }
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {
+                    "type": "text",
+                    "media_type": "text/plain",
+                    "data": "Document text",
+                },
+            }
+        ]
     )
 
+    assert len(parts) == 1
+    part = parts[0]
     assert isinstance(part, BlobPart)
     assert part.content == b"Document text"
     assert part.mime_type == "text/plain"

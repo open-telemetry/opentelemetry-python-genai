@@ -572,6 +572,63 @@ def test_sync_messages_create_captures_multimodal_content(
     _assert_multimodal_input(spans[0])
 
 
+def test_sync_messages_create_preserves_generator_document_content(
+    instrument_with_content,
+):
+    received_content = None
+
+    def handle_request(request):
+        nonlocal received_content
+        body = json.loads(request.content)
+        received_content = body["messages"][0]["content"][0]["source"][
+            "content"
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_generator_content",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "Received."}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    def document_content():
+        yield {"type": "text", "text": "First"}
+        yield {"type": "text", "text": "Second"}
+
+    transport = httpx.MockTransport(handle_request)
+    with httpx.Client(transport=transport) as http_client:
+        client = Anthropic(http_client=http_client)
+        client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "content",
+                                "content": document_content(),
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+    assert received_content == [
+        {"type": "text", "text": "First"},
+        {"type": "text", "text": "Second"},
+    ]
+
+
 @pytest.mark.vcr()
 def test_sync_messages_create_with_all_params(
     span_exporter, anthropic_client, instrument_no_content
