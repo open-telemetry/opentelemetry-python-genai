@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from typing import (
@@ -70,9 +71,9 @@ class RawResponseStreamProxy(ObjectProxy):
 
     ``parse()`` wraps the result only when it is an SDK ``Stream`` /
     ``AsyncStream`` we know how to drive. Anything else is handed back untouched
-    (for example the coroutine ``parse()`` the SDK documents it "will become in
-    the next major version" for the async client, or a custom non-stream parse
-    target): we can't instrument it, so we just log and step aside.
+    (for example a custom non-stream parse target): we can't instrument it, so
+    we just log and step aside. On the async client ``parse()`` is a coroutine,
+    so we await it and wrap what it resolves to.
 
     The span is finalized independently of ``parse()``. Whether the caller
     parses and drains the wrapper, drains the body directly via the raw
@@ -149,7 +150,22 @@ class RawResponseStreamProxy(ObjectProxy):
         # would consume it twice anyway.
         if self._self_parsed is not None:
             return self._self_parsed
-        stream = self.__wrapped__.parse(*args, **kwargs)
+        parsed = self.__wrapped__.parse(*args, **kwargs)
+        if inspect.isawaitable(parsed):
+            # Only ``AsyncAPIResponse`` (the async ``with_streaming_response``)
+            # has a coroutine ``parse()``.
+            return self._parse_awaited(parsed)
+        return self._wrap_parsed(parsed)
+
+    async def _parse_awaited(self, pending: Awaitable[Any]) -> object:
+        stream = await pending
+        # parse() can hand out several coroutines before any of them resolves,
+        # so re-check the memo to keep one wrapper per response.
+        if self._self_parsed is not None:
+            return self._self_parsed
+        return self._wrap_parsed(stream)
+
+    def _wrap_parsed(self, stream: Any) -> object:
         if isinstance(stream, (Stream, AsyncStream)):
             self._self_parsed = self._self_wrap_stream(stream)
             return self._self_parsed

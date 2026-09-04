@@ -4,14 +4,16 @@
 """Unit tests for the streaming ``with_raw_response`` proxy.
 
 These exercise ``RawResponseStreamProxy.parse()`` — it wraps only SDK streams
-it can drive and hands anything else back untouched — and the close fallback
-that finalizes the span when the caller never parses, so the span never leaks.
+it can drive, awaits the coroutine the async client's ``parse()`` returns, and
+hands anything else back untouched — and the close fallback that finalizes the
+span when the caller never parses, so the span never leaks.
 """
 
+import inspect
 import logging
 
 import pytest
-from openai import Stream
+from openai import AsyncStream, Stream
 
 from opentelemetry.instrumentation.genai.openai._raw_response import (
     RawResponseStreamProxy,
@@ -38,6 +40,12 @@ class _FakeStream(Stream):
         pass
 
 
+class _FakeAsyncStream(AsyncStream):
+    # See _FakeStream.
+    def __init__(self):
+        pass
+
+
 class _RawResponse:
     headers = {"openai-version": "2020-10-01"}
     request_id = "req_123"
@@ -47,6 +55,13 @@ class _RawResponse:
         self._parse_result = parse_result
 
     def parse(self, *, to=None):
+        return self._parse_result
+
+
+class _AsyncRawResponse(_RawResponse):
+    """Shaped like ``AsyncAPIResponse``, whose ``parse()`` is a coroutine."""
+
+    async def parse(self, *, to=None):
         return self._parse_result
 
 
@@ -80,10 +95,10 @@ def test_parse_wraps_stream_and_memoizes():
 
 
 def test_parse_non_stream_returned_untouched(caplog):
-    # parse() may return something we can't drive — e.g. the coroutine the SDK
-    # documents parse() "will become in the next major version", or a custom
-    # non-stream target. The proxy hands it back untouched, logs, and does NOT
-    # finalize; the close fallback stays armed to finalize on drain/close.
+    # parse() may return something we can't drive — e.g. a custom non-stream
+    # target passed as ``to=``. The proxy hands it back untouched, logs, and
+    # does NOT finalize; the close fallback stays armed to finalize on
+    # drain/close.
     raw = _RawResponse("not-a-stream")
     wrapped_calls = []
     finalize_calls = []
@@ -106,6 +121,70 @@ def test_parse_non_stream_returned_untouched(caplog):
     # Fallback still armed: closing the body finalizes the span.
     raw.http_response.close()
     assert finalize_calls == [True]
+
+
+@pytest.mark.asyncio()
+async def test_parse_awaits_coroutine_and_wraps():
+    # The async client's with_streaming_response hands back an AsyncAPIResponse
+    # whose parse() is a coroutine. parse() must stay awaitable for the caller
+    # and resolve to the instrumented wrapper, not the bare SDK stream.
+    stream = _FakeAsyncStream()
+    raw = _AsyncRawResponse(stream)
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: ("wrapped", s),
+        finalize=_noop,
+    )
+
+    pending = proxy.parse()
+    assert inspect.isawaitable(pending)  # caller still writes `await parse()`
+    assert await pending == ("wrapped", stream)
+
+    # Memoized, so a second parse() shares the one wrapper / span. The proxy
+    # already holds the wrapper, so this call returns it without awaiting.
+    assert proxy.parse() == ("wrapped", stream)
+
+
+@pytest.mark.asyncio()
+async def test_parse_awaited_non_stream_returned_untouched(caplog):
+    # A coroutine parse() resolving to something we can't drive is handed back
+    # untouched, exactly like the synchronous case.
+    raw = _AsyncRawResponse("not-a-stream")
+    finalize_calls = []
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: ("wrapped", s),
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    with caplog.at_level(
+        logging.DEBUG,
+        logger="opentelemetry.instrumentation.genai.openai._raw_response",
+    ):
+        parsed = await proxy.parse()
+
+    assert parsed == "not-a-stream"
+    assert finalize_calls == []  # parse must not finalize; the close hook does
+    assert "skipping stream instrumentation" in caplog.text
+
+
+@pytest.mark.asyncio()
+async def test_close_before_awaiting_parse_finalizes_once():
+    # parse() returning an un-awaited coroutine leaves the proxy without a
+    # wrapper, so the close fallback is still what finalizes the span.
+    raw = _AsyncRawResponse(_FakeAsyncStream())
+    finalize_calls = []
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: ("wrapped", s),
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    pending = proxy.parse()
+    raw.http_response.close()
+    assert finalize_calls == [True]  # span closed, did not leak
+
+    await pending  # tidy up the coroutine so it is not left un-awaited
 
 
 def test_close_without_parse_finalizes_once():

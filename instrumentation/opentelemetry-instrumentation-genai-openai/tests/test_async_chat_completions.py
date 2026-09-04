@@ -492,6 +492,57 @@ async def test_chat_completion_with_raw_response_streaming(
         )
 
 
+@pytest.mark.asyncio()
+async def test_async_chat_completion_with_streaming_response_parse(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    """``AsyncAPIResponse.parse()`` is a coroutine, and must still be traced.
+
+    The async client's ``with_streaming_response`` is the only raw-response
+    entry point whose ``parse()`` is ``async``, so it returns a coroutine
+    rather than a stream.
+    """
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        async with (
+            async_openai_client.chat.completions.with_streaming_response.create(
+                messages=USER_ONLY_PROMPT,
+                model=DEFAULT_MODEL,
+                stream=True,
+                stream_options={"include_usage": True},
+            ) as raw_response
+        ):
+            assert "openai-version" in raw_response.headers
+
+            message_content = ""
+            usage = model = response_id = None
+            async for chunk in await raw_response.parse():
+                if chunk.choices:
+                    message_content += chunk.choices[0].delta.content or ""
+                if getattr(chunk, "usage", None):
+                    usage = chunk.usage
+                    model = chunk.model
+                    response_id = chunk.id
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        is_experimental_mode(),
+        response_id,
+        model,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        response_service_tier="default",
+    )
+    if is_experimental_mode():
+        assert_messages_attribute(
+            span.attributes["gen_ai.output.messages"],
+            format_simple_expected_output_message(message_content),
+        )
+
+
 class _CustomChatCompletion(ChatCompletion):
     """Caller-defined response type passed to non-streaming parse(to=...)."""
 

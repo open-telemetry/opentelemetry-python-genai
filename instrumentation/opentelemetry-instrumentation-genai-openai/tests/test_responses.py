@@ -779,6 +779,41 @@ def test_responses_with_raw_response_streaming(
     )
 
 
+def test_responses_with_streaming_response_parse(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """``with_streaming_response`` + ``parse()`` traces like a plain stream."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_streaming[content_mode0].yaml"
+    ):
+        with openai_client.responses.with_streaming_response.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            service_tier="default",
+            stream=True,
+        ) as raw_response:
+            # Metadata resolves natively off the wrapper.
+            assert "openai-version" in raw_response.headers
+
+            response = _collect_completed_response(raw_response.parse())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        request_service_tier="default",
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+
+
 class _UnrelatedEvent(BaseModel):
     """An event type unrelated to the Responses stream events."""
 
