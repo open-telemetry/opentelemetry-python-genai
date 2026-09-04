@@ -38,7 +38,7 @@ class RetrievalInvocation(GenAIInvocation):
     - gen_ai.provider.name: Provider name (Conditionally Required, when applicable)
     - gen_ai.request.model: Model name if applicable (Conditionally Required, if available)
     - server.port: Server port (Conditionally Required, if server.address is set)
-    - gen_ai.retrieval.top_k: Top-k sampling setting (Recommended)
+    - gen_ai.retrieval.top_k: Maximum number of documents to return (Recommended)
     - server.address: Server address (Recommended)
     - gen_ai.retrieval.documents: Retrieved documents (Opt-In, may contain sensitive data)
     - gen_ai.retrieval.query.text: Query text (Opt-In, may contain sensitive data)
