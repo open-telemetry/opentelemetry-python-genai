@@ -36,17 +36,14 @@ class ContentCapturingMode(Enum):
 
 @dataclass()
 class GenericPart:
-    """Used for provider-specific message part types that don't match
-    the standard MessagePart types defined in semantic conventions. Set ``type``
-    to the provider-specific type discriminator and carry the payload in
-    ``value`` to explicitly opt-in to non-standard types.
-    This will be removed in a future version when all instrumentations use core types.
+    """Represents an arbitrary message part with any type and properties.
+    This allows for extensibility with custom message part types.
 
-    Per the semconv message schema, ``type`` is a free-form string (the
-    provider's own type name), not a fixed literal."""
+    This model is specified as part of semconv in `GenAI messages Python models - GenericPart
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
 
     type: str
-    value: Any
 
 
 @dataclass()
@@ -306,6 +303,9 @@ class Role(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+
+
+SystemInstructionPart = Union[TextPart, GenericPart]
 
 
 @dataclass()

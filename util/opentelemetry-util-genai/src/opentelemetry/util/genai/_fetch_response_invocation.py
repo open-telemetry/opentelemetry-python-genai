@@ -22,6 +22,7 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
@@ -111,7 +112,10 @@ class FetchResponseInvocation(GenAIInvocation):
         self.finish_reasons: list[str] | None = None
         self.stream_cursor: str | None = None
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self.tool_definitions: list[ToolDefinition] | None = None
         self._start(self._get_start_attributes())
 

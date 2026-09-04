@@ -10,7 +10,7 @@ from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from typing_extensions import Self
 
@@ -30,6 +30,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
@@ -172,7 +173,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         *,
         inputs: list[InputMessage] | None = None,
         outputs: list[OutputMessage] | None = None,
-        system_instruction: list[MessagePart] | None = None,
+        system_instruction: list[SystemInstructionPart]
+        | list[MessagePart]
+        | None = None,
         tool_definitions: list[ToolDefinition] | None = None,
         log_record: LogRecord | None = None,
     ) -> None:
@@ -184,7 +187,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._completion_hook.on_completion(
             inputs=inputs or [],
             outputs=outputs or [],
-            system_instruction=system_instruction or [],
+            system_instruction=cast(
+                "list[MessagePart]", system_instruction or []
+            ),
             tool_definitions=tool_definitions,
             span=self.span,
             log_record=log_record,
@@ -239,7 +244,7 @@ def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
     output_messages: Sequence[OutputMessage],
-    system_instruction: Sequence[MessagePart],
+    system_instruction: Sequence[SystemInstructionPart | MessagePart],
     tool_definitions: Sequence[ToolDefinition] | None,
     for_span: bool,
 ) -> dict[str, Any]:
@@ -248,7 +253,8 @@ def get_content_attributes(
     Args:
         input_messages: Input messages to serialize.
         output_messages: Output messages to serialize.
-        system_instruction: System instructions to serialize.
+        system_instruction: System instructions to serialize. Passing ``MessagePart``
+            is deprecated; use ``SystemInstructionPart``.
         tool_definitions: Tool definitions to serialize (may be None).
         for_span: If True, serialize for span attributes (JSON string);
                   if False, serialize for event attributes (list of dicts).

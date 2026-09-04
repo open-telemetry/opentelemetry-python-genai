@@ -45,6 +45,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     ReasoningPart,
     Role,
+    SystemInstructionPart,
     TextPart,
     ToolCallRequestPart,
     ToolDefinition,
@@ -428,7 +429,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             )
             tool_definitions = _tool_definitions(instance)
             system_prompt = instance.system_prompt
-            system_instruction: list[MessagePart] = (
+            system_instruction: list[SystemInstructionPart] = (
                 [TextPart(content=system_prompt)]
                 if capture_content and system_prompt
                 else []
