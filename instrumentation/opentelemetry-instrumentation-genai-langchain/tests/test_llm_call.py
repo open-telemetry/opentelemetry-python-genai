@@ -1378,12 +1378,7 @@ def test_chat_anthropic_claude_sonnet_cache_token_details(
     assert len(spans) == 1
     span = spans[0]
 
-    assert (
-        span.attributes.get(
-            gen_ai_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        )
-        == 5
-    )
+    assert span.attributes.get("gen_ai.usage.cache_write.input_tokens") == 5
 
     assert (
         span.attributes.get(
