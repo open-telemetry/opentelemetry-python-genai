@@ -1,0 +1,1 @@
+Add optional name field to InputMessage and OutputMessage, and make finish_reason optional in OutputMessage.
