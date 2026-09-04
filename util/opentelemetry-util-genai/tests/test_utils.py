@@ -1169,6 +1169,35 @@ class TestTelemetryHandler(unittest.TestCase):
         ):
             assert key not in attrs
 
+    def test_inference_reasoning_and_continuation_and_compaction(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.reasoning_level = "high"
+        invocation.previous_response_id = "resp_123"
+        invocation.conversation_compacted = True
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs["gen_ai.request.reasoning.level"] == "high"
+        assert attrs["gen_ai.request.previous_response.id"] == "resp_123"
+        assert attrs["gen_ai.conversation.compacted"] is True
+
+    def test_inference_prompt_template_attributes(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.prompt_name = "chat_prompt"
+        invocation.prompt_version = "1.0.0"
+        invocation.prompt_variables = {"user": "Alice", "style": "formal"}
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_PROMPT_NAME] == "chat_prompt"
+        assert attrs["gen_ai.prompt.version"] == "1.0.0"
+        assert attrs["gen_ai.prompt.variable.user"] == "Alice"
+        assert attrs["gen_ai.prompt.variable.style"] == "formal"
+
 
 class AnyNonNone:
     def __eq__(self, other):
