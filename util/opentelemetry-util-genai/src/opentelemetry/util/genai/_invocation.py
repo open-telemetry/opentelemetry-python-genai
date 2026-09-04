@@ -261,17 +261,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             self.stop()
 
 
-def clean_message_dict(item: Any) -> dict[str, Any]:
-    d = asdict(item)
-    if isinstance(item, (InputMessage, OutputMessage)):
-        if item.name is None:
-            d.pop("name", None)
-    if isinstance(item, OutputMessage):
-        if item.finish_reason is None:
-            d.pop("finish_reason", None)
-    return d
-
-
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -311,7 +300,7 @@ def get_content_attributes(
     )
 
     def serialize(items: Sequence[Any]) -> Any:
-        dicts = [clean_message_dict(item) for item in items]
+        dicts = [asdict(item) for item in items]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
     # Tool definitions are always captured, the sem conv recommends adding params / description only

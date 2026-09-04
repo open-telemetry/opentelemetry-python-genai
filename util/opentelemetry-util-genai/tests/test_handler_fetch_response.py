@@ -314,6 +314,7 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
                     "role": "assistant",
                     "parts": [{"content": "This is a test.", "type": "text"}],
                     "finish_reason": "stop",
+                    "name": None,
                 }
             ],
         )

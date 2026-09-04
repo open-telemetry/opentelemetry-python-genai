@@ -17,7 +17,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
 )
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import partial
 from time import time
 from typing import Any, Final, Literal
@@ -29,7 +29,6 @@ from opentelemetry._logs import LogRecord
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import Span
 from opentelemetry.util.genai import types
-from opentelemetry.util.genai._invocation import clean_message_dict
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.utils import gen_ai_json_dump
 
@@ -327,7 +326,7 @@ class UploadCompletionHook(CompletionHook):
             | list[types.MessagePart]
             | list[types.ToolDefinition],
         ) -> JsonEncodeable:
-            return [clean_message_dict(dc) for dc in dataclass_list]
+            return [asdict(dc) for dc in dataclass_list]
 
         references = [
             (ref_name, ref, ref_attr, contents_hashed_to_filename)
