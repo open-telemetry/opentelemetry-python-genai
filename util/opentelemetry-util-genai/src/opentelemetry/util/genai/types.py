@@ -312,13 +312,15 @@ class Role(str, Enum):
 class InputMessage:
     role: str
     parts: list[MessagePart]
+    name: str | None = None
 
 
 @dataclass()
 class OutputMessage:
     role: str
     parts: list[MessagePart]
-    finish_reason: str | FinishReason
+    finish_reason: str | FinishReason | None = None
+    name: str | None = None
 
 
 # Callback an instrumentor may supply to derive the error.type attribute from a

@@ -10,7 +10,11 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    clean_message_dict,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
@@ -77,13 +81,17 @@ class WorkflowInvocation(GenAIInvocation):
         optional_attrs = (
             (
                 GenAI.GEN_AI_INPUT_MESSAGES,
-                gen_ai_json_dumps([asdict(m) for m in self.input_messages])
+                gen_ai_json_dumps(
+                    [clean_message_dict(m) for m in self.input_messages]
+                )
                 if self.input_messages
                 else None,
             ),
             (
                 GenAI.GEN_AI_OUTPUT_MESSAGES,
-                gen_ai_json_dumps([asdict(m) for m in self.output_messages])
+                gen_ai_json_dumps(
+                    [clean_message_dict(m) for m in self.output_messages]
+                )
                 if self.output_messages
                 else None,
             ),

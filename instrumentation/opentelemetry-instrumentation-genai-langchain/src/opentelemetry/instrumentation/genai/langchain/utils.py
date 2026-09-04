@@ -352,10 +352,12 @@ def to_input_messages(
         parts = _message_parts(message)
         if not parts and not _has_content(message):
             continue
+        msg_name = getattr(message, "name", None)
         result.append(
             InputMessage(
                 role=_normalize_role(message) or Role.USER.value,
                 parts=parts,
+                name=str(msg_name) if msg_name is not None else None,
             )
         )
     return result
@@ -417,11 +419,13 @@ def to_output_messages(
         parts = _ai_message_parts(message)
         if not parts and not _has_content(message):
             continue
+        msg_name = getattr(message, "name", None)
         result.append(
             OutputMessage(
                 role=_normalize_role(message) or Role.ASSISTANT.value,
                 parts=parts,
                 finish_reason=finish_reason,
+                name=str(msg_name) if msg_name is not None else None,
             )
         )
     return result

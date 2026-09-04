@@ -1081,6 +1081,39 @@ class TestRole(unittest.TestCase):
         self.assertEqual(serialized["role"], "assistant")
 
 
+class TestMessageModels(unittest.TestCase):
+    def test_output_message_optional_finish_reason(self):
+        message = OutputMessage(
+            role=Role.ASSISTANT,
+            parts=[TextPart(content="streamed")],
+        )
+        self.assertIsNone(message.finish_reason)
+        self.assertIsNone(message.name)
+        serialized = json.loads(gen_ai_json_dumps(asdict(message)))
+        self.assertEqual(serialized["role"], "assistant")
+        self.assertIsNone(serialized["finish_reason"])
+
+    def test_messages_with_name(self):
+        in_msg = InputMessage(
+            role=Role.USER,
+            parts=[TextPart(content="hi")],
+            name="alice",
+        )
+        self.assertEqual(in_msg.name, "alice")
+        serialized_in = json.loads(gen_ai_json_dumps(asdict(in_msg)))
+        self.assertEqual(serialized_in["name"], "alice")
+
+        out_msg = OutputMessage(
+            role=Role.ASSISTANT,
+            parts=[TextPart(content="hello")],
+            finish_reason="stop",
+            name="bot",
+        )
+        self.assertEqual(out_msg.name, "bot")
+        serialized_out = json.loads(gen_ai_json_dumps(asdict(out_msg)))
+        self.assertEqual(serialized_out["name"], "bot")
+
+
 _REAL_PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
     b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc"

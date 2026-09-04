@@ -197,7 +197,12 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
     chat_messages = []
     for message in messages:
         role = get_property_value(message, "role")
-        chat_message = InputMessage(role=str(role), parts=[])
+        name = get_property_value(message, "name")
+        chat_message = InputMessage(
+            role=str(role),
+            parts=[],
+            name=str(name) if name is not None else None,
+        )
         chat_messages.append(chat_message)
 
         content = get_property_value(message, "content")
