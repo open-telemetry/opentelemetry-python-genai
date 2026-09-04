@@ -141,6 +141,66 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
     ]
 
 
+def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hello!",
+                        "annotations": [],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        ("user", [TextPart(content="Hi")]),
+        ("assistant", [TextPart(content="Hello!")]),
+    ]
+
+
+def test_extract_input_messages_supports_sdk_response_output(loaded_module):
+    response = _make_response(
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "First response",
+                        "annotations": [],
+                    },
+                    {
+                        "type": "output_text",
+                        "text": "Second response",
+                        "annotations": [],
+                    },
+                ],
+            }
+        ]
+    )
+
+    messages = loaded_module.get_input_messages(response.output)
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        (
+            "assistant",
+            [
+                TextPart(content="First response"),
+                TextPart(content="Second response"),
+            ],
+        )
+    ]
+
+
 def test_extract_input_messages_supports_image_data_url_and_file_id(
     loaded_module,
 ):

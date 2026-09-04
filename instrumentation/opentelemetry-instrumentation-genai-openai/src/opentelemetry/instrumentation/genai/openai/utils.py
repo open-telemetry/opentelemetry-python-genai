@@ -210,7 +210,7 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
 
         part_type = get_property_value(item, "type")
         text = get_property_value(item, "text")
-        if part_type in ("text", "input_text") or (
+        if part_type in ("text", "input_text", "output_text") or (
             part_type is None and isinstance(text, str)
         ):
             if isinstance(text, str):

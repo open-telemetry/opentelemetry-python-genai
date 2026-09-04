@@ -114,6 +114,22 @@ def test_chat_completion_with_content(
         )
 
 
+def test_chat_completion_captures_multimodal_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    with vcr.use_cassette("chat_completions_multimodal_conformance.yaml"):
+        openai_client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=MULTIMODAL_PROMPT,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
+
+
 def test_chat_completion_with_named_input_message(
     span_exporter, openai_client, instrument_with_content, vcr
 ):
