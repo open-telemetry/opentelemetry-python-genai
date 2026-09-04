@@ -140,9 +140,25 @@ async def test_parse_awaits_coroutine_and_wraps():
     assert inspect.isawaitable(pending)  # caller still writes `await parse()`
     assert await pending == ("wrapped", stream)
 
-    # Memoized, so a second parse() shares the one wrapper / span. The proxy
-    # already holds the wrapper, so this call returns it without awaiting.
-    assert proxy.parse() == ("wrapped", stream)
+
+@pytest.mark.asyncio()
+async def test_parse_stays_awaitable_once_memoized():
+    # Memoizing must not change the shape parse() returns: the caller writes
+    # `await parse()` every time, so a memoized hit has to stay awaitable
+    # instead of handing back the bare wrapper.
+    stream = _FakeAsyncStream()
+    raw = _AsyncRawResponse(stream)
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: ("wrapped", s),
+        finalize=_noop,
+    )
+
+    first = await proxy.parse()
+
+    second = proxy.parse()
+    assert inspect.isawaitable(second)
+    assert await second is first  # one wrapper / span, shared
 
 
 @pytest.mark.asyncio()
