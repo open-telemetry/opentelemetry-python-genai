@@ -14,12 +14,18 @@ def create_mock_interaction(
     output_text: str = "model output",
     input_tokens: int = 10,
     output_tokens: int = 20,
+    input_tokens_by_modality: list[Any] | None = None,
+    output_tokens_by_modality: list[Any] | None = None,
+    cached_tokens_by_modality: list[Any] | None = None,
 ) -> Any:
     mock_usage = unittest.mock.MagicMock()
     mock_usage.total_input_tokens = input_tokens
     mock_usage.total_output_tokens = output_tokens
     mock_usage.total_thought_tokens = 0
     mock_usage.total_cached_tokens = 0
+    mock_usage.input_tokens_by_modality = input_tokens_by_modality
+    mock_usage.output_tokens_by_modality = output_tokens_by_modality
+    mock_usage.cached_tokens_by_modality = cached_tokens_by_modality
 
     mock_user_step = unittest.mock.MagicMock()
     mock_user_step.type = "user_input"

@@ -107,8 +107,6 @@ class UsageTokens:
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
     cache_write_input_tokens: int | None = None
-    audio_input_tokens: int | None = None
-    audio_output_tokens: int | None = None
 
 
 def _get_field(value: object, field_name: str) -> object | None:
@@ -596,27 +594,20 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
         else None
     )
     cache_write = (
-        getattr(details, "cache_write_input_tokens", None)
+        getattr(details, "cache_write_tokens", None)
         if details is not None
         else None
-    ) or cache_creation
-    output_details = getattr(usage, "output_tokens_details", None)
+    )
+    if cache_write is None:
+        cache_write = cache_creation
     return UsageTokens(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         cache_creation_input_tokens=cache_creation,
         cache_write_input_tokens=cache_write,
         cache_read_input_tokens=(
-            details.cached_tokens if details is not None else None
-        ),
-        audio_input_tokens=(
-            getattr(details, "audio_tokens", None)
+            getattr(details, "cached_tokens", None)
             if details is not None
-            else None
-        ),
-        audio_output_tokens=(
-            getattr(output_details, "audio_tokens", None)
-            if output_details is not None
             else None
         ),
     )
@@ -678,10 +669,6 @@ def set_invocation_response_attributes(
     invocation.output_tokens = tokens.output_tokens
     invocation.cache_write_input_tokens = tokens.cache_write_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
-    if tokens.audio_input_tokens is not None:
-        invocation.audio_input_tokens = tokens.audio_input_tokens
-    if tokens.audio_output_tokens is not None:
-        invocation.audio_output_tokens = tokens.audio_output_tokens
 
     finish_reasons = extract_finish_reasons(response)
     if finish_reasons:
