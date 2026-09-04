@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
@@ -42,6 +42,8 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
 )
 from opentelemetry.util.types import AttributeValue
+
+_GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
@@ -272,6 +274,7 @@ def get_content_attributes(
     output_messages: Sequence[OutputMessage],
     system_instruction: Sequence[SystemInstructionPart | MessagePart],
     tool_definitions: Sequence[ToolDefinition] | None,
+    prompt_variables: Mapping[str, object] | None = None,
     for_span: bool,
     content_capturing_mode: ContentCapturingMode | None = None,
 ) -> dict[str, Any]:
@@ -283,6 +286,7 @@ def get_content_attributes(
         system_instruction: System instructions to serialize. Passing ``MessagePart``
             is deprecated; use ``SystemInstructionPart``.
         tool_definitions: Tool definitions to serialize (may be None).
+        prompt_variables: Prompt template variables to serialize (may be None).
         for_span: If True, serialize for span attributes (JSON string);
                   if False, serialize for event attributes (list of dicts).
         content_capturing_mode: Configured content capturing mode; if None,
@@ -336,4 +340,10 @@ def get_content_attributes(
             serialize(tool_definitions) if tool_definitions else None,
         ),
     )
-    return {key: value for key, value in optional_attrs if value is not None}
+    result = {key: value for key, value in optional_attrs if value is not None}
+    if prompt_variables:
+        for k, v in prompt_variables.items():
+            result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = (
+                v if isinstance(v, str) else gen_ai_json_dumps(v)
+            )
+    return result

@@ -60,7 +60,6 @@ from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
     get_content_capturing_mode,
     image_from_url,
-    should_capture_content_on_events,
     should_capture_content_on_spans,
     should_emit_event,
 )
@@ -262,25 +261,6 @@ class TestShouldCaptureContent(unittest.TestCase):
                     should_capture_content_on_spans() is span_content_enabled
                 )
 
-    def test_should_capture_content_on_events_against_various_env_var_combinations(
-        self,
-    ):  # pylint: disable=no-self-use
-        for content_capture, event_content_enabled in [
-            ("NO_CONTENT", False),
-            ("EVENT_ONLY", True),
-            ("SPAN_ONLY", False),
-            ("SPAN_AND_EVENT", True),
-        ]:
-            with patch.dict(
-                os.environ,
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
-                },
-            ):
-                assert (
-                    should_capture_content_on_events() is event_content_enabled
-                )
-
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
         for content_capture, expected_content_capturing in [
             ("NO_CONTENT", ContentCapturingMode.NO_CONTENT),
@@ -324,13 +304,13 @@ class TestTelemetryHandler(unittest.TestCase):
             SimpleSpanProcessor(self.span_exporter)
         )
         self.log_exporter = InMemoryLogRecordExporter()
-        logger_provider = LoggerProvider()
-        logger_provider.add_log_record_processor(
+        self.logger_provider = LoggerProvider()
+        self.logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(self.log_exporter)
         )
         self.telemetry_handler = get_telemetry_handler(
             tracer_provider=self.tracer_provider,
-            logger_provider=logger_provider,
+            logger_provider=self.logger_provider,
         )
 
     def tearDown(self):
@@ -1225,7 +1205,11 @@ class TestTelemetryHandler(unittest.TestCase):
                 "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
             },
         ):
-            invocation = self.telemetry_handler.inference(
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                logger_provider=self.logger_provider,
+            )
+            invocation = handler.inference(
                 "test-provider", request_model="test-model"
             )
             invocation.prompt_name = "chat_prompt"
