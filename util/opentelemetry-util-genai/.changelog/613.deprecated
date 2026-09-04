@@ -1,0 +1,1 @@
+Deprecate `cache_creation_input_tokens` in favor of `cache_write_input_tokens`.

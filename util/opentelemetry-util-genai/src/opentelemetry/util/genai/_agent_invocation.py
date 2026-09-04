@@ -94,8 +94,8 @@ class AgentInvocation(GenAIInvocation):
 
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
-        self.cache_creation_input_tokens: int | None = None
-        self.cache_read_input_tokens: int | None = None
+        self._cache_write_input_tokens: int | None = None
+        self._cache_read_input_tokens: int | None = None
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -106,6 +106,45 @@ class AgentInvocation(GenAIInvocation):
         self.tool_definitions: list[ToolDefinition] | None = None
 
         self._start(self._get_start_attributes())
+
+    @property
+    def cache_write_input_tokens(self) -> int | None:
+        """The number of cache write input tokens.
+
+        .. deprecated:: 1.3b0
+            Cache tokens are not reported on internal agent spans per semantic conventions.
+        """
+        return self._cache_write_input_tokens
+
+    @cache_write_input_tokens.setter
+    def cache_write_input_tokens(self, value: int | None) -> None:
+        self._cache_write_input_tokens = value
+
+    @property
+    def cache_creation_input_tokens(self) -> int | None:
+        """The number of cache creation input tokens.
+
+        .. deprecated:: 1.3b0
+            Cache tokens are not reported on internal agent spans per semantic conventions.
+        """
+        return self._cache_write_input_tokens
+
+    @cache_creation_input_tokens.setter
+    def cache_creation_input_tokens(self, value: int | None) -> None:
+        self._cache_write_input_tokens = value
+
+    @property
+    def cache_read_input_tokens(self) -> int | None:
+        """The number of cache read input tokens.
+
+        .. deprecated:: 1.3b0
+            Cache tokens are not reported on internal agent spans per semantic conventions.
+        """
+        return self._cache_read_input_tokens
+
+    @cache_read_input_tokens.setter
+    def cache_read_input_tokens(self, value: int | None) -> None:
+        self._cache_read_input_tokens = value
 
     @property
     def agent_name(self) -> str | None:
@@ -160,14 +199,6 @@ class AgentInvocation(GenAIInvocation):
         optional_attrs = (
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
-            (
-                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-                self.cache_creation_input_tokens,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.cache_read_input_tokens,
-            ),
         )
         return {k: v for k, v in optional_attrs if v is not None}
 

@@ -248,6 +248,38 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 15)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 25)
 
+    def test_generated_span_counts_modality_tokens(self) -> None:
+        self.configure_valid_interaction(
+            input_tokens=15,
+            output_tokens=25,
+            input_tokens_by_modality=[
+                {"modality": "text", "tokens": 10},
+                {"modality": "image", "tokens": 5},
+            ],
+            output_tokens_by_modality=[
+                {"modality": "text", "tokens": 20},
+                {"modality": "audio", "tokens": 5},
+            ],
+            cached_tokens_by_modality=[
+                {"modality": "text", "tokens": 3},
+            ],
+        )
+        self.run_interaction(model="gemini-2.5-flash", input="Some input")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 15)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 25)
+        self.assertEqual(span.attributes["gen_ai.usage.text.input_tokens"], 10)
+        self.assertEqual(span.attributes["gen_ai.usage.image.input_tokens"], 5)
+        self.assertEqual(
+            span.attributes["gen_ai.usage.text.output_tokens"], 20
+        )
+        self.assertEqual(
+            span.attributes["gen_ai.usage.audio.output_tokens"], 5
+        )
+        self.assertEqual(
+            span.attributes["gen_ai.usage.text.cache_read.input_tokens"], 3
+        )
+
     @patch.dict(
         "os.environ",
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},

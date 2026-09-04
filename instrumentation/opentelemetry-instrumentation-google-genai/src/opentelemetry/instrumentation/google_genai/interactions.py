@@ -147,9 +147,47 @@ def _apply_interaction_response_attributes(
 
     invocation.input_tokens = usage.total_input_tokens
     invocation.output_tokens = usage.total_output_tokens
+    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
     if isinstance(invocation, InferenceInvocation):
         invocation.thinking_tokens = usage.total_thought_tokens
-    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
+        def _set_modality_tokens(
+            entries: Any,
+            text_attr: str,
+            image_attr: str,
+            audio_attr: str,
+        ) -> None:
+            for entry in entries or []:
+                modality = _get_field(entry, "modality")
+                tokens = _get_field(entry, "tokens")
+                if modality and tokens is not None:
+                    m = str(modality).lower()
+                    if m == "text":
+                        setattr(invocation, text_attr, tokens)
+                    elif m == "image":
+                        setattr(invocation, image_attr, tokens)
+                    elif m == "audio":
+                        setattr(invocation, audio_attr, tokens)
+
+        _set_modality_tokens(
+            _get_field(usage, "input_tokens_by_modality"),
+            "text_input_tokens",
+            "image_input_tokens",
+            "audio_input_tokens",
+        )
+        _set_modality_tokens(
+            _get_field(usage, "output_tokens_by_modality"),
+            "text_output_tokens",
+            "image_output_tokens",
+            "audio_output_tokens",
+        )
+        _set_modality_tokens(
+            _get_field(usage, "cached_tokens_by_modality"),
+            "text_cache_read_input_tokens",
+            "image_cache_read_input_tokens",
+            "audio_cache_read_input_tokens",
+        )
 
     if telemetry_handler.should_capture_content():
         invocation.output_messages = _interactions_response_to_messages(

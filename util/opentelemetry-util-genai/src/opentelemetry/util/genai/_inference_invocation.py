@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.semconv._incubating.attributes import (
@@ -31,6 +32,25 @@ from opentelemetry.util.genai.utils import (
     should_emit_event,
 )
 from opentelemetry.util.types import AttributeValue
+
+_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
+    "gen_ai.usage.cache_write.input_tokens"
+)
+_GEN_AI_USAGE_TEXT_INPUT_TOKENS: Final = "gen_ai.usage.text.input_tokens"
+_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: Final = "gen_ai.usage.image.input_tokens"
+_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: Final = "gen_ai.usage.audio.input_tokens"
+_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: Final = "gen_ai.usage.text.output_tokens"
+_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.image.output_tokens"
+_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: Final = "gen_ai.usage.audio.output_tokens"
+_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.text.cache_read.input_tokens"
+)
+_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.image.cache_read.input_tokens"
+)
+_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.audio.cache_read.input_tokens"
+)
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -96,8 +116,17 @@ class InferenceInvocation(GenAIInvocation):
         self.max_tokens: int | None = None
         self.stop_sequences: list[str] | None = None
         self.seed: int | None = None
-        self.cache_creation_input_tokens: int | None = None
+        self.cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
+        self.text_input_tokens: int | None = None
+        self.image_input_tokens: int | None = None
+        self.audio_input_tokens: int | None = None
+        self.text_output_tokens: int | None = None
+        self.image_output_tokens: int | None = None
+        self.audio_output_tokens: int | None = None
+        self.text_cache_read_input_tokens: int | None = None
+        self.image_cache_read_input_tokens: int | None = None
+        self.audio_cache_read_input_tokens: int | None = None
         self.tool_definitions: list[ToolDefinition] | None = None
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
@@ -106,6 +135,18 @@ class InferenceInvocation(GenAIInvocation):
         # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
         self._start(self._get_start_attributes())
+
+    @property
+    def cache_creation_input_tokens(self) -> int | None:
+        """
+        .. deprecated:: 1.3b0
+            Use :attr:`cache_write_input_tokens` instead.
+        """
+        return self.cache_write_input_tokens
+
+    @cache_creation_input_tokens.setter
+    def cache_creation_input_tokens(self, value: int | None) -> None:
+        self.cache_write_input_tokens = value
 
     @property
     def response_model_name(self) -> str | None:
@@ -174,16 +215,52 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
-                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-                self.cache_creation_input_tokens,
+                _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+                self.cache_write_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.cache_read_input_tokens,
+                self.cache_read_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-                self.thinking_tokens,
+                self.thinking_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
+                self.text_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
+                self.image_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+                self.audio_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
+                self.text_output_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
+                self.image_output_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+                self.audio_output_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
+                self.text_cache_read_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+                self.image_cache_read_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+                self.audio_cache_read_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
