@@ -10,7 +10,10 @@ from typing import Any
 
 import pytest
 
-from opentelemetry.instrumentation.genai.openai.utils import _content_to_parts
+from opentelemetry.instrumentation.genai.openai.utils import (
+    _content_to_parts,
+    _prepare_input_messages,
+)
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -22,15 +25,19 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.trace import SpanKind
-from opentelemetry.util.genai.types import BlobPart, TextPart, UriPart
-
-_REAL_PNG_BYTES = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
-    b"\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc"
-    b"\xf8\xcf\xc0\xf0\x1f\x00\x05\x05\x02\x00\xa1\r\xf7\xdf\x00\x00\x00"
-    b"\x00IEND\xaeB`\x82"
+from opentelemetry.util.genai.types import (
+    BlobPart,
+    InputMessage,
+    TextPart,
+    UriPart,
 )
-_REAL_PNG_B64 = base64.b64encode(_REAL_PNG_BYTES).decode("ascii")
+
+_REAL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
+    "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
+    "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
+)
+_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -53,6 +60,32 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
                 "type": "text",
                 "content": USER_ONLY_PROMPT[0]["content"],
             }
+        ],
+    }
+]
+MULTIMODAL_PROMPT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe the image"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+            },
+        ],
+    }
+]
+MULTIMODAL_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [
+            {"type": "text", "content": "Describe the image"},
+            {
+                "mime_type": "image/png",
+                "modality": "image",
+                "content": _REAL_PNG_B64,
+                "type": "blob",
+            },
         ],
     }
 ]
@@ -216,6 +249,26 @@ def test_chat_content_parts_drop_malformed_image_and_keep_text():
     )
 
     assert parts == [TextPart(content="Keep this")]
+
+
+def test_prepare_input_messages_drops_messages_without_parts():
+    messages = _prepare_input_messages(
+        [
+            {"role": "user", "content": []},
+            {
+                "role": "user",
+                "content": [{"type": "unsupported", "value": "ignored"}],
+            },
+            {"role": "user", "content": "Keep this"},
+        ]
+    )
+
+    assert messages == [
+        InputMessage(
+            role="user",
+            parts=[TextPart(content="Keep this")],
+        )
+    ]
 
 
 def _assert_optional_attribute(span, attribute_name, expected_value):

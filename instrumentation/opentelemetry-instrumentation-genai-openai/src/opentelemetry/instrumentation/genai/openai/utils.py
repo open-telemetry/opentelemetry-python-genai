@@ -244,26 +244,27 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
     chat_messages = []
     for message in messages:
         role = get_property_value(message, "role")
-        chat_message = InputMessage(role=str(role), parts=[])
-        chat_messages.append(chat_message)
-
+        parts: list[MessagePart] = []
         content = get_property_value(message, "content")
 
         if role == Role.ASSISTANT.value:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
-                chat_message.parts += extract_tool_calls_new(tool_calls)
-            chat_message.parts += _content_to_parts(content)
+                parts += extract_tool_calls_new(tool_calls)
+            parts += _content_to_parts(content)
 
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
-            chat_message.parts.append(
+            parts.append(
                 ToolCallResponsePart(id=tool_call_id, response=content)
             )
 
         else:
             # system, developer, user, fallback
-            chat_message.parts += _content_to_parts(content)
+            parts += _content_to_parts(content)
+
+        if parts:
+            chat_messages.append(InputMessage(role=str(role), parts=parts))
     return chat_messages
 
 
