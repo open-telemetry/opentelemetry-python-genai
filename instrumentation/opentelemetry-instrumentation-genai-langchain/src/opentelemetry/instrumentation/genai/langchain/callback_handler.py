@@ -172,7 +172,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent.input_messages = make_input_message(inputs)
 
                     if metadata:
-                        agent.agent_id = metadata.get("agent_id")
                         agent.agent_description = metadata.get(
                             "agent_description"
                         )

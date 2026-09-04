@@ -1,0 +1,1 @@
+Add `LocalAgentInvocation` and `RemoteAgentInvocation` for in-process and remote agent invocations.
