@@ -92,14 +92,16 @@ class GuardrailInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        optional_attrs = (
-            (_GEN_AI_GUARDRAIL_TARGET_TYPE, self.target_type),
-        )
+        optional_attrs = ((_GEN_AI_GUARDRAIL_TARGET_TYPE, self.target_type),)
         attributes: dict[str, AttributeValue] = {
             _GEN_AI_GUARDRAIL_VERDICT_TYPE: (
                 "deny" if self.triggered else "allow"
             ),
-            **{key: value for key, value in optional_attrs if value is not None},
+            **{
+                key: value
+                for key, value in optional_attrs
+                if value is not None
+            },
         }
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)

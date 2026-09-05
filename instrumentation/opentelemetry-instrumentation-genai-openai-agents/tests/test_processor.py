@@ -95,9 +95,7 @@ def test_guardrail_span_creates_guardrail_invocation(
 ) -> None:
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
-    tracer_provider.add_span_processor(
-        SimpleSpanProcessor(span_exporter)
-    )
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(GuardrailSpanData(name="content_filter", triggered=False))

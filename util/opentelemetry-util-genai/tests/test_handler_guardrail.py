@@ -10,9 +10,9 @@ from opentelemetry.trace import SpanKind
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 
-def _make_span_exporter_and_handler() -> (
-    tuple[InMemorySpanExporter, TelemetryHandler]
-):
+def _make_span_exporter_and_handler() -> tuple[
+    InMemorySpanExporter, TelemetryHandler
+]:
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
