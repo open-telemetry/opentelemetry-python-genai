@@ -593,6 +593,10 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                     instance or bound_args.arguments.get("self"),
                     tool_call.tool_name,
                 )
+            if tool_type is None and isinstance(instance, AgentWorkflow):
+                # AgentWorkflow's built-in handoff tool is a function tool but
+                # is not exposed through the member agent tool lists.
+                tool_type = "function"
             tool_invocation = self._handler.tool(
                 tool_call.tool_name,
                 tool_type=tool_type,

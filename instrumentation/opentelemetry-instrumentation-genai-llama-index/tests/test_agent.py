@@ -1040,6 +1040,7 @@ async def test_agent_workflow_captures_content(
         {
             "role": "user",
             "parts": [{"type": "text", "content": "Run the workflow"}],
+            "name": None,
         }
     ]
     assert json.loads(workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[
@@ -1049,6 +1050,7 @@ async def test_agent_workflow_captures_content(
         {
             "role": "user",
             "parts": [{"type": "text", "content": "Run the workflow"}],
+            "name": None,
         }
     ]
     assert json.loads(
