@@ -39,10 +39,11 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.instrumentation.genai.langchain.package import _instruments
+from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.completion_hook import load_completion_hook
-from opentelemetry.util.genai.handler import get_telemetry_handler
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 
 class LangChainInstrumentor(BaseInstrumentor):
@@ -68,12 +69,14 @@ class LangChainInstrumentor(BaseInstrumentor):
         meter_provider = kwargs.get("meter_provider")
         logger_provider = kwargs.get("logger_provider")
 
-        telemetry_handler = get_telemetry_handler(
+        telemetry_handler = TelemetryHandler(
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=kwargs.get("completion_hook")
             or load_completion_hook(),
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
         otel_callback_handler = OpenTelemetryLangChainCallbackHandler(
             telemetry_handler=telemetry_handler,
@@ -112,14 +115,6 @@ class LangChainInstrumentor(BaseInstrumentor):
                 unwrap(langgraph.pregel.Pregel, method)
         except (ImportError, AttributeError):
             pass
-        # Clear the TelemetryHandler singleton so the next instrument() uses
-        # the provided tracer_provider/meter_provider/logger_provider instead
-        # of reusing the previous handler.
-        if (
-            getattr(get_telemetry_handler, "_default_handler", None)
-            is not None
-        ):
-            delattr(get_telemetry_handler, "_default_handler")
 
 
 class _BaseCallbackManagerInitWrapper:

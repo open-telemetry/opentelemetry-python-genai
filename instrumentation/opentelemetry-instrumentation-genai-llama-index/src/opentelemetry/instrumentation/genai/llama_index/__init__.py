@@ -43,6 +43,7 @@ from opentelemetry.instrumentation.genai.llama_index._handler import (
 from opentelemetry.instrumentation.genai.llama_index.package import (
     _instruments,
 )
+from opentelemetry.instrumentation.genai.llama_index.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -74,6 +75,8 @@ class LlamaIndexInstrumentor(BaseInstrumentor):
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=kwargs.get("completion_hook")
             or load_completion_hook(),
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
         span_handler = LlamaIndexSpanHandler(handler)
         dispatcher = cast(

@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Any
 
+from opentelemetry.instrumentation.genai.bedrock.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -36,6 +37,8 @@ class BedrockInstrumentor(BaseInstrumentor):
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=completion_hook,
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
         patch_bedrock(self._handler)
 

@@ -1,0 +1,1 @@
+Deprecate get_telemetry_handler, construct and cache a TelemetryHandler instead.

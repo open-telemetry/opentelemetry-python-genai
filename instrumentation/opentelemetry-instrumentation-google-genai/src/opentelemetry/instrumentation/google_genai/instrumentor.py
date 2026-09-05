@@ -5,6 +5,7 @@ from collections.abc import Collection
 from typing import Any
 
 from opentelemetry._logs import get_logger_provider
+from opentelemetry.instrumentation.google_genai.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.metrics import get_meter_provider
 from opentelemetry.trace import get_tracer_provider
@@ -62,6 +63,8 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=completion_hook,
+            instrumentation_scope_name="opentelemetry.instrumentation.google_genai",
+            instrumentation_scope_version=__version__,
         )
         self._generate_content_snapshot = instrument_generate_content(
             telemetry_handler,

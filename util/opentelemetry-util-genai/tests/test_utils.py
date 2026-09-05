@@ -32,10 +32,7 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
-from opentelemetry.util.genai.handler import (
-    TelemetryHandler,
-    get_telemetry_handler,
-)
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
     BlobPart,
@@ -308,7 +305,7 @@ class TestTelemetryHandler(unittest.TestCase):
         logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(self.log_exporter)
         )
-        self.telemetry_handler = get_telemetry_handler(
+        self.telemetry_handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=logger_provider,
         )
@@ -317,8 +314,6 @@ class TestTelemetryHandler(unittest.TestCase):
         # Clear spans and reset the singleton telemetry handler so each test starts clean
         self.span_exporter.clear()
         self.log_exporter.clear()
-        if hasattr(get_telemetry_handler, "_default_handler"):
-            delattr(get_telemetry_handler, "_default_handler")
 
     @patch.dict(
         os.environ,

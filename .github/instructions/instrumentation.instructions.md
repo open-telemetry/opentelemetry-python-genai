@@ -37,6 +37,10 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 
 - Spans, logs, metrics, and events must go through `opentelemetry-util-genai`. Direct use of
   `Tracer`, `Meter`, `Logger`, or event APIs is not allowed.
+- `TelemetryHandler` must be constructed with `instrumentation_scope_name=__name__` and
+  `instrumentation_scope_version=__version__` so spans, metrics, and logs carry the
+  instrumentation's own scope; the shared test fixtures enforce this. Flag handlers built without
+  them. `get_telemetry_handler()` is deprecated; flag new uses.
 - Content capture, hooks, and other cross-cutting configuration are owned by the util.
   Instrumentations must not introduce their own env vars, settings, or hook interfaces.
 - Completion hook wiring must follow the util's contract (reference:

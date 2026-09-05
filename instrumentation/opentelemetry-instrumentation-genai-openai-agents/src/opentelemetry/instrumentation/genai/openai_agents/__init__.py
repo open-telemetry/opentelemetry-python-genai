@@ -42,6 +42,9 @@ from agents.tracing import (
     set_trace_processors,
 )
 
+from opentelemetry.instrumentation.genai.openai_agents.version import (
+    __version__,
+)
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -94,6 +97,8 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=completion_hook,
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
         provider = GenAI.GenAiProviderNameValues.OPENAI.value
         self._processor = GenAITracingProcessor(handler, provider)

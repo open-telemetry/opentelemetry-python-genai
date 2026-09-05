@@ -9,6 +9,7 @@ from collections.abc import Collection
 from typing import Any
 
 from opentelemetry.instrumentation.genai.crewai.package import _instruments
+from opentelemetry.instrumentation.genai.crewai.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -32,6 +33,8 @@ class CrewAIInstrumentor(BaseInstrumentor):
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=completion_hook,
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
         # CrewAI patching will be added in a follow-up change.
 

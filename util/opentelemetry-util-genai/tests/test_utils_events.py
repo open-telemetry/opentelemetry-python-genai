@@ -20,10 +20,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.util.genai.handler import (
-    TelemetryHandler,
-    get_telemetry_handler,
-)
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import Error
 
 from .test_utils import (
@@ -51,15 +48,13 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         )
         self.tracer_provider = tracer_provider
         self.logger_provider = logger_provider
-        self.telemetry_handler = get_telemetry_handler(
+        self.telemetry_handler = TelemetryHandler(
             tracer_provider=tracer_provider, logger_provider=logger_provider
         )
 
     def tearDown(self):
         self.span_exporter.clear()
         self.log_exporter.clear()
-        if hasattr(get_telemetry_handler, "_default_handler"):
-            delattr(get_telemetry_handler, "_default_handler")
 
     @patch.dict(
         os.environ,

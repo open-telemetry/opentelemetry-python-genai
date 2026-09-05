@@ -68,6 +68,9 @@ from typing import Any
 from opentelemetry.instrumentation.genai.claude_agent_sdk.package import (
     _instruments,
 )
+from opentelemetry.instrumentation.genai.claude_agent_sdk.version import (
+    __version__,
+)
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -109,6 +112,8 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
             logger_provider=logger_provider,
             completion_hook=kwargs.get("completion_hook")
             or load_completion_hook(),
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
 
         # Patching will be added in a follow-up PR

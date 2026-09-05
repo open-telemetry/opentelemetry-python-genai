@@ -40,6 +40,7 @@ from opentelemetry.instrumentation.genai.agno.patch import (
     patch_agent,
     unpatch_agent,
 )
+from opentelemetry.instrumentation.genai.agno.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -75,6 +76,8 @@ class AgnoInstrumentor(BaseInstrumentor):
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=completion_hook,
+            instrumentation_scope_name=__name__,
+            instrumentation_scope_version=__version__,
         )
         patch_agent(handler)
 
