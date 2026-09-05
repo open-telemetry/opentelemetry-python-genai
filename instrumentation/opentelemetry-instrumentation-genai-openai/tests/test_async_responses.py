@@ -59,10 +59,12 @@ try:
     )
     _has_tools_param = "tools" in _create_params
     _has_reasoning_param = "reasoning" in _create_params
+    _has_conversation_param = "conversation" in _create_params
 except ImportError:
     HAS_RESPONSES_API = False
     _has_tools_param = False
     _has_reasoning_param = False
+    _has_conversation_param = False
 
 
 pytestmark = pytest.mark.skipif(
@@ -629,6 +631,135 @@ async def test_async_responses_create_with_all_params(
         top_p=0.9,
         max_tokens=50,
         output_type="text",
+    )
+
+
+CONVERSATION_ID = "conv_0a1b2c3d4e5f60718293a4b5c6d7e8f9"
+
+requires_conversation_param = pytest.mark.skipif(
+    not _has_conversation_param,
+    reason=(
+        "openai SDK too old to support 'conversation' parameter on "
+        "AsyncResponses.create"
+    ),
+)
+
+
+@requires_conversation_param
+@pytest.mark.parametrize(
+    "conversation",
+    [CONVERSATION_ID, {"id": CONVERSATION_ID}],
+    ids=["id", "object"],
+)
+@pytest.mark.asyncio()
+@pytest.mark.cassette("test_async_responses_create_basic[content_mode0]")
+@pytest.mark.vcr()
+async def test_async_responses_create_records_conversation_id(
+    span_exporter, async_openai_client, instrument_no_content, conversation
+):
+    _skip_if_not_latest()
+
+    await async_openai_client.responses.create(
+        model=DEFAULT_MODEL,
+        input=USER_ONLY_PROMPT[0]["content"],
+        conversation=conversation,
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
+        == CONVERSATION_ID
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.cassette("test_async_responses_create_basic[content_mode0]")
+@pytest.mark.vcr()
+async def test_async_responses_create_without_conversation_omits_conversation_id(
+    span_exporter, async_openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    await async_openai_client.responses.create(
+        model=DEFAULT_MODEL,
+        input=USER_ONLY_PROMPT[0]["content"],
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert GenAIAttributes.GEN_AI_CONVERSATION_ID not in span.attributes
+
+
+@requires_conversation_param
+@pytest.mark.asyncio()
+@pytest.mark.cassette("test_async_responses_create_api_error[content_mode0]")
+@pytest.mark.vcr()
+async def test_async_responses_create_records_conversation_id_on_error(
+    span_exporter, async_openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with pytest.raises((BadRequestError, NotFoundError)):
+        await async_openai_client.responses.create(
+            model=INVALID_MODEL,
+            input="Hello",
+            conversation=CONVERSATION_ID,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
+        == CONVERSATION_ID
+    )
+
+
+@requires_conversation_param
+@pytest.mark.asyncio()
+@pytest.mark.cassette("test_async_responses_create_streaming[content_mode0]")
+@pytest.mark.vcr()
+async def test_async_responses_create_streaming_records_conversation_id(
+    span_exporter, async_openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    stream = await async_openai_client.responses.create(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+        service_tier="default",
+        conversation=CONVERSATION_ID,
+        stream=True,
+    )
+    await _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
+        == CONVERSATION_ID
+    )
+
+
+@requires_conversation_param
+@pytest.mark.asyncio()
+@pytest.mark.cassette("test_async_responses_stream_until_done[content_mode0]")
+@pytest.mark.vcr()
+async def test_async_responses_stream_records_conversation_id(
+    span_exporter, async_openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    async with async_openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+        service_tier="default",
+        conversation=CONVERSATION_ID,
+    ) as stream:
+        await stream.get_final_response()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
+        == CONVERSATION_ID
     )
 
 

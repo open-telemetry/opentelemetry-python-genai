@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 from unittest import mock
 
+import openai
 import pytest
 
 from opentelemetry.instrumentation.genai.openai import response_extractors
@@ -319,6 +320,64 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
         is None
     )
     assert loaded_module.extract_params(text="plain").output_type is None
+
+
+def test_extract_conversation_id_handles_supported_shapes(loaded_module):
+    assert (
+        loaded_module.extract_params(conversation="conv_abc").conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation={"id": "conv_abc"}
+        ).conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation=SimpleNamespace(id="conv_abc")
+        ).conversation_id
+        == "conv_abc"
+    )
+
+
+# Sentinels a caller can pass explicitly instead of a conversation. A current
+# SDK defaults `conversation` to `omit`, which the oldest supported one lacks.
+_UNSET_SENTINELS = [openai.NOT_GIVEN]
+if hasattr(openai, "omit"):
+    _UNSET_SENTINELS.append(openai.omit)
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        None,
+        *_UNSET_SENTINELS,
+        "",
+        {},
+        {"id": ""},
+        {"id": 42},
+        42,
+        SimpleNamespace(),
+    ],
+)
+def test_extract_conversation_id_ignores_unusable_values(
+    loaded_module, conversation
+):
+    assert (
+        loaded_module.extract_params(conversation=conversation).conversation_id
+        is None
+    )
+
+
+def test_apply_request_attributes_sets_conversation_id(loaded_module):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    loaded_module.apply_request_attributes(
+        invocation,
+        loaded_module.extract_params(conversation="conv_abc"),
+        False,
+    )
+    assert invocation.conversation_id == "conv_abc"
 
 
 def test_extractors_handle_missing_genai_types_import(loaded_module):
