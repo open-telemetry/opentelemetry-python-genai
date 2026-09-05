@@ -520,7 +520,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             )
             tool_definitions = _tool_definitions(instance)
             system_prompt = instance.system_prompt
-            system_instruction: list[MessagePart] = (
+            agent_system_instruction: list[MessagePart] = (
                 [TextPart(content=system_prompt)]
                 if capture_content and system_prompt
                 else []
@@ -532,7 +532,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             agent_invocation.agent_description = agent_description
             agent_invocation.input_messages = input_messages
             agent_invocation.tool_definitions = tool_definitions
-            agent_invocation.system_instruction = system_instruction
+            agent_invocation.system_instruction = agent_system_instruction
             invocation = agent_invocation
             tool_attributes_token = _AGENT_TOOL_ATTRIBUTES.set(
                 _agent_tool_attribute_map(instance)
