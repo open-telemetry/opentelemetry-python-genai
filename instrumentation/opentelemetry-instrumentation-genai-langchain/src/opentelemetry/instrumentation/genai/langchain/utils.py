@@ -367,41 +367,6 @@ def to_input_messages(
     return result
 
 
-def split_system_and_input_messages(
-    messages: Iterable[Any],
-) -> tuple[list[MessagePart], list[InputMessage]]:
-    """Split ``messages`` into ``system_instruction`` parts and ``InputMessage`` s.
-
-    Called only when content capture is enabled
-    (``TelemetryHandler.should_capture_content()``).
-    """
-    materialized = list(messages)
-    try:
-        normalized: Iterable[BaseMessage] = convert_to_messages(materialized)
-    except Exception:  # pylint: disable=broad-except
-        normalized = [m for m in materialized if isinstance(m, BaseMessage)]
-
-    system_parts: list[MessagePart] = []
-    input_messages: list[InputMessage] = []
-
-    for message in normalized:
-        if isinstance(message, SystemMessage):
-            system_parts.extend(_content_to_parts(message.content))
-        else:
-            parts = _message_parts(message)
-            if not parts and not _has_content(message):
-                continue
-            input_messages.append(
-                InputMessage(
-                    role=_normalize_role(message) or Role.USER.value,
-                    parts=parts,
-                    name=_message_name(message),
-                )
-            )
-
-    return system_parts, input_messages
-
-
 def to_output_messages(
     messages: Iterable[BaseMessage],
     *,

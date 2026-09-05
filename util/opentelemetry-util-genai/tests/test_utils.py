@@ -42,12 +42,14 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    GenericPart,
     InputMessage,
     MessagePart,
     OutputMessage,
     Reasoning,
     ReasoningPart,
     Role,
+    SystemInstructionPart,
     Text,
     TextPart,
     Uri,
@@ -402,6 +404,33 @@ class TestTelemetryHandler(unittest.TestCase):
             span_system[0]["content"], "You are a helpful assistant."
         )
         self.assertEqual(span_system[0]["type"], "text")
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_system_instruction_generic_part_on_span(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.inference("test-provider") as invocation:
+            invocation.system_instruction = [
+                TextPart(content="You are helpful"),
+                GenericPart(type="custom"),
+            ]
+
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+        self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
+        instructions = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+        self.assertEqual(
+            instructions,
+            [
+                {"type": "text", "content": "You are helpful"},
+                {"type": "custom"},
+            ],
+        )
 
     @patch.dict(
         os.environ,
@@ -1112,6 +1141,20 @@ class TestMessageModels(unittest.TestCase):
         self.assertEqual(out_msg.name, "bot")
         serialized_out = json.loads(gen_ai_json_dumps(asdict(out_msg)))
         self.assertEqual(serialized_out["name"], "bot")
+
+    def test_system_instruction_part(self):
+        text_part: SystemInstructionPart = TextPart(content="You are helpful")
+        generic_part: SystemInstructionPart = GenericPart(type="custom")
+        self.assertEqual(text_part.content, "You are helpful")
+        self.assertEqual(generic_part.type, "custom")
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(asdict(text_part))),
+            {"type": "text", "content": "You are helpful"},
+        )
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(asdict(generic_part))),
+            {"type": "custom"},
+        )
 
 
 _REAL_PNG_BYTES = (

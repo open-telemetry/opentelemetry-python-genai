@@ -37,6 +37,7 @@ from opentelemetry.util.genai.utils import is_experimental_mode
 from .test_responses import assert_responses_streaming_timing_metrics
 from .test_utils import (
     DEFAULT_MODEL,
+    EXPECTED_TOOL_DEFINITIONS,
     GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
@@ -1196,6 +1197,11 @@ async def test_async_responses_create_captures_tool_call_content(
     )
     assert input_messages[0]["role"] == "user"
 
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS],
+        EXPECTED_TOOL_DEFINITIONS,
+    )
+
     output_messages = _load_span_messages(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
@@ -1208,6 +1214,66 @@ async def test_async_responses_create_captures_tool_call_content(
     assert len(tool_call_parts) > 0
     assert tool_call_parts[0]["name"] == "get_current_weather"
     assert "arguments" in tool_call_parts[0]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+async def test_async_responses_create_streaming_captures_tool_definitions(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    """The definitions come from the request, so a streamed call records them too."""
+    _skip_if_not_latest()
+
+    # Reuses the plain streaming cassette: VCR does not match on the request
+    # body and this attribute is read off the request, not the response.
+    with vcr.use_cassette(
+        "test_async_responses_create_streaming_captures_content[content_mode0].yaml"
+    ):
+        stream = await async_openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            input=USER_ONLY_PROMPT[0]["content"],
+            tools=[get_responses_weather_tool_definition()],
+            stream=True,
+        )
+        async with stream:
+            await _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS],
+        EXPECTED_TOOL_DEFINITIONS,
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.stream",
+)
+async def test_async_responses_stream_captures_tool_definitions(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    """`responses.stream()` builds its invocation separately from `create`."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_stream_captures_content[content_mode0].yaml"
+    ):
+        async with async_openai_client.responses.stream(
+            model=DEFAULT_MODEL,
+            input=USER_ONLY_PROMPT[0]["content"],
+            tools=[get_responses_weather_tool_definition()],
+        ) as stream:
+            await _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS],
+        EXPECTED_TOOL_DEFINITIONS,
+    )
 
 
 @pytest.mark.asyncio()

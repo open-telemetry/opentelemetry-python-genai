@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from openai import NOT_GIVEN
 
 from opentelemetry.instrumentation.genai.openai import response_extractors
 from opentelemetry.instrumentation.genai.openai.utils import get_served_model
@@ -638,6 +639,124 @@ def test_get_tool_definitions_from_response_returns_none_without_tools(
         loaded_module.get_tool_definitions_from_response(_make_response())
         is None
     )
+
+
+def test_extract_params_captures_request_tools(loaded_module):
+    """`tools` on the create request is the source for gen_ai.tool.definitions."""
+    tools = [{"type": "function", "name": "get_weather"}]
+
+    assert loaded_module.extract_params(tools=tools).tools == tools
+    assert loaded_module.extract_params().tools is None
+    assert loaded_module.extract_params(tools=[]).tools is None
+    assert loaded_module.extract_params(tools=NOT_GIVEN).tools is None
+
+
+def test_extract_params_accepts_reusable_non_sequence_tool_iterables(
+    loaded_module,
+):
+    """The SDK takes any `Iterable[ToolParam]`, not just a list."""
+    tool = {"type": "function", "name": "get_weather"}
+
+    from_set = loaded_module.extract_params(
+        tools={"unhashable": tool}.values()
+    )
+    assert list(from_set.tools) == [tool]
+
+    from_tuple = loaded_module.extract_params(tools=(tool,))
+    assert list(from_tuple.tools) == [tool]
+
+
+def test_extract_params_does_not_drain_a_one_shot_tools_iterable(
+    loaded_module,
+):
+    """Consuming the caller's iterator would leave the SDK with no tools."""
+    tool = {"type": "function", "name": "get_weather"}
+    tools = iter([tool])
+
+    assert loaded_module.extract_params(tools=tools).tools is None
+    # The SDK still gets to read it.
+    assert list(tools) == [tool]
+
+
+def test_get_tool_definitions_maps_request_tools(loaded_module):
+    """Request tools use the same flat shape as the ones echoed on a response."""
+    definitions = loaded_module.get_tool_definitions(
+        [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+                "strict": True,
+            },
+            {"type": "web_search_preview"},
+            {"no": "type"},
+        ]
+    )
+
+    function_definition, builtin_definition = definitions
+    assert isinstance(function_definition, FunctionToolDefinition)
+    assert function_definition.type == "function"
+    assert function_definition.name == "get_weather"
+    assert function_definition.description == "Get the weather"
+    assert function_definition.parameters == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+    }
+    assert isinstance(builtin_definition, GenericToolDefinition)
+    assert builtin_definition.type == "web_search_preview"
+    assert builtin_definition.name == "web_search_preview"
+
+
+def test_get_tool_definitions_returns_none_without_usable_tools(loaded_module):
+    assert loaded_module.get_tool_definitions(None) is None
+    assert loaded_module.get_tool_definitions([]) is None
+    assert loaded_module.get_tool_definitions([{"no": "type"}]) is None
+
+
+def _make_request_invocation():
+    return SimpleNamespace(
+        temperature=None,
+        top_p=None,
+        max_tokens=None,
+        system_instruction=[],
+        input_messages=[],
+        tool_definitions=None,
+        attributes={},
+    )
+
+
+def test_apply_request_attributes_captures_tool_definitions(loaded_module):
+    """Tool definitions are captured only when content capture is enabled."""
+    params = loaded_module.extract_params(
+        model="gpt-4.1",
+        input="What is the weather?",
+        tools=[
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": None,
+                "parameters": {"type": "object"},
+            }
+        ],
+    )
+
+    captured = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        captured, params, capture_content=True
+    )
+    (definition,) = captured.tool_definitions
+    assert isinstance(definition, FunctionToolDefinition)
+    assert definition.name == "get_weather"
+
+    not_captured = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        not_captured, params, capture_content=False
+    )
+    assert not_captured.tool_definitions is None
 
 
 def test_set_fetch_response_attributes_captures_tool_definitions(

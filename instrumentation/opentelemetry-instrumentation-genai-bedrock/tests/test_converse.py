@@ -27,6 +27,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import GenericPart, TextPart
 
 
 @pytest.mark.vcr
@@ -596,3 +597,47 @@ def test_extract_converse_request_prompt_variables_no_content(
         == "sgi5gkybzqak"
     )
     assert "gen_ai.prompt.variable.user_name" not in invocation.attributes
+
+
+def test_extract_converse_request_system_instruction(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    extract_converse_request(
+        {
+            "system": [
+                {"text": "Be concise"},
+                {"text": "Answer politely"},
+            ],
+        },
+        invocation,
+    )
+
+    assert invocation.system_instruction == [
+        TextPart(content="Be concise"),
+        TextPart(content="Answer politely"),
+    ]
+
+
+def test_extract_converse_request_system_instruction_generic(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    extract_converse_request(
+        {
+            "system": [
+                {"text": "Be concise"},
+                {"guardContent": {"guardrailIdentifier": "gr-123"}},
+                {"cachePoint": {"type": "default"}},
+            ],
+        },
+        invocation,
+    )
+
+    assert invocation.system_instruction == [
+        TextPart(content="Be concise"),
+        GenericPart(type="guardContent"),
+        GenericPart(type="cachePoint"),
+    ]

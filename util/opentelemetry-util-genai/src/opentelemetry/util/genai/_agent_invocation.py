@@ -20,6 +20,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import ContentCapturingMode
@@ -98,7 +99,10 @@ class AgentInvocation(GenAIInvocation):
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the agent. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self.tool_definitions: list[ToolDefinition] | None = None
 
         self._start(self._get_start_attributes())

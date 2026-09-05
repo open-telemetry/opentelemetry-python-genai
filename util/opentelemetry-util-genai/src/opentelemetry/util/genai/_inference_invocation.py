@@ -23,6 +23,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
@@ -78,7 +79,10 @@ class InferenceInvocation(GenAIInvocation):
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self._response_model_name: str | None = None
         self.response_id: str | None = None
         self.finish_reasons: list[str] | None = None
@@ -273,7 +277,9 @@ class LLMInvocation:
     request_model: str | None = None
     input_messages: list[InputMessage] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     output_messages: list[OutputMessage] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
-    system_instruction: list[MessagePart] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    system_instruction: (  # pyright: ignore[reportUnknownVariableType]
+        list[SystemInstructionPart] | list[MessagePart]
+    ) = field(default_factory=list)
     provider: str | None = None
     response_model_name: str | None = None
     response_id: str | None = None

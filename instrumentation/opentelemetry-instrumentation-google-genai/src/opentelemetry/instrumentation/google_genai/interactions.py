@@ -213,7 +213,7 @@ def _interactions_input_to_messages(
             )
             parts.append(part)
         elif item_type is not None:
-            part = GenericPart(type=item_type, value=type(item).__name__)
+            part = GenericPart(type=item_type)
             parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]

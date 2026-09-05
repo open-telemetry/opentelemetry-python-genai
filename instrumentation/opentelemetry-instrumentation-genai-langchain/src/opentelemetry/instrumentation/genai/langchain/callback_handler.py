@@ -40,7 +40,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     prepare_tool_definitions,
     resolve_response_model_and_id,
     response_fields_from_generation,
-    split_system_and_input_messages,
+    to_input_messages,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -327,15 +327,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if "ls_max_tokens" in metadata:
                 max_tokens = metadata.get("ls_max_tokens")
 
-        # Flatten ``list[list[BaseMessage]]`` (one inner list per generation
-        # request) before splitting into system / input.
+        # ``messages`` from on_chat_model_start is ``list[list[BaseMessage]]``
+        # (one inner list per generation request). Flatten and let
+        # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
+        # with proper roles, tool-call requests, tool results, and reasoning.
         flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
-        system_instruction: list[MessagePart] = []
         input_messages: list[InputMessage] = []
         if self._telemetry_handler.should_capture_content():
-            system_instruction, input_messages = (
-                split_system_and_input_messages(flattened)
-            )
+            input_messages = to_input_messages(flattened)
 
         llm_invocation = self._telemetry_handler.inference(
             provider,
@@ -343,8 +342,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
-        if system_instruction:
-            llm_invocation.system_instruction = system_instruction
         llm_invocation.top_p = top_p
         llm_invocation.frequency_penalty = frequency_penalty
         llm_invocation.presence_penalty = presence_penalty
