@@ -1154,7 +1154,9 @@ async def test_agent_workflow_instruments_function_and_react_members(
     )[0]
     react_span = _spans_named(span_exporter, "invoke_agent react-member")[0]
     handoff_span = _spans_named(span_exporter, "execute_tool handoff")[0]
-    assert handoff_span.attributes[GenAIAttributes.GEN_AI_TOOL_TYPE] == "function"
+    assert (
+        handoff_span.attributes[GenAIAttributes.GEN_AI_TOOL_TYPE] == "function"
+    )
     for span in (function_span, react_span, handoff_span):
         assert span.parent is not None
         assert span.parent.span_id == workflow_span.context.span_id
