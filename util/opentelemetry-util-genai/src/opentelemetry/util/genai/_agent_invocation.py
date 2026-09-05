@@ -97,6 +97,9 @@ class AgentInvocation(GenAIInvocation):
         self.cache_creation_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
 
+        self.inference_calls: int | None = None
+        self.tool_calls: int | None = None
+
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
         self.system_instruction: (
@@ -183,6 +186,7 @@ class AgentInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
+            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
             (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
             (server_attributes.SERVER_ADDRESS, self._server_address),
@@ -223,4 +227,4 @@ class AgentInvocation(GenAIInvocation):
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
         )
-        self._metrics_recorder.record(self)
+        self._metrics_recorder.record_agent(self)
