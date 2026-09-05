@@ -118,13 +118,16 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 attributes=attributes,
                 context=self._parent_context,
             )
+            self._span_context = set_span_in_context(
+                self.span, self._parent_context
+            )
         else:
             self.span = self._tracer.start_span(
                 name=self._span_name,
                 kind=self._span_kind,
                 attributes=attributes,
             )
-        self._span_context = set_span_in_context(self.span)
+            self._span_context = set_span_in_context(self.span)
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)
 

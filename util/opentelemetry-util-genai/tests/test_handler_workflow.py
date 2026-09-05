@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from opentelemetry.baggage import get_baggage, set_baggage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -113,6 +114,27 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         child = next(s for s in spans if s.name == "invoke_workflow child")
         parent = next(s for s in spans if s.name == "parent")
         self.assertEqual(child.parent.span_id, parent.context.span_id)
+
+    def test_start_workflow_preserves_baggage_from_explicit_parent_context(
+        self,
+    ) -> None:
+        parent_span = self.tracer_provider.get_tracer("parent").start_span(
+            "parent"
+        )
+        parent_context = set_baggage(
+            "tenant_id", "acme", set_span_in_context(parent_span)
+        )
+        invocation = self.handler.workflow(
+            name="child",
+            parent_context=parent_context,
+        )
+        invocation.stop()
+        parent_span.end()
+
+        self.assertEqual(
+            get_baggage("tenant_id", context=invocation._span_context),
+            "acme",
+        )
 
     def test_start_workflow_span_kind_is_internal(self) -> None:
         invocation = self.handler.workflow(name="wf")
