@@ -795,6 +795,48 @@ def test_chat_completion_with_raw_response_streaming_read_without_parse(
     assert spans[0].end_time is not None
 
 
+def test_abandoned_streaming_response_still_emits_span(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """Sync counterpart of the async abandoned-stream case."""
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        with openai_client.chat.completions.with_streaming_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        ) as raw_response:
+            for _chunk in raw_response.parse():
+                break
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.end_time is not None
+    assert span.attributes["gen_ai.response.id"]
+
+
+def test_streaming_response_exception_in_block_still_emits_span(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """A caller exception inside the block also abandons the stream."""
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        with pytest.raises(ValueError):
+            with openai_client.chat.completions.with_streaming_response.create(
+                messages=USER_ONLY_PROMPT,
+                model=DEFAULT_MODEL,
+                stream=True,
+                stream_options={"include_usage": True},
+            ) as raw_response:
+                for _chunk in raw_response.parse():
+                    raise ValueError("caller blew up")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.end_time is not None
+
+
 def test_chat_completion_tool_calls_with_content(
     span_exporter, log_exporter, openai_client, instrument_with_content, vcr
 ):

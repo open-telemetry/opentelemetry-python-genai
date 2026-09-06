@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from typing import (
@@ -70,16 +71,16 @@ class RawResponseStreamProxy(ObjectProxy):
 
     ``parse()`` wraps the result only when it is an SDK ``Stream`` /
     ``AsyncStream`` we know how to drive. Anything else is handed back untouched
-    (for example the coroutine ``parse()`` the SDK documents it "will become in
-    the next major version" for the async client, or a custom non-stream parse
-    target): we can't instrument it, so we just log and step aside.
+    (for example a custom non-stream parse target): we can't instrument it, so
+    we just log and step aside. On the async client ``parse()`` is a coroutine,
+    so we await it and wrap what it resolves to.
 
-    The span is finalized independently of ``parse()``. Whether the caller
-    parses and drains the wrapper, drains the body directly via the raw
-    response's ``read()``/``iter_bytes()``, or never parses at all, every path
-    ends by closing the underlying httpx response — so a fallback on its
-    ``close``/``aclose`` finalizes the span when ``parse()`` never built a
-    wrapper that would finalize it instead.
+    Every path — draining the wrapper, reading the body directly, never parsing
+    at all — ends by closing the underlying httpx response, so hooks on its
+    ``close``/``aclose`` are what guarantee the span ends exactly once. A caller
+    that parses and then walks away (an early ``break``, an exception inside the
+    ``with`` block) leaves a wrapper nobody drove, so the hook closes it and the
+    wrapper finalizes with what it saw.
     """
 
     def __init__(
@@ -90,7 +91,9 @@ class RawResponseStreamProxy(ObjectProxy):
     ) -> None:
         super().__init__(raw_response)
         self._self_wrap_stream = wrap_stream
-        self._self_finalize: Callable[[], None] | None = finalize
+        # How this operation ends; swapped for the wrapper's ``close`` once
+        # there is one, so an abandoned stream finalizes with what it saw.
+        self._self_end: Callable[[], Any] | None = finalize
         self._self_parsed: object | None = None
         self._install_close_fallback(raw_response)
 
@@ -125,21 +128,50 @@ class RawResponseStreamProxy(ObjectProxy):
             try:
                 return await original(*args, **kwargs)
             finally:
-                self._finalize_close_fallback()
+                await self._afinalize_close_fallback()
 
         return _aclose
 
-    def _finalize_close_fallback(self) -> None:
-        # When ``parse()`` built a stream wrapper, that wrapper owns
-        # finalization; only finalize here for callers that never parsed.
-        if self._self_parsed is None:
-            self._finalize_once()
+    def _claim_end(self) -> Callable[[], Any] | None:
+        # Clearing on claim also stops the recursion: closing the wrapper
+        # closes the SDK stream, which closes this response and re-enters here.
+        end, self._self_end = self._self_end, None
+        return end
 
-    def _finalize_once(self) -> None:
-        # ``stop()`` is not idempotent, so finalize at most once.
-        if self._self_finalize is not None:
-            finalize, self._self_finalize = self._self_finalize, None
-            finalize()
+    def _finalize_close_fallback(self) -> None:
+        if inspect.iscoroutinefunction(self._self_end):
+            return  # needs an await; ``aclose`` will claim it
+        self._run_end(self._claim_end())
+
+    async def _afinalize_close_fallback(self) -> None:
+        end = self._claim_end()
+        if inspect.iscoroutinefunction(end):
+            await self._arun_end(end)
+        else:
+            self._run_end(end)
+
+    @staticmethod
+    def _run_end(end: Callable[[], Any] | None) -> None:
+        if end is None:
+            return
+        try:
+            end()
+        except Exception:  # pylint: disable=broad-exception-caught
+            # The caller already walked away; nobody is left to raise at.
+            _logger.debug(
+                "error ending an abandoned raw response", exc_info=True
+            )
+
+    @staticmethod
+    async def _arun_end(end: Callable[[], Any] | None) -> None:
+        if end is None:
+            return
+        try:
+            await end()
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "error ending an abandoned raw response", exc_info=True
+            )
 
     def parse(self, *args: Any, **kwargs: Any) -> object:
         # We memoize the first parse regardless of the arguments it was called
@@ -148,11 +180,38 @@ class RawResponseStreamProxy(ObjectProxy):
         # deliberate: one raw response backs one span, and re-parsing a stream
         # would consume it twice anyway.
         if self._self_parsed is not None:
+            # An awaitable parse() is awaited on every call, memo hits included.
+            if inspect.iscoroutinefunction(self.__wrapped__.parse):
+                return self._parsed_as_awaitable()
             return self._self_parsed
-        stream = self.__wrapped__.parse(*args, **kwargs)
+        parsed = self.__wrapped__.parse(*args, **kwargs)
+        if inspect.isawaitable(parsed):
+            # Only ``AsyncAPIResponse`` (the async ``with_streaming_response``)
+            # has a coroutine ``parse()``.
+            return self._parse_awaited(parsed)
+        return self._wrap_parsed(parsed)
+
+    async def _parsed_as_awaitable(self) -> object:
+        return self._self_parsed
+
+    async def _parse_awaited(self, pending: Awaitable[Any]) -> object:
+        stream = await pending
+        # parse() can hand out several coroutines before any of them resolves,
+        # so re-check the memo to keep one wrapper per response.
+        if self._self_parsed is not None:
+            return self._self_parsed
+        return self._wrap_parsed(stream)
+
+    def _wrap_parsed(self, stream: Any) -> object:
         if isinstance(stream, (Stream, AsyncStream)):
-            self._self_parsed = self._self_wrap_stream(stream)
-            return self._self_parsed
+            if self._self_end is None:
+                # Already ended while parse() was pending, so a wrapper would
+                # collect attributes with nowhere left to record them.
+                return stream
+            wrapper = self._self_wrap_stream(stream)
+            self._self_parsed = wrapper
+            self._self_end = wrapper.close
+            return wrapper
         # Not a stream we can drive; hand it back untouched. The close fallback
         # finalizes the span once the caller drains/closes the response body.
         _logger.debug(
