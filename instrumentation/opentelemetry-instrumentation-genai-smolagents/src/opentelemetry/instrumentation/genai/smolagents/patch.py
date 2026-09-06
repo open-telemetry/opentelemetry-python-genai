@@ -502,6 +502,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
         if isinstance(chunk, FinalAnswerStep):
             self._self_final_output = chunk.output
             self._self_saw_final = True
+            self._finalize_success()
 
     def _on_stream_end(self) -> None:
         try:

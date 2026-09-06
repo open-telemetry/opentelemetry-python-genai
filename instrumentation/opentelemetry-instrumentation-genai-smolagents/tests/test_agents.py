@@ -258,6 +258,21 @@ def _first_step_only(agent: CodeAgent) -> None:
         break
 
 
+def test_break_on_final_answer_step_finishes_the_span(
+    instrument_with_content, span_exporter
+) -> None:
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+    stream = agent.run("Test question", stream=True)
+    for step in stream:
+        if isinstance(step, FinalAnswerStep):
+            break
+
+    (agent_span,) = spans_by_operation(
+        span_exporter.get_finished_spans(), "invoke_agent"
+    )
+    assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
+
+
 def test_abandoned_streaming_run_finalizes_the_span(
     instrument_with_content, span_exporter
 ) -> None:
