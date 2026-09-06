@@ -10,6 +10,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._invocation import (
+    GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
     Error,
     GenAIInvocation,
     get_content_attributes,
@@ -161,7 +162,7 @@ class AgentInvocation(GenAIInvocation):
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
             (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
             (
-                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+                GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
                 self.cache_creation_input_tokens,
             ),
             (

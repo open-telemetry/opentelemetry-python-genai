@@ -44,6 +44,12 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
+# TODO: use the semconv constant once this attribute is released in
+# opentelemetry-semantic-conventions. Renamed from
+# gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
@@ -878,10 +884,7 @@ async def test_async_messages_create_aggregates_cache_tokens(
     assert len(spans) == 1
     span = spans[0]
 
-    assert (
-        GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        in span.attributes
-    )
+    assert GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS in span.attributes
     assert (
         GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS in span.attributes
     )
@@ -895,9 +898,7 @@ async def test_async_messages_create_aggregates_cache_tokens(
     cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
     cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
     assert (
-        span.attributes[
-            GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        ]
+        span.attributes[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS]
         == cache_creation
     )
     assert (
@@ -942,10 +943,7 @@ async def test_async_messages_create_streaming_aggregates_cache_tokens(
     assert len(spans) == 1
     span = spans[0]
 
-    assert (
-        GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        in span.attributes
-    )
+    assert GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS in span.attributes
     assert (
         GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS in span.attributes
     )
@@ -958,9 +956,7 @@ async def test_async_messages_create_streaming_aggregates_cache_tokens(
         == output_tokens
     )
     assert (
-        span.attributes[
-            GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        ]
+        span.attributes[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS]
         == cache_creation
     )
     assert (

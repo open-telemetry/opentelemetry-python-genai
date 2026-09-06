@@ -32,6 +32,12 @@ from opentelemetry.util.genai.types import (
     TextPart,
 )
 
+# TODO: use the semconv constant once this attribute is released in
+# opentelemetry-semantic-conventions. Renamed from
+# gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+
 
 class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-public-methods
     def setUp(self):
@@ -162,7 +168,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 100
-        assert attrs[GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] == 25
+        assert attrs[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] == 25
         assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 50
 
     def test_fail_sets_error_status(self):

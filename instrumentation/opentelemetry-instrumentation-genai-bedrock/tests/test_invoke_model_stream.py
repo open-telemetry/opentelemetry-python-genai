@@ -29,6 +29,12 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 
+# TODO: use the semconv constant once this attribute is released in
+# opentelemetry-semantic-conventions. Renamed from
+# gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+
 
 def test_stream_wrapper_anthropic_messages(
     tracer_provider,
@@ -461,12 +467,7 @@ def test_stream_wrapper_anthropic_with_cache_tokens(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
         == 30
     )
-    assert (
-        span.attributes[
-            GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        ]
-        == 10
-    )
+    assert span.attributes[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] == 10
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )

@@ -1,0 +1,1 @@
+report cache write input tokens as `gen_ai.usage.cache_write.input_tokens`, renamed from `gen_ai.usage.cache_creation.input_tokens` in the GenAI semantic conventions

@@ -10,7 +10,7 @@ from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 from typing_extensions import Self
 
@@ -42,6 +42,13 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
 )
 from opentelemetry.util.types import AttributeValue
+
+# TODO: Migrate to a gen_ai_attributes constant once available in the semconv
+# package. Renamed from gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
+    "gen_ai.usage.cache_write.input_tokens"
+)
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai.metrics import InvocationMetricsRecorder

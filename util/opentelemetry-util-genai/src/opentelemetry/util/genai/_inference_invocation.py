@@ -12,6 +12,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import INVALID_SPAN, Span, SpanKind, Tracer
 from opentelemetry.util.genai._invocation import (
+    GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
     Error,
     GenAIInvocation,
     get_content_attributes,
@@ -174,7 +175,7 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
-                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+                GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
                 self.cache_creation_input_tokens,
             ),
             (

@@ -64,6 +64,12 @@ from opentelemetry.util.genai.utils import (
     should_emit_event,
 )
 
+# TODO: use the semconv constant once this attribute is released in
+# opentelemetry-semantic-conventions. Renamed from
+# gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+
 
 def _create_input_message(
     content: str = "hello world", role: str = "Human"
@@ -593,6 +599,34 @@ class TestTelemetryHandler(unittest.TestCase):
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
+
+    def test_inference_cache_token_attributes(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.input_tokens = 100
+        invocation.cache_creation_input_tokens = 25
+        invocation.cache_read_input_tokens = 50
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 100
+        assert attrs[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] == 25
+        assert isinstance(attrs[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS], int)
+        assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 50
+        assert isinstance(
+            attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS], int
+        )
+
+    def test_inference_omits_cache_token_attributes_when_not_set(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS not in attrs
+        assert GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
 
     def test_start_inference_sampler_can_drop_span_based_on_attributes(self):
         """Verify that a sampler can reject spans based on attributes passed at creation time."""

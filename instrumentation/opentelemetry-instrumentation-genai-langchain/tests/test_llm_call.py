@@ -40,6 +40,12 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util.genai.types import TextPart
 
+# TODO: use the semconv constant once this attribute is released in
+# opentelemetry-semantic-conventions. Renamed from
+# gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+
 
 def _openai_cassette_name(model, base: str) -> str:
     # Newer langchain-openai renders ``max_completion_tokens`` on the request
@@ -1378,12 +1384,7 @@ def test_chat_anthropic_claude_sonnet_cache_token_details(
     assert len(spans) == 1
     span = spans[0]
 
-    assert (
-        span.attributes.get(
-            gen_ai_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        )
-        == 5
-    )
+    assert span.attributes.get(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS) == 5
 
     assert (
         span.attributes.get(

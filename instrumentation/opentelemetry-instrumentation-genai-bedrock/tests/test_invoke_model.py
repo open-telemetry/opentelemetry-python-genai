@@ -32,6 +32,12 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 
+# TODO: use the semconv constant once this attribute is released in
+# opentelemetry-semantic-conventions. Renamed from
+# gen_ai.usage.cache_creation.input_tokens in
+# https://github.com/open-telemetry/semantic-conventions-genai/pull/440.
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+
 
 def test_invoke_model_anthropic_messages(
     bedrock_client,
@@ -115,12 +121,7 @@ def test_invoke_model_anthropic_messages(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 8
-    assert (
-        span.attributes[
-            GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        ]
-        == 2
-    )
+    assert span.attributes[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] == 2
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
         == 4

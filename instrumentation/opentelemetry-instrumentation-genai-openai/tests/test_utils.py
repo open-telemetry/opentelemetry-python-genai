@@ -26,9 +26,7 @@ FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
 # in https://github.com/open-telemetry/semantic-conventions-genai/pull/353.
 GEN_AI_REQUEST_STREAM_CURSOR = "gen_ai.request.stream_cursor"
 GEN_AI_RESPONSE_STATUS = "gen_ai.response.status"
-GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
-    "gen_ai.usage.cache_creation.input_tokens"
-)
+GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
 GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
 USER_ONLY_EXPECTED_INPUT_MESSAGES = [
@@ -370,10 +368,10 @@ def assert_cache_attributes(span, usage):
 
     cache_creation = getattr(details, "cache_creation_input_tokens", None)
     if cache_creation is None:
-        assert GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS not in span.attributes
+        assert GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS not in span.attributes
     else:
         assert (
-            span.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]
+            span.attributes[GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS]
             == cache_creation
         )
 
