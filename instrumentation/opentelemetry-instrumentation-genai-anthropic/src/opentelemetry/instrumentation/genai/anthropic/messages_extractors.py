@@ -65,12 +65,6 @@ class MessageRequestParams:
     system: str | Iterable[TextBlockParam] | None = None
 
 
-GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
-    "gen_ai.usage.cache_creation.input_tokens"
-)
-GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
-
-
 @dataclass
 class UsageTokens:
     input_tokens: int | None = None
@@ -173,14 +167,8 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(message.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
-    if tokens.cache_creation_input_tokens is not None:
-        invocation.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = (
-            tokens.cache_creation_input_tokens
-        )
-    if tokens.cache_read_input_tokens is not None:
-        invocation.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = (
-            tokens.cache_read_input_tokens
-        )
+    invocation.cache_creation_input_tokens = tokens.cache_creation_input_tokens
+    invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
     if capture_content:
         invocation.output_messages = get_output_messages_from_message(message)
