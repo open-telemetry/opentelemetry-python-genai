@@ -16,8 +16,8 @@ from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
     gen_ai_json_dumps,
-    should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -54,6 +54,7 @@ class RetrievalInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
@@ -67,6 +68,7 @@ class RetrievalInvocation(GenAIInvocation):
             if data_source_id
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            content_capturing_mode=content_capturing_mode,
         )
         self._data_source_id: str | None = data_source_id
         self._provider: str | None = provider
@@ -110,7 +112,7 @@ class RetrievalInvocation(GenAIInvocation):
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
         if (
             not self.span.is_recording()
-            or not should_capture_content_on_spans()
+            or not self._should_capture_content_on_span
         ):
             return {}
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (

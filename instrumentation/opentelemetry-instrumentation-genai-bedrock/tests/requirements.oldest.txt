@@ -3,3 +3,6 @@
 
 # The oldest tox factor resolves declared dependencies from pyproject.toml
 # with UV_RESOLUTION=lowest-direct. There are no additional test-only pins.
+
+# Drop this once opentelemetry-util-genai 1.2b0 is published.
+-e util/opentelemetry-util-genai

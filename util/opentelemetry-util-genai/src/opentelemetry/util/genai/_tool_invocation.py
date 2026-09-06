@@ -12,8 +12,8 @@ from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
     gen_ai_json_dumps,
-    should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AnyValue, AttributeValue
 
@@ -42,6 +42,8 @@ class ToolInvocation(GenAIInvocation):
     Semantic convention attributes for execute_tool spans:
     - gen_ai.operation.name: "execute_tool" (Required)
     - gen_ai.tool.name: Name of the tool (Recommended)
+    - gen_ai.agent.name: Human-readable name of the agent executing the tool
+      (Conditionally Required "When applicable")
     - gen_ai.tool.call.id: Tool call identifier (Recommended if available)
     - gen_ai.tool.type: Type classification - "function", "extension", or "datastore" (Recommended if available)
     - gen_ai.tool.description: Tool description (Recommended if available)
@@ -58,11 +60,19 @@ class ToolInvocation(GenAIInvocation):
         completion_hook: CompletionHook,
         name: str,
         *,
-        tool_call_id: str | None = None,
         tool_type: str | None = None,
+        agent_name: str | None = None,
+        tool_call_id: str | None = None,
         tool_description: str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
-        """Use handler.tool(name) instead of calling this directly."""
+        """Use handler.tool(name) instead of calling this directly.
+
+        .. deprecated:: 1.2b0
+            Passing ``tool_call_id`` or ``tool_description`` to the constructor
+            is deprecated. Set ``invocation.tool_call_id`` and
+            ``invocation.tool_description`` on the returned invocation instead.
+        """
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
         super().__init__(
             tracer,
@@ -72,8 +82,8 @@ class ToolInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            content_capturing_mode=content_capturing_mode,
         )
-        self.should_capture_content_on_span = should_capture_content_on_spans()
         self._name: str = name
         self.tool_result: AnyValue | None = None
         # Since arguments and tool_result can be expensive to serialize,
@@ -81,29 +91,26 @@ class ToolInvocation(GenAIInvocation):
         # instrumentation library before assigning these attributes
         # to the invocation.
         self.arguments: AnyValue | None = None
-        self._tool_call_id: str | None = tool_call_id
+        self.tool_call_id: str | None = tool_call_id
+        self.tool_description: str | None = tool_description
         self._tool_type: str | None = tool_type
-        self._tool_description: str | None = tool_description
+        self._agent_name: str | None = agent_name
         self._start(self._get_start_attributes())
 
     @property
-    def tool_call_id(self) -> str | None:
-        """The tool call identifier."""
-        return self._tool_call_id
+    def should_capture_content_on_span(self) -> bool:
+        """Returns whether content capture is enabled on spans.
 
-    @tool_call_id.setter
-    def tool_call_id(self, value: str | None) -> None:
-        self._tool_call_id = value
-        if value is not None and self.span.is_recording():
-            self.span.set_attribute(GenAI.GEN_AI_TOOL_CALL_ID, value)
+        .. deprecated:: 1.2b0
+            Use :attr:`should_capture_content` instead.
+        """
+        return self._should_capture_content_on_span
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self._name),
-            (GenAI.GEN_AI_TOOL_CALL_ID, self._tool_call_id),
             (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
-            (GenAI.GEN_AI_TOOL_DESCRIPTION, self._tool_description),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -120,19 +127,21 @@ class ToolInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
+        capture_content_on_span = self._should_capture_content_on_span
         optional_attrs = (
+            (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
+            (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
+            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
                 _any_value_to_attribute_value(self.arguments)
-                if self.should_capture_content_on_span
-                and self.arguments is not None
+                if capture_content_on_span and self.arguments is not None
                 else None,
             ),
             (
                 GenAI.GEN_AI_TOOL_CALL_RESULT,
                 _any_value_to_attribute_value(self.tool_result)
-                if self.should_capture_content_on_span
-                and self.tool_result is not None
+                if capture_content_on_span and self.tool_result is not None
                 else None,
             ),
         )

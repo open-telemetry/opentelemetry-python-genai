@@ -103,7 +103,6 @@ class TestInteractionsParser(unittest.TestCase):
         self.assertEqual(len(messages[0].parts), 1)
         self.assertIsInstance(messages[0].parts[0], GenericPart)
         self.assertEqual(messages[0].parts[0].type, "some_unsupported_type")
-        self.assertEqual(messages[0].parts[0].value, "dict")
 
     def test_input_to_messages_single_non_sequence_step(self) -> None:
         step = {"type": "text", "text": "Hello single step"}

@@ -18,3 +18,8 @@
 # ``instruments`` extra, are resolved to their pyproject.toml floors by
 # ``UV_RESOLUTION=lowest-direct`` on the oldest tox factor. Pin test-only
 # dependencies here only when they are not already provided elsewhere.
+
+# Drop this once opentelemetry-util-genai 1.2b0 is published.
+-e util/opentelemetry-util-genai
+
+llama-index-llms-openai==0.7.10

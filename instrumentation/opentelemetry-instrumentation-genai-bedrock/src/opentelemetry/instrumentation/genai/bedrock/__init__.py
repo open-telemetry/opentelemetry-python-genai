@@ -8,10 +8,12 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Any
 
-from opentelemetry.instrumentation.genai.bedrock.package import _instruments
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
+
+from .package import _instruments
+from .patch import patch_bedrock, unpatch_bedrock
 
 __all__ = ["BedrockInstrumentor"]
 
@@ -35,9 +37,9 @@ class BedrockInstrumentor(BaseInstrumentor):
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=completion_hook,
         )
-        # Amazon Bedrock patching will be added in a follow-up change.
+        patch_bedrock(self._handler)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Amazon Bedrock instrumentation."""
+        unpatch_bedrock()
         self._handler = None
-        # Amazon Bedrock unpatching will be added in a follow-up change.

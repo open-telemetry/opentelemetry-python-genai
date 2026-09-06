@@ -31,6 +31,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     TextPart,
     ToolDefinition,
     UriPart,
@@ -63,8 +64,8 @@ _DATA_URL_PREFIX = "data:"
 # overrides the mapping and can send different roles. Roles that are already
 # spec values pass through unchanged.
 _ROLE_MAP: dict[str, str] = {
-    "tool-call": "assistant",
-    "tool-response": "user",
+    "tool-call": Role.ASSISTANT.value,
+    "tool-response": Role.USER.value,
 }
 
 
@@ -205,7 +206,7 @@ def to_output_message(output_message: ChatMessage) -> OutputMessage:
     would make a generation cut short by ``max_new_tokens`` look like a natural
     stop.
     """
-    role = _unwrap_role(output_message.role) or "assistant"
+    role = _unwrap_role(output_message.role) or Role.ASSISTANT.value
     parts = _parts_from_content(output_message.content)
     return OutputMessage(role=role, parts=parts, finish_reason="")
 

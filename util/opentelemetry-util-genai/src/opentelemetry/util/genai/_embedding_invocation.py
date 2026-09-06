@@ -12,6 +12,7 @@ from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 
@@ -32,6 +33,7 @@ class EmbeddingInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
@@ -45,6 +47,7 @@ class EmbeddingInvocation(GenAIInvocation):
             if request_model
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            content_capturing_mode=content_capturing_mode,
         )
         # e.g., azure.ai.openai, openai, aws.bedrock
         self._provider: str = provider

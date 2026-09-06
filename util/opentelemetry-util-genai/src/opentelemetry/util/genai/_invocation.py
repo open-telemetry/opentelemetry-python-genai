@@ -10,7 +10,9 @@ from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
+
+from typing_extensions import Self
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach
@@ -21,13 +23,17 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import INVALID_SPAN as _INVALID_SPAN
 from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.completion_hook import (
+    CompletionHook,
+    _NoOpCompletionHook,
+)
 from opentelemetry.util.genai.types import (
     Error,
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
@@ -67,6 +73,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        *,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
         self._metrics_recorder = metrics_recorder
@@ -74,6 +82,11 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
+        self._content_capturing_mode: ContentCapturingMode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
         )
@@ -95,6 +108,22 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._request_stream: bool | None = None
         self._ttfc_seconds: float | None = None
         self._stream_last_chunk_at: float | None = None
+
+    @property
+    def should_capture_content(self) -> bool:
+        """Return True when message content should be captured for this invocation."""
+        return self._content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ) or not isinstance(self._completion_hook, _NoOpCompletionHook)
+
+    @property
+    def _should_capture_content_on_span(self) -> bool:
+        return self._content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None
@@ -170,7 +199,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         *,
         inputs: list[InputMessage] | None = None,
         outputs: list[OutputMessage] | None = None,
-        system_instruction: list[MessagePart] | None = None,
+        system_instruction: list[SystemInstructionPart]
+        | list[MessagePart]
+        | None = None,
         tool_definitions: list[ToolDefinition] | None = None,
         log_record: LogRecord | None = None,
     ) -> None:
@@ -182,7 +213,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._completion_hook.on_completion(
             inputs=inputs or [],
             outputs=outputs or [],
-            system_instruction=system_instruction or [],
+            system_instruction=cast(
+                "list[MessagePart]", system_instruction or []
+            ),
             tool_definitions=tool_definitions,
             span=self.span,
             log_record=log_record,
@@ -218,7 +251,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             error = Error.from_exception(error, self._error_type_resolver)
         self._finish(error)
 
-    def __enter__(self) -> GenAIInvocation:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -227,7 +260,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if exc_value is not None and isinstance(exc_value, Exception):
+        if exc_value is not None:
             self.fail(exc_value)
         else:
             self.stop()
@@ -237,21 +270,29 @@ def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
     output_messages: Sequence[OutputMessage],
-    system_instruction: Sequence[MessagePart],
+    system_instruction: Sequence[SystemInstructionPart | MessagePart],
     tool_definitions: Sequence[ToolDefinition] | None,
     for_span: bool,
+    content_capturing_mode: ContentCapturingMode | None = None,
 ) -> dict[str, Any]:
     """Serialize messages, system instructions, and tool definitions into attributes.
 
     Args:
         input_messages: Input messages to serialize.
         output_messages: Output messages to serialize.
-        system_instruction: System instructions to serialize.
+        system_instruction: System instructions to serialize. Passing ``MessagePart``
+            is deprecated; use ``SystemInstructionPart``.
         tool_definitions: Tool definitions to serialize (may be None).
         for_span: If True, serialize for span attributes (JSON string);
                   if False, serialize for event attributes (list of dicts).
+        content_capturing_mode: Configured content capturing mode; if None,
+                                reads from environment.
     """
-    mode = get_content_capturing_mode()
+    mode = (
+        get_content_capturing_mode()
+        if content_capturing_mode is None
+        else content_capturing_mode
+    )
     allowed_modes = (
         (
             ContentCapturingMode.SPAN_ONLY,

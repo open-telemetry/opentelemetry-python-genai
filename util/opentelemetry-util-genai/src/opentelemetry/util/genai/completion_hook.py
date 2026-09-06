@@ -21,9 +21,14 @@ from opentelemetry.trace import Span
 from opentelemetry.util._importlib_metadata import (
     entry_points,  # pyright: ignore[reportUnknownVariableType]
 )
-from opentelemetry.util.genai import types
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK,
+)
+from opentelemetry.util.genai.types import (
+    InputMessage,
+    MessagePart,
+    OutputMessage,
+    ToolDefinition,
 )
 
 _logger = logging.getLogger(__name__)
@@ -68,10 +73,10 @@ class CompletionHook(Protocol):
     def on_completion(
         self,
         *,
-        inputs: list[types.InputMessage],
-        outputs: list[types.OutputMessage],
-        system_instruction: list[types.MessagePart],
-        tool_definitions: list[types.ToolDefinition] | None = None,
+        inputs: list[InputMessage],
+        outputs: list[OutputMessage],
+        system_instruction: list[MessagePart],
+        tool_definitions: list[ToolDefinition] | None = None,
         span: Span | None = None,
         log_record: LogRecord | None = None,
     ) -> None: ...

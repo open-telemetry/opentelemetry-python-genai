@@ -31,6 +31,10 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.genai.langchain.agent_context import (
+    wrap_astream,
+    wrap_stream,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
@@ -80,12 +84,34 @@ class LangChainInstrumentor(BaseInstrumentor):
             "BaseCallbackManager.__init__",
             _BaseCallbackManagerInitWrapper(otel_callback_handler),
         )
+        self._instrument_agent_entry_points()
+
+    @staticmethod
+    def _instrument_agent_entry_points() -> None:
+        """Recover the create_agent provenance the callback metadata does not carry."""
+        for method, wrapper in (
+            ("Pregel.stream", wrap_stream),
+            ("Pregel.astream", wrap_astream),
+        ):
+            try:
+                wrap_function_wrapper("langgraph.pregel", method, wrapper)
+            except (ImportError, AttributeError):
+                # Without langgraph there are no agent graphs to announce, and
+                # classification stays metadata-based.
+                return
 
     def _uninstrument(self, **kwargs: Any):
         """
         Cleanup instrumentation (unwrap).
         """
         unwrap("langchain_core.callbacks.base.BaseCallbackManager", "__init__")
+        try:
+            import langgraph.pregel
+
+            for method in ("stream", "astream"):
+                unwrap(langgraph.pregel.Pregel, method)
+        except (ImportError, AttributeError):
+            pass
         # Clear the TelemetryHandler singleton so the next instrument() uses
         # the provided tracer_provider/meter_provider/logger_provider instead
         # of reusing the previous handler.

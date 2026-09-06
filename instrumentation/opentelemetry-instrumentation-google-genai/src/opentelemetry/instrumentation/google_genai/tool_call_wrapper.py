@@ -81,15 +81,15 @@ def _wrap_tool_function(
             # In the future that could change (see https://github.com/open-telemetry/opentelemetry-specification/pull/4485), and we could possibly stop using json.dumps here.
             with telemetry_handler.tool(
                 tool_function.__name__,
-                tool_description=tool_function.__doc__,
             ) as tool_invocation:
+                tool_invocation.tool_description = tool_function.__doc__
                 # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.arguments = json.dumps(
                         _get_function_args(tool_function, args, kwargs)
                     )
                 result = await tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.tool_result = json.dumps(
                         _to_otel_value(result)
                     )
@@ -100,15 +100,15 @@ def _wrap_tool_function(
         def wrapped_function(*args, **kwargs):
             with telemetry_handler.tool(
                 tool_function.__name__,
-                tool_description=tool_function.__doc__,
             ) as tool_invocation:
+                tool_invocation.tool_description = tool_function.__doc__
                 # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.arguments = json.dumps(
                         _get_function_args(tool_function, args, kwargs)
                     )
                 result = tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.tool_result = json.dumps(
                         _to_otel_value(result)
                     )

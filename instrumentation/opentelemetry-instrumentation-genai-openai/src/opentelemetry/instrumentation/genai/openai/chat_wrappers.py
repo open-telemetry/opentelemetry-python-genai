@@ -19,11 +19,13 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
 )
 
 from .chat_buffers import ChoiceBuffer
+from .utils import map_finish_reason
 
 _logger = logging.getLogger(__name__)
 
@@ -117,8 +119,8 @@ class _ChatStreamMixin:
         output_messages = []
         for choice in self._self_choice_buffers:
             message = OutputMessage(
-                role="assistant",
-                finish_reason=choice.finish_reason or "error",
+                role=Role.ASSISTANT.value,
+                finish_reason=map_finish_reason(choice.finish_reason),
                 parts=[],
             )
             if choice.text_content:

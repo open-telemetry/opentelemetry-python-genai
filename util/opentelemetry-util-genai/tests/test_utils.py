@@ -6,6 +6,7 @@ import json
 import os
 import unittest
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -30,6 +31,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._inference_invocation import LLMInvocation
 from opentelemetry.util.genai.handler import (
     TelemetryHandler,
     get_telemetry_handler,
@@ -40,11 +42,14 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    GenericPart,
     InputMessage,
     MessagePart,
     OutputMessage,
     Reasoning,
     ReasoningPart,
+    Role,
+    SystemInstructionPart,
     Text,
     TextPart,
     Uri,
@@ -52,6 +57,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     decode_base64,
+    gen_ai_json_dumps,
     get_content_capturing_mode,
     image_from_url,
     should_capture_content_on_spans,
@@ -293,8 +299,8 @@ class TestShouldCaptureContent(unittest.TestCase):
 class TestTelemetryHandler(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
         self.log_exporter = InMemoryLogRecordExporter()
@@ -303,7 +309,8 @@ class TestTelemetryHandler(unittest.TestCase):
             SimpleLogRecordProcessor(self.log_exporter)
         )
         self.telemetry_handler = get_telemetry_handler(
-            tracer_provider=tracer_provider, logger_provider=logger_provider
+            tracer_provider=self.tracer_provider,
+            logger_provider=logger_provider,
         )
 
     def tearDown(self):
@@ -325,7 +332,8 @@ class TestTelemetryHandler(unittest.TestCase):
         chat_generation = _create_output_message("hello back")
         system_instruction = _create_system_instruction()
 
-        with self.telemetry_handler.inference(
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.inference(
             "test-provider",
             request_model="test-model",
             server_address="custom.server.com",
@@ -404,11 +412,39 @@ class TestTelemetryHandler(unittest.TestCase):
             "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
+    def test_system_instruction_generic_part_on_span(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.inference("test-provider") as invocation:
+            invocation.system_instruction = [
+                TextPart(content="You are helpful"),
+                GenericPart(type="custom"),
+            ]
+
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+        self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
+        instructions = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
+        self.assertEqual(
+            instructions,
+            [
+                {"type": "text", "content": "You are helpful"},
+                {"type": "custom"},
+            ],
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
     def test_llm_manual_start_and_stop_creates_span(self):
         message = _create_input_message("hi")
         chat_generation = _create_output_message("ok")
 
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.inference(
             "test-provider", request_model="manual-model"
         )
         invocation.input_messages = [message]
@@ -437,6 +473,46 @@ class TestTelemetryHandler(unittest.TestCase):
                 "extra_manual": "yes",
             },
         )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_start_llm_captures_content_on_span(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        inv = LLMInvocation(request_model="legacy-model")
+        handler.start_llm(inv)
+        inv.input_messages = [_create_input_message("hi")]
+        inv.output_messages = [_create_output_message("hello")]
+        handler.stop_llm(inv)
+
+        span = _get_single_span(self.span_exporter)
+        attrs = _get_span_attributes(span)
+        assert GenAI.GEN_AI_INPUT_MESSAGES in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES in attrs
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_inference_messages_omitted_from_span_in_event_only_mode(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.inference(
+            "test-provider", request_model="test-model"
+        ) as inv:
+            inv.input_messages = [_create_input_message("hi")]
+            inv.output_messages = [_create_output_message("hello")]
+
+        span = _get_single_span(self.span_exporter)
+        attrs = _get_span_attributes(span)
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
     def test_start_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
@@ -1012,6 +1088,73 @@ class TestTelemetryHandler(unittest.TestCase):
 class AnyNonNone:
     def __eq__(self, other):
         return other is not None
+
+
+class TestRole(unittest.TestCase):
+    def test_values_match_semantic_conventions(self):
+        self.assertEqual(
+            {role.value for role in Role},
+            {"system", "user", "assistant", "tool"},
+        )
+
+    def test_serializes_as_a_bare_string(self):
+        """A member set on a message must reach the wire as its value."""
+        message = OutputMessage(
+            role=Role.ASSISTANT,
+            parts=[TextPart(content="hi")],
+            finish_reason="stop",
+        )
+
+        serialized = json.loads(gen_ai_json_dumps(asdict(message)))
+
+        self.assertEqual(serialized["role"], "assistant")
+
+
+class TestMessageModels(unittest.TestCase):
+    def test_output_message_optional_finish_reason(self):
+        message = OutputMessage(
+            role=Role.ASSISTANT,
+            parts=[TextPart(content="streamed")],
+        )
+        self.assertIsNone(message.finish_reason)
+        self.assertIsNone(message.name)
+        serialized = json.loads(gen_ai_json_dumps(asdict(message)))
+        self.assertEqual(serialized["role"], "assistant")
+        self.assertIsNone(serialized["finish_reason"])
+
+    def test_messages_with_name(self):
+        in_msg = InputMessage(
+            role=Role.USER,
+            parts=[TextPart(content="hi")],
+            name="alice",
+        )
+        self.assertEqual(in_msg.name, "alice")
+        serialized_in = json.loads(gen_ai_json_dumps(asdict(in_msg)))
+        self.assertEqual(serialized_in["name"], "alice")
+
+        out_msg = OutputMessage(
+            role=Role.ASSISTANT,
+            parts=[TextPart(content="hello")],
+            finish_reason="stop",
+            name="bot",
+        )
+        self.assertEqual(out_msg.name, "bot")
+        serialized_out = json.loads(gen_ai_json_dumps(asdict(out_msg)))
+        self.assertEqual(serialized_out["name"], "bot")
+
+    def test_system_instruction_part(self):
+        text_part: SystemInstructionPart = TextPart(content="You are helpful")
+        generic_part: SystemInstructionPart = GenericPart(type="custom")
+        self.assertEqual(text_part.content, "You are helpful")
+        self.assertEqual(generic_part.type, "custom")
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(asdict(text_part))),
+            {"type": "text", "content": "You are helpful"},
+        )
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(asdict(generic_part))),
+            {"type": "custom"},
+        )
 
 
 _REAL_PNG_BYTES = (
