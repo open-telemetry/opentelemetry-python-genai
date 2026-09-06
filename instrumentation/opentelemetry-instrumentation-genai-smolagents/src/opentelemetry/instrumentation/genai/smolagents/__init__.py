@@ -11,8 +11,8 @@ Calls to the in-process model classes (``TransformersModel``, ``VLLMModel`` and
 ``MLXModel``) are recorded as ``chat`` spans. The API-backed model classes are
 not instrumented here: each one calls a client library that carries its own
 instrumentation, and emitting a span at this layer as well would duplicate the
-span and count the token-usage and duration metrics twice. Agent runs and tool
-calls are not instrumented yet.
+span and count the token-usage and duration metrics twice. Tool calls are not
+instrumented yet.
 
 Usage
 -----
@@ -22,21 +22,13 @@ Usage
     from opentelemetry.instrumentation.genai.smolagents import (
         SmolagentsInstrumentor,
     )
-    from smolagents import TransformersModel
+    from smolagents import CodeAgent, TransformersModel
 
     SmolagentsInstrumentor().instrument()
 
     model = TransformersModel(model_id="HuggingFaceTB/SmolLM2-135M-Instruct")
-    model.generate(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "How many seconds are in a week?"}
-                ],
-            }
-        ]
-    )
+    agent = CodeAgent(tools=[], model=model)
+    agent.run("How many seconds are in a week?")
 
 Configuration
 -------------
@@ -60,6 +52,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Any
 
+import smolagents
 from smolagents import models
 from wrapt import wrap_function_wrapper
 
@@ -69,10 +62,13 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
-from .patch import model_generate, model_generate_stream
+from .patch import (
+    agent_run,
+    model_generate,
+    model_generate_stream,
+)
 
 __all__ = ["SmolagentsInstrumentor"]
-
 
 # The model classes that run inference in the current process. They call no
 # client library, so this instrumentation is the only place their model calls
@@ -120,6 +116,7 @@ class SmolagentsInstrumentor(BaseInstrumentor):
     # only ``_instrument`` / ``_uninstrument`` rebind.
     _wrapped_generate_classes: list[type] = []
     _wrapped_generate_stream_classes: list[type] = []
+    _wrapped_agent_run = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -144,6 +141,7 @@ class SmolagentsInstrumentor(BaseInstrumentor):
 
         self._wrapped_generate_classes = []
         self._wrapped_generate_stream_classes = []
+        self._wrapped_agent_run = False
         try:
             for model_cls in _model_classes_defining("generate"):
                 wrap_function_wrapper(
@@ -160,6 +158,16 @@ class SmolagentsInstrumentor(BaseInstrumentor):
                     model_generate_stream(handler),
                 )
                 self._wrapped_generate_stream_classes.append(model_cls)
+
+            # TODO: emit a span per agent step once the semantic conventions
+            # define an operation for one iteration of a reason-and-act loop.
+            # https://github.com/open-telemetry/semantic-conventions-genai/issues/81
+            wrap_function_wrapper(
+                "smolagents",
+                "MultiStepAgent.run",
+                agent_run(handler),
+            )
+            self._wrapped_agent_run = True
         except BaseException:
             # BaseInstrumentor.instrument() doesn't mark the instrumentor as
             # instrumented when _instrument raises, so uninstrument() would
@@ -176,3 +184,7 @@ class SmolagentsInstrumentor(BaseInstrumentor):
         for model_cls in self._wrapped_generate_stream_classes:
             unwrap(model_cls, "generate_stream")
         self._wrapped_generate_stream_classes = []
+
+        if self._wrapped_agent_run:
+            unwrap(smolagents.MultiStepAgent, "run")
+            self._wrapped_agent_run = False

@@ -3,12 +3,12 @@
 
 """Shared helpers, tools, and model stubs for smolagents instrumentation tests.
 
-Only the in-process model classes are instrumented, and none of them can be
-recorded with VCR: they run inference in the current process instead of calling
-a provider over HTTP. Each factory here bypasses ``__init__`` (which would load
-gigabytes of weights) and stubs the runtime pieces the real ``generate`` drives,
-so the code under test is smolagents' own ``generate`` and the wrapper around
-it.
+The in-process model helpers cannot be recorded with VCR because they make no
+HTTP requests. Each factory bypasses ``__init__`` to avoid loading model weights
+and stubs the runtime code that the real ``generate`` method calls. The tests
+therefore exercise smolagents' ``generate`` method and its wrapper.
+
+Agent fakes emit no ``chat`` spans.
 """
 
 from __future__ import annotations
@@ -19,12 +19,109 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+from PIL import Image
 from smolagents import Tool
+from smolagents.models import ChatMessage, ChatMessageStreamDelta
+from smolagents.monitoring import TokenUsage
 
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+
+CODE_FINAL_ANSWER = """
+Thought: Return the final answer.
+Code:
+```py
+final_answer("Test result from CodeAgent")
+```<end_code>
+"""
+
+CODE_NO_OP = """
+Thought: Keep going.
+Code:
+```py
+x = 1
+```<end_code>
+"""
+
+
+class FakeCodeModel:
+    """Drive a CodeAgent without emitting a ``chat`` span."""
+
+    def __init__(self, model_id: str = "fake-model") -> None:
+        self.model_id = model_id
+        self.kwargs: dict[str, Any] = {}
+
+    def generate(
+        self,
+        messages: list[Any],
+        stop_sequences: list[str] | None = None,
+        response_format: Any = None,
+        tools_to_call_from: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> ChatMessage:
+        return ChatMessage(
+            role="assistant",
+            content=CODE_FINAL_ANSWER,
+            token_usage=TokenUsage(input_tokens=11, output_tokens=7),
+        )
+
+    def __call__(self, *args: Any, **kwargs: Any) -> ChatMessage:
+        return self.generate(*args, **kwargs)
+
+
+class ModelWithoutModelId(FakeCodeModel):
+    def __init__(self) -> None:
+        super().__init__()
+        del self.model_id
+
+
+class FakeStreamingCodeModel(FakeCodeModel):
+    def generate_stream(
+        self,
+        messages: list[Any],
+        stop_sequences: list[str] | None = None,
+        response_format: Any = None,
+        tools_to_call_from: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        yield ChatMessageStreamDelta(
+            content=CODE_FINAL_ANSWER,
+            token_usage=TokenUsage(input_tokens=11, output_tokens=7),
+        )
+
+
+class NeverFinishingCodeModel(FakeCodeModel):
+    """Trigger smolagents' synthesized max-step answer."""
+
+    def generate(self, messages: list[Any], **kwargs: Any) -> ChatMessage:
+        return ChatMessage(
+            role="assistant",
+            content=CODE_NO_OP,
+            token_usage=TokenUsage(input_tokens=3, output_tokens=5),
+        )
+
+
+class ImageTool(Tool):
+    name = "make_image"
+    description = "Make a tiny image"
+    inputs: dict[str, Any] = {}
+    output_type = "image"
+
+    def forward(self) -> Any:
+        return Image.new("RGB", (4, 4), color="red")
+
+
+class BrokenTool(Tool):
+    name = "broken_tool"
+    description = "A tool that always fails"
+    inputs = {"location": {"type": "string", "description": "ignored"}}
+    output_type = "string"
+
+    def forward(self, location: str) -> str:
+        raise ValueError("tool exploded")
 
 
 class GetWeatherTool(Tool):
@@ -229,3 +326,27 @@ def metrics_by_name(metric_reader: Any) -> dict[str, Any]:
 
 def data_point_attributes(metric: Any) -> list[dict[str, Any]]:
     return [dict(point.attributes) for point in metric.data.data_points]
+
+
+class LifecycleRecorder(SpanProcessor):
+    """Records span starts and ends.
+
+    The exporter only sees a span once it ends, so an unfinished span reads
+    there as no span at all.
+    """
+
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self.ended: list[str] = []
+
+    def on_start(
+        self, span: Span, parent_context: Context | None = None
+    ) -> None:
+        self.started.append(span.name)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self.ended.append(span.name)
+
+    @property
+    def leaked(self) -> list[str]:
+        return self.started[len(self.ended) :]

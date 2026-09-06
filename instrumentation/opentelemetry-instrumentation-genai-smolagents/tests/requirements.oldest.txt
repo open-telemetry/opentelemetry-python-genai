@@ -22,9 +22,10 @@
 # come transitively from opentelemetry-test-util-genai.
 #
 # The instrumented model classes run inference in this process and the tests stub their
-# runtimes, so there is no model backend to pin here.
-#
+# runtimes. The VCR agent test uses openai, which is test-only and not declared in
+# pyproject.toml or the instruments extra. This is the version smolagents 1.24.0
+# declares in its openai extra.
+openai>=1.58.1
+
 # Drop this once opentelemetry-util-genai 1.2b0 is published.
 -e util/opentelemetry-util-genai
-
-
