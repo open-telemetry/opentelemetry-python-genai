@@ -41,6 +41,12 @@ from opentelemetry.util.genai.utils import is_experimental_mode
 from .test_utils import (
     DEFAULT_MODEL,
     EXPECTED_TOOL_DEFINITIONS,
+    MULTIMODAL_CONTENT_PARTS_EXPECTED_INPUT_MESSAGES,
+    MULTIMODAL_CONTENT_PARTS_PROMPT,
+    MULTITURN_CONTENT_PARTS_EXPECTED_INPUT_MESSAGES,
+    MULTITURN_CONTENT_PARTS_PROMPT,
+    REFUSAL_PROMPT,
+    REFUSAL_TEXT,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
@@ -1767,6 +1773,91 @@ def chat_completion_multiple_tools_streaming(
         assert_message_in_logs(
             logs[2], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+def test_chat_completion_multiturn_content_parts(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # Message content in the list-of-parts form must be captured part by
+    # part rather than dropped (#357).
+    with vcr.use_cassette("test_chat_completion_multiturn_content_parts.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=MULTITURN_CONTENT_PARTS_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=False,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        spans[0],
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+    )
+    assert_messages_attribute(
+        spans[0].attributes["gen_ai.input.messages"],
+        MULTITURN_CONTENT_PARTS_EXPECTED_INPUT_MESSAGES,
+    )
+    assert_messages_attribute(
+        spans[0].attributes["gen_ai.output.messages"],
+        format_simple_expected_output_message(
+            response.choices[0].message.content
+        ),
+    )
+
+
+def test_chat_completion_multimodal_content_parts(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # Non-text parts map to their semconv counterparts: a remote image_url
+    # to a uri part, an inline data: URL to a blob carrying its mime type,
+    # input_audio to an audio blob, and a file to either a file reference
+    # (file_id) or a document blob (inline file_data).
+    with vcr.use_cassette(
+        "test_chat_completion_multimodal_content_parts.yaml"
+    ):
+        response = openai_client.chat.completions.create(
+            messages=MULTIMODAL_CONTENT_PARTS_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=False,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        spans[0].attributes["gen_ai.input.messages"],
+        MULTIMODAL_CONTENT_PARTS_EXPECTED_INPUT_MESSAGES,
+    )
+    assert_messages_attribute(
+        spans[0].attributes["gen_ai.output.messages"],
+        format_simple_expected_output_message(
+            response.choices[0].message.content
+        ),
+    )
+
+
+def test_chat_completion_refusal(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A refused completion carries content=None and the text in its own
+    # `refusal` field, which must still be recorded as the output message.
+    with vcr.use_cassette("test_chat_completion_refusal.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=REFUSAL_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=False,
+        )
+
+    assert response.choices[0].message.content is None
+    assert response.choices[0].message.refusal == REFUSAL_TEXT
+
+    spans = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        spans[0].attributes["gen_ai.output.messages"],
+        format_simple_expected_output_message(REFUSAL_TEXT),
+    )
 
 
 def assert_no_invalid_type_warning(caplog):

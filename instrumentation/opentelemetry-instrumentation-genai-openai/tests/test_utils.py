@@ -74,6 +74,142 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
 ]
 
 
+# Content in the list-of-parts form, across several turns.
+MULTITURN_CONTENT_PARTS_PROMPT = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Remember: my name is Tom and I like blue.",
+            }
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Got it, Tom!"}],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What's my name?"},
+            {"type": "text", "text": "And what color do I like?"},
+        ],
+    },
+]
+MULTITURN_CONTENT_PARTS_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "system",
+        "parts": [{"type": "text", "content": "You are a helpful assistant."}],
+        "name": None,
+    },
+    {
+        "role": "user",
+        "parts": [
+            {
+                "type": "text",
+                "content": "Remember: my name is Tom and I like blue.",
+            }
+        ],
+        "name": None,
+    },
+    {
+        "role": "assistant",
+        "parts": [{"type": "text", "content": "Got it, Tom!"}],
+        "name": None,
+    },
+    {
+        "role": "user",
+        "parts": [
+            {"type": "text", "content": "What's my name?"},
+            {"type": "text", "content": "And what color do I like?"},
+        ],
+        "name": None,
+    },
+]
+
+# Canonical base64 payloads, so they round-trip unchanged through the span
+# attribute (bytes are re-encoded by the GenAI JSON encoder).
+INLINE_IMAGE_BASE64 = "aGVsbG8="  # b"hello"
+INLINE_AUDIO_BASE64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
+INLINE_PDF_BASE64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
+MULTIMODAL_CONTENT_PARTS_PROMPT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in these attachments?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/cat.png"},
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{INLINE_IMAGE_BASE64}"
+                },
+            },
+            {
+                "type": "input_audio",
+                "input_audio": {"data": INLINE_AUDIO_BASE64, "format": "wav"},
+            },
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "spec.pdf",
+                    "file_data": f"data:application/pdf;base64,{INLINE_PDF_BASE64}",
+                },
+            },
+        ],
+    }
+]
+MULTIMODAL_CONTENT_PARTS_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [
+            {"type": "text", "content": "What is in these attachments?"},
+            {
+                "type": "uri",
+                "uri": "https://example.com/cat.png",
+                "mime_type": None,
+                "modality": "image",
+            },
+            {
+                "type": "blob",
+                "content": INLINE_IMAGE_BASE64,
+                "mime_type": "image/png",
+                "modality": "image",
+            },
+            {
+                "type": "blob",
+                "content": INLINE_AUDIO_BASE64,
+                "mime_type": "audio/wav",
+                "modality": "audio",
+            },
+            {
+                "type": "file",
+                "file_id": "file-123",
+                "mime_type": None,
+                "modality": "document",
+            },
+            {
+                "type": "blob",
+                "content": INLINE_PDF_BASE64,
+                "mime_type": "application/pdf",
+                "modality": "document",
+            },
+        ],
+        "name": None,
+    }
+]
+
+REFUSAL_PROMPT = [
+    {"role": "user", "content": "Tell me how to do something disallowed."}
+]
+REFUSAL_TEXT = "I'm sorry, I can't help with that."
+
+
 def _assert_optional_attribute(span, attribute_name, expected_value):
     """Helper to assert optional span attributes."""
     if expected_value is not None:
