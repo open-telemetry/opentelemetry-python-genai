@@ -325,6 +325,8 @@ def test_code_agent_streaming_is_lazy_until_drained(
     (agent_span,) = spans_by_operation(spans, "invoke_agent")
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "Test result from CodeAgent"
+    assert agent_span.status.status_code == StatusCode.UNSET
+    assert attr(agent_span, error_attributes.ERROR_TYPE) is None
 
 
 def test_streaming_run_stays_a_generator(

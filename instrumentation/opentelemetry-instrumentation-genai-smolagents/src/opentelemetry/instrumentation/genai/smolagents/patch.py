@@ -487,6 +487,8 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
     def __next__(self) -> _RunStreamChunk:
         try:
             return super().__next__()
+        except StopIteration:
+            raise
         except BaseException as error:
             self._finish_once(error)
             raise
