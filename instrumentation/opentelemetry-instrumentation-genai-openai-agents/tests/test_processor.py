@@ -12,6 +12,7 @@ from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
     GenerationSpanData,
+    GuardrailSpanData,
     HandoffSpanData,
     ResponseSpanData,
 )
@@ -20,6 +21,7 @@ from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
@@ -82,6 +84,34 @@ def test_agent_span_creates_invoke_local_agent() -> None:
 
     processor.on_span_end(span)
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("triggered", "verdict"),
+    [(False, "allow"), (True, "deny")],
+)
+def test_guardrail_span_creates_guardrail_invocation(
+    triggered: bool, verdict: str
+) -> None:
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(GuardrailSpanData(name="content_filter", triggered=False))
+
+    processor.on_span_start(span)
+    span.span_data.triggered = triggered
+    processor.on_span_end(span)
+
+    finished_span = span_exporter.get_finished_spans()[0]
+    assert finished_span.name == "run_guardrail content_filter"
+    assert finished_span.attributes == {
+        "gen_ai.operation.name": "run_guardrail",
+        "gen_ai.guardrail.component.name": "content_filter",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.guardrail.verdict.type": verdict,
+    }
 
 
 def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
@@ -342,6 +372,24 @@ def test_tool_span_error_sets_error_status_and_type(
     assert tool_span.status.status_code is StatusCode.ERROR
     assert tool_span.attributes is not None
     assert tool_span.attributes["error.type"] == "_OTHER"
+
+
+def test_guardrail_span_error_sets_error_status_and_type(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(GuardrailSpanData(name="content_filter", triggered=False))
+    span.error = {"message": "Error running guardrail", "data": {}}
+
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+
+    (guardrail_span,) = span_exporter.get_finished_spans()
+    assert guardrail_span.status.status_code is StatusCode.ERROR
+    assert guardrail_span.attributes is not None
+    assert guardrail_span.attributes["error.type"] == "_OTHER"
 
 
 def test_agent_span_error_sets_error_status_and_type(

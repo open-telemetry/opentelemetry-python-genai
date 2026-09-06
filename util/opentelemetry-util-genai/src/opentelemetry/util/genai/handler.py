@@ -58,6 +58,7 @@ from opentelemetry.util.genai.completion_hook import (
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     FetchResponseInvocation,
+    GuardrailInvocation,
     InferenceInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -444,6 +445,34 @@ class TelemetryHandler:
             tool_call_id=tool_call_id,
             tool_description=tool_description,
             content_capturing_mode=self._content_capturing_mode,
+        )
+
+    def guardrail(
+        self,
+        name: str,
+        *,
+        provider: str,
+        target_type: str | None = None,
+    ) -> GuardrailInvocation:
+        """Returns a Guardrail invocation. Starts span when called.
+
+        Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
+        to finalize the span upon exiting. If not used as a ContextManager, the caller is
+        responsible for calling `stop` or `fail` to finalize the span.
+
+        ``target_type`` is required by semconv-genai#427 and must be supplied
+        by instrumentations that know the guardrail direction.
+
+        Only set data attributes on the invocation object, do not modify the span or context.
+        """
+        return GuardrailInvocation(
+            self._tracer,
+            self._metrics_recorder,
+            self._logger,
+            self._completion_hook,
+            name,
+            provider=provider,
+            target_type=target_type,
         )
 
     def start_invoke_local_agent(
