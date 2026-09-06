@@ -1,0 +1,1 @@
+Fix chat message content being dropped from ``gen_ai.input.messages`` and ``gen_ai.output.messages`` when it is a list of content parts, and record a completion refusal.

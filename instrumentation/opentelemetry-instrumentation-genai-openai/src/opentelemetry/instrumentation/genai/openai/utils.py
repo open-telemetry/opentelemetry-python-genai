@@ -22,9 +22,12 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FinishReason,
     FunctionToolDefinition,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
     TextPart,
@@ -32,6 +35,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponsePart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -186,11 +190,95 @@ def get_value(v: Any):
     return None
 
 
-def _is_text_part(content: Any) -> bool:
-    return isinstance(content, str) or (
-        isinstance(content, Iterable)
-        and all(isinstance(part, str) for part in content)
-    )
+# OpenAI accepts "wav" and "mp3" for input_audio; "audio/mp3" is not a
+# registered media type, the payload is MPEG audio.
+_AUDIO_MIME_TYPES = {"wav": "audio/wav", "mp3": "audio/mpeg"}
+
+
+def _convert_content_part(part: Any) -> MessagePart | None:
+    """Convert one OpenAI content part to a semconv message part.
+
+    Returns ``None`` for a part this function does not recognize, so an
+    unknown part type costs that part rather than the whole message.
+    """
+    if isinstance(part, str):
+        return TextPart(content=part)
+
+    part_type = get_property_value(part, "type")
+
+    if part_type == "text":
+        text = get_property_value(part, "text")
+        return TextPart(content=str(text) if text is not None else "")
+
+    if part_type == "image_url":
+        image_url = get_property_value(part, "image_url")
+        url = (
+            get_property_value(image_url, "url")
+            if image_url is not None
+            else None
+        )
+        if not isinstance(url, str):
+            return None
+        # Decodes a data: URL into a BlobPart (carrying its mime type) and
+        # leaves a remote URL as a UriPart.
+        return image_from_url(url)
+
+    if part_type == "input_audio":
+        input_audio = get_property_value(part, "input_audio")
+        if input_audio is None:
+            return None
+        data = get_property_value(input_audio, "data")
+        decoded = decode_base64(data) if isinstance(data, str) else None
+        if decoded is None:
+            return None
+        audio_format = get_property_value(input_audio, "format")
+        return BlobPart(
+            mime_type=_AUDIO_MIME_TYPES.get(audio_format)
+            if isinstance(audio_format, str)
+            else None,
+            modality="audio",
+            content=decoded,
+        )
+
+    if part_type == "file":
+        file_obj = get_property_value(part, "file")
+        if file_obj is None:
+            return None
+        file_id = get_property_value(file_obj, "file_id")
+        if isinstance(file_id, str):
+            return FilePart(
+                mime_type=None, modality="document", file_id=file_id
+            )
+        # Inline upload: file_data carries the document as a data: URL.
+        file_data = get_property_value(file_obj, "file_data")
+        if isinstance(file_data, str) and file_data.startswith("data:"):
+            return image_from_url(file_data, modality="document")
+        return None
+
+    if part_type == "refusal":
+        # The refusal string is the message's user-visible text content.
+        refusal = get_property_value(part, "refusal")
+        return TextPart(content=str(refusal) if refusal is not None else "")
+
+    return None
+
+
+def _content_to_parts(content: Any) -> list[MessagePart]:
+    """Convert a message ``content`` value - a plain string or a list of
+    content parts - to semconv message parts."""
+    if isinstance(content, str):
+        return [TextPart(content=content)]
+    if isinstance(content, Mapping):
+        # Not a valid content shape; iterating it would yield its keys.
+        return []
+    if isinstance(content, Iterable):
+        parts: list[MessagePart] = []
+        for item in content:
+            part = _convert_content_part(item)
+            if part is not None:
+                parts.append(part)
+        return parts
+    return []
 
 
 def _prepare_input_messages(messages) -> list[InputMessage]:
@@ -211,8 +299,7 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
                 chat_message.parts += extract_tool_calls_new(tool_calls)
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            chat_message.parts += _content_to_parts(content)
 
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
@@ -222,8 +309,7 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
 
         else:
             # system, developer, user, fallback
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            chat_message.parts += _content_to_parts(content)
     return chat_messages
 
 
@@ -288,8 +374,12 @@ def _prepare_output_messages(choices) -> list[OutputMessage]:
             if tool_calls:
                 parts += extract_tool_calls_new(tool_calls)
             content = get_property_value(choice.message, "content")
-            if _is_text_part(content):
-                parts.append(TextPart(content=str(content)))
+            parts += _content_to_parts(content)
+            # A refused completion carries content=None and the text in
+            # its own `refusal` field.
+            refusal = get_property_value(choice.message, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
 
             message = OutputMessage(
                 finish_reason=map_finish_reason(choice.finish_reason),

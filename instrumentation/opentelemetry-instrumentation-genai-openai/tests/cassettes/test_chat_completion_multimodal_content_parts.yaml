@@ -1,0 +1,114 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What is in these attachments?"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.com/cat.png"
+                }
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,aGVsbG8="
+                }
+              },
+              {
+                "type": "input_audio",
+                "input_audio": {
+                  "data": "ZmFrZSB3YXYgYnl0ZXM=",
+                  "format": "wav"
+                }
+              },
+              {
+                "type": "file",
+                "file": {
+                  "file_id": "file-123"
+                }
+              },
+              {
+                "type": "file",
+                "file": {
+                  "filename": "spec.pdf",
+                  "file_data": "data:application/pdf;base64,JVBERi0xLjQK"
+                }
+              }
+            ]
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-multimodalparts001",
+          "object": "chat.completion",
+          "created": 1757000000,
+          "model": "gpt-4o-mini-2024-07-18",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "A cat photo, a short audio clip and a PDF.",
+                "refusal": null
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 120,
+            "completion_tokens": 12,
+            "total_tokens": 132,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "system_fingerprint": "fp_test"
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      openai-organization: test_openai_org_id
+      openai-version:
+      - '2020-10-01'
+    status:
+      code: 200
+      message: OK
+version: 1
