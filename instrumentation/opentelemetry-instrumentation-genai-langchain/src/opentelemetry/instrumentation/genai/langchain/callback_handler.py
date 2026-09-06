@@ -33,6 +33,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     _message_name,
     _normalize_role,
     extract_token_details,
+    extract_usage_tokens,
     is_stream_end_marker,
     make_input_message,
     make_last_output_message,
@@ -78,6 +79,30 @@ def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
         if conversation_id:
             return str(conversation_id)
     return None
+
+
+def _usage_metadata_candidates(
+    chat_generation: Any,
+    llm_output: Any,
+) -> list[Mapping[str, Any]]:
+    candidates: list[Mapping[str, Any]] = []
+    usage_metadata = chat_generation.message.usage_metadata
+    if usage_metadata:
+        candidates.append(usage_metadata)
+
+    generation_info = getattr(chat_generation, "generation_info", None)
+    if isinstance(generation_info, Mapping):
+        usage_metadata = generation_info.get("usage_metadata")
+        if isinstance(usage_metadata, Mapping):
+            candidates.append(usage_metadata)
+
+    if isinstance(llm_output, Mapping):
+        for key in ("token_usage", "usage"):
+            usage_metadata = llm_output.get(key)
+            if isinstance(usage_metadata, Mapping):
+                candidates.append(usage_metadata)
+
+    return candidates
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -399,6 +424,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         served_model: str | None = None
         generation_model: str | None = None
         generation_response_id: str | None = None
+        llm_output = getattr(response, "llm_output", None)
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
                 message = chat_generation.message
@@ -521,20 +547,21 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     output_messages.append(output_message)
 
                     # Get token usage if available
-                    if chat_generation.message.usage_metadata:
-                        usage_metadata = chat_generation.message.usage_metadata
-                        input_tokens = usage_metadata.get("input_tokens", 0)
-                        if not isinstance(input_tokens, int) or isinstance(
-                            input_tokens, bool
-                        ):
-                            input_tokens = 0
-                        llm_invocation.input_tokens = input_tokens
-
-                        output_tokens = usage_metadata.get("output_tokens", 0)
-                        if not isinstance(output_tokens, int) or isinstance(
-                            output_tokens, bool
-                        ):
-                            output_tokens = 0
+                    has_input_tokens = False
+                    has_output_tokens = False
+                    for usage_metadata in _usage_metadata_candidates(
+                        chat_generation,
+                        llm_output,
+                    ):
+                        input_tokens, output_tokens = extract_usage_tokens(
+                            usage_metadata
+                        )
+                        if input_tokens is not None and not has_input_tokens:
+                            llm_invocation.input_tokens = input_tokens
+                            has_input_tokens = True
+                        if output_tokens is not None and not has_output_tokens:
+                            llm_invocation.output_tokens = output_tokens
+                            has_output_tokens = True
 
                         # Cache/reasoning break-downs (Anthropic, OpenAI
                         # reasoning models, Bedrock). Audio tokens are dropped
@@ -559,13 +586,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
                         if reasoning_tokens is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
-
-                        llm_invocation.output_tokens = output_tokens
+                        if has_input_tokens and has_output_tokens:
+                            break
 
         llm_invocation.output_messages = output_messages
 
         response_model, response_id = resolve_response_model_and_id(
-            llm_output=getattr(response, "llm_output", None),
+            llm_output=llm_output,
             served_model=served_model,
             generation_model=generation_model,
             generation_response_id=generation_response_id,
