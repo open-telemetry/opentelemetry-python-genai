@@ -77,8 +77,7 @@ _RunStreamChunk: TypeAlias = (
 def _finish(
     invocation: GenAIInvocation, error: BaseException | None = None
 ) -> None:
-    """End the invocation. An interrupt ends the span without an error."""
-    if isinstance(error, Exception):
+    if error is not None:
         invocation.fail(error)
     else:
         invocation.stop()

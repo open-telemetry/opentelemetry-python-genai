@@ -129,6 +129,7 @@ def test_code_agent_non_streaming(
     assert inputs[0] == {
         "role": "user",
         "parts": [{"type": "text", "content": "Test question"}],
+        "name": None,
     }
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "Test result from CodeAgent"
@@ -629,7 +630,8 @@ def test_interrupted_stream_iteration_ends_the_span(
     (agent_span,) = spans_by_operation(
         span_exporter.get_finished_spans(), "invoke_agent"
     )
-    assert agent_span.status.status_code == StatusCode.UNSET
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert attr(agent_span, error_attributes.ERROR_TYPE) == "KeyboardInterrupt"
     assert lifecycle.leaked == []
 
 
@@ -649,7 +651,8 @@ def test_interrupted_agent_recording_ends_the_span(
     (agent_span,) = spans_by_operation(
         span_exporter.get_finished_spans(), "invoke_agent"
     )
-    assert agent_span.status.status_code == StatusCode.UNSET
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert attr(agent_span, error_attributes.ERROR_TYPE) == "KeyboardInterrupt"
     assert lifecycle.leaked == []
 
 
@@ -708,8 +711,6 @@ def test_the_signature_cache_does_not_retain_agents(
 def test_interrupted_run_ends_the_span(
     instrument_with_content, span_exporter, lifecycle, monkeypatch
 ) -> None:
-    # A KeyboardInterrupt is not an Exception. Catching only Exception would
-    # leave the span of an interrupted run open for the process's lifetime.
     agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
 
     def _interrupt(*args: Any, **kwargs: Any):
@@ -722,9 +723,8 @@ def test_interrupted_run_ends_the_span(
     (agent_span,) = spans_by_operation(
         span_exporter.get_finished_spans(), "invoke_agent"
     )
-    # Interrupting a run is not the agent failing, so the span ends without an
-    # error.
-    assert agent_span.status.status_code == StatusCode.UNSET
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert attr(agent_span, error_attributes.ERROR_TYPE) == "KeyboardInterrupt"
     assert lifecycle.leaked == []
 
 
