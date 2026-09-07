@@ -33,6 +33,20 @@ class _HttpResponse:
     def close(self):
         self.close_calls += 1
 
+    async def aclose(self):
+        self.close_calls += 1
+
+
+class _SyncWrapper:
+    """Stands in for a sync stream wrapper, which finalizes on close()."""
+
+    def __init__(self, stream=None):
+        self.stream = stream
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
 
 class _FakeStream(Stream):
     # Bypass Stream.__init__ (needs an httpx response + client); the proxy only
@@ -81,7 +95,7 @@ def test_parse_wraps_stream_and_memoizes():
     raw = _RawResponse(stream)
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=_SyncWrapper,
         finalize=_noop,
     )
 
@@ -90,7 +104,7 @@ def test_parse_wraps_stream_and_memoizes():
     assert proxy.request_id == "req_123"
 
     parsed = proxy.parse()
-    assert parsed == ("wrapped", stream)
+    assert parsed.stream is stream
     # Memoized so repeated calls share one wrapper / span.
     assert proxy.parse() is parsed
 
@@ -105,7 +119,7 @@ def test_parse_non_stream_returned_untouched(caplog):
     finalize_calls = []
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: wrapped_calls.append(s) or ("wrapped", s),
+        wrap_stream=lambda s: wrapped_calls.append(s) or _SyncWrapper(s),
         finalize=lambda: finalize_calls.append(True),
     )
 
@@ -133,13 +147,13 @@ async def test_parse_awaits_coroutine_and_wraps():
     raw = _AsyncRawResponse(stream)
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=_SyncWrapper,
         finalize=_noop,
     )
 
     pending = proxy.parse()
     assert inspect.isawaitable(pending)  # caller still writes `await parse()`
-    assert await pending == ("wrapped", stream)
+    assert (await pending).stream is stream
 
 
 @pytest.mark.asyncio()
@@ -151,7 +165,7 @@ async def test_parse_stays_awaitable_once_memoized():
     raw = _AsyncRawResponse(stream)
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=_SyncWrapper,
         finalize=_noop,
     )
 
@@ -170,7 +184,7 @@ async def test_parse_awaited_non_stream_returned_untouched(caplog):
     finalize_calls = []
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=_SyncWrapper,
         finalize=lambda: finalize_calls.append(True),
     )
 
@@ -193,7 +207,7 @@ async def test_close_before_awaiting_parse_finalizes_once():
     finalize_calls = []
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=_SyncWrapper,
         finalize=lambda: finalize_calls.append(True),
     )
 
@@ -221,7 +235,7 @@ async def test_close_while_parse_pending_does_not_wrap():
     finalize_calls, wrap_calls = [], []
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: wrap_calls.append(s) or ("wrapped", s),
+        wrap_stream=lambda s: wrap_calls.append(s) or _SyncWrapper(s),
         finalize=lambda: finalize_calls.append(True),
     )
 
@@ -246,7 +260,7 @@ def test_close_without_parse_finalizes_once():
     # http_response keeps it alive, so we drive the response directly.
     RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=_SyncWrapper,
         finalize=lambda: finalize_calls.append(True),
     )
 
@@ -258,21 +272,86 @@ def test_close_without_parse_finalizes_once():
     assert finalize_calls == [True]
 
 
-def test_close_after_parse_does_not_double_finalize():
-    # When parse() built a stream wrapper, that wrapper owns finalization; the
-    # close fallback must stay out of the way and not finalize the span itself.
+class _AsyncWrapper:
+    """Stands in for an async stream wrapper, whose close() is a coroutine."""
+
+    def __init__(self, stream=None):
+        self.stream = stream
+        self.close_calls = 0
+
+    async def close(self):
+        self.close_calls += 1
+
+
+def test_close_after_parse_drives_the_wrapper():
+    # A wrapper owns finalization, but only once something drives it. A caller
+    # that parses and then walks away (an early break, an exception inside the
+    # with block) never does, so the close fallback closes the wrapper rather
+    # than standing aside; the wrapper finalizes with what it saw.
+    wrapper = _SyncWrapper()
     raw = _RawResponse(_FakeStream())
     finalize_calls = []
     proxy = RawResponseStreamProxy(
         raw,
-        wrap_stream=lambda s: ("wrapped", s),
+        wrap_stream=lambda s: wrapper,
         finalize=lambda: finalize_calls.append(True),
     )
 
     proxy.parse()
     raw.http_response.close()
     assert raw.http_response.close_calls == 1  # real close still ran
-    assert finalize_calls == []  # fallback did not fire
+    assert wrapper.close_calls == 1  # wrapper was driven
+    assert finalize_calls == []  # the wrapper ends the span, not the fallback
+
+    raw.http_response.close()  # a second close must not drive it again
+    assert wrapper.close_calls == 1
+    assert finalize_calls == []
+
+
+def test_closing_the_wrapper_reentrantly_does_not_end_the_span():
+    # Closing the wrapper closes the SDK stream, which closes this same httpx
+    # response and re-enters the hook. The re-entrant call must not take the
+    # "nobody parsed" branch and end the span before the wrapper finalizes it.
+    raw = _RawResponse(_FakeStream())
+    finalize_calls = []
+
+    class _ReentrantWrapper:
+        def close(self):
+            raw.http_response.close()
+
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: _ReentrantWrapper(),
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    proxy.parse()
+    raw.http_response.close()
+    assert finalize_calls == []  # the re-entrant close did not finalize
+
+
+@pytest.mark.asyncio()
+async def test_async_wrapper_is_closed_by_aclose_not_close():
+    # httpx rejects a sync close of an async response and nothing in the sync
+    # hook can await, so an async wrapper has to wait for the aclose hook.
+    wrapper = _AsyncWrapper()
+    raw = _AsyncRawResponse(_FakeAsyncStream())
+    finalize_calls = []
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=lambda s: wrapper,
+        finalize=lambda: finalize_calls.append(True),
+    )
+
+    await proxy.parse()
+
+    raw.http_response.close()  # sync hook leaves the wrapper alone
+    assert wrapper.close_calls == 0
+    assert finalize_calls == []
+
+    await raw.http_response.aclose()
+    assert wrapper.close_calls == 1  # aclose drove it
+    assert finalize_calls == []
 
 
 def test_wrap_result_non_stream_finalizes_on_close(

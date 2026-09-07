@@ -543,6 +543,36 @@ async def test_async_chat_completion_with_streaming_response_parse(
         )
 
 
+@pytest.mark.asyncio()
+async def test_abandoned_async_streaming_response_still_emits_span(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    """Walking away from a parsed stream must still end its span.
+
+    An early ``break`` leaves a wrapper nobody drained. Exiting the
+    ``with_streaming_response`` block closes the http response, and the close
+    fallback closes the wrapper so it finalizes with what it saw.
+    """
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        async with (
+            async_openai_client.chat.completions.with_streaming_response.create(
+                messages=USER_ONLY_PROMPT,
+                model=DEFAULT_MODEL,
+                stream=True,
+                stream_options={"include_usage": True},
+            ) as raw_response
+        ):
+            async for _chunk in await raw_response.parse():
+                break
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.end_time is not None
+    # The one chunk that was read is on the span; the rest never arrived.
+    assert span.attributes["gen_ai.response.id"]
+
+
 class _CustomChatCompletion(ChatCompletion):
     """Caller-defined response type passed to non-streaming parse(to=...)."""
 
