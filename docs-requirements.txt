@@ -8,7 +8,7 @@ wrapt>=2.2.2,<3.0.0
 
 # Required by instrumentation packages
 agno>=2.9.0
-anthropic>=1.0.0
+anthropic>=1.4.0
 boto3>=1.40.46
 claude-agent-sdk>=0.2.152
 google-genai>=2.19.0
