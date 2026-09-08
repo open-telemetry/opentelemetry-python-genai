@@ -477,6 +477,7 @@ class NonStreamingTestCase(TestCase):
                 {
                     "role": "user",
                     "parts": ({"content": "Some input", "type": "text"},),
+                    "name": None,
                 },
             ),
         )
@@ -489,6 +490,7 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Some response content", "type": "text"},
                     ),
                     "finish_reason": "",
+                    "name": None,
                 },
             ),
         )
@@ -602,11 +604,11 @@ class NonStreamingTestCase(TestCase):
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Some input","type":"text"}]}]',
+            '[{"role":"user","parts":[{"content":"Some input","type":"text"}],"name":null}]',
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Some response content","type":"text"}],"finish_reason":""}]',
+            '[{"role":"assistant","parts":[{"content":"Some response content","type":"text"}],"finish_reason":"","name":null}]',
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS],

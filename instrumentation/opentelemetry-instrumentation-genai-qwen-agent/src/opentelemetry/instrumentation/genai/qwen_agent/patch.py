@@ -103,7 +103,7 @@ def wrap_agent_call_tool(
         kwargs.get("messages"), tool_name
     )
     invocation.tool_description = getattr(tool, "description", None)
-    if invocation.should_capture_content_on_span and tool_args is not None:
+    if invocation.should_capture_content and tool_args is not None:
         invocation.arguments = tool_args
 
     try:
@@ -112,7 +112,7 @@ def wrap_agent_call_tool(
         invocation.fail(error)
         raise
 
-    if invocation.should_capture_content_on_span and result is not None:
+    if invocation.should_capture_content and result is not None:
         invocation.tool_result = (
             result if isinstance(result, str) else str(result)
         )

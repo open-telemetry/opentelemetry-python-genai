@@ -30,6 +30,9 @@ from .conformance.responses_conversation import ResponsesConversationScenario
 from .conformance.responses_fetch import ResponsesFetchScenario
 from .conformance.responses_stream import ResponsesStreamScenario
 from .conformance.responses_streaming import ResponsesStreamingScenario
+from .conformance.responses_tool_calling import (
+    ResponsesToolCallingScenario,
+)
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -44,6 +47,7 @@ from .conformance.tool_calling import ToolCallingScenario
         ResponsesFetchScenario(),
         ResponsesStreamScenario(),
         ResponsesStreamingScenario(),
+        ResponsesToolCallingScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

@@ -23,9 +23,11 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
     should_emit_event,
 )
 from opentelemetry.util.types import AttributeValue
@@ -50,6 +52,7 @@ class InferenceInvocation(GenAIInvocation):
         server_port: int | None = None,
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -66,6 +69,7 @@ class InferenceInvocation(GenAIInvocation):
             else operation_name,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            content_capturing_mode=content_capturing_mode,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
@@ -75,7 +79,10 @@ class InferenceInvocation(GenAIInvocation):
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self._response_model_name: str | None = None
         self.response_id: str | None = None
         self.finish_reasons: list[str] | None = None
@@ -119,6 +126,7 @@ class InferenceInvocation(GenAIInvocation):
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
             for_span=for_span,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def _get_finish_reasons(self) -> list[str] | None:
@@ -269,7 +277,9 @@ class LLMInvocation:
     request_model: str | None = None
     input_messages: list[InputMessage] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     output_messages: list[OutputMessage] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
-    system_instruction: list[MessagePart] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    system_instruction: (  # pyright: ignore[reportUnknownVariableType]
+        list[SystemInstructionPart] | list[MessagePart]
+    ) = field(default_factory=list)
     provider: str | None = None
     response_model_name: str | None = None
     response_id: str | None = None
@@ -300,6 +310,8 @@ class LLMInvocation:
         metrics_recorder: InvocationMetricsRecorder,
         logger: Logger,
         completion_hook: CompletionHook,
+        *,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
         inv = InferenceInvocation(
@@ -311,6 +323,7 @@ class LLMInvocation:
             request_model=self.request_model,
             server_address=self.server_address,
             server_port=self.server_port,
+            content_capturing_mode=content_capturing_mode,
         )
         inv.input_messages = self.input_messages
         inv.output_messages = self.output_messages

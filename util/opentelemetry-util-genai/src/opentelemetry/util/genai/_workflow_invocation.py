@@ -10,7 +10,10 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
@@ -18,8 +21,8 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
 )
 from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
     gen_ai_json_dumps,
-    should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -40,6 +43,8 @@ class WorkflowInvocation(GenAIInvocation):
         logger: Logger,
         completion_hook: CompletionHook,
         name: str | None,
+        *,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = "invoke_workflow"
@@ -51,6 +56,7 @@ class WorkflowInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            content_capturing_mode=content_capturing_mode,
         )
         self._name: str | None = name
         self.conversation_id: str | None = None
@@ -69,7 +75,7 @@ class WorkflowInvocation(GenAIInvocation):
         return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:
-        if not should_capture_content_on_spans():
+        if not self._should_capture_content_on_span:
             return {}
         optional_attrs = (
             (

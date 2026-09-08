@@ -1,0 +1,1 @@
+Add SystemInstructionPart model, align GenericPart with semantic conventions by removing value, and update invocation types.

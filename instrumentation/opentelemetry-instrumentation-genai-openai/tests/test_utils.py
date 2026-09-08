@@ -40,6 +40,7 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
                 "content": USER_ONLY_PROMPT[0]["content"],
             }
         ],
+        "name": None,
     }
 ]
 WEATHER_TOOL_PROMPT = [
@@ -58,6 +59,7 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
                 "content": WEATHER_TOOL_PROMPT[0]["content"],
             }
         ],
+        "name": None,
     },
     {
         "role": "user",
@@ -67,6 +69,7 @@ WEATHER_TOOL_EXPECTED_INPUT_MESSAGES = [
                 "content": WEATHER_TOOL_PROMPT[1]["content"],
             }
         ],
+        "name": None,
     },
 ]
 
@@ -341,6 +344,7 @@ def format_simple_expected_output_message(
                 }
             ],
             "finish_reason": finish_reason,
+            "name": None,
         }
     ]
 

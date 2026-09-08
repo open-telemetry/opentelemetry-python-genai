@@ -12,8 +12,8 @@ from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
     gen_ai_json_dumps,
-    should_capture_content_on_spans,
 )
 from opentelemetry.util.types import AnyValue, AttributeValue
 
@@ -64,6 +64,7 @@ class ToolInvocation(GenAIInvocation):
         agent_name: str | None = None,
         tool_call_id: str | None = None,
         tool_description: str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.tool(name) instead of calling this directly.
 
@@ -81,8 +82,8 @@ class ToolInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            content_capturing_mode=content_capturing_mode,
         )
-        self.should_capture_content_on_span = should_capture_content_on_spans()
         self._name: str = name
         self.tool_result: AnyValue | None = None
         # Since arguments and tool_result can be expensive to serialize,
@@ -95,6 +96,15 @@ class ToolInvocation(GenAIInvocation):
         self._tool_type: str | None = tool_type
         self._agent_name: str | None = agent_name
         self._start(self._get_start_attributes())
+
+    @property
+    def should_capture_content_on_span(self) -> bool:
+        """Returns whether content capture is enabled on spans.
+
+        .. deprecated:: 1.2b0
+            Use :attr:`should_capture_content` instead.
+        """
+        return self._should_capture_content_on_span
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
@@ -117,6 +127,7 @@ class ToolInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
+        capture_content_on_span = self._should_capture_content_on_span
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
             (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
@@ -124,15 +135,13 @@ class ToolInvocation(GenAIInvocation):
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
                 _any_value_to_attribute_value(self.arguments)
-                if self.should_capture_content_on_span
-                and self.arguments is not None
+                if capture_content_on_span and self.arguments is not None
                 else None,
             ),
             (
                 GenAI.GEN_AI_TOOL_CALL_RESULT,
                 _any_value_to_attribute_value(self.tool_result)
-                if self.should_capture_content_on_span
-                and self.tool_result is not None
+                if capture_content_on_span and self.tool_result is not None
                 else None,
             ),
         )

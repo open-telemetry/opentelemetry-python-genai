@@ -31,6 +31,9 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     prepare_tool_definitions,
 )
 from opentelemetry.instrumentation.utils import unwrap
+from opentelemetry.semconv._incubating.attributes.error_attributes import (
+    ErrorTypeValues,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
@@ -38,8 +41,10 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
+    Error,
     InputMessage,
     OutputMessage,
+    Role,
     TextPart,
 )
 
@@ -178,10 +183,19 @@ def _set_tool_invocation_input(
 
 
 def _set_tool_invocation_output(
-    invocation: Any,
+    invocation: ToolInvocation,
     result: Any,
     capture_content: bool,
 ) -> None:
+    if getattr(result, "status", None) == "failure":
+        error = getattr(result, "error", None)
+        invocation.fail(
+            Error(
+                type=ErrorTypeValues.OTHER.value,
+                message=str(error) if error else None,
+            )
+        )
+        return
     if capture_content and result is not None:
         invocation.tool_result = _extract_output_content(result)
 
@@ -199,7 +213,7 @@ def _set_invocation_input(
             content_str = _extract_input_content(input_val)
             invocation.input_messages = [
                 InputMessage(
-                    role="user", parts=[TextPart(content=content_str)]
+                    role=Role.USER.value, parts=[TextPart(content=content_str)]
                 )
             ]
 
@@ -219,7 +233,7 @@ def _set_invocation_output(
         output_str = _extract_output_content(result)
         invocation.output_messages = [
             OutputMessage(
-                role="assistant",
+                role=Role.ASSISTANT.value,
                 parts=[TextPart(content=output_str)],
                 finish_reason=_extract_finish_reason(result),
             )

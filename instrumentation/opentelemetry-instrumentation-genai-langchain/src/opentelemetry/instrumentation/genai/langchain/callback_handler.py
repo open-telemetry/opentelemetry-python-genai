@@ -17,6 +17,9 @@ from langchain_core.outputs import (
     LLMResult,
 )
 
+from opentelemetry.instrumentation.genai.langchain.agent_context import (
+    claim_agent,
+)
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
 )
@@ -27,6 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
+    _message_name,
     _normalize_role,
     extract_token_details,
     is_stream_end_marker,
@@ -97,8 +101,23 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        parent_agent, ancestor_agent_names = self._find_agent_context(
+            parent_run_id
+        )
+        # A claimed announcement is proof this run is a create_agent root, which
+        # the callback metadata alone cannot establish for a nested agent.
+        agent_announcement = claim_agent()
+        declared_agent_name = (
+            agent_announcement.name if agent_announcement else None
+        )
         operation = classify_chain_run(
-            serialized, metadata, kwargs, parent_run_id
+            serialized,
+            metadata,
+            kwargs,
+            parent_run_id,
+            declared_agent_name,
+            agent_announcement is not None,
+            ancestor_agent_names,
         )
         conversation_id = _conversation_id(metadata)
         capture_content = self._telemetry_handler.should_capture_content()
@@ -119,10 +138,15 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         elif operation == OperationName.INVOKE_AGENT:
             # agent name passed by the user
             suggested_agent_name = resolve_agent_name(
-                serialized, metadata, kwargs
+                serialized,
+                metadata,
+                kwargs,
+                declared_agent_name,
+                ancestor_agent_names,
+                agent_announcement is not None,
             )
             # find if there is an agent already
-            agent_invocation = self._find_nearest_agent(parent_run_id)
+            agent_invocation = parent_agent
             agent_invocation_name = (
                 agent_invocation.agent_name if agent_invocation else None
             )
@@ -133,7 +157,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     if agent_invocation_name
                     else None
                 )
-                if suggested_agent_name_lower != agent_invocation_name_lower:
+                # An announced create_agent root always opens its own layer. For
+                # non-announced runs, suppress a repeated metadata name matching the
+                # enclosing agent - that repetition is inherited config, not a new agent.
+                if (
+                    agent_announcement is not None
+                    or suggested_agent_name_lower
+                    != agent_invocation_name_lower
+                ):
                     agent = self._telemetry_handler.invoke_local_agent(
                         agent_name=suggested_agent_name,
                     )
@@ -155,9 +186,17 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     self._invocation_manager.add_invocation_state(
                         run_id, parent_run_id, None
                     )
+            elif agent_announcement is not None:
+                agent = self._telemetry_handler.invoke_local_agent(
+                    agent_name=None,
+                )
+                agent.input_messages = make_input_message(inputs)
+                self._invocation_manager.add_invocation_state(
+                    run_id, parent_run_id, agent
+                )
             else:
                 # No agent name could be resolved; still register the run_id so that
-                # parent-child traversal (e.g. _find_nearest_agent) is not broken for
+                # parent-child traversal through _find_agent_context is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
                     run_id, parent_run_id, None
@@ -429,6 +468,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                         )
 
+                    name_str = _message_name(chat_generation.message)
+
                     if finish_reason in ("tool_calls", "tool_use"):
                         tool_calls: list[ToolCallRequestPart] = []
                         for tool_call in chat_generation.message.tool_calls:
@@ -443,6 +484,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     elif (
                         legacy_call := _legacy_function_call_request(
@@ -457,6 +499,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     else:
                         parts = [
@@ -473,6 +516,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             role=role,
                             parts=cast(list[MessagePart], parts),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     output_messages.append(output_message)
 
@@ -581,7 +625,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 arguments = json.loads(input_str)
             except (json.JSONDecodeError, ValueError):
                 arguments = input_str
-        nearest_agent = self._find_nearest_agent(parent_run_id)
+        nearest_agent, _ = self._find_agent_context(parent_run_id)
         agent_name = nearest_agent.agent_name if nearest_agent else None
 
         tool_invocation = self._telemetry_handler.tool(
@@ -700,15 +744,20 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if not invocation.span.is_recording():
             self._invocation_manager.delete_invocation_state(run_id=run_id)
 
-    def _find_nearest_agent(
+    def _find_agent_context(
         self, run_id: UUID | None
-    ) -> AgentInvocation | None:
+    ) -> tuple[AgentInvocation | None, set[str]]:
         current = run_id
         visited: set[UUID] = set()
+        nearest_agent: AgentInvocation | None = None
+        ancestor_agent_names: set[str] = set()
         while current is not None and current not in visited:
             visited.add(current)
             entity = self._invocation_manager.get_invocation(current)
             if isinstance(entity, AgentInvocation):
-                return entity
+                if nearest_agent is None:
+                    nearest_agent = entity
+                if entity.agent_name:
+                    ancestor_agent_names.add(entity.agent_name.lower())
             current = self._invocation_manager.get_parent_run_id(current)
-        return None
+        return nearest_agent, ancestor_agent_names

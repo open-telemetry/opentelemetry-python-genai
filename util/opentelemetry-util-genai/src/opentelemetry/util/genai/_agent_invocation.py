@@ -20,8 +20,10 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 
@@ -49,6 +51,7 @@ class AgentInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.invoke_local_agent() or handler.invoke_remote_agent() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
@@ -62,6 +65,7 @@ class AgentInvocation(GenAIInvocation):
             if agent_name
             else _operation_name,
             span_kind=span_kind,
+            content_capturing_mode=content_capturing_mode,
         )
         self._provider: str | None = provider
         self._request_model: str | None = request_model
@@ -95,7 +99,10 @@ class AgentInvocation(GenAIInvocation):
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the agent. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self.tool_definitions: list[ToolDefinition] | None = None
 
         self._start(self._get_start_attributes())
@@ -171,6 +178,7 @@ class AgentInvocation(GenAIInvocation):
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
             for_span=True,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:

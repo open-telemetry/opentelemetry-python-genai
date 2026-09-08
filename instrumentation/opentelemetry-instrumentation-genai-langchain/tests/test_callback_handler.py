@@ -418,12 +418,13 @@ class TestOnChainStartAgent:
         assert run_id in handler._invocation_manager._invocations
         assert handler._invocation_manager.get_invocation(run_id) is None
 
-    def test_no_agent_name_child_can_still_find_ancestor_agent(self):
+    def test_same_name_grandchild_finds_agent_through_unnamed_parent(self):
         """Even when an intermediate node has no agent name, a deeper child
         must still be able to walk up and find a grandparent AgentInvocation."""
-        handler, telemetry, _, agent_inv = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         grandparent_id = _run_id()
         parent_id = _run_id()
+        child_id = _run_id()
 
         # Grandparent: a known agent
         handler.on_chain_start(
@@ -444,9 +445,17 @@ class TestOnChainStartAgent:
             metadata={"otel_agent_span": True},
         )
 
-        # Child: should find the grandparent agent via _find_nearest_agent
-        found = handler._find_nearest_agent(parent_id)
-        assert found is agent_inv
+        # A same-name grandchild must deduplicate against the grandparent agent.
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=child_id,
+            parent_run_id=parent_id,
+            metadata={"agent_name": "math_agent"},
+        )
+
+        telemetry.invoke_local_agent.assert_not_called()
+        assert handler._invocation_manager.get_invocation(child_id) is None
 
 
 # ---------------------------------------------------------------------------
@@ -648,68 +657,30 @@ class TestOnChainError:
         assert run_id not in handler._invocation_manager._invocations
 
 
-# ---------------------------------------------------------------------------
-# _find_nearest_agent
-# ---------------------------------------------------------------------------
-
-
-class TestFindNearestAgent:
-    def test_returns_none_when_no_agent_in_ancestry(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
+class TestAgentAncestryPublicBehavior:
+    def test_named_child_under_workflow_opens_agent_layer(self):
+        handler, telemetry, _, _ = _make_handler()
+        workflow_id = _run_id()
+        child_id = _run_id()
 
         handler.on_chain_start(
             serialized={"name": "LangGraph"},
             inputs={},
-            run_id=run_id,
+            run_id=workflow_id,
             parent_run_id=None,
         )
-
-        assert handler._find_nearest_agent(run_id) is None
-
-    def test_finds_direct_parent_agent(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        parent_id = _run_id()
-        child_id = _run_id()
-
+        telemetry.invoke_local_agent.reset_mock()
         handler.on_chain_start(
             serialized={"name": "math_agent"},
             inputs={},
-            run_id=parent_id,
-            parent_run_id=None,
+            run_id=child_id,
+            parent_run_id=workflow_id,
             metadata={"agent_name": "math_agent"},
         )
 
-        # Register the child as unclassified so it links to the parent
-        handler._invocation_manager.add_invocation_state(
-            child_id, parent_id, None
+        telemetry.invoke_local_agent.assert_called_once_with(
+            agent_name="math_agent"
         )
-
-        found = handler._find_nearest_agent(child_id)
-        assert found is agent_inv
-
-    def test_finds_grandparent_agent(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        grandparent_id = _run_id()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=grandparent_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-        handler._invocation_manager.add_invocation_state(
-            parent_id, grandparent_id, None
-        )
-        handler._invocation_manager.add_invocation_state(
-            child_id, parent_id, None
-        )
-
-        found = handler._find_nearest_agent(child_id)
-        assert found is agent_inv
 
 
 # ---------------------------------------------------------------------------
@@ -1316,6 +1287,48 @@ class TestOnLlmEndToolCalls:
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
+
+    def test_on_llm_end_preserves_message_name(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="Hello!", name="assistant_bot")
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].name == "assistant_bot"
+
+    def test_on_llm_end_tool_calls_preserves_message_name(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_123",
+            "args": {"location": "Paris"},
+        }
+        ai_msg = AIMessage(
+            content="",
+            tool_calls=[tool_call],
+            name="tool_caller_bot",
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert assigned[0].name == "tool_caller_bot"
 
 
 # ---------------------------------------------------------------------------
@@ -2674,3 +2687,19 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     assert any(isinstance(p, TextPart) for p in parts)
     blob = next(p for p in parts if isinstance(p, BlobPart))
     assert blob.content == _REAL_PNG_BYTES
+
+
+def test_on_chat_model_start_preserves_message_name():
+    run_id = _run_id()
+    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+    telemetry.should_capture_content.return_value = True
+
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content="Hello", name="Alice")]],
+        run_id=run_id,
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    assert len(llm_inv.input_messages) == 1
+    assert llm_inv.input_messages[0].name == "Alice"

@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from agno.agent import Agent
@@ -16,8 +17,17 @@ from agno.team import Team
 from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
+from opentelemetry.instrumentation.genai.agno.patch import (
+    _set_tool_invocation_output,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
+)
+from opentelemetry.semconv._incubating.attributes.error_attributes import (
+    ErrorTypeValues,
+)
+from opentelemetry.semconv.attributes import (
+    error_attributes as ErrorAttributes,
 )
 from opentelemetry.trace.status import StatusCode
 
@@ -154,6 +164,50 @@ def test_tool_call_aexecute_spans(
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID) == "call-456"
     )
+
+
+@pytest.mark.parametrize("async_execute", [False, True])
+def test_tool_call_failure_spans(
+    instrument_agno,
+    span_exporter,
+    async_execute: bool,
+) -> None:
+    def failing_tool() -> None:
+        raise ValueError("tool failed")
+
+    func_call = FunctionCall(
+        function=Function.from_callable(failing_tool), arguments={}
+    )
+    result = (
+        asyncio.run(func_call.aexecute())
+        if async_execute
+        else func_call.execute()
+    )
+
+    assert result.status == "failure"
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "tool failed"
+    assert (
+        span.attributes.get(ErrorAttributes.ERROR_TYPE)
+        == ErrorTypeValues.OTHER.value
+    )
+
+
+def test_failed_tool_result_is_not_captured() -> None:
+    invocation = MagicMock()
+    invocation.tool_result = None
+
+    _set_tool_invocation_output(
+        invocation,
+        SimpleNamespace(status="failure", error="tool failed"),
+        capture_content=True,
+    )
+
+    assert invocation.tool_result is None
+    invocation.fail.assert_called_once()
 
 
 def test_team_run_spans(

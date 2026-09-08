@@ -20,6 +20,7 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
+    Role,
     Text,
     ToolCallRequest,
 )
@@ -175,7 +176,7 @@ class _PortkeyStreamMixin:
                 parts.extend(tool_calls)
             output_messages.append(
                 OutputMessage(
-                    role="assistant",
+                    role=Role.ASSISTANT.value,
                     finish_reason=choice.finish_reason or "stop",
                     parts=parts,
                 )

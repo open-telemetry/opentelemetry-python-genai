@@ -33,9 +33,8 @@ class _InvocationManager:
     ) -> None:
         invocation_state = _InvocationState(invocation=invocation)
 
+        invocation_state.parent_run_id = parent_run_id
         if parent_run_id is not None and parent_run_id in self._invocations:
-            invocation_state.parent_run_id = parent_run_id
-
             parent_invocation_state = self._invocations[parent_run_id]
             parent_invocation_state.children.append(run_id)
 
@@ -57,7 +56,7 @@ class _InvocationManager:
         invocation_state.ended = True
 
         # Defer removal if any children are still live, so upward traversal
-        # (e.g. _find_nearest_agent) can still walk through this node.
+        # via _find_agent_context can still walk through this node.
         if any(c in self._invocations for c in invocation_state.children):
             return
 

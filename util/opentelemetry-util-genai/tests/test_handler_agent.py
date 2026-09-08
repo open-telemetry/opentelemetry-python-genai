@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,9 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import INVALID_SPAN, SpanKind
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
@@ -337,18 +341,19 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 class TestAgentInvocationContent(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
-        self.handler = TelemetryHandler(tracer_provider=tracer_provider)
+        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
 
     @patch(
-        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_system_instruction_on_span(self, _mock_cap):
-        invocation = self.handler.invoke_local_agent()
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.invoke_local_agent()
         invocation.system_instruction = [
             TextPart(content="You are a helpful assistant."),
         ]
@@ -375,11 +380,12 @@ class TestAgentInvocationContent(unittest.TestCase):
         assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
 
     @patch(
-        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_messages_on_span(self, _mock_cap):
-        invocation = self.handler.invoke_local_agent()
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.invoke_local_agent()
         invocation.input_messages = [
             InputMessage(role="user", parts=[TextPart(content="Hello")])
         ]
@@ -409,6 +415,34 @@ class TestAgentInvocationContent(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+    )
+    def test_messages_omitted_from_span_in_event_only_mode(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.invoke_local_agent()
+        assert invocation.should_capture_content is True
+        invocation.system_instruction = [
+            TextPart(content="You are a helpful assistant."),
+        ]
+        invocation.input_messages = [
+            InputMessage(role="user", parts=[TextPart(content="Hello")])
+        ]
+        invocation.output_messages = [
+            OutputMessage(
+                role="assistant",
+                parts=[TextPart(content="Hi!")],
+                finish_reason="stop",
+            )
+        ]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes or {}
+        assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
 class TestRemoteAgentInvocation(unittest.TestCase):

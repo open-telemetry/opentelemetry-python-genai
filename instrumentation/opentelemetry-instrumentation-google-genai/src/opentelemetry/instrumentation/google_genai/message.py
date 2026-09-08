@@ -4,29 +4,23 @@
 from __future__ import annotations
 
 import logging
-from enum import Enum
 
 from google.genai import types as genai_types
 
 from opentelemetry.util.genai.types import (
     BlobPart,
     FinishReason,
+    GenericPart,
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
+    SystemInstructionPart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
     UriPart,
 )
-
-
-class Role(str, Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
 
 _logger = logging.getLogger(__name__)
 
@@ -64,11 +58,15 @@ def to_output_messages(
 def to_system_instructions(
     *,
     content: genai_types.Content,
-) -> list[MessagePart]:
-    parts = (
-        _to_part(part, idx) for idx, part in enumerate(content.parts or [])
-    )
-    return [part for part in parts if part is not None]
+) -> list[SystemInstructionPart]:
+    instructions: list[SystemInstructionPart] = []
+    for idx, part in enumerate(content.parts or []):
+        msg_part = _to_part(part, idx)
+        if isinstance(msg_part, TextPart):
+            instructions.append(msg_part)
+        elif msg_part is not None:
+            instructions.append(GenericPart(type=msg_part.type))
+    return instructions
 
 
 def _to_input_message(
@@ -129,7 +127,7 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
 
 
 def _to_role(role: str | None) -> str:
-    if role == "user":
+    if role == Role.USER.value:
         return Role.USER.value
     if role == "model":
         return Role.ASSISTANT.value

@@ -4,7 +4,7 @@
 """Tests for ToolCallRequestPart and ToolInvocation inheritance structure"""
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,11 +18,12 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind
+from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import GenAIInvocation
+from opentelemetry.util.genai.invocation import GenAIInvocation, ToolInvocation
 from opentelemetry.util.genai.types import (
     CompactionPart,
     InputMessage,
@@ -398,3 +399,99 @@ def test_tool_start_attributes_omit_agent_name_at_sampling_time():
     assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
     finalized = span_exporter.get_finished_spans()[0].attributes
     assert finalized[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
+
+
+def test_tool_should_capture_content_defaults_to_false():
+    handler = _make_handler()
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is False
+    assert invocation.should_capture_content_on_span is False
+    invocation.stop()
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_tool_should_capture_content_enabled():
+    handler = _make_handler()
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is True
+    invocation.stop()
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+)
+def test_tool_content_not_on_span_in_event_only_mode():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is False
+    invocation.arguments = {"city": "Paris"}
+    invocation.tool_result = "sunny"
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+
+
+def test_tool_content_not_on_span_with_completion_hook():
+    mock_hook = MagicMock(spec=CompletionHook)
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=mock_hook
+    )
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is False
+    invocation.arguments = {"city": "Paris"}
+    invocation.tool_result = "sunny"
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_direct_invocation_instantiation_falls_back_to_env():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    tracer = tracer_provider.get_tracer(__name__)
+    mock_recorder = MagicMock()
+    mock_logger = MagicMock()
+    mock_hook = MagicMock(spec=CompletionHook)
+
+    invocation = ToolInvocation(
+        tracer=tracer,
+        metrics_recorder=mock_recorder,
+        logger=mock_logger,
+        completion_hook=mock_hook,
+        name="direct_tool",
+    )
+    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content_on_span is True
+    invocation.arguments = {"arg": "val"}
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
