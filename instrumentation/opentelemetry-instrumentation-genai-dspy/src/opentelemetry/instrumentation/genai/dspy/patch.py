@@ -168,7 +168,6 @@ def _wrap_function(
 def patch_dspy(handler: TelemetryHandler) -> None:
     """Apply patches to DSPy Tool, ReAct, and Retrieve classes."""
     import dspy
-    import dspy.predict.react
 
     tool_module = dspy.Tool.__module__
     tool_name = dspy.Tool.__name__
