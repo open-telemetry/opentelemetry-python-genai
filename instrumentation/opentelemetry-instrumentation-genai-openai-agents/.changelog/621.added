@@ -1,0 +1,1 @@
+Record OpenAI Agents SDK guardrail tracing data as ``run_guardrail`` spans.

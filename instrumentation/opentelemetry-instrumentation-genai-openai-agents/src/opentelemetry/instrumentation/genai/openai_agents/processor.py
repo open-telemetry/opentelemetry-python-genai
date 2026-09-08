@@ -41,6 +41,7 @@ from agents.tracing import Span, Trace, TracingProcessor
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
+    GuardrailSpanData,
 )
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -52,6 +53,7 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     GenAIInvocation,
+    GuardrailInvocation,
     ToolInvocation,
 )
 from opentelemetry.util.genai.types import Error
@@ -126,8 +128,17 @@ class GenAITracingProcessor(TracingProcessor):
             )
             self._invocations[span] = invocation
             return
+        if isinstance(span_data, GuardrailSpanData):
+            # GuardrailSpanData does not record whether an input or output guardrail ran.
+            invocation = self._handler.guardrail(
+                span_data.name,
+                provider=self._provider,
+                target_type=None,
+            )
+            self._invocations[span] = invocation
+            return
         # Other span_data types (GenerationSpanData, ResponseSpanData,
-        # HandoffSpanData, GuardrailSpanData, Speech/TranscriptionSpanData)
+        # HandoffSpanData, Speech/TranscriptionSpanData)
         # are intentionally ignored. LLM-level spans come from the openai
         # instrumentation; the rest have no semconv yet.
 
@@ -148,6 +159,10 @@ class GenAITracingProcessor(TracingProcessor):
                 invocation.tool_result = (
                     output if isinstance(output, str) else str(output)
                 )
+        if isinstance(invocation, GuardrailInvocation) and isinstance(
+            span.span_data, GuardrailSpanData
+        ):
+            invocation.triggered = span.span_data.triggered
         # SpanError is a mapping, not a raised exception, so it never
         # reaches util-genai's exception path on its own.
         span_error = getattr(span, "error", None)
