@@ -3,6 +3,9 @@
 
 """Tests for GoogleGenAiSdkInstrumentor."""
 
+import os
+
+import pytest
 from google.genai.models import AsyncModels, Models
 
 from opentelemetry.instrumentation.google_genai import (
@@ -14,6 +17,38 @@ from opentelemetry.instrumentation.google_genai.interactions import (
     InteractionsResource,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+)
+
+
+@pytest.mark.parametrize("configured_value", [None, "false"])
+def test_instrumentation_preserves_emit_event_configuration(
+    configured_value,
+    monkeypatch,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    if configured_value is None:
+        monkeypatch.delenv(
+            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, raising=False
+        )
+    else:
+        monkeypatch.setenv(
+            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, configured_value
+        )
+
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        assert (
+            os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT)
+            == configured_value
+        )
 
 
 def test_co_filename_on_wrapped_functions(

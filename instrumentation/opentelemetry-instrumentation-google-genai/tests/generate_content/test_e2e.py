@@ -40,6 +40,7 @@ from opentelemetry.instrumentation.google_genai import (
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
     OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH,
 )
 
@@ -314,7 +315,9 @@ def fixture_enable_completion_hook(request):
 
 
 @pytest.fixture(name="internal_instrumentation_setup", autouse=True)
-def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
+def fixture_setup_instrumentation(
+    instrumentor, enable_completion_hook, monkeypatch
+):
     if enable_completion_hook == "enable_completion_hook":
         os.environ.update(
             {
@@ -322,6 +325,7 @@ def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
                 "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "upload",
             }
         )
+        monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "true")
     instrumentor.instrument()
     yield
     instrumentor.uninstrument()

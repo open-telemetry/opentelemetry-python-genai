@@ -359,6 +359,7 @@ class NonStreamingTestCase(TestCase):
         {
             "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "gcp.gen_ai.operation.config.response_schema",
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_log_event_no_content_capture(self):
@@ -427,6 +428,19 @@ class NonStreamingTestCase(TestCase):
                 event.attributes[GEN_AI_TOOL_DEFINITIONS],
                 self.base_tools_definition,
             )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+        },
+    )
+    def test_no_log_event_by_default_without_content_capture(self):
+        self.configure_valid_response(text="Some response content")
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+        self.otel.assert_does_not_have_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
 
     @patch.dict(
         "os.environ",
