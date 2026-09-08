@@ -170,7 +170,7 @@ class SyncStreamWrapper(
     def close(self) -> None:
         try:
             self._self_stream.close()
-        except Exception as error:
+        except BaseException as error:
             self._finalize_failure(error)
             raise
         self._finalize_success()
@@ -187,7 +187,7 @@ class SyncStreamWrapper(
         except StopIteration:
             self._finalize_success()
             raise
-        except Exception as error:
+        except BaseException as error:
             self._finalize_failure(error)
             raise
         invocation = self._self_invocation
@@ -299,7 +299,7 @@ class AsyncStreamWrapper(
         """
         try:
             await self._close_stream()
-        except Exception as error:
+        except BaseException as error:
             self._finalize_failure(error)
             _logger.debug(
                 "GenAI stream close error during close",
@@ -346,7 +346,7 @@ class AsyncStreamWrapper(
         except StopAsyncIteration:
             self._finalize_success()
             raise
-        except Exception as error:
+        except BaseException as error:
             self._finalize_failure(error)
             raise
 
@@ -449,7 +449,7 @@ class SyncStreamManagerWrapper(
         self._self_invocation = invocation
         try:
             stream = self._enter_manager(invocation)
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
         stream_wrapper = self._wrap_stream(stream, invocation)
@@ -466,7 +466,7 @@ class SyncStreamManagerWrapper(
         self._self_stream_wrapper = None
         try:
             suppressed = self.__wrapped__.__exit__(exc_type, exc_val, exc_tb)
-        except Exception as error:
+        except BaseException as error:
             if stream_wrapper is not None:
                 stream_wrapper.__exit__(
                     type(error), error, error.__traceback__
@@ -516,7 +516,7 @@ class AsyncStreamManagerWrapper(
         self._self_invocation = invocation
         try:
             stream = await self._enter_manager(invocation)
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
         stream_wrapper = self._wrap_stream(stream, invocation)
@@ -535,7 +535,7 @@ class AsyncStreamManagerWrapper(
             suppressed = await self.__wrapped__.__aexit__(
                 exc_type, exc_val, exc_tb
             )
-        except Exception as error:
+        except BaseException as error:
             if stream_wrapper is not None:
                 await stream_wrapper.__aexit__(
                     type(error), error, error.__traceback__

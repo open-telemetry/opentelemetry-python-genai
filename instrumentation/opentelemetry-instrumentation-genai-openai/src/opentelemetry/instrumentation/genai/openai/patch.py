@@ -82,7 +82,7 @@ def chat_completions_create_v_new(
             _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             chat_invocation.fail(error)
             raise
 
@@ -114,7 +114,7 @@ def async_chat_completions_create_v_new(
             chat_invocation.stop()
             return result
 
-        except Exception as error:
+        except BaseException as error:
             chat_invocation.fail(error)
             raise
 
@@ -129,7 +129,7 @@ def embeddings_create(handler: TelemetryHandler):
 
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -148,7 +148,7 @@ def async_embeddings_create(handler: TelemetryHandler):
 
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
