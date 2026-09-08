@@ -322,16 +322,19 @@ def _agent_arun(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation = _start_agent_invocation(
-            handler, instance, args, kwargs, capture_content
-        )
         try:
             result = wrapped(*args, **kwargs)
         except Exception as error:
+            invocation = _start_agent_invocation(
+                handler, instance, args, kwargs, capture_content
+            )
             invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
+            invocation = _start_agent_invocation(
+                handler, instance, args, kwargs, capture_content
+            )
             return AsyncAgnoAgentStreamWrapper(
                 result, invocation, capture_content
             )
@@ -340,6 +343,9 @@ def _agent_arun(
 
             @functools.wraps(wrapped)
             async def _await_result() -> object:
+                invocation = _start_agent_invocation(
+                    handler, instance, args, kwargs, capture_content
+                )
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
@@ -358,6 +364,9 @@ def _agent_arun(
 
             return _await_result()
 
+        invocation = _start_agent_invocation(
+            handler, instance, args, kwargs, capture_content
+        )
         _set_invocation_output(invocation, result, capture_content)
         invocation.stop()
         return result
@@ -463,16 +472,19 @@ def _workflow_arun(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation = _start_workflow_invocation(
-            handler, instance, args, kwargs, capture_content
-        )
         try:
             result = wrapped(*args, **kwargs)
         except Exception as error:
+            invocation = _start_workflow_invocation(
+                handler, instance, args, kwargs, capture_content
+            )
             invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
+            invocation = _start_workflow_invocation(
+                handler, instance, args, kwargs, capture_content
+            )
             return AsyncAgnoWorkflowStreamWrapper(
                 result, invocation, capture_content
             )
@@ -481,6 +493,9 @@ def _workflow_arun(
 
             @functools.wraps(wrapped)
             async def _await_result() -> object:
+                invocation = _start_workflow_invocation(
+                    handler, instance, args, kwargs, capture_content
+                )
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
@@ -499,6 +514,9 @@ def _workflow_arun(
 
             return _await_result()
 
+        invocation = _start_workflow_invocation(
+            handler, instance, args, kwargs, capture_content
+        )
         _set_invocation_output(invocation, result, capture_content)
         invocation.stop()
         return result

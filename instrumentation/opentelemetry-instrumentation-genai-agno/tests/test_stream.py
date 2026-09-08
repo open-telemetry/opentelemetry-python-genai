@@ -666,3 +666,83 @@ def test_agent_run_stream_structured_pydantic_output(
         "title": "Inception",
         "year": 2010,
     }
+
+
+def test_agent_stream_tool_completed_event_preserves_final_content(
+    instrument_agno_content_capture, span_exporter
+) -> None:
+    """Test that intermediate tool completed events do not overwrite final content."""
+    from agno.agent import (
+        RunCompletedEvent,
+        RunContentEvent,
+        ToolCallCompletedEvent,
+    )
+
+    agent = Agent(name="test-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield ToolCallCompletedEvent(content="tool output")
+        yield RunContentEvent(content="final answer")
+        yield RunCompletedEvent()
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages is not None
+    assert "final answer" in output_messages
+    assert "tool output" not in output_messages
+
+
+def test_agent_stream_no_llm_client_metrics(
+    instrument_agno, metric_reader
+) -> None:
+    """Test that agent stream wrappers do not emit client LLM chunk metrics."""
+    agent = Agent(name="test-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield ModelResponse(content="chunk 1")
+        yield ModelResponse(content="chunk 2")
+
+    with patch(
+        "agno.models.base.Model.response_stream", side_effect=fake_stream
+    ):
+        list(agent.run("hello", stream=True))
+
+    metric_names = [
+        m.name
+        for rm in metric_reader.get_metrics_data().resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+    ]
+    assert "gen_ai.client.operation.time_to_first_chunk" not in metric_names
+    assert "gen_ai.client.operation.time_per_output_chunk" not in metric_names
+
+
+def test_workflow_stream_step_completed_event_preserves_final_content(
+    instrument_agno_content_capture, span_exporter
+) -> None:
+    """Test that intermediate step completed events do not overwrite workflow final content."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("agno.workflow.workflow")
+    from agno.run.workflow import StepCompletedEvent, WorkflowCompletedEvent
+    from agno.workflow.workflow import Workflow
+
+    workflow = Workflow(name="test-workflow-step-completed", steps=[])
+
+    def fake_stream(*args, **kwargs):
+        yield StepCompletedEvent(content="step output")
+        yield WorkflowCompletedEvent(content="final workflow output")
+
+    with patch.object(Workflow, "_execute_stream", side_effect=fake_stream):
+        list(workflow.run("test", stream=True))
+
+    span = span_exporter.get_finished_spans()[0]
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages is not None
+    assert "final workflow output" in output_messages

@@ -92,6 +92,30 @@ def test_agent_arun_spans(
     )
 
 
+def test_agent_arun_concurrent(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that concurrent Agent.arun calls emit unnested spans without context errors."""
+    agent = Agent(name="test-agent", model=MockModel(id="mock-model"))
+    mock_output = ModelResponse(content="output")
+
+    async def _run() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse", return_value=mock_output
+        ):
+            coro1 = agent.arun("input 1")
+            coro2 = agent.arun("input 2")
+            await asyncio.gather(coro1, coro2)
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].parent is None
+    assert spans[1].parent is None
+
+
 def test_tool_call_execute_spans(
     instrument_agno,
     span_exporter,
@@ -451,6 +475,30 @@ def test_workflow_arun_error_path(
     assert span.name == "invoke_workflow test-workflow-async"
     assert span.attributes.get("error.type") == "RuntimeError"
     assert span.status.status_code == StatusCode.ERROR
+
+
+def test_workflow_arun_concurrent(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that concurrent Workflow.arun calls emit unnested spans without context errors."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("agno.workflow.workflow")
+    from agno.workflow.workflow import Workflow
+
+    workflow = Workflow(name="test-workflow-concurrent", steps=[])
+
+    async def _run() -> None:
+        coro1 = workflow.arun("input 1")
+        coro2 = workflow.arun("input 2")
+        await asyncio.gather(coro1, coro2)
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].parent is None
+    assert spans[1].parent is None
 
 
 def test_none_role_becomes_assistant_and_finish_reason_stop(
