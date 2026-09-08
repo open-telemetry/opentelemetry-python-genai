@@ -24,6 +24,7 @@ from .messages_extractors import (
     get_llm_request_attributes,
     get_server_address_and_port,
     get_system_instruction,
+    get_tool_definitions,
 )
 from .utils import is_anthropic_async_stream, is_anthropic_stream
 from .wrappers import (
@@ -248,6 +249,9 @@ def _create_invocation(
     )
     invocation.system_instruction = (
         get_system_instruction(params.system) if capture_content else []
+    )
+    invocation.tool_definitions = (
+        get_tool_definitions(params.tools) if capture_content else None
     )
     invocation.attributes = attributes
     return invocation
