@@ -1,0 +1,1 @@
+Record response telemetry on ``messages.stream()`` when the stream is consumed through ``text_stream``, ``get_final_message()``, ``get_final_text()`` or ``until_done()``, which previously produced a span with request attributes only.

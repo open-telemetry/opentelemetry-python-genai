@@ -2071,3 +2071,139 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
     assert first_stops == [True]
     assert second_stops == [True]
     assert http_response.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_text_stream_records_response(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """``stream.text_stream`` records the response the same as event iteration."""
+    model = "claude-haiku-4-5"
+
+    text = ""
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        async for chunk in stream.text_stream:
+            text += chunk
+
+    assert text == "Hello."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01N2EGWxw2zHUcjTjToMivN6"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "claude-haiku-4-5-20251001"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello."}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_get_final_message_records_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """``get_final_message()`` drains the SDK's iterator and still records."""
+    model = "claude-haiku-4-5"
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        message = await stream.get_final_message()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == message.model
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    ] == expected_input_tokens(message.usage)
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == message.usage.output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        normalize_stop_reason(message.stop_reason),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_until_done_records_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """``until_done()`` drains the SDK's iterator and still records."""
+    model = "claude-haiku-4-5"
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        await stream.until_done()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "claude-haiku-4-5-20251001"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_text_stream_user_exception(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """A caller error while reading ``text_stream`` propagates and is recorded."""
+    model = "claude-haiku-4-5"
+
+    with pytest.raises(ValueError, match="caller failed"):
+        async with async_anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+        ) as stream:
+            async for _ in stream.text_stream:
+                raise ValueError("caller failed")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
