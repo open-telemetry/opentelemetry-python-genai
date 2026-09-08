@@ -165,6 +165,30 @@ def _load_span_messages(span, attribute):
     return parsed
 
 
+_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get weather by city",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+def _assert_weather_tool_definitions(span):
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather by city",
+            "parameters": _WEATHER_TOOL["input_schema"],
+        }
+    ]
+
+
 def _skip_if_cassette_missing_and_no_real_key(request):
     cassette_path = (
         Path(__file__).parent / "cassettes" / f"{request.node.name}.yaml"
@@ -748,6 +772,34 @@ def test_sync_messages_create_streaming_captures_content(
 
 
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_records_tool_definitions(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """``stream`` builds its invocation lazily -- it must still see ``tools``.
+
+    Replays the plain ``test_sync_messages_stream`` cassette: tool definitions
+    come from the request, so the recorded response does not matter.
+    """
+    with anthropic_client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.vcr()
 def test_sync_messages_stream(  # pylint: disable=too-many-locals
     request, span_exporter, anthropic_client, instrument_no_content
 ):
@@ -1080,17 +1132,7 @@ def test_sync_messages_create_captures_tool_use_content(
         model=model,
         max_tokens=256,
         messages=messages,
-        tools=[
-            {
-                "name": "get_weather",
-                "description": "Get weather by city",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ],
+        tools=[_WEATHER_TOOL],
         tool_choice={"type": "tool", "name": "get_weather"},
     )
 
@@ -1106,6 +1148,33 @@ def test_sync_messages_create_captures_tool_use_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    _assert_weather_tool_definitions(span)
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_captures_tool_use_content")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_create_omits_tool_definitions_without_content(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Tool definitions are content: they stay off when capture is off."""
+    anthropic_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+        tool_choice={"type": "tool", "name": "get_weather"},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
 @pytest.mark.vcr()

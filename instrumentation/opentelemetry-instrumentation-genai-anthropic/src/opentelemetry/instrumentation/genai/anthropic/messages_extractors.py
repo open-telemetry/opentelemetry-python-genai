@@ -24,10 +24,13 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    GenericToolDefinition,
     InputMessage,
     OutputMessage,
     SystemInstructionPart,
     TextPart,
+    ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -63,6 +66,7 @@ class MessageRequestParams:
     stream: bool | None = None
     messages: Iterable[MessageParam] | None = None
     system: str | Iterable[TextBlockParam] | None = None
+    tools: Iterable[ToolUnionParam] | None = None
 
 
 GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
@@ -136,6 +140,58 @@ def get_system_instruction(
         for block in system
         if block.get("text")
     ]
+
+
+def _tool_field(tool: object, key: str) -> object:
+    if isinstance(tool, Mapping):
+        return cast("Mapping[str, object]", tool).get(key)
+    return getattr(tool, key, None)
+
+
+def get_tool_definitions(
+    tools: Iterable[ToolUnionParam] | None,
+) -> list[ToolDefinition] | None:
+    """Convert the request's ``tools`` into semconv tool definitions.
+
+    A custom tool carries its JSON schema in ``input_schema`` and maps onto a
+    function definition. Server tools are identified by a versioned ``type``
+    (``web_search_20250305``, ``bash_20250124``, ...) and toolsets
+    (``computer_toolset_20260801``, ...) carry no ``name`` at all, so their type
+    stands in for the name.
+    """
+    if tools is None:
+        return None
+
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        name = _tool_field(tool, "name")
+        tool_type = _tool_field(tool, "type")
+        input_schema = _tool_field(tool, "input_schema")
+        if input_schema is not None or tool_type in (None, "custom"):
+            description = _tool_field(tool, "description")
+            definitions.append(
+                FunctionToolDefinition(
+                    name=name if isinstance(name, str) else "",
+                    description=(
+                        description if isinstance(description, str) else None
+                    ),
+                    # The schema requires an object; drop anything else rather
+                    # than emit a tool definition that fails validation.
+                    parameters=(
+                        input_schema
+                        if isinstance(input_schema, Mapping)
+                        else None
+                    ),
+                )
+            )
+        elif isinstance(tool_type, str):
+            definitions.append(
+                GenericToolDefinition(
+                    name=name if isinstance(name, str) else tool_type,
+                    type=tool_type,
+                )
+            )
+    return definitions or None
 
 
 def get_output_messages_from_message(
@@ -244,6 +300,7 @@ def extract_params(  # pylint: disable=too-many-locals
         stream=stream,
         messages=messages,
         system=system,
+        tools=tools,
     )
 
 
