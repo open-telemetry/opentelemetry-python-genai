@@ -1,0 +1,160 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: smolagents
+instrumentation_library: opentelemetry-instrumentation-genai-smolagents
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+env:
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  inference:
+    run: opentelemetry-instrument python inference.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not listen on socket
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response id
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not return finish reasons
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  streaming:
+    run: opentelemetry-instrument python streaming.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not listen on socket
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response id
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not return finish reasons
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not listen on socket
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response id
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not return finish reasons
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+          attributes:
+            gen_ai.tool.definitions:
+              present: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal:
+    run: opentelemetry-instrument python multimodal.py
+    # TODO: was asserting a uri/image part on gen_ai.input.messages. The present:
+    # true check below only says the attribute exists, not that the image is in
+    # it. Needs expectations on complex values - https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not listen on socket
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response id
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not return finish reasons
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.input.messages:
+              present: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage

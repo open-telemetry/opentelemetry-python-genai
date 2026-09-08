@@ -1,0 +1,133 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: openai-agents
+instrumentation_library: opentelemetry-instrumentation-genai-openai-agents
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  OPENAI_BASE_URL: ${MOCK_SERVER_URL}/v1
+  OPENAI_API_KEY: test_openai_api_key
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  invoke_agent:
+    run: opentelemetry-instrument python invoke_agent.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not emit finish reasons
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.input_tokens
+        reason: does not emit input tokens
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.output_tokens
+        reason: does not emit output tokens
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_workflow
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_agent
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.invoke_workflow.duration
+
+  automatic_tool_calling:
+    run: opentelemetry-instrument python automatic_tool_calling.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not emit finish reasons
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.input_tokens
+        reason: does not emit input tokens
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.output_tokens
+        reason: does not emit output tokens
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_workflow
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_agent
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: execute_tool
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.invoke_workflow.duration
+
+  multi_agent:
+    run: opentelemetry-instrument python multi_agent.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not emit finish reasons
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.input_tokens
+        reason: does not emit input tokens
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.output_tokens
+        reason: does not emit output tokens
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_workflow
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_agent
+        expect:
+          count: 2
+          attributes:
+            # Triage and specialist must each surface their own name.
+            gen_ai.agent.name:
+              distinct: 2
+      - match:
+          attributes:
+            gen_ai.operation.name: execute_tool
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.invoke_workflow.duration

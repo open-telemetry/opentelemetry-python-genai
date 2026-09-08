@@ -3,79 +3,52 @@
 
 """Conformance scenario: anthropic chat with tool calls."""
 
-from __future__ import annotations
-
-import os
-from typing import Any
-from unittest import mock
-
 from anthropic import Anthropic
 
-from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import (
-    ExpectedViolation,
-    Scenario,
+client = Anthropic()
+tools = [
+    {
+        "name": "get_weather",
+        "description": "Get weather by city",
+        "input_schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    }
+]
+messages = [
+    {
+        "role": "user",
+        "content": "What is the weather in SF?",
+    }
+]
+
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=256,
+    messages=messages,
+    tools=tools,
+    tool_choice={"type": "tool", "name": "get_weather"},
 )
-from opentelemetry.test_util_genai.instrumentor import instrument
 
-
-class ToolCallingScenario(Scenario):
-    expected_spans = {"chat": 1}
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-    )
-    expected_violations = (
-        ExpectedViolation(
-            advice_id="missing_attribute",
-            message_substring="gen_ai.usage.cache_creation.input_tokens",
-        ),
-    )
-
-    def run(
-        self,
-        *,
-        tracer_provider: TracerProvider,
-        meter_provider: MeterProvider,
-        logger_provider: LoggerProvider,
-        vcr: Any,
-    ) -> None:
-        key_override = (
-            {}
-            if os.getenv("ANTHROPIC_API_KEY")
-            else {"ANTHROPIC_API_KEY": "test_anthropic_api_key"}
+tool_results = []
+for block in response.content:
+    if block.type == "tool_use":
+        tool_results.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": "70 degrees and sunny",
+            }
         )
-        with mock.patch.dict(os.environ, key_override):
-            with instrument(
-                AnthropicInstrumentor(),
-                tracer_provider=tracer_provider,
-                logger_provider=logger_provider,
-                meter_provider=meter_provider,
-                content_capture="SPAN_ONLY",
-            ):
-                with vcr.use_cassette("tool_calling_conformance.yaml"):
-                    Anthropic().messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=256,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": "What is the weather in SF?",
-                            }
-                        ],
-                        tools=[
-                            {
-                                "name": "get_weather",
-                                "description": "Get weather by city",
-                                "input_schema": {
-                                    "type": "object",
-                                    "properties": {"city": {"type": "string"}},
-                                    "required": ["city"],
-                                },
-                            }
-                        ],
-                        tool_choice={"type": "tool", "name": "get_weather"},
-                    )
+
+messages.append({"role": "assistant", "content": response.content})
+messages.append({"role": "user", "content": tool_results})
+
+client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=256,
+    messages=messages,
+    tools=tools,
+)

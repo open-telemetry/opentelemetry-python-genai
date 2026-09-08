@@ -1,0 +1,152 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: google-genai
+instrumentation_library: opentelemetry-instrumentation-google-genai
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  GOOGLE_GEMINI_BASE_URL: ${MOCK_SERVER_URL}
+  GOOGLE_API_KEY: test_google_api_key
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  generate_content:
+    run: opentelemetry-instrument python generate_content.py
+    expected_violations:
+      - id: type_mismatch
+        context:
+          attribute_key: gen_ai.request.top_k
+          attribute_type: double
+          expected: int
+        reason: util-genai types InferenceInvocation.top_k as float; semconv says int
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: generate_content
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  inference:
+    run: opentelemetry-instrument python inference.py
+    expected_violations:
+      - id: genai_operation_name_unknown
+        context:
+          operation: interactions.create
+        reason: experimental operation name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: interactions.create
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  embeddings:
+    run: opentelemetry-instrument python embeddings.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: embeddings
+          missing_attribute: gen_ai.response.model
+        reason: does not include model
+      - id: genai_expected_attribute_missing
+        context:
+          operation: embeddings
+          missing_attribute: gen_ai.request.encoding_formats
+        reason: does not set request encoding formats
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: embeddings
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  streaming:
+    run: opentelemetry-instrument python streaming.py
+    expected_violations:
+      - id: type_mismatch
+        context:
+          attribute_key: gen_ai.request.top_k
+          attribute_type: double
+          expected: int
+        reason: util-genai types InferenceInvocation.top_k as float; semconv says int
+      - id: genai_expected_attribute_missing
+        context:
+          operation: generate_content
+          missing_attribute: gen_ai.response.id
+        reason: streaming generate_content does not record response id
+      - id: genai_expected_attribute_missing
+        context:
+          operation: generate_content
+          missing_attribute: gen_ai.response.model
+        reason: streaming generate_content does not record response model
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: generate_content
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  structured_output:
+    run: opentelemetry-instrument python structured_output.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: generate_content
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal:
+    run: opentelemetry-instrument python multimodal.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: generate_content
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: generate_content
+        expect:
+          count: 2
+      - match:
+          attributes:
+            gen_ai.operation.name: execute_tool
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+

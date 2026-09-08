@@ -1,0 +1,8 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+llama-index-core~=0.14.24
+llama-index-llms-openai
+wrapt==2.2.2
+-e util/opentelemetry-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-llama-index

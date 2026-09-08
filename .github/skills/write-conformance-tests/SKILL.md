@@ -1,19 +1,28 @@
 ---
 name: write-conformance-tests
-description: Author GenAI conformance-test scenarios for an OpenTelemetry instrumentation package — Scenario subclasses under tests/conformance/, the test_conformance.py runner, declared gaps, lib-specific assertions, and weaver live-check policies. Use when adding or updating conformance tests for any instrumentation, whether greenfield or ported.
+description: Author GenAI conformance-test scenarios for an OpenTelemetry instrumentation package - conformance.yaml configuration, standalone scenario scripts under tests/conformance/, declared gaps, span/metric expectations, and genai-mock-server. Use when adding or updating conformance tests for any instrumentation, whether greenfield or ported.
 ---
 
 # Write GenAI conformance tests
 
 Conformance tests validate that an instrumentation package emits telemetry
 matching the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
-via Weaver live-check. They apply to **any** instrumentation package —
-greenfield or ported — and don't depend on how the package was built.
+via Weaver live-check. They apply to **any** instrumentation package -
+greenfield or ported - and don't depend on how the package was built.
 
-This skill covers authoring the `tests/conformance/<scenario>.py` modules and
-the `tests/test_conformance.py` runner. For the always-on rules that hold even
-without this skill loaded, see the **Conformance tests** section of
-[AGENTS.md](../../../AGENTS.md).
+Conformance testing is driven by the shared runner from
+[`semantic-conventions-conformance`](https://github.com/open-telemetry/semantic-conventions-conformance)
+(`genai-conformance`). Each instrumentation package provides:
+
+1. `tests/conformance/conformance.yaml` - declares the runner, mock server, environment,
+   declared gaps (`expected_violations`), and per-scenario span/metric expectations.
+2. `tests/conformance/<scenario>.py` - standalone Python scenario scripts executed under
+   `opentelemetry-instrument`.
+3. `tests/conformance/data.json` - committed coverage file recording emitted spans, metrics,
+   events, and findings from the run.
+
+For the always-on rules that hold even without this skill loaded, see the **Conformance tests**
+section of [AGENTS.md](../../../AGENTS.md).
 
 ## One scenario per operation
 
@@ -34,342 +43,252 @@ client has no `embeddings` scenario).
 | Scenario | File | Covers |
 |---|---|---|
 | Inference | `inference.py` | A `chat` operation. |
-| Tool calling | `tool_calling.py` | A `chat` turn where the model returns tool calls and a follow-up turn feeds tool results back. Asserts tool calls and tool results are present on input/output **messages**. weaver will validate the format. Do **not** expect `execute_tool` spans unless the client library itself instruments tool execution — most don't; tool execution is the caller's code. |
-| Multimodal content | `multimodal.py` | A `chat` turn carrying the **non-text parts** the client accepts (inline image/audio bytes, media URLs, file refs, …), asserting each round-trips onto the messages. Cover only the part types the library emits — see [Message-part coverage](#message-part-coverage). |
-| Reasoning | `reasoning.py` | A `chat` turn against a reasoning model where the response carries reasoning/thinking content, asserting a `reasoning` part lands on an output message (and `gen_ai.usage.output_tokens` / reasoning-token attributes if the library records them). Only when the client surfaces reasoning content — see [Message-part coverage](#message-part-coverage). |
-| Embeddings | `embedding.py` | An `embeddings` operation. |
+| Streaming | `streaming.py` | A streamed `chat` operation, draining the stream completely. |
+| Tool calling | `tool_calling.py` | A `chat` turn where the model returns tool calls and a follow-up turn feeds tool results back. Do **not** expect `execute_tool` spans unless the client library itself instruments tool execution - most don't; tool execution is the caller's code. |
+| Multimodal content | `multimodal.py` | A `chat` turn carrying the non-text parts the client accepts (inline image/audio bytes, media URLs, file refs, …). |
+| Reasoning | `reasoning.py` | A `chat` turn against a reasoning model where the response carries reasoning/thinking content. |
+| Embeddings | `embeddings.py` | An `embeddings` operation. |
 
 **Agent / orchestration instrumentations:**
 
 | Scenario | File | Covers |
 |---|---|---|
-| Agent invocation with tooling | `invoke_agent.py` | An `invoke_agent` run that calls at least one tool — expects `invoke_agent` plus the nested `execute_tool` / `chat` spans the framework emits. |
-| Multi-agent orchestration | `multi_agent.py` | One agent handing off to / invoking another — expects nested `invoke_agent` spans under the orchestrator. |
-| Workflows | `invoke_workflow.py` | An `invoke_workflow` run wrapping the agent/tool spans it drives. |
+| Agent invocation | `invoke_agent.py` | An `invoke_agent` run. |
+| Tool calling | `automatic_tool_calling.py` | An `invoke_agent` run that calls at least one tool - expects `invoke_agent` plus nested `execute_tool` / `chat` spans. |
+| Multi-agent orchestration | `multi_agent.py` | One agent handing off to or invoking another - expects nested `invoke_agent` spans under the orchestrator. |
+| Workflows | `workflow.py` | An `invoke_workflow` run wrapping the agent/tool spans it drives. |
 
 ## Message-part coverage
 
-Weaver validates a part's *shape*, not *which* part types a scenario
-exercised — a text-only scenario leaves the package's image/audio/file/tool
-mapping unverified. So exercise **every non-text part type the library can
-emit** and assert it landed on a message. Cover only what the package
-instruments: walk its wrappers (the step-6 mapping for a port) for which
-`opentelemetry.util.genai.types` parts they produce.
+Exercise **every non-text part type the library can emit**. Cover only what the
+package instruments: check its message serializer for which
+`opentelemetry.util.genai.types` parts it produces.
+
+Weaver validates a part's *shape*, not that a part type was emitted at all, and
+`expect.attributes` can't reach inside a JSON-valued attribute - so a scenario
+that stopped producing `blob` parts still passes. Exercising the part is what
+we have; asserting it arrived is
+[open upstream](https://github.com/open-telemetry/semantic-conventions-conformance/issues/177).
 
 | Part `type` | util-genai type | Emitted when the library accepts… |
 |---|---|---|
 | `text` | `TextPart` | plain text (always) |
-| `tool_call` / `tool_call_response` | `ToolCallRequestPart` / `ToolCallResponsePart` | function/tool calling — covered by `tool_calling.py` |
+| `tool_call` / `tool_call_response` | `ToolCallRequestPart` / `ToolCallResponsePart` | function/tool calling - covered by `tool_calling.py` |
 | `server_tool_call` / `server_tool_call_response` | `ServerToolCallPart` / `ServerToolCallResponsePart` | vendor server-side tools (web_search, code_interpreter, …) |
 | `reasoning` | `ReasoningPart` | reasoning / thinking items |
 | `blob` | `BlobPart` | inline image/audio/video **bytes** (`modality` distinguishes them) |
 | `uri` | `UriPart` | an external media **URL** (`modality`) |
 | `file` | `FilePart` | a **file reference** / id (`modality`) |
-| `generic` | `GenericPart` | a provider item with no semconv mapping — flag, don't drop |
+| `generic` | `GenericPart` | a provider item with no semconv mapping - flag, don't drop |
 
-Group by shared turn/cassette — typically one `multimodal.py` for the
+Group by shared scenario - typically one `multimodal.py` for the
 image/audio/file/url inputs the client accepts, `tool_calling.py` for tool
 parts, and `reasoning.py` for `reasoning` parts (a reasoning model emits
-those on output messages, not input). `type` alone gives `blob` / `uri` /
-`file`; to tell image from
-audio from video, read the part's `modality` with a `_part_fields` helper
-returning `(type, modality)` tuples (defined alongside `_part_types` in
-[Lib-specific assertions](#lib-specific-assertions)):
-
-```python
-def validate(self, report: LiveCheckReport) -> None:
-    super().validate(report)
-    chat_spans = [
-        entry["span"]
-        for entry in report["samples"]
-        if "span" in entry
-        and _attr(entry["span"], "gen_ai.operation.name") == "chat"
-    ]
-    input_parts = {
-        (t, m)
-        for span in chat_spans
-        for t, m in _part_fields(_attr(span, "gen_ai.input.messages"))
-    }
-    # e.g. an inline image + an audio URL were sent
-    assert ("blob", "image") in input_parts, (
-        f"no image blob, saw {input_parts}"
-    )
-    assert ("uri", "audio") in input_parts, f"no audio uri, saw {input_parts}"
-```
+those on output messages, not input).
 
 If a part type the library accepts can't round-trip yet (a util-genai/semconv
 gap), still write the scenario and record it as a
-[declared gap](#declared-gaps) — never silently omit the part.
+[declared gap](#declared-gaps) - never silently omit the part.
 
-## Scenario modules
+## Standalone scenario scripts
 
-Each scenario module defines a subclass of `Scenario` from
-`opentelemetry.test_util_genai.conformance`. It sets the `expected_spans` /
-`expected_metrics` ClassVars and implements
-`run(self, *, tracer_provider, meter_provider, logger_provider, vcr)`.
+Each scenario is a standalone Python script under `tests/conformance/<scenario>.py`.
+The script does **not** import pytest, Weaver, or manually wire SDK Tracer/Meter providers.
+Instead, the runner executes it under `opentelemetry-instrument python <scenario>.py`, which
+automatically initializes OpenTelemetry and forwards telemetry to Weaver.
 
-`expected_spans` is a `dict[str, int]` of exact per-operation span counts
-(e.g. `{"chat": 2}` for a tool-calling turn's two LLM calls); the base
-`validate` fails on any mismatch. Pin real counts here — don't re-assert them
-in a `validate` override. `expected_metrics` is a tuple of metric names that
-must each appear at least once.
-Drive instrumentation through the shared `instrument` context manager (not
-`instr.instrument()` / `trace.set_tracer_provider`). The runner injects an
-already-configured `vcr`, so a cassette-based scenario just calls
-`vcr.use_cassette(...)`:
+The script initializes the library client pointing to `${MOCK_SERVER_URL}` (injected via `env`)
+and executes the target operation:
 
 ```python
 # tests/conformance/inference.py
-from typing import Any
+from openai import OpenAI
 
-from opentelemetry.instrumentation.genai.<lib> import <Lib>Instrumentor
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
-from opentelemetry.test_util_genai.instrumentor import instrument
-
-
-class InferenceScenario(Scenario):
-    expected_spans = {"chat": 1}
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
-    )
-
-    def run(
-        self,
-        *,
-        tracer_provider: TracerProvider,
-        meter_provider: MeterProvider,
-        logger_provider: LoggerProvider,
-        vcr: Any,
-    ) -> None:
-        with instrument(
-            <Lib>Instrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            with vcr.use_cassette("inference.yaml"):
-                ...  # call the patched API
+client = OpenAI()
+client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Say this is a test"}],
+)
 ```
 
-One operation per scenario. No env vars, no logging config.
+Keep scripts minimal and self-contained:
+- No hardcoded external network calls.
+- Consume configuration from environment variables declared in `conformance.yaml`.
+- Drain streams completely in streaming scenarios.
 
-**VCR cassettes are not required — a transport mock works too.** Mock HTTP
-however the package's **unit** tests already do, and use the **same pattern
-across every scenario in that package** (don't mix cassettes and transport
-mocks within one lib). If the package mocks the transport (e.g.
-`httpx.MockTransport`, `respx`) instead of replaying cassettes, build the
-client with that transport inside `run()` and ignore the injected `vcr`:
+## The `conformance.yaml` configuration
 
-```python
-    def run(self, *, tracer_provider, meter_provider, logger_provider, vcr) -> None:
-        with instrument(
-            <Lib>Instrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            client = <Lib>(transport=httpx.MockTransport(_handler))  # canned response
-            client.<method>(...)  # call the patched API
+`tests/conformance/conformance.yaml` is the declarative configuration for the test package.
+It defines:
+- `runner`: always `genai-conformance`.
+- `instrumented_library`: name of the underlying SDK (e.g. `openai`, `anthropic`).
+- `instrumentation_library`: name of the instrumentation package (e.g. `opentelemetry-instrumentation-genai-openai`).
+- `server`: mock server startup command, usually `genai-mock-server --port ${PORT}`.
+- `weaver.registry`: always `../../../../.semconv/model` - see [Which registry](#which-registry).
+- `env`: environment variables injected into the scenario execution environment.
+- `scenarios`: dictionary of scenario configurations with per-scenario expectations and declared gaps (`expected_violations`).
+
+Example:
+
+```yaml
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: openai
+instrumentation_library: opentelemetry-instrumentation-genai-openai
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  OPENAI_BASE_URL: ${MOCK_SERVER_URL}/v1
+  OPENAI_API_KEY: test_openai_api_key
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  inference:
+    run: opentelemetry-instrument python inference.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
 ```
 
-`vcr` stays in the signature either way (the runner always passes it).
+## Which registry
+
+The runner ships a `semantic-conventions-genai` pin of its own, which lags the
+`SEMCONV_GENAI_REF` in `versions.env` that util-genai's types are written against. Left alone, a
+run would validate against conventions the code doesn't target and an attribute renamed, retyped or
+deprecated in between would pass unnoticed.
+
+So every `conformance.yaml` overrides it:
+
+```yaml
+weaver:
+  registry: ../../../../.semconv/model
+```
+
+`scripts/provision_semconv_registry.py` stages that directory from the pin in `versions.env`; the
+`conformance` tox envs run it in `commands_pre`, so `uv run tox -e py314-test-…-conformance` needs
+no extra step. A caller's registry wins outright in the runner - validation, the coverage model and
+the content JSON schemas all come from it. Only the rego policies and weaver config stay the
+runner's, so a convention needing a *new rule* still waits on a runner bump.
+
+Bumping `SEMCONV_GENAI_REF` is the one thing that moves this; the path never changes.
+
+## Span and metric expectations
+
+The runner validates scenario telemetry strictly:
+
+1. **Span counts**: `expect.count` defines the exact number of matching spans.
+   Any extra undeclared spans cause the scenario to fail.
+2. **Span attributes**: under `expect.attributes`, a bare value asserts equality on every
+   matched span; a mapping takes `present` or `distinct` (one or the other, not both):
+   ```yaml
+   attributes:
+     gen_ai.request.stream: true
+     gen_ai.response.id:
+       present: true
+     gen_ai.response.model:
+       distinct: 1
+   ```
+3. **Metrics**: listed under `metrics:` must appear in the emitted telemetry.
+   Missing expected metrics or extra undeclared metrics fail the test.
 
 ## Declared gaps
 
-**Declared gaps** go in the `expected_violations` ClassVar (a tuple of
-`ExpectedViolation`), not `xfail`. `run_conformance` fails on *undeclared*
-weaver violations and on declared violations weaver no longer reports — so
-a known util-genai/semconv gap is recorded as an `expected_violation` that
-fails loudly the moment it's fixed.
+Known semconv departures or util-genai gaps are declared under `expected_violations:` in `conformance.yaml`.
+Each entry requires:
+- `id`: the advice rule that fired - one of `genai_expected_attribute_missing`,
+  `genai_operation_name_unknown`, `genai_span_name_format`, `genai_span_kind_unexpected`,
+  `genai_content_schema`, `span_status_ok_set_by_instrumentation`. Matched exactly, so an
+  id that isn't one of these matches nothing.
+- `context`: the key-value pairs the rule reported, identifying which signal it fired on
+  (e.g. `operation`, `missing_attribute`). Matched as a whole - declare every key the
+  violation carries, or leave `context` out to match any.
+- `reason`: short explanation of why the violation exists.
 
-When the gap is too big to capture as individual `expected_violations` — the
-whole operation can't run yet — skip the entire scenario instead, via
-`pytest.mark.xfail` / `skip` on the parametrize entry in
-`test_conformance.py`. Don't invent a one-off `reason=` string: **ask the
-user to file a tracking bug** and update the skip `reason=` with that issue
-(e.g. `reason="blocked by open-telemetry/...#1234"`) so the skip is traceable
-and gets revisited when the bug is fixed. **Never** drop the scenario file
-itself — a skipped scenario still records that the operation exists; a
-deleted one hides it.
-
-## Lib-specific assertions
-
-**Lib-specific assertions** go in a `validate(self, report)` override on the
-scenario (call `super().validate(report)` first) — there is no
-`_local_assertions.py` / `LocalAssertions` hook. Common lib-specific shapes:
-
-- **Vendor server-tool payloads** (`code_interpreter`, `web_search`, …).
-- **Vendor-specific finish reasons** outside semconv's enum (`stop`,
-  `length`, `content_filter`, `tool_call`, `error`).
-- **Provider-specific `error.type`** — exception class names from the
-  underlying SDK.
-
-`validate` receives the weaver `LiveCheckReport`. Read span samples from
-`report["samples"]` (each `entry["span"]["attributes"]` is a list of
-`{"name", "value"}`) and seen metrics from
-`report["statistics"]["seen_registry_metrics"]`. Always call
-`super().validate(report)` first so the `expected_spans` / `expected_metrics`
-checks still run:
-
-```python
-# tests/conformance/tool_calling.py
-from __future__ import annotations
-
-import json
-from typing import Any
-
-from opentelemetry.test.weaver_live_check import LiveCheckReport
-from opentelemetry.test_util_genai.conformance import Scenario
-
-
-class ToolCallingScenario(Scenario):
-    expected_spans = {"chat": 2}  # initial turn + follow-up with tool results
-    expected_metrics = ("gen_ai.client.operation.duration",)
-
-    def run(
-        self, *, tracer_provider, meter_provider, logger_provider, vcr
-    ) -> None: ...  # drive a tool-calling turn — see "Scenario modules" above
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)  # keep the expected_spans / _metrics checks
-
-        # Lib-specific: weaver validates the *shape* of each message part, but
-        # not that a tool call actually round-tripped. Assert the model's
-        # tool_call landed on an output message and the tool result was fed
-        # back on an input message (across the two chat turns).
-        chat_spans = [
-            entry["span"]
-            for entry in report["samples"]
-            if "span" in entry
-            and _attr(entry["span"], "gen_ai.operation.name") == "chat"
-        ]
-        assert chat_spans, "no chat span emitted"
-
-        output_part_types = {
-            t
-            for span in chat_spans
-            for t in _part_types(_attr(span, "gen_ai.output.messages"))
-        }
-        input_part_types = {
-            t
-            for span in chat_spans
-            for t in _part_types(_attr(span, "gen_ai.input.messages"))
-        }
-        assert "tool_call" in output_part_types, (
-            f"expected a tool_call part on an output message, saw {output_part_types}"
-        )
-        assert "tool_call_response" in input_part_types, (
-            f"expected a tool_call_response part on an input message, saw {input_part_types}"
-        )
-
-
-def _attr(span: dict[str, Any], name: str) -> Any:
-    for attr in span["attributes"]:
-        if attr["name"] == name:
-            return attr["value"]
-    return None
-
-
-def _part_types(messages_json: str | None) -> list[str]:
-    # gen_ai.{input,output}.messages is a JSON string of
-    # [{"role": ..., "parts": [{"type": ..., ...}]}].
-    messages = json.loads(messages_json) if messages_json else []
-    return [part["type"] for message in messages for part in message["parts"]]
-
-
-def _part_fields(messages_json: str | None) -> list[tuple[str, str | None]]:
-    # Like _part_types, but keeps modality so image/audio/video are
-    # distinguishable on blob/uri/file parts (None for parts without one).
-    messages = json.loads(messages_json) if messages_json else []
-    return [
-        (part["type"], part.get("modality"))
-        for message in messages
-        for part in message["parts"]
-    ]
+```yaml
+expected_violations:
+  - id: genai_expected_attribute_missing
+    context:
+      operation: chat
+      missing_attribute: server.address
+    reason: underlying client does not expose remote address
 ```
 
-## The test_conformance.py runner
+The runner strictly enforces declared violations:
+- Any **undeclared** violation reported by Weaver fails the run.
+- Any **declared** violation that Weaver no longer reports fails the run with:
+  `"... is no longer reported, remove it"`.
+This ensures gaps are tracked and resolved as soon as fixes land.
 
-`tests/test_conformance.py` guards collection with
-`pytest.importorskip("opentelemetry.test.weaver_live_check")`, parametrizes
-the scenario *instances*, and calls `run_conformance(scenario, vcr=vcr,
-weaver=weaver_live_check)` — it builds its own providers from the weaver
-OTLP endpoint, so don't pass providers/exporters:
+## Mock server vs. Cassettes
 
-```python
-import pytest
+Conformance tests run against `genai-mock-server` (provided by `semantic-conventions-conformance`),
+**not** VCR cassettes. VCR cassettes are used solely for unit tests.
 
-pytest.importorskip("opentelemetry.test.weaver_live_check")
+- The runner launches `genai-mock-server --port ${PORT}` on a random free port and exposes
+  `${MOCK_SERVER_URL}` and `${PORT}` to `conformance.yaml` `env`.
+- If an instrumentation requires a mock server capability or endpoint not yet supported by
+  `genai-mock-server` (e.g. a new vendor endpoint or protocol), contribute the mock handler
+  to `tools/gen-ai/mock-server` in the `semantic-conventions-conformance` repository.
+- Pure agent or in-memory frameworks (e.g. smolagents) that use in-process dummy models may run
+  without `server:` in `conformance.yaml`.
 
-from opentelemetry.test.weaver_live_check import WeaverLiveCheck  # noqa: E402
-from opentelemetry.test_util_genai.conformance import (  # noqa: E402
-    Scenario,
-    run_conformance,
-)
+## Coverage data file (`data.json`)
 
-from .conformance.embedding import EmbeddingScenario
-from .conformance.inference import InferenceScenario
+Once every scenario in `conformance.yaml` has run, the runner writes a summarized coverage report
+to `tests/conformance/data.json`. This file records:
+- Emitted spans and their carried attributes.
+- Emitted metrics and events.
+- Recorded findings / violations.
 
+Failing scenarios still count as run, so a red run rewrites `data.json` too - only a partial run
+(a single `--scenario`, or a session that raised) leaves it alone. Check the run was green before
+committing the result.
 
-@pytest.mark.parametrize(
-    "scenario",
-    [InferenceScenario(), EmbeddingScenario()],
-    ids=lambda s: type(s).__name__,
-)
-def test_conformance(
-    scenario: Scenario, vcr, weaver_live_check: WeaverLiveCheck
-) -> None:
-    run_conformance(scenario, vcr=vcr, weaver=weaver_live_check)
-```
-
-Do not write a separate `test_weaver_live.py`; weaver is already wired
-through `run_conformance`. The `weaver_live_check` fixture skips the test
-(rather than passing without the gate) only when it can't start (unsupported
-platform / network) — never wrap it in a try/except, which would silently
-disable the gate.
-
-## Weaver policies
-
-`weaver_live_check` enforces `policies/genai_content_validation.rego`
-(content-attribute JSON shape) and `policies/genai_span_validation.rego`
-(span name format, per-op expected attributes) — read these policy files
-when authoring scenarios; they're authoritative.
-
-`weaver_live_check` downloads the pinned weaver binary on first use (cached
-under `~/.cache/otel-conformance/weaver/`).
-
-## Recorded HTTP (cassettes or transport mock)
-
-A scenario replays one HTTP interaction per operation. Use whichever
-mechanism the package's unit tests use, consistently across all of its
-scenarios:
-
-- **VCR cassette** — `vcr.use_cassette("<scenario>.yaml")`, one committed
-  cassette per operation under `tests/cassettes/`.
-- **Transport mock** — build the SDK client with an `httpx.MockTransport`
-  (or `respx`) returning a canned response; no cassette file needed.
-
-Pick the one the lib already follows and don't mix the
-two within a package.
-
-**AI-generated cassettes.** Lacking provider access, you may synthesize a
-cassette from the provider's API reference via AI. Start the cassette with a
-`# TODO: this is generated by AI, re-record` comment, mention it in the PR,
-and open a follow-up issue to re-record it against the real provider in CI.
+Commit `data.json` alongside `conformance.yaml`. Reviewing diffs in `data.json` makes telemetry
+changes visible during PR reviews, and CI fails the conformance job when the committed file no
+longer matches what the run emitted.
 
 ## Running
+
+Run conformance tests using tox:
 
 ```sh
 uv run tox -e py314-test-instrumentation-genai-<lib>-conformance
 ```
 
-The `*-conformance` tox envs target `tests/test_conformance.py` directly; the
-regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
-OTLP/gRPC exporter or `weaver_live_check`.
+The `*-conformance` tox env invokes `pytest` directly on `tests/conformance/conformance.yaml`:
+
+```sh
+pytest instrumentation/<pkg>/tests/conformance/conformance.yaml
+```
+
+The unit test envs (`*-{oldest,latest}`) ignore the `tests/conformance` directory so they do not
+require conformance tools or the Weaver binary.
 

@@ -1,0 +1,145 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: boto3
+instrumentation_library: opentelemetry-instrumentation-genai-bedrock
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  AWS_ENDPOINT_URL_BEDROCK_RUNTIME: ${MOCK_SERVER_URL}
+  AWS_ACCESS_KEY_ID: test_access_key_id
+  AWS_SECRET_ACCESS_KEY: test_secret_access_key
+  AWS_DEFAULT_REGION: us-east-1
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  inference:
+    run: opentelemetry-instrument python inference.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response ID
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  streaming:
+    run: opentelemetry-instrument python streaming.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response ID
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response ID
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  invoke_model:
+    run: opentelemetry-instrument python invoke_model.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response ID
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  invoke_model_streaming:
+    run: opentelemetry-instrument python invoke_model_streaming.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not return response ID
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.model
+        reason: does not return response model
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk

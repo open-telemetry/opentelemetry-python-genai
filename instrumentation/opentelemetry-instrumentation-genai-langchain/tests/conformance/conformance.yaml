@@ -1,0 +1,383 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: langchain
+instrumentation_library: opentelemetry-instrumentation-genai-langchain
+
+# TODO: point at the pin directly once the runner takes a Git URL with a ref -
+# https://github.com/open-telemetry/semantic-conventions-conformance/issues/176
+weaver:
+  registry: ../../../../.semconv/model
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  OPENAI_BASE_URL: ${MOCK_SERVER_URL}/v1
+  OPENAI_API_KEY: test_openai_api_key
+  ANTHROPIC_BASE_URL: ${MOCK_SERVER_URL}
+  ANTHROPIC_API_KEY: test_anthropic_api_key
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  workflow:
+    run: opentelemetry-instrument python workflow.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_workflow
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.invoke_workflow.duration
+
+  invoke_agent:
+    run: opentelemetry-instrument python invoke_agent.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not surface finish reasons
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.input_tokens
+        reason: does not surface input tokens
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.output_tokens
+        reason: does not surface output tokens
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_agent
+        expect:
+          count: 1
+          attributes:
+            gen_ai.agent.name:
+              present: true
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  invoke_agent_unnamed:
+    run: opentelemetry-instrument python invoke_agent_unnamed.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not surface finish reasons
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.input_tokens
+        reason: does not surface input tokens
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.output_tokens
+        reason: does not surface output tokens
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_agent
+        expect:
+          count: 1
+          attributes:
+            gen_ai.agent.name:
+              present: false
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  automatic_tool_calling:
+    run: opentelemetry-instrument python automatic_tool_calling.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.response.finish_reasons
+        reason: does not surface finish reasons
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.input_tokens
+        reason: does not surface input tokens
+      - id: genai_expected_attribute_missing
+        context:
+          operation: invoke_agent
+          missing_attribute: gen_ai.usage.output_tokens
+        reason: does not surface output tokens
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: invoke_agent
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: execute_tool
+        expect:
+          count: 1
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  retrieval:
+    run: opentelemetry-instrument python retrieval.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: retrieval
+          missing_attribute: server.address
+        reason: does not listen on socket
+      - id: genai_expected_attribute_missing
+        context:
+          operation: retrieval
+          missing_attribute: gen_ai.retrieval.top_k
+        reason: does not specify top_k
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: retrieval
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+
+  inference:
+    run: opentelemetry-instrument python inference.py
+    # TODO: assert the SystemMessage lands on gen_ai.input.messages as a
+    # system-role message. Needs expectations on complex values -
+    # https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  streaming:
+    run: opentelemetry-instrument python streaming.py
+    # TODO: assert the SystemMessage lands on gen_ai.input.messages as a
+    # system-role message. Needs expectations on complex values -
+    # https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: gen_ai.response.id
+        reason: does not surface response ID
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal:
+    run: opentelemetry-instrument python multimodal.py
+    # TODO: was asserting the image reached gen_ai.input.messages as a
+    # blob/image part. Needs expectations on complex values - https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal_image_block:
+    run: opentelemetry-instrument python multimodal_image_block.py
+    # TODO: was asserting the image reached gen_ai.input.messages as a
+    # blob/image part. Needs expectations on complex values - https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal_responses:
+    run: opentelemetry-instrument python multimodal_responses.py
+    # TODO: was asserting the image reached gen_ai.input.messages as a
+    # blob/image part. Needs expectations on complex values - https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            # The Responses turn must still surface the response model.
+            gen_ai.response.model: gpt-4o
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal_anthropic:
+    run: opentelemetry-instrument python multimodal_anthropic.py
+    # TODO: was asserting the image reached gen_ai.input.messages as a
+    # blob/image part. Needs expectations on complex values - https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal_anthropic_file:
+    run: opentelemetry-instrument python multimodal_anthropic_file.py
+    # TODO: was asserting the image reached gen_ai.input.messages as a
+    # file/image part. Needs expectations on complex values - https://github.com/open-telemetry/semantic-conventions-conformance/issues/177
+    expected_violations:
+      - id: genai_expected_attribute_missing
+        context:
+          operation: chat
+          missing_attribute: server.address
+        reason: does not expose server address
+      - id: missing_attribute
+        context:
+          attribute_key: gen_ai.usage.cache_creation.input_tokens
+        reason: >-
+          renamed to gen_ai.usage.cache_write.input_tokens in
+          semantic-conventions-genai#440; util-genai still emits the old name
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
