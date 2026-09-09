@@ -15,6 +15,8 @@ import asyncio
 from typing import TypedDict
 
 import pytest
+
+pytest.importorskip("langgraph")
 from langgraph.graph import END, START, StateGraph
 
 from opentelemetry.semconv._incubating.attributes import (
