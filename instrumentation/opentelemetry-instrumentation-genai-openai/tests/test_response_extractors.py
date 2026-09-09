@@ -144,7 +144,10 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
 def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
     messages = loaded_module.get_input_messages(
         [
-            {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
             {
                 "role": "assistant",
                 "name": "example_assistant",
