@@ -816,6 +816,58 @@ async def test_async_messages_create_captures_tool_use_content(
 
 
 @pytest.mark.asyncio
+async def test_async_messages_create_tools_generator_reaches_the_sdk(
+    span_exporter, instrument_with_content
+):
+    """Async counterpart: a one-shot ``tools`` iterator must reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    try:
+        await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[
+                {"role": "user", "content": "What is the weather in SF?"}
+            ],
+            tools=(tool for tool in [_WEATHER_TOOL]),
+        )
+    finally:
+        await client.close()
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.asyncio
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_async_messages_create_captures_tool_use_content")
 @pytest.mark.skipif(
