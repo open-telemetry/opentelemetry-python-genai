@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import inspect
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from copy import copy, deepcopy
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
@@ -189,12 +189,6 @@ def patch_dspy(handler: TelemetryHandler) -> None:
         f"{retrieve_name}.forward",
         _retrieve_forward(handler),
     )
-    if hasattr(dspy.Retrieve, "aforward"):
-        _wrap_function(
-            retrieve_module,
-            f"{retrieve_name}.aforward",
-            _retrieve_aforward(handler),
-        )
 
     _wrap_function(
         _REACT_MODULE,
@@ -233,8 +227,6 @@ def unpatch_dspy() -> None:
     unwrap(dspy.Tool, "acall")
 
     unwrap(dspy.Retrieve, "forward")
-    if hasattr(dspy.Retrieve, "aforward"):
-        unwrap(dspy.Retrieve, "aforward")
 
     unwrap(dspy.predict.react.ReAct, "forward")
     unwrap(dspy.predict.react.ReAct, "aforward")
@@ -457,7 +449,7 @@ def _start_retrieval_invocation(
 
         rm = getattr(dspy.settings, "rm", None)
 
-    # DSPy retrieval models lack a uniform identifier schema, so inspect common index and provider
+    # DSPy retrieval models lack a uniform identifier schema, so inspect common index
     # attributes across the Retrieve instance and configured RM.
     data_source_id: str | None = (
         getattr(instance, "data_source_id", None)
@@ -466,17 +458,11 @@ def _start_retrieval_invocation(
         or (getattr(rm, "index_name", None) if rm is not None else None)
         or (getattr(rm, "collection_name", None) if rm is not None else None)
     )
-    provider: str | None = (
-        getattr(instance, "provider", None)
-        or (getattr(rm, "provider", None) if rm is not None else None)
-        or (getattr(rm, "provider_name", None) if rm is not None else None)
-    )
 
     invocation = handler.retrieval(
         data_source_id=str(data_source_id)
         if data_source_id is not None
         else None,
-        provider=str(provider) if provider is not None else None,
     )
 
     invocation.query_text = _extract_retrieval_query(args, kwargs)
@@ -507,44 +493,7 @@ def _set_retrieval_invocation_documents(
     if passages is None:
         return
 
-    documents: list[dict[str, Any]] = []
-    for psg in passages:
-        # Standard dspy.Retrieve flattens RM passages to strings via psg.long_text.
-        if isinstance(psg, str):
-            documents.append({"content": psg})
-        elif isinstance(psg, Mapping):
-            mapping_psg = cast(Mapping[str, Any], psg)
-            content_val = mapping_psg.get("long_text") or mapping_psg.get(
-                "content"
-            )
-            doc: dict[str, Any] = {
-                "content": str(
-                    content_val if content_val is not None else mapping_psg
-                )
-            }
-            if "id" in mapping_psg:
-                doc["id"] = str(mapping_psg["id"])
-            if "score" in mapping_psg:
-                try:
-                    doc["score"] = float(mapping_psg["score"])
-                except (ValueError, TypeError):
-                    pass
-            documents.append(doc)
-        elif hasattr(psg, "long_text"):
-            long_text = getattr(psg, "long_text")
-            doc = {"content": str(long_text)}
-            if hasattr(psg, "id"):
-                doc["id"] = str(getattr(psg, "id"))
-            if hasattr(psg, "score"):
-                try:
-                    doc["score"] = float(getattr(psg, "score"))
-                except (ValueError, TypeError):
-                    pass
-            documents.append(doc)
-        else:
-            documents.append({"content": str(psg)})
-
-    invocation.documents = documents
+    invocation.documents = [{"content": str(psg)} for psg in passages]
 
 
 def _retrieve_forward(
@@ -561,26 +510,6 @@ def _retrieve_forward(
         )
         with invocation:
             result = wrapped(*args, **kwargs)
-            _set_retrieval_invocation_documents(handler, invocation, result)
-            return result
-
-    return traced_method
-
-
-def _retrieve_aforward(
-    handler: TelemetryHandler,
-) -> Callable[..., Any]:
-    async def traced_method(
-        wrapped: Callable[..., Awaitable[Any]],
-        instance: Retrieve,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        invocation = _start_retrieval_invocation(
-            handler, instance, args, kwargs
-        )
-        with invocation:
-            result = await wrapped(*args, **kwargs)
             _set_retrieval_invocation_documents(handler, invocation, result)
             return result
 
