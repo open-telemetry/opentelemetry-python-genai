@@ -340,7 +340,9 @@ async def test_async_messages_create_captures_multimodal_content(
     instrument_with_content,
     vcr,
 ):
-    with vcr.use_cassette("test_async_messages_create_captures_content.yaml"):
+    with vcr.use_cassette(
+        "test_async_messages_create_captures_multimodal_content.yaml"
+    ):
         await async_anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=100,
