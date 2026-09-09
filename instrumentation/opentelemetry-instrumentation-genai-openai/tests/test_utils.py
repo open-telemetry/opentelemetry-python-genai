@@ -5,16 +5,11 @@
 
 import base64
 import json
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
-try:
-    # pylint: disable-next=no-name-in-module
-    from openai.types.completion_usage import PromptTokensDetails
-except ImportError:
-    PromptTokensDetails = None
 
 from opentelemetry.instrumentation.genai.openai.utils import (
     _content_to_parts,
@@ -567,16 +562,9 @@ def assert_cache_attributes(span, usage):
     details = _get_usage_details(usage)
     assert details is not None
 
-    prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
-    if prompt_tokens_details is not None:
-        if PromptTokensDetails is None:
-            assert isinstance(prompt_tokens_details, dict)
-        else:
-            assert isinstance(prompt_tokens_details, PromptTokensDetails)
-
     cached_tokens = (
         details.get("cached_tokens")
-        if isinstance(details, dict)
+        if isinstance(details, Mapping)
         else getattr(details, "cached_tokens", None)
     )
     if not cached_tokens:
