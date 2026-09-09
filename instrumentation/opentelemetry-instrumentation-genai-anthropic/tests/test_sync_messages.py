@@ -2363,6 +2363,36 @@ def test_sync_messages_stream_get_final_message_records_response(
 
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_get_final_text_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``get_final_text()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        text = stream.get_final_text()
+
+    assert text == "Hello!"
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
 def test_sync_messages_stream_until_done_records_response(
     span_exporter, anthropic_client, instrument_no_content
 ):
