@@ -93,6 +93,8 @@ Flag, with a link to the rule:
 
 - When catching exceptions from the underlying library to record telemetry, always re-raise the
   original exception unmodified.
+- Flag telemetry-finalizing handlers that catch `Exception` instead of `BaseException`; cancellation
+  raises `asyncio.CancelledError`, which would otherwise leave spans open.
 - Do not raise **new** exceptions in instrumentation/telemetry code.
 
 ## 6. Tests

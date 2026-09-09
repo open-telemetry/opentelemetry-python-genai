@@ -65,7 +65,7 @@ def _handle_converse(
     )
     try:
         response: Any = wrapped(*args, **kwargs)
-    except Exception as exc:
+    except BaseException as exc:
         invocation.fail(exc)
         raise
 
@@ -117,7 +117,7 @@ def _handle_invoke_model(
     )
     try:
         response: Any = wrapped(*args, **kwargs)
-    except Exception as exc:
+    except BaseException as exc:
         invocation.fail(exc)
         raise
 

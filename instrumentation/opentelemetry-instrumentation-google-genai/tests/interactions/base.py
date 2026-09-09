@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 import unittest.mock
 from typing import Any
@@ -69,10 +70,12 @@ class TestCase(CommonTestCaseBase):
         interaction = create_mock_interaction(**kwargs)
         self._interactions.append(interaction)
 
-    def configure_exception(self, e: Exception) -> None:
+    def configure_exception(self, e: BaseException) -> None:
         self._create_and_install_mocks(e)
 
-    def _create_and_install_mocks(self, e: Exception | None = None) -> None:
+    def _create_and_install_mocks(
+        self, e: BaseException | None = None
+    ) -> None:
         if self._create_mock is not None:
             return
         self.reset_client()
@@ -81,7 +84,7 @@ class TestCase(CommonTestCaseBase):
         self._install_mocks()
 
     def _create_mock_impl(
-        self, e: Exception | None = None
+        self, e: BaseException | None = None
     ) -> unittest.mock.MagicMock:
         mock = unittest.mock.MagicMock()
 
@@ -227,6 +230,54 @@ class TestCase(CommonTestCaseBase):
         )
         self.assertEqual(span.attributes["error.type"], "ValueError")
         self.assertEqual(event.attributes["error.type"], "ValueError")
+
+    def test_cancelled_request_records_error(self) -> None:
+        self.configure_exception(asyncio.CancelledError())
+        with self.assertRaises(asyncio.CancelledError):
+            self.run_interaction(
+                model="gemini-2.5-flash", input="Does this work?"
+            )
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            span.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+        self.assertEqual(
+            event.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+
+    def test_cancelled_streaming_request_records_error(self) -> None:
+        self.configure_exception(asyncio.CancelledError())
+        with self.assertRaises(asyncio.CancelledError):
+            self.run_streaming_interaction(
+                model="gemini-2.5-flash",
+                input="Does this work?",
+                stream=True,
+            )
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            span.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+        self.assertEqual(
+            event.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
 
     def test_generated_span_has_vertex_ai_system_when_configured(self) -> None:
         self.set_use_vertex(True)
