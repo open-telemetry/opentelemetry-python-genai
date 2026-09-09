@@ -82,3 +82,36 @@ def create_time_per_output_chunk_histogram(meter: Meter) -> Histogram:
         unit="s",
         explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
     )
+
+
+def create_agent_inference_calls_histogram(meter: Meter) -> Histogram:
+    return meter.create_histogram(
+        name="gen_ai.invoke_agent.inference_calls",
+        description=(
+            "The number of inference (model) calls a GenAI agent makes during"
+            " a single invocation."
+        ),
+        unit="{inference_call}",
+    )
+
+
+def create_agent_tool_calls_histogram(meter: Meter) -> Histogram:
+    return meter.create_histogram(
+        name="gen_ai.invoke_agent.tool_calls",
+        description=(
+            "The number of tool calls a GenAI agent makes during a single"
+            " invocation."
+        ),
+        unit="{tool_call}",
+    )
+
+
+__all__ = [
+    "create_agent_inference_calls_histogram",
+    "create_agent_tool_calls_histogram",
+    "create_duration_histogram",
+    "create_time_per_output_chunk_histogram",
+    "create_time_to_first_chunk_histogram",
+    "create_token_histogram",
+    "create_workflow_duration_histogram",
+]

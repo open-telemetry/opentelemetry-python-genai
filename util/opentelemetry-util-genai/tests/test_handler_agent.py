@@ -670,6 +670,149 @@ class TestAgentInvocationMetrics(TestBase):
         )
         self.assertAlmostEqual(duration_point.sum, 1.0, places=3)
 
+    def test_agent_records_inference_and_tool_calls(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(
+            agent_name="SearchAgent",
+            request_model="gpt-4o",
+        )
+        invocation.inference_calls = 3
+        invocation.tool_calls = 5
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+
+        self.assertIn("gen_ai.invoke_agent.inference_calls", metrics)
+        inf_points = metrics["gen_ai.invoke_agent.inference_calls"]
+        self.assertEqual(len(inf_points), 1)
+        self.assertAlmostEqual(inf_points[0].sum, 3.0, places=3)
+        self.assertEqual(
+            inf_points[0].attributes[GenAI.GEN_AI_AGENT_NAME],
+            "SearchAgent",
+        )
+        self.assertEqual(
+            inf_points[0].attributes[GenAI.GEN_AI_OPERATION_NAME],
+            GenAI.GenAiOperationNameValues.INVOKE_AGENT.value,
+        )
+        self.assertEqual(
+            inf_points[0].attributes[GenAI.GEN_AI_REQUEST_MODEL],
+            "gpt-4o",
+        )
+
+        self.assertIn("gen_ai.invoke_agent.tool_calls", metrics)
+        tool_points = metrics["gen_ai.invoke_agent.tool_calls"]
+        self.assertEqual(len(tool_points), 1)
+        self.assertAlmostEqual(tool_points[0].sum, 5.0, places=3)
+        self.assertEqual(
+            tool_points[0].attributes[GenAI.GEN_AI_AGENT_NAME],
+            "SearchAgent",
+        )
+        self.assertEqual(
+            tool_points[0].attributes[GenAI.GEN_AI_OPERATION_NAME],
+            GenAI.GenAiOperationNameValues.INVOKE_AGENT.value,
+        )
+
+    def test_agent_without_calls_does_not_record_call_metrics(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="MinimalAgent")
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.client.operation.duration", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.inference_calls", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.tool_calls", metrics)
+
+    def test_agent_records_zero_calls(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="ZeroAgent")
+        invocation.inference_calls = 1
+        invocation.tool_calls = 0
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.invoke_agent.inference_calls", metrics)
+        self.assertAlmostEqual(
+            metrics["gen_ai.invoke_agent.inference_calls"][0].sum,
+            1.0,
+            places=3,
+        )
+        self.assertIn("gen_ai.invoke_agent.tool_calls", metrics)
+        self.assertAlmostEqual(
+            metrics["gen_ai.invoke_agent.tool_calls"][0].sum,
+            0.0,
+            places=3,
+        )
+
+    def test_remote_agent_records_calls_with_server_attrs(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_remote_agent(
+            provider="openai",
+            request_model="gpt-4o",
+            server_address="api.openai.com",
+            server_port=443,
+            agent_name="RemoteAgent",
+        )
+        invocation.inference_calls = 2
+        invocation.tool_calls = 1
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        inf_points = metrics["gen_ai.invoke_agent.inference_calls"]
+        self.assertEqual(len(inf_points), 1)
+        self.assertEqual(
+            inf_points[0].attributes["server.address"],
+            "api.openai.com",
+        )
+        self.assertEqual(inf_points[0].attributes["server.port"], 443)
+        self.assertEqual(
+            inf_points[0].attributes[GenAI.GEN_AI_PROVIDER_NAME],
+            "openai",
+        )
+        self.assertEqual(
+            inf_points[0].attributes[GenAI.GEN_AI_AGENT_NAME],
+            "RemoteAgent",
+        )
+
+    def test_failed_agent_records_calls_with_error_type(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="FailingAgent")
+        invocation.inference_calls = 2
+        invocation.fail(Error(message="boom", type="ValueError"))
+
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.invoke_agent.inference_calls", metrics)
+        inf_point = metrics["gen_ai.invoke_agent.inference_calls"][0]
+        self.assertEqual(inf_point.attributes.get("error.type"), "ValueError")
+        self.assertAlmostEqual(inf_point.sum, 2.0, places=3)
+
+    def test_agent_name_omitted_from_metrics_when_none(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent()
+        invocation.inference_calls = 1
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        inf_point = metrics["gen_ai.invoke_agent.inference_calls"][0]
+        self.assertNotIn(GenAI.GEN_AI_AGENT_NAME, inf_point.attributes)
+
     def _harvest_metrics(self):
         metrics = self.get_sorted_metrics()
         metrics_by_name = {}

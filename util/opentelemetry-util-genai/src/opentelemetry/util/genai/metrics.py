@@ -14,6 +14,8 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.util.genai.instruments import (
+    create_agent_inference_calls_histogram,
+    create_agent_tool_calls_histogram,
     create_duration_histogram,
     create_time_per_output_chunk_histogram,
     create_time_to_first_chunk_histogram,
@@ -25,6 +27,7 @@ from opentelemetry.util.types import Attributes
 from ._invocation import GenAIInvocation
 
 if TYPE_CHECKING:
+    from ._agent_invocation import AgentInvocation
     from ._workflow_invocation import WorkflowInvocation
 
 
@@ -42,6 +45,12 @@ class InvocationMetricsRecorder:
         )
         self._time_per_output_chunk_histogram: Histogram = (
             create_time_per_output_chunk_histogram(meter)
+        )
+        self._agent_inference_calls_histogram: Histogram = (
+            create_agent_inference_calls_histogram(meter)
+        )
+        self._agent_tool_calls_histogram: Histogram = (
+            create_agent_tool_calls_histogram(meter)
         )
 
     def record(self, invocation: GenAIInvocation) -> None:
@@ -65,6 +74,26 @@ class InvocationMetricsRecorder:
                 attributes=attributes | {GenAI.GEN_AI_TOKEN_TYPE: token_type},
                 context=invocation._span_context,
             )
+
+        inference_calls = getattr(invocation, "inference_calls", None)
+        if inference_calls is not None:
+            self._agent_inference_calls_histogram.record(
+                inference_calls,
+                attributes=attributes,
+                context=invocation._span_context,
+            )
+
+        tool_calls = getattr(invocation, "tool_calls", None)
+        if tool_calls is not None:
+            self._agent_tool_calls_histogram.record(
+                tool_calls,
+                attributes=attributes,
+                context=invocation._span_context,
+            )
+
+    def record_agent(self, invocation: AgentInvocation) -> None:
+        """Record duration, token, and call count metrics for an agent invocation."""
+        self.record(invocation)
 
     def record_workflow(self, invocation: WorkflowInvocation) -> None:
         """Record duration metric for a workflow invocation."""
