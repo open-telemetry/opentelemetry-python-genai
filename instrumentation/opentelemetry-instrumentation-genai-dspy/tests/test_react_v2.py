@@ -10,6 +10,7 @@ import json
 import dspy
 import pytest
 from dspy.adapters.types.tool import ToolCalls
+from tests.test_react import MockExtract, MockSyncPredict
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
@@ -194,29 +195,6 @@ def test_react_v2_missing_tolerated(
     import dspy.predict.react_v2
 
     monkeypatch.delattr(dspy.predict.react_v2, "ReActV2", raising=False)
-
-    class MockSyncPredict:
-        def __init__(self) -> None:
-            self.count = 0
-
-        def __call__(self, **kwargs: object) -> object:
-            self.count += 1
-
-            class Pred:
-                next_thought = "Need to add 2 and 2"
-                next_tool_name = "add"
-                next_tool_args = {"x": 2, "y": 2}
-
-            class FinishPred:
-                next_thought = "Done calculation"
-                next_tool_name = "finish"
-                next_tool_args = {}
-
-            return Pred() if self.count == 1 else FinishPred()
-
-    class MockExtract:
-        def __call__(self, **kwargs: object) -> dict[str, str]:
-            return {"answer": "4"}
 
     with instrument(
         DSPyInstrumentor(),

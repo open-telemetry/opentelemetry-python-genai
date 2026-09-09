@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest import mock
 
 import dspy
@@ -37,16 +38,24 @@ async def async_multiply(a: int, b: int) -> int:
 
 
 class MockSyncPredict:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        tool_name: str = "add",
+        tool_args: dict[str, Any] | None = None,
+    ) -> None:
         self.count = 0
+        self.tool_name = tool_name
+        self.tool_args = (
+            tool_args if tool_args is not None else {"x": 2, "y": 2}
+        )
 
     def __call__(self, **kwargs: object) -> object:
         self.count += 1
 
         class Pred:
-            next_thought = "Need to calculate 2 + 2"
-            next_tool_name = "add"
-            next_tool_args = {"x": 2, "y": 2}
+            next_thought = f"Need to calculate {self.tool_name}"
+            next_tool_name = self.tool_name
+            next_tool_args = self.tool_args
 
         class FinishPred:
             next_thought = "Done calculation"

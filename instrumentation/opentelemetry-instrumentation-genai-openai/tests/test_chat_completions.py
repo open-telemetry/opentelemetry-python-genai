@@ -41,6 +41,8 @@ from opentelemetry.util.genai.utils import is_experimental_mode
 from .test_utils import (
     DEFAULT_MODEL,
     EXPECTED_TOOL_DEFINITIONS,
+    MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    MULTIMODAL_PROMPT,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
@@ -110,6 +112,22 @@ def test_chat_completion_with_content(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+def test_chat_completion_captures_multimodal_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    with vcr.use_cassette("chat_completions_multimodal_conformance.yaml"):
+        openai_client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=MULTIMODAL_PROMPT,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
 
 
 def test_chat_completion_with_named_input_message(
@@ -1181,6 +1199,28 @@ def test_chat_completion_streaming(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+def test_chat_completion_streaming_captures_multimodal_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_multimodal_input.yaml"
+    ):
+        response = openai_client.chat.completions.create(
+            model="gpt-4.1",
+            messages=MULTIMODAL_PROMPT,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        for _ in response:
+            pass
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
 
 
 def test_chat_completion_streaming_user_exception_propagates(
