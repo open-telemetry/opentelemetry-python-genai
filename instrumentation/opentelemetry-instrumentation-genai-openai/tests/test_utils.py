@@ -10,6 +10,12 @@ from typing import Any
 
 import pytest
 
+try:
+    # pylint: disable-next=no-name-in-module
+    from openai.types.completion_usage import PromptTokensDetails
+except ImportError:
+    PromptTokensDetails = None
+
 from opentelemetry.instrumentation.genai.openai.utils import (
     _content_to_parts,
     _prepare_input_messages,
@@ -561,7 +567,18 @@ def assert_cache_attributes(span, usage):
     details = _get_usage_details(usage)
     assert details is not None
 
-    cached_tokens = getattr(details, "cached_tokens", None)
+    prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
+    if prompt_tokens_details is not None:
+        if PromptTokensDetails is None:
+            assert isinstance(prompt_tokens_details, dict)
+        else:
+            assert isinstance(prompt_tokens_details, PromptTokensDetails)
+
+    cached_tokens = (
+        details.get("cached_tokens")
+        if isinstance(details, dict)
+        else getattr(details, "cached_tokens", None)
+    )
     if not cached_tokens:
         assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in span.attributes
     else:
