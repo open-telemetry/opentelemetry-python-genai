@@ -8,12 +8,16 @@ on:
         - ''
         - opentelemetry-instrumentation-genai-agno
         - opentelemetry-instrumentation-genai-anthropic
+        - opentelemetry-instrumentation-genai-bedrock
+        - opentelemetry-instrumentation-genai-dspy
         - opentelemetry-instrumentation-google-genai
         - opentelemetry-instrumentation-genai-langchain
+        - opentelemetry-instrumentation-genai-llama-index
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-portkey
         - opentelemetry-instrumentation-genai-qwen-agent
+        - opentelemetry-instrumentation-genai-smolagents
         - opentelemetry-util-genai
         description: >
           Restrict to a single package. Leave empty to prepare every package
