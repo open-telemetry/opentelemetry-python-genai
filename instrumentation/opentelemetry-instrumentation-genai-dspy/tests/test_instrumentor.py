@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace import TracerProvider
 
 def test_instrumentation_dependencies() -> None:
     assert DSPyInstrumentor().instrumentation_dependencies() == (
-        "dspy >= 2.5.0, < 4",
+        "dspy >= 3.3.0, < 4",
     )
 
 

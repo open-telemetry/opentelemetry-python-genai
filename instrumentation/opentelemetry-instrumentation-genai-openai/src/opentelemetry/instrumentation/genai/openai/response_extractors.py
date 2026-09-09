@@ -92,6 +92,7 @@ class ResponseRequestParams:
     model: str | None = None
     instructions: str | None = None
     input: str | Sequence[object] | None = None
+    conversation_id: str | None = None
     max_output_tokens: int | None = None
     service_tier: str | None = None
     temperature: float | None = None
@@ -160,11 +161,23 @@ def _extract_output_type_from_value(text_config: object) -> str | None:
     return None
 
 
+def _extract_conversation_id(conversation: object) -> str | None:
+    """Return the conversation id the ``conversation`` parameter names."""
+    if isinstance(conversation, str):
+        return conversation or None
+
+    conversation_id = _get_field(conversation, "id")
+    if isinstance(conversation_id, str) and conversation_id:
+        return conversation_id
+    return None
+
+
 def extract_params(
     *,
     model: str | None = None,
     instructions: str | None = None,
     input_items: str | Sequence[object] | None = None,
+    conversation: object | None = None,
     max_output_tokens: int | None = None,
     service_tier: str | None = None,
     temperature: float | None = None,
@@ -188,6 +201,7 @@ def extract_params(
             )
             else None
         ),
+        conversation_id=_extract_conversation_id(conversation),
         max_output_tokens=_get_int(max_output_tokens),
         service_tier=(
             service_tier
@@ -555,6 +569,7 @@ def apply_request_attributes(
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
+    invocation.conversation_id = params.conversation_id
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens
