@@ -163,6 +163,79 @@ def _load_span_messages(span, attribute):
     return parsed
 
 
+_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get weather by city",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+_STREAM_SSE_BODY = b"".join(
+    f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+    for name, payload in (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_generator",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "ok"},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 2},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+)
+
+
+def _assert_weather_tool_definitions(span):
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather by city",
+            "parameters": _WEATHER_TOOL["input_schema"],
+        }
+    ]
+
+
 def _skip_if_cassette_missing_and_no_real_key(request):
     cassette_path = (
         Path(__file__).parent / "cassettes" / f"{request.node.name}.yaml"
@@ -746,6 +819,34 @@ def test_sync_messages_create_streaming_captures_content(
 
 
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_records_tool_definitions(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """``stream`` builds its invocation lazily -- it must still see ``tools``.
+
+    Replays the plain ``test_sync_messages_stream`` cassette: tool definitions
+    come from the request, so the recorded response does not matter.
+    """
+    with anthropic_client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.vcr()
 def test_sync_messages_stream(  # pylint: disable=too-many-locals
     request, span_exporter, anthropic_client, instrument_no_content
 ):
@@ -1078,17 +1179,7 @@ def test_sync_messages_create_captures_tool_use_content(
         model=model,
         max_tokens=256,
         messages=messages,
-        tools=[
-            {
-                "name": "get_weather",
-                "description": "Get weather by city",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ],
+        tools=[_WEATHER_TOOL],
         tool_choice={"type": "tool", "name": "get_weather"},
     )
 
@@ -1104,6 +1195,114 @@ def test_sync_messages_create_captures_tool_use_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    _assert_weather_tool_definitions(span)
+
+
+def test_sync_messages_create_tools_generator_reaches_the_sdk(
+    span_exporter, instrument_with_content
+):
+    """A one-shot ``tools`` iterator must still reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=(tool for tool in [_WEATHER_TOOL]),
+    )
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+def test_sync_messages_stream_tools_generator_is_recorded(
+    span_exporter, instrument_with_content
+):
+    """``stream`` serializes the request before the invocation exists.
+
+    The generator has to be frozen in the wrapper, not while the invocation is
+    built, or the SDK drains it first and the span records no tools.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_SSE_BODY,
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=(tool for tool in [_WEATHER_TOOL]),
+    ) as stream:
+        stream.until_done()
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_captures_tool_use_content")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_create_omits_tool_definitions_without_content(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Tool definitions are content: they stay off when capture is off."""
+    anthropic_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+        tool_choice={"type": "tool", "name": "get_weather"},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
 @pytest.mark.vcr()
