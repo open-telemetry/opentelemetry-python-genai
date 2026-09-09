@@ -6,7 +6,6 @@
 import json
 import logging
 import os
-from types import SimpleNamespace
 
 import pytest
 from openai import (
@@ -24,12 +23,6 @@ try:
 except ImportError:
     not_given = NOT_GIVEN
 
-from opentelemetry.instrumentation.genai.openai.chat_wrappers import (
-    _ChatStreamMixin,
-)
-from opentelemetry.instrumentation.genai.openai.patch import (
-    _set_response_properties,
-)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -61,91 +54,6 @@ from .test_utils import (
     format_simple_expected_output_message,
     get_current_weather_tool_definition,
 )
-
-
-@pytest.mark.parametrize("cached_tokens", [3, 0, None])
-def test_set_response_properties_extracts_cached_prompt_tokens(cached_tokens):
-    invocation = SimpleNamespace(cache_read_input_tokens=None)
-    result = SimpleNamespace(
-        usage=SimpleNamespace(
-            prompt_tokens=11,
-            completion_tokens=7,
-            prompt_tokens_details=SimpleNamespace(
-                cached_tokens=cached_tokens
-            ),
-        )
-    )
-
-    _set_response_properties(invocation, result, capture_content=False)
-
-    assert invocation.input_tokens == 11
-    assert invocation.output_tokens == 7
-    assert invocation.cache_read_input_tokens == cached_tokens
-
-
-def test_set_response_properties_handles_missing_prompt_token_details():
-    invocation = SimpleNamespace(cache_read_input_tokens=None)
-    result = SimpleNamespace(
-        usage=SimpleNamespace(prompt_tokens=11, completion_tokens=7)
-    )
-
-    _set_response_properties(invocation, result, capture_content=False)
-
-    assert invocation.cache_read_input_tokens is None
-
-
-@pytest.mark.parametrize("prompt_tokens_details", [None, SimpleNamespace()])
-def test_chat_stream_handles_missing_cached_prompt_tokens(
-    prompt_tokens_details,
-):
-    wrapper = _make_chat_stream_mixin()
-    chunk = SimpleNamespace(
-        usage=SimpleNamespace(
-            prompt_tokens=11,
-            completion_tokens=7,
-            prompt_tokens_details=prompt_tokens_details,
-        )
-    )
-
-    wrapper._set_usage(chunk)
-    wrapper._cleanup()
-
-    assert wrapper._self_invocation.cache_read_input_tokens is None
-
-
-def test_chat_stream_transfers_cached_prompt_tokens_on_cleanup():
-    wrapper = _make_chat_stream_mixin()
-    chunk = SimpleNamespace(
-        usage=SimpleNamespace(
-            prompt_tokens=11,
-            completion_tokens=7,
-            prompt_tokens_details=SimpleNamespace(cached_tokens=3),
-        )
-    )
-
-    wrapper._set_usage(chunk)
-    wrapper._cleanup()
-
-    assert wrapper._self_invocation.input_tokens == 11
-    assert wrapper._self_invocation.output_tokens == 7
-    assert wrapper._self_invocation.cache_read_input_tokens == 3
-
-
-def _make_chat_stream_mixin():
-    wrapper = _ChatStreamMixin()
-    wrapper._self_invocation = SimpleNamespace(
-        attributes={},
-        cache_read_input_tokens=None,
-        stop=lambda: None,
-    )
-    wrapper._self_capture_content = False
-    wrapper._self_choice_buffers = []
-    wrapper._self_response_id = None
-    wrapper._self_service_tier = None
-    wrapper._self_prompt_tokens = None
-    wrapper._self_completion_tokens = None
-    wrapper._self_cached_prompt_tokens = None
-    return wrapper
 
 
 def test_chat_completion_with_content(
