@@ -88,6 +88,7 @@ MULTIMODAL_EXPECTED_INPUT_MESSAGES = [
                 "type": "blob",
             },
         ],
+        "name": None,
     }
 ]
 WEATHER_TOOL_PROMPT = [
