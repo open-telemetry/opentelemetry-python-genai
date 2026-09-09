@@ -262,7 +262,7 @@ def test_prepare_input_messages_drops_messages_without_parts():
                 "role": "user",
                 "content": [{"type": "unsupported", "value": "ignored"}],
             },
-            {"role": "user", "content": "Keep this"},
+            {"role": "user", "name": "customer", "content": "Keep this"},
         ]
     )
 
@@ -270,6 +270,7 @@ def test_prepare_input_messages_drops_messages_without_parts():
         InputMessage(
             role="user",
             parts=[TextPart(content="Keep this")],
+            name="customer",
         )
     ]
 

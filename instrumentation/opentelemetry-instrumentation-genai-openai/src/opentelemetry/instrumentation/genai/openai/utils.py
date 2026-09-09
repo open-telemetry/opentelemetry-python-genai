@@ -245,12 +245,6 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
     for message in messages:
         role = get_property_value(message, "role")
         name = get_property_value(message, "name")
-        chat_message = InputMessage(
-            role=str(role),
-            parts=[],
-            name=str(name) if name is not None else None,
-        )
-        chat_messages.append(chat_message)
         parts: list[MessagePart] = []
 
         content = get_property_value(message, "content")
@@ -272,7 +266,13 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             parts += _content_to_parts(content)
 
         if parts:
-            chat_messages.append(InputMessage(role=str(role), parts=parts))
+            chat_messages.append(
+                InputMessage(
+                    role=str(role),
+                    parts=parts,
+                    name=str(name) if name is not None else None,
+                )
+            )
     return chat_messages
 
 

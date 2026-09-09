@@ -241,6 +241,8 @@ def get_input_messages(
         if not isinstance(role, str):
             continue
 
+        name = _get_field(item, "name")
+        name_str = str(name) if name is not None else None
         parts = _content_to_parts(_get_field(item, "content"))
         if parts:
             messages.append(

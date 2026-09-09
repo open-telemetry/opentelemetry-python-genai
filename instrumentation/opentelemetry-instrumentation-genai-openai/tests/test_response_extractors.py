@@ -147,6 +147,7 @@ def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
             {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
             {
                 "role": "assistant",
+                "name": "example_assistant",
                 "content": [
                     {
                         "type": "output_text",
@@ -162,6 +163,7 @@ def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
         ("user", [TextPart(content="Hi")]),
         ("assistant", [TextPart(content="Hello!")]),
     ]
+    assert messages[1].name == "example_assistant"
 
 
 def test_extract_input_messages_supports_sdk_response_output(loaded_module):
