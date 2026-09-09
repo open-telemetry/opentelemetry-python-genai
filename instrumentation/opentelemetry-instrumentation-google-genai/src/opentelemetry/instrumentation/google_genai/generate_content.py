@@ -480,6 +480,18 @@ def _create_instrumented_generate_content(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             ) as invocation:
+                if invocation.already_started:
+                    # Example attribute to show that setting/overwriting attributes on an existing invocation works.
+                    invocation.attributes[
+                        "google_genai.inference_suppressed"
+                    ] = True
+                    return wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
+                    )
                 _apply_request_attributes(
                     wrapped_config,
                     generate_content_config_key_allowlist,
@@ -639,6 +651,19 @@ def _create_instrumented_generate_content_stream(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             )
+            if invocation.already_started:
+                # Example attribute to show that setting/overwriting attributes on an existing invocation works.
+                invocation.attributes["google_genai.inference_suppressed"] = (
+                    True
+                )
+                invocation.stop()
+                return wrapped(
+                    model=model,
+                    contents=contents,
+                    config=wrapped_config if has_wrapped_tools else config,
+                    *_args,
+                    **_kwargs,
+                )
             _apply_request_attributes(
                 wrapped_config,
                 generate_content_config_key_allowlist,
@@ -711,6 +736,18 @@ def _create_instrumented_async_generate_content(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             ) as invocation:
+                if invocation.already_started:
+                    # Example attribute to show that setting/overwriting attributes on an existing invocation works.
+                    invocation.attributes[
+                        "google_genai.inference_suppressed"
+                    ] = True
+                    return await wrapped(
+                        model=model,
+                        contents=contents,
+                        config=wrapped_config if has_wrapped_tools else config,
+                        *_args,
+                        **_kwargs,
+                    )
                 invocation.attributes.update(
                     _get_extra_generate_content_attributes()
                 )
@@ -794,6 +831,19 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             )
+            if invocation.already_started:
+                # Example attribute to show that setting/overwriting attributes on an existing invocation works.
+                invocation.attributes["google_genai.inference_suppressed"] = (
+                    True
+                )
+                invocation.stop()
+                return await wrapped(
+                    model=model,
+                    contents=contents,
+                    config=wrapped_config if has_wrapped_tools else config,
+                    *_args,
+                    **_kwargs,
+                )
             invocation.attributes.update(
                 _get_extra_generate_content_attributes()
             )

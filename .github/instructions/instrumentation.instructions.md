@@ -65,7 +65,9 @@ Investigate the library's real API and apply the litmus tests in
 Flag, with a link to the rule:
 
 - An operation the library delegates to another instrumentable library (e.g. a framework calling
-  `openai`/`anthropic`/`google-genai` under the hood) — it belongs to that library, not here.
+  `openai`/`anthropic`/`google-genai` under the hood) — it belongs to that library, not here. If an
+  upstream layer does start an inference span, downstream instrumentations should check
+  `get_current_inference_span()` to decide whether to enrich it or skip creating a duplicate span.
 - An operation the library has no concept of: inference/embeddings unless the library is itself the
   model-call boundary; `invoke_agent` unless it models agents; `invoke_workflow` unless it models
   workflows/graphs/complex agents.

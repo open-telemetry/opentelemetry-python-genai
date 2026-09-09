@@ -166,7 +166,9 @@ Once the change implementation is complete and tests pass, review the diff in a 
 
 - Test coverage gaps - sync/async variants, error paths, streaming, edge cases. Add the missing
   tests.
-- Instrumentation of layers not owned by the target library (LLM spans reported by agentic framework).
+- Unchecked duplicate spans for layers not owned by the target library (e.g. agent frameworks emitting
+  LLM spans without checking for existing spans, or downstream client libraries failing to check
+  `get_current_inference_span()`).
 - Functional issues
 
 Fix the findings, keeping the PR scoped to the original change; for anything outside that scope,
@@ -276,6 +278,33 @@ Instrumentation observes; it should not change what a call returns or when its w
   replace.
 
 Full transparency isn't always reachable — prefer the least intrusive option that works.
+
+#### Handling existing inference spans
+
+When an LLM call occurs, an inference span may already exist in the OpenTelemetry context (for
+example, if an upstream agent framework, gateway, or workflow layer already started one).
+`InferenceInvocation` automatically puts its `Span` in the context so downstream layers can observe
+it.
+
+Downstream instrumentations can check whether an inference span is already active using
+`get_current_inference_span()` from `opentelemetry.util.genai` (or
+`opentelemetry.util.genai.context`):
+
+```python
+from opentelemetry.util.genai import get_current_inference_span
+
+existing_span = get_current_inference_span()
+if existing_span is not None:
+    # An inference span already exists in context.
+    # Decide whether to enrich it or skip tracing:
+    existing_span.set_attribute("custom.attribute", "enriched")
+    return wrapped(*args, **kwargs)
+```
+
+Instrumentations should decide if they have anything interesting to add or change on the existing
+inference span (e.g. low-level transport details, connection addresses, or provider-specific
+metadata) or whether to skip tracing altogether to avoid emitting duplicate inference spans for the
+same logical model call.
 
 ### Exception handling
 

@@ -412,45 +412,45 @@ def test_invoke_model_error(
 
 def test_extract_invoke_model_response_headers(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    invocation = handler.inference(provider="aws.bedrock")
-    extract_invoke_model_response(
-        {
-            "ResponseMetadata": {
-                "HTTPHeaders": {
-                    "X-Amzn-Bedrock-Input-Token-Count": "15",
-                    "X-Amzn-Bedrock-Output-Token-Count": "22",
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_response(
+            {
+                "ResponseMetadata": {
+                    "HTTPHeaders": {
+                        "X-Amzn-Bedrock-Input-Token-Count": "15",
+                        "X-Amzn-Bedrock-Output-Token-Count": "22",
+                    }
                 }
-            }
-        },
-        b'{"completion": "hello"}',
-        invocation,
-    )
-    assert invocation.input_tokens == 15
-    assert invocation.output_tokens == 22
+            },
+            b'{"completion": "hello"}',
+            invocation,
+        )
+        assert invocation.input_tokens == 15
+        assert invocation.output_tokens == 22
 
 
 def test_extract_invoke_model_request_zero_values(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    invocation = handler.inference(provider="aws.bedrock")
-    extract_invoke_model_request(
-        {
-            "body": json.dumps(
-                {
-                    "temperature": 0.0,
-                    "top_p": 0.0,
-                    "top_k": 0,
-                    "max_tokens": 0,
-                    "seed": 0,
-                }
-            )
-        },
-        invocation,
-    )
-    assert invocation.temperature == 0.0
-    assert invocation.top_p == 0.0
-    assert invocation.top_k == 0.0
-    assert invocation.max_tokens == 0
-    assert invocation.seed == 0
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_request(
+            {
+                "body": json.dumps(
+                    {
+                        "temperature": 0.0,
+                        "top_p": 0.0,
+                        "top_k": 0,
+                        "max_tokens": 0,
+                        "seed": 0,
+                    }
+                )
+            },
+            invocation,
+        )
+        assert invocation.temperature == 0.0
+        assert invocation.top_p == 0.0
+        assert invocation.top_k == 0.0
+        assert invocation.max_tokens == 0
+        assert invocation.seed == 0
 
 
 def test_invoke_model_anthropic_tool_call_and_result(
@@ -560,20 +560,19 @@ def test_invoke_model_anthropic_tool_call_and_result(
 
 def test_extract_invoke_model_request_guardrail(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    invocation = handler.inference(provider="aws.bedrock")
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_request(
+            {
+                "guardrailIdentifier": "sgi5gkybzqak",
+                "body": json.dumps({"prompt": "Hello"}),
+            },
+            invocation,
+        )
 
-    extract_invoke_model_request(
-        {
-            "guardrailIdentifier": "sgi5gkybzqak",
-            "body": json.dumps({"prompt": "Hello"}),
-        },
-        invocation,
-    )
-
-    assert (
-        invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
-        == "sgi5gkybzqak"
-    )
+        assert (
+            invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
+            == "sgi5gkybzqak"
+        )
 
 
 def test_invoke_model_with_guardrail_stubber(

@@ -49,6 +49,7 @@ from typing import Any
 
 import pytest
 
+from opentelemetry.context import attach, detach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -73,6 +74,19 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.types import ContentCapturingMode
+
+# ─── Context isolation ──────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def reset_context() -> Iterator[None]:
+    """Function-scoped context reset to prevent cross-test context leaks."""
+    token = attach(get_current())
+    try:
+        yield
+    finally:
+        detach(token)
+
 
 # ─── In-memory exporters and providers ──────────────────────────────────────
 
