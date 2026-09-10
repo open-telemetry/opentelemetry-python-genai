@@ -95,7 +95,11 @@ def normalize_finish_reason(stop_reason: str | None) -> str | None:
 
 
 def _extract_base64_blob(source: object, modality: str) -> MessagePart | None:
-    """Extract a BlobPart from a base64-encoded source dict."""
+    """Convert an Anthropic base64 source to a GenAI message part.
+
+    String data becomes a ``BlobPart``; file-backed data is represented as a
+    ``GenericPart`` without being read.
+    """
     if not isinstance(source, dict):
         return None
     source_dict = cast(dict[str, object], source)

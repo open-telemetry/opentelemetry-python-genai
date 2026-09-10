@@ -941,7 +941,7 @@ def test_sync_messages_create_streaming_captures_multimodal_content(
     vcr,
 ):
     with vcr.use_cassette(
-        "test_sync_messages_create_streaming_captures_content.yaml"
+        "test_sync_messages_create_streaming_captures_multimodal_content.yaml"
     ):
         with anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",

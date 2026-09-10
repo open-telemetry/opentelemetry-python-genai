@@ -571,7 +571,7 @@ async def test_async_messages_create_streaming_captures_multimodal_content(
     vcr,
 ):
     with vcr.use_cassette(
-        "test_async_messages_create_streaming_captures_content.yaml"
+        "test_async_messages_create_streaming_captures_multimodal_content.yaml"
     ):
         stream = await async_anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
