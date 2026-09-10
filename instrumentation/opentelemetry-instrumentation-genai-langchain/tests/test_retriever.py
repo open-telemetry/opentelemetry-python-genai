@@ -11,6 +11,8 @@ spans, attributes, and metrics against the semconv spec.
 
 from __future__ import annotations
 
+import json
+import math
 from typing import Any
 
 import pytest
@@ -27,6 +29,12 @@ from opentelemetry.semconv.attributes import error_attributes
 # ---------------------------------------------------------------------------
 # Fake retriever helpers
 # ---------------------------------------------------------------------------
+
+
+class _ScoredDocument(Document):
+    """Document subclass that allows a score attribute."""
+
+    score: float | None = None
 
 
 class _FakeRetriever(BaseRetriever):
@@ -371,23 +379,25 @@ def test_document_metadata_not_in_span_content(
         meter_provider=meter_provider,
         logger_provider=logger_provider,
     )
-    docs = [
-        Document(
-            page_content="text",
-            metadata={"source": "wiki", "score": 0.9},
-        )
-    ]
-    retriever = _FakeRetriever(documents=docs)
-    retriever.invoke("q")
+    try:
+        docs = [
+            Document(
+                page_content="text",
+                metadata={"source": "wiki", "author": "alice"},
+            )
+        ]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
 
-    spans = span_exporter.get_finished_spans()
-    docs_attr = spans[0].attributes[
-        gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
-    ]
-    assert "text" in docs_attr
-    assert "wiki" not in docs_attr
-    assert "0.9" not in docs_attr
-    instrumentor.uninstrument()
+        spans = span_exporter.get_finished_spans()
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        assert "text" in docs_attr
+        assert "wiki" not in docs_attr
+        assert "alice" not in docs_attr
+    finally:
+        instrumentor.uninstrument()
 
 
 def test_empty_documents_in_span_content(
@@ -409,13 +419,285 @@ def test_empty_documents_in_span_content(
         meter_provider=meter_provider,
         logger_provider=logger_provider,
     )
-    retriever = _FakeRetriever(documents=[])
-    retriever.invoke("q")
+    try:
+        retriever = _FakeRetriever(documents=[])
+        retriever.invoke("q")
 
-    spans = span_exporter.get_finished_spans()
-    # documents attribute is set but represents an empty list
-    docs_attr = spans[0].attributes.get(
-        gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        spans = span_exporter.get_finished_spans()
+        # documents attribute is set but represents an empty list
+        docs_attr = spans[0].attributes.get(
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        )
+        assert docs_attr == "[]"
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_documents_with_attribute_score(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
     )
-    assert docs_attr == "[]"
-    instrumentor.uninstrument()
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [_ScoredDocument(page_content="text", id="doc-1", score=0.85)]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        parsed = json.loads(docs_attr)
+        assert len(parsed) == 1
+        assert parsed[0]["content"] == "text"
+        assert parsed[0]["id"] == "doc-1"
+        assert parsed[0]["score"] == 0.85
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_documents_with_metadata_score(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [
+            Document(page_content="text", id="doc-2", metadata={"score": 0.92})
+        ]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        parsed = json.loads(docs_attr)
+        assert len(parsed) == 1
+        assert parsed[0]["content"] == "text"
+        assert parsed[0]["id"] == "doc-2"
+        assert parsed[0]["score"] == 0.92
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_documents_with_precedence(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [
+            _ScoredDocument(
+                page_content="text",
+                id="doc-3",
+                score=0.9,
+                metadata={"score": 0.5},
+            )
+        ]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        parsed = json.loads(docs_attr)
+        assert len(parsed) == 1
+        assert parsed[0]["score"] == 0.9
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_documents_with_zero_score(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [_ScoredDocument(page_content="text", id="doc-4", score=0.0)]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        parsed = json.loads(docs_attr)
+        assert len(parsed) == 1
+        assert "score" in parsed[0]
+        assert parsed[0]["score"] == 0.0
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_documents_without_score(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [Document(page_content="text", id="doc-5")]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        parsed = json.loads(docs_attr)
+        assert len(parsed) == 1
+        assert "score" not in parsed[0]
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_content_capture_gating(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "NO_CONTENT"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [Document(page_content="text", metadata={"score": 0.95})]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert (
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+            not in spans[0].attributes
+        )
+    finally:
+        instrumentor.uninstrument()
+
+
+def test_retriever_documents_with_non_finite_scores(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+        docs = [
+            _ScoredDocument(page_content="c1", id="d1", score=float("nan")),
+            _ScoredDocument(page_content="c2", id="d2", score=float("inf")),
+            _ScoredDocument(page_content="c3", id="d3", score=float("-inf")),
+            Document(page_content="c4", id="d4", metadata={"score": math.nan}),
+        ]
+        retriever = _FakeRetriever(documents=docs)
+        retriever.invoke("q")
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        docs_attr = spans[0].attributes[
+            gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
+        ]
+        assert isinstance(docs_attr, str)
+        # RFC 8259 JSON compliance: unquoted NaN and Infinity must be strictly absent
+        assert "NaN" not in docs_attr
+        assert "Infinity" not in docs_attr
+
+        parsed = json.loads(docs_attr)
+        assert len(parsed) == 4
+        for item in parsed:
+            assert "score" not in item
+    finally:
+        instrumentor.uninstrument()
