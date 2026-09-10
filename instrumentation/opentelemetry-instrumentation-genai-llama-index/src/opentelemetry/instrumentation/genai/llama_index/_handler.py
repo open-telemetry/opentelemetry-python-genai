@@ -32,8 +32,8 @@ from pydantic import PrivateAttr
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     GenAIInvocation,
+    LocalAgentInvocation,
     ToolInvocation,
 )
 from opentelemetry.util.genai.types import (
@@ -316,7 +316,7 @@ def _tool_definitions(agent: BaseWorkflowAgent) -> list[ToolDefinition] | None:
     return definitions or None
 
 
-def _set_agent_output(invocation: AgentInvocation, result: Any) -> None:
+def _set_agent_output(invocation: LocalAgentInvocation, result: Any) -> None:
     """Copy the final chat response out of LlamaIndex's workflow result."""
     output = getattr(result, "result", None)
     response = getattr(output, "response", None)
@@ -512,7 +512,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         span = self.open_spans.get(id_)
         if span is None:
             return None
-        if isinstance(span._invocation, AgentInvocation):
+        if isinstance(span._invocation, LocalAgentInvocation):
             span.reset_tool_attributes()
             if self._handler.should_capture_content():
                 _set_agent_output(span._invocation, result)

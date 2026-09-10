@@ -327,7 +327,7 @@ class RemoteAgentInvocation(AgentInvocation):
         return {k: v for k, v in optional_attrs if v is not None}
 
     def _get_request_attributes(self) -> dict[str, AttributeValue]:
-        attrs = dict(super()._get_request_attributes())
+        attrs = super()._get_request_attributes()
         if self.previous_response_id is not None:
             attrs[_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID] = (
                 self.previous_response_id
@@ -335,7 +335,7 @@ class RemoteAgentInvocation(AgentInvocation):
         return attrs
 
     def _get_usage_attributes(self) -> dict[str, AttributeValue]:
-        attrs = dict(super()._get_usage_attributes())
+        attrs = super()._get_usage_attributes()
         if self.cache_write_input_tokens is not None:
             attrs[_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = (
                 self.cache_write_input_tokens
