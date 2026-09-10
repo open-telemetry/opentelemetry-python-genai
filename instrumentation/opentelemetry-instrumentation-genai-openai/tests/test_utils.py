@@ -52,6 +52,16 @@ GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
     "gen_ai.usage.cache_creation.input_tokens"
 )
 GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
+CACHEABLE_MESSAGES = [
+    {
+        "role": "system",
+        "content": (
+            "This is stable context for an OpenTelemetry prompt caching test. "
+            * 120
+        ),
+    },
+    {"role": "user", "content": "Reply with OK only."},
+]
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
 USER_ONLY_EXPECTED_INPUT_MESSAGES = [
     {
@@ -558,7 +568,7 @@ def _get_usage_details(usage):
     )
 
 
-def assert_cache_attributes(span, usage):
+def assert_cache_attributes(span, usage, require_cache_read=False):
     details = _get_usage_details(usage)
     assert details is not None
 
@@ -567,13 +577,18 @@ def assert_cache_attributes(span, usage):
         if isinstance(details, Mapping)
         else getattr(details, "cached_tokens", None)
     )
+    if require_cache_read:
+        assert type(cached_tokens) is int
+        assert cached_tokens > 0
+
     if not cached_tokens:
         assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in span.attributes
     else:
-        assert (
-            span.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
-            == cached_tokens
-        )
+        emitted_cached_tokens = span.attributes[
+            GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        ]
+        assert emitted_cached_tokens == cached_tokens
+        assert type(emitted_cached_tokens) is int
 
     cache_creation = getattr(details, "cache_creation_input_tokens", None)
     if not cache_creation:
