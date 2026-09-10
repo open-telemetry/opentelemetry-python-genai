@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agno.knowledge.knowledge import Document, Knowledge
@@ -54,12 +54,10 @@ def test_knowledge_search_content_capture(
         == "retrieval"
     )
     assert (
-        span.attributes.get(GenAIAttributes.GEN_AI_DATA_SOURCE_ID)
-        == "test_kb"
+        span.attributes.get(GenAIAttributes.GEN_AI_DATA_SOURCE_ID) == "test_kb"
     )
     assert (
-        span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
-        == "pgvector"
+        span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "pgvector"
     )
     assert span.attributes.get("gen_ai.retrieval.top_k") == 5
     assert (
@@ -120,7 +118,9 @@ def test_knowledge_asearch_content_capture(
 ) -> None:
     """Test Knowledge.asearch with content capture enabled."""
     if not hasattr(Knowledge, "asearch"):
-        pytest.skip("Knowledge.asearch is not supported in this version of agno")
+        pytest.skip(
+            "Knowledge.asearch is not supported in this version of agno"
+        )
 
     kb = Knowledge(name="async_kb")
     kb.vector_db = MagicMock()
@@ -166,7 +166,9 @@ def test_knowledge_retrieve_delegation(
 ) -> None:
     """Test that Knowledge.retrieve delegates to search and creates a retrieval span."""
     if not hasattr(Knowledge, "retrieve"):
-        pytest.skip("Knowledge.retrieve is not supported in this version of agno")
+        pytest.skip(
+            "Knowledge.retrieve is not supported in this version of agno"
+        )
 
     kb = Knowledge(name="retrieve_kb")
     kb.vector_db = MagicMock()
@@ -186,7 +188,9 @@ def test_knowledge_aretrieve_delegation(
 ) -> None:
     """Test that Knowledge.aretrieve delegates to asearch and creates a retrieval span."""
     if not hasattr(Knowledge, "aretrieve"):
-        pytest.skip("Knowledge.aretrieve is not supported in this version of agno")
+        pytest.skip(
+            "Knowledge.aretrieve is not supported in this version of agno"
+        )
 
     kb = Knowledge(name="aretrieve_kb")
     kb.vector_db = MagicMock()
