@@ -166,7 +166,7 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
 
         try:
             self._self_message = accumulate_event(**kwargs)
-        except Exception:
+        except BaseException:
             _accumulation_disabled = True
             _logger.warning(
                 "Failed to accumulate streaming content; this Anthropic SDK "
