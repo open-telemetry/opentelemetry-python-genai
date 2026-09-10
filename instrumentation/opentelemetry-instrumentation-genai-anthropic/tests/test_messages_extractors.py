@@ -13,6 +13,7 @@ import pytest
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
     get_input_messages,
+    set_invocation_response_attributes,
 )
 from opentelemetry.instrumentation.genai.anthropic.utils import (
     _convert_dict_block_to_part,
@@ -24,7 +25,6 @@ from opentelemetry.util.genai.types import (
     GenericPart,
     TextPart,
     UriPart,
-    set_invocation_response_attributes,
 )
 
 
