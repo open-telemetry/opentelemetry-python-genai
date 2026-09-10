@@ -136,9 +136,7 @@ async def test_async_chat_completion_reports_cached_tokens(
 async def test_async_chat_completion_streaming_reports_cached_tokens(
     span_exporter, async_openai_client, instrument_no_content, vcr
 ):
-    with vcr.use_cassette(
-        "test_chat_completion_streaming_cached_tokens.yaml"
-    ):
+    with vcr.use_cassette("test_chat_completion_streaming_cached_tokens.yaml"):
         await async_openai_client.chat.completions.create(
             messages=CACHEABLE_MESSAGES,
             model=DEFAULT_MODEL,
