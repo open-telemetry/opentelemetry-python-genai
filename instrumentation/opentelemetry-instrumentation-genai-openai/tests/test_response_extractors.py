@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 from unittest import mock
 
+import openai
 import pytest
 from openai import NOT_GIVEN
 
@@ -13,9 +14,13 @@ from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     GenericToolDefinition,
     LLMInvocation,
+    TextPart,
+    UriPart,
 )
 
 try:
@@ -100,23 +105,141 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
             SimpleNamespace(
                 role="assistant",
                 content=[
-                    {"text": "Second"},
+                    {"type": "input_text", "text": "Second"},
                     SimpleNamespace(text="Third"),
-                    {"type": "input_image", "image_url": "ignored"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                    },
                 ],
             ),
             {"role": None, "content": "ignored"},
+            {
+                "role": "user",
+                "content": [{"type": "input_audio", "audio_url": "ignored"}],
+            },
         ]
     )
 
     assert [
         (msg.role, [part.content for part in msg.parts]) for msg in from_string
     ] == [("user", ["Hello"])]
-    assert [
-        (msg.role, [part.content for part in msg.parts]) for msg in from_list
-    ] == [
-        ("user", ["First"]),
-        ("assistant", ["Second", "Third"]),
+    assert [(msg.role, msg.parts) for msg in from_list] == [
+        ("user", [TextPart(content="First")]),
+        (
+            "assistant",
+            [
+                TextPart(content="Second"),
+                TextPart(content="Third"),
+                UriPart(
+                    mime_type=None,
+                    modality="image",
+                    uri="https://example.com/image.png",
+                ),
+            ],
+        ),
+    ]
+
+
+def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "role": "assistant",
+                "name": "example_assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hello!",
+                        "annotations": [],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        ("user", [TextPart(content="Hi")]),
+        ("assistant", [TextPart(content="Hello!")]),
+    ]
+    assert messages[1].name == "example_assistant"
+
+
+def test_extract_input_messages_supports_sdk_response_output(loaded_module):
+    response = _make_response(
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "First response",
+                        "annotations": [],
+                    },
+                    {
+                        "type": "output_text",
+                        "text": "Second response",
+                        "annotations": [],
+                    },
+                ],
+            }
+        ]
+    )
+
+    messages = loaded_module.get_input_messages(response.output)
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        (
+            "assistant",
+            [
+                TextPart(content="First response"),
+                TextPart(content="Second response"),
+            ],
+        )
+    ]
+
+
+def test_extract_input_messages_supports_image_data_url_and_file_id(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,aGVsbG8=",
+                    },
+                    {"type": "input_image", "file_id": "file-123"},
+                ],
+            }
+        ]
+    )
+
+    assert messages[0].parts == [
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        ),
+        BlobPart(
+            mime_type="image/png",
+            modality="image",
+            content=b"hello",
+        ),
+        FilePart(mime_type=None, modality="image", file_id="file-123"),
     ]
 
 
@@ -335,6 +458,64 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
         is None
     )
     assert loaded_module.extract_params(text="plain").output_type is None
+
+
+def test_extract_conversation_id_handles_supported_shapes(loaded_module):
+    assert (
+        loaded_module.extract_params(conversation="conv_abc").conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation={"id": "conv_abc"}
+        ).conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation=SimpleNamespace(id="conv_abc")
+        ).conversation_id
+        == "conv_abc"
+    )
+
+
+# Sentinels a caller can pass explicitly instead of a conversation. A current
+# SDK defaults `conversation` to `omit`, which the oldest supported one lacks.
+_UNSET_SENTINELS = [openai.NOT_GIVEN]
+if hasattr(openai, "omit"):
+    _UNSET_SENTINELS.append(openai.omit)
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        None,
+        *_UNSET_SENTINELS,
+        "",
+        {},
+        {"id": ""},
+        {"id": 42},
+        42,
+        SimpleNamespace(),
+    ],
+)
+def test_extract_conversation_id_ignores_unusable_values(
+    loaded_module, conversation
+):
+    assert (
+        loaded_module.extract_params(conversation=conversation).conversation_id
+        is None
+    )
+
+
+def test_apply_request_attributes_sets_conversation_id(loaded_module):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    loaded_module.apply_request_attributes(
+        invocation,
+        loaded_module.extract_params(conversation="conv_abc"),
+        False,
+    )
+    assert invocation.conversation_id == "conv_abc"
 
 
 def test_extractors_handle_missing_genai_types_import(loaded_module):

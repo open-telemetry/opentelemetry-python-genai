@@ -6,10 +6,10 @@ OpenTelemetry DSPy Instrumentation
 .. |pypi| image:: https://badge.fury.io/py/opentelemetry-instrumentation-genai-dspy.svg
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-dspy/
 
-This package provides the setup for instrumenting the
-`DSPy framework <https://pypi.org/project/dspy/>`_ with OpenTelemetry
-Generative AI semantic conventions. DSPy operation instrumentation
-will be added in follow-up changes.
+This package provides OpenTelemetry instrumentation for the
+`DSPy framework <https://pypi.org/project/dspy/>`_, emitting Generative AI
+semantic conventions for DSPy Tool executions and ReAct agent loops
+(supporting both ``dspy.ReAct`` and ``dspy.ReActV2``).
 
 Installation
 ------------
