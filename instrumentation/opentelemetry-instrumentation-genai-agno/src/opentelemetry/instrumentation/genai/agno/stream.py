@@ -11,8 +11,12 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     format_content,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
+    ToolInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.stream import (
@@ -47,6 +51,14 @@ class _AgentStreamMixin:
         session_id = getattr(chunk, "session_id", None)
         if session_id and not self._self_agent_invocation.conversation_id:
             self._self_agent_invocation.conversation_id = str(session_id)
+
+        if not self._self_agent_invocation._request_model:
+            model = getattr(chunk, "model", None)
+            if model:
+                self._self_agent_invocation._request_model = str(model)
+                self._self_agent_invocation.attributes[
+                    GenAI.GEN_AI_REQUEST_MODEL
+                ] = str(model)
 
         metrics = getattr(chunk, "metrics", None)
         if metrics is not None:
@@ -309,3 +321,57 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+
+
+class AgnoToolStreamWrapper(SyncStreamWrapper[Any]):
+    """Stream wrapper for synchronous tool executions that return iterators/generators."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: ToolInvocation,
+        capture_content: bool,
+    ) -> None:
+        super().__init__(stream)
+        self._self_tool_invocation = invocation
+        self._self_capture_content = capture_content
+        self._self_chunks: list[str] = []
+
+    def _process_chunk(self, chunk: Any) -> None:
+        if self._self_capture_content:
+            self._self_chunks.append(format_content(chunk))
+
+    def _on_stream_end(self) -> None:
+        if self._self_capture_content:
+            self._self_tool_invocation.tool_result = "".join(self._self_chunks)
+        self._self_tool_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_tool_invocation.fail(error)
+
+
+class AsyncAgnoToolStreamWrapper(AsyncStreamWrapper[Any]):
+    """Stream wrapper for asynchronous tool executions that return async iterators/generators."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: ToolInvocation,
+        capture_content: bool,
+    ) -> None:
+        super().__init__(stream)
+        self._self_tool_invocation = invocation
+        self._self_capture_content = capture_content
+        self._self_chunks: list[str] = []
+
+    def _process_chunk(self, chunk: Any) -> None:
+        if self._self_capture_content:
+            self._self_chunks.append(format_content(chunk))
+
+    def _on_stream_end(self) -> None:
+        if self._self_capture_content:
+            self._self_tool_invocation.tool_result = "".join(self._self_chunks)
+        self._self_tool_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_tool_invocation.fail(error)
