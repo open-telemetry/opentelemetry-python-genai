@@ -28,6 +28,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    CACHEABLE_MESSAGES,
     DEFAULT_MODEL,
     EXPECTED_TOOL_DEFINITIONS,
     MULTIMODAL_EXPECTED_INPUT_MESSAGES,
@@ -37,6 +38,7 @@ from .test_utils import (
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
     WEATHER_TOOL_PROMPT,
     assert_all_attributes,
+    assert_cache_attributes,
     assert_message_in_logs,
     assert_messages_attribute,
     format_simple_expected_output_message,
@@ -68,6 +70,7 @@ async def test_async_chat_completion_with_content(
         response.usage.prompt_tokens,
         response.usage.completion_tokens,
     )
+    assert_cache_attributes(spans[0], response.usage)
 
     if latest_experimental_enabled:
         assert_messages_attribute(
@@ -100,6 +103,66 @@ async def test_async_chat_completion_with_content(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_reports_cached_tokens(
+    span_exporter, async_openai_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_chat_completion_cached_tokens.yaml"):
+        await async_openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=False,
+        )
+        response = await async_openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=False,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert_cache_attributes(
+        spans[-1],
+        response.usage,
+        require_cache_read=True,
+    )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_streaming_reports_cached_tokens(
+    span_exporter, async_openai_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_chat_completion_streaming_cached_tokens.yaml"):
+        await async_openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=False,
+        )
+        stream = await async_openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        usage = None
+        async for chunk in stream:
+            if chunk.usage is not None:
+                usage = chunk.usage
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert usage is not None
+    assert_cache_attributes(
+        spans[-1],
+        usage,
+        require_cache_read=True,
+    )
 
 
 @pytest.mark.asyncio()
@@ -994,6 +1057,7 @@ async def test_async_chat_completion_streaming(
         response_stream_usage.prompt_tokens,
         response_stream_usage.completion_tokens,
     )
+    assert_cache_attributes(spans[0], response_stream_usage)
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
