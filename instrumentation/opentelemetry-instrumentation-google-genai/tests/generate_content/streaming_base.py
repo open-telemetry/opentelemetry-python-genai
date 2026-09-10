@@ -3,6 +3,12 @@
 
 import unittest
 
+from google.genai.types import (
+    GenerateContentResponseUsageMetadata,
+    MediaModality,
+    ModalityTokenCount,
+)
+
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.google_genai import (
     GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
@@ -92,6 +98,62 @@ class StreamingTestCase(TestCase):
         self.assertEqual(span.attributes["gen_ai.response.id"], "qwerty19")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 3)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
+
+    def test_modality_token_counts_are_replaced_not_merged(self):
+        # Cumulative counts are returned on each response, so the last
+        # breakdown wins outright and a modality that drops out of it must not
+        # survive from an earlier chunk.
+        self.configure_valid_response(
+            usage_metadata=GenerateContentResponseUsageMetadata(
+                prompt_tokens_details=[
+                    ModalityTokenCount(
+                        modality=MediaModality.TEXT, token_count=10
+                    ),
+                    ModalityTokenCount(
+                        modality=MediaModality.AUDIO, token_count=90
+                    ),
+                ],
+            ),
+            response_id="qwerty17",
+        )
+        self.configure_valid_response(
+            usage_metadata=GenerateContentResponseUsageMetadata(
+                prompt_tokens_details=[
+                    ModalityTokenCount(
+                        modality=MediaModality.TEXT, token_count=12
+                    ),
+                ],
+            ),
+            response_id="qwerty18",
+        )
+
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.response.id"], "qwerty18")
+        self.assertEqual(span.attributes["gen_ai.usage.text.input_tokens"], 12)
+        self.assertNotIn("gen_ai.usage.audio.input_tokens", span.attributes)
+
+    def test_modality_token_counts_survive_a_chunk_without_a_breakdown(self):
+        self.configure_valid_response(
+            usage_metadata=GenerateContentResponseUsageMetadata(
+                prompt_tokens_details=[
+                    ModalityTokenCount(
+                        modality=MediaModality.AUDIO, token_count=90
+                    ),
+                ],
+            ),
+            response_id="qwerty17",
+        )
+        self.configure_valid_response(response_id="qwerty18")
+
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.response.id"], "qwerty18")
+        self.assertEqual(
+            span.attributes["gen_ai.usage.audio.input_tokens"], 90
+        )
 
     def test_log_has_extra_genai_attributes(self):
         self.configure_valid_response(text="Yep, it works!")
