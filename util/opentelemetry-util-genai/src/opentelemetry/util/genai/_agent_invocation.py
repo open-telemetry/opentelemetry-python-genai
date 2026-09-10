@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import timeit
+from abc import abstractmethod
 from typing import Final
 
 from opentelemetry._logs import Logger
@@ -152,6 +153,30 @@ class AgentInvocation(GenAIInvocation):
             content_capturing_mode=self._content_capturing_mode,
         )
 
+    def _apply_finish(self, error: Error | None = None) -> None:
+        if error is not None:
+            self._apply_error_attributes(error)
+
+        attributes: dict[str, AttributeValue] = {}
+        attributes.update(self._get_agent_attributes())
+        attributes.update(self._get_request_attributes())
+        attributes.update(self._get_response_attributes())
+        attributes.update(self._get_usage_attributes())
+        attributes.update(self._get_content_attributes_for_span())
+        attributes.update(self.attributes)
+        self.span.set_attributes(attributes)
+        self._call_completion_hook(
+            inputs=self.input_messages,
+            outputs=self.output_messages,
+            system_instruction=self.system_instruction,
+            tool_definitions=self.tool_definitions,
+        )
+        self._record_metrics()
+
+    @abstractmethod
+    def _record_metrics(self) -> None:
+        """Record invocation metrics."""
+
 
 class LocalAgentInvocation(AgentInvocation):
     """Represents an in-process agent invocation (INTERNAL span kind).
@@ -203,26 +228,6 @@ class LocalAgentInvocation(AgentInvocation):
             attrs[GenAI.GEN_AI_REQUEST_MODEL] = self._request_model
         attrs.update(self.metric_attributes)
         return attrs
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-
-        attributes: dict[str, AttributeValue] = {}
-        attributes.update(self._get_agent_attributes())
-        attributes.update(self._get_request_attributes())
-        attributes.update(self._get_response_attributes())
-        attributes.update(self._get_usage_attributes())
-        attributes.update(self._get_content_attributes_for_span())
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._call_completion_hook(
-            inputs=self.input_messages,
-            outputs=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-        )
-        self._record_metrics()
 
     def _record_metrics(self) -> None:
         duration_seconds = max(
@@ -370,22 +375,6 @@ class RemoteAgentInvocation(AgentInvocation):
             )
         return counts
 
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-
-        attributes: dict[str, AttributeValue] = {}
-        attributes.update(self._get_agent_attributes())
-        attributes.update(self._get_request_attributes())
-        attributes.update(self._get_response_attributes())
-        attributes.update(self._get_usage_attributes())
-        attributes.update(self._get_content_attributes_for_span())
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._call_completion_hook(
-            inputs=self.input_messages,
-            outputs=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-        )
+    def _record_metrics(self) -> None:
         self._record_client_metrics()
+
