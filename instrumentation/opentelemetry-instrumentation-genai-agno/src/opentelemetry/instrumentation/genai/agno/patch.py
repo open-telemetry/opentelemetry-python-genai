@@ -81,14 +81,21 @@ _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
 
 
+_instrumentation_generation: int = 0
+_is_instrumented: bool = False
+
+
 def _safe_wrap_function(
     target_module: str,
     target_name: str,
     wrapper: Callable[..., Any],
+    generation: int,
 ) -> None:
     """Safely wrap a method if it exists, deferring if module is not yet imported."""
 
     def _apply(mod: Any) -> None:
+        if not _is_instrumented or _instrumentation_generation != generation:
+            return
         try:
             parts = target_name.split(".")
             curr = mod
@@ -96,6 +103,8 @@ def _safe_wrap_function(
                 curr = getattr(curr, part)
         except AttributeError:
             # Target class or method may not exist across all supported Agno versions.
+            return
+        if hasattr(curr, "__wrapped__"):
             return
         wrap_function_wrapper(mod, target_name, wrapper)
 
@@ -109,45 +118,58 @@ def _safe_wrap_function(
 
 def patch_agent(handler: TelemetryHandler) -> None:
     """Apply patches to Agno class methods."""
-    wrap_function_wrapper(
+    global _instrumentation_generation, _is_instrumented
+    _instrumentation_generation += 1
+    _is_instrumented = True
+    current_generation = _instrumentation_generation
+
+    _safe_wrap_function(
         _AGNO_MODULE,
         f"{_AGENT_CLASS}.run",
         _agent_run(handler),
+        current_generation,
     )
-    wrap_function_wrapper(
+    _safe_wrap_function(
         _AGNO_MODULE,
         f"{_AGENT_CLASS}.arun",
         _agent_arun(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_TEAM_MODULE,
         f"{_TEAM_CLASS}.run",
         _agent_run(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_TEAM_MODULE,
         f"{_TEAM_CLASS}.arun",
         _agent_arun(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_TOOLS_MODULE,
         f"{_FUNCTION_CALL_CLASS}.execute",
         _tool_call_execute(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_TOOLS_MODULE,
         f"{_FUNCTION_CALL_CLASS}.aexecute",
         _tool_call_aexecute(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_WORKFLOW_MODULE,
         f"{_WORKFLOW_CLASS}.run",
         _workflow_run(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_WORKFLOW_MODULE,
         f"{_WORKFLOW_CLASS}.arun",
         _workflow_arun(handler),
+        current_generation,
     )
     # Knowledge.retrieve and aretrieve delegate to search and asearch, so wrapping
     # search/asearch avoids duplicate spans.
@@ -155,16 +177,21 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _AGNO_KNOWLEDGE_MODULE,
         f"{_KNOWLEDGE_CLASS}.search",
         _knowledge_search(handler),
+        current_generation,
     )
     _safe_wrap_function(
         _AGNO_KNOWLEDGE_MODULE,
         f"{_KNOWLEDGE_CLASS}.asearch",
         _knowledge_asearch(handler),
+        current_generation,
     )
 
 
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
+    global _instrumentation_generation, _is_instrumented
+    _instrumentation_generation += 1
+    _is_instrumented = False
     if _AGNO_MODULE in sys.modules:
         try:
             import agno.agent
@@ -309,11 +336,11 @@ def _set_invocation_output(
     if session_id:
         invocation.conversation_id = str(session_id)
     if isinstance(invocation, AgentInvocation):
-        if not invocation._request_model:
-            model = getattr(result, "model", None)
-            if model:
-                invocation._request_model = str(model)
-                invocation.attributes[GenAI.GEN_AI_REQUEST_MODEL] = str(model)
+        model = getattr(result, "model", None)
+        if model:
+            invocation.attributes.setdefault(
+                GenAI.GEN_AI_REQUEST_MODEL, str(model)
+            )
 
 
 def _start_agent_invocation(
@@ -335,6 +362,8 @@ def _start_agent_invocation(
         agent_name=str(agent_name) if agent_name else None,
         request_model=str(request_model) if request_model else None,
     )
+    if request_model:
+        invocation.attributes[GenAI.GEN_AI_REQUEST_MODEL] = str(request_model)
     description = getattr(instance, "description", None)
     if description:
         invocation.agent_description = str(description)

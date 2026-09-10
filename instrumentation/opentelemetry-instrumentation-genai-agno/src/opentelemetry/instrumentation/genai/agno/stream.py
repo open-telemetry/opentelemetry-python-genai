@@ -52,13 +52,11 @@ class _AgentStreamMixin:
         if session_id and not self._self_agent_invocation.conversation_id:
             self._self_agent_invocation.conversation_id = str(session_id)
 
-        if not self._self_agent_invocation._request_model:
-            model = getattr(chunk, "model", None)
-            if model:
-                self._self_agent_invocation._request_model = str(model)
-                self._self_agent_invocation.attributes[
-                    GenAI.GEN_AI_REQUEST_MODEL
-                ] = str(model)
+        model = getattr(chunk, "model", None)
+        if model:
+            self._self_agent_invocation.attributes.setdefault(
+                GenAI.GEN_AI_REQUEST_MODEL, str(model)
+            )
 
         metrics = getattr(chunk, "metrics", None)
         if metrics is not None:
