@@ -588,7 +588,7 @@ async def test_async_stream_wrapper_accumulate_event_failure_logs_warning_and_di
 
     def mock_accumulate(**kwargs):
         calls.append(kwargs)
-        raise BaseException("Unexpected failure")
+        raise TypeError("Unexpected argument in new SDK version")
 
     monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
 
@@ -605,6 +605,46 @@ async def test_async_stream_wrapper_accumulate_event_failure_logs_warning_and_di
         "Failed to accumulate streaming content; this Anthropic SDK version is not supported."
         in caplog.text
     )
+
+
+def test_stream_wrapper_reraises_non_exception(monkeypatch):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+
+    def mock_accumulate(**kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeSyncStream(events=["chunk1"])
+    wrapper = _make_stream_wrapper(stream)
+
+    with pytest.raises(KeyboardInterrupt):
+        list(wrapper)
+
+    assert wrappers._accumulation_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_async_stream_wrapper_reraises_non_exception(monkeypatch):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+
+    def mock_accumulate(**kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeAsyncStream(events=["chunk1"])
+    wrapper = _make_async_stream_wrapper(stream)
+
+    with pytest.raises(KeyboardInterrupt):
+        async for _ in wrapper:
+            pass
+
+    assert wrappers._accumulation_disabled is True
 
 
 @pytest.mark.asyncio
