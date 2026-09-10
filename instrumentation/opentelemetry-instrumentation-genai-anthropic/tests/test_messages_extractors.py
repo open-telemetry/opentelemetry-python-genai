@@ -5,9 +5,6 @@
 
 from io import BytesIO
 from pathlib import Path
-
-import pytest
-
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -17,6 +14,7 @@ from anthropic.types import (
     WebSearchToolResultBlock,
     WebSearchToolResultError,
 )
+
 
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
