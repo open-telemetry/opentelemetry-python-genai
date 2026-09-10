@@ -52,6 +52,7 @@ from .test_utils import (
     assert_cache_attributes,
     assert_message_in_logs,
     assert_messages_attribute,
+    assert_reasoning_attributes,
     format_simple_expected_output_message,
     get_current_weather_tool_definition,
 )
@@ -83,6 +84,7 @@ def test_chat_completion_with_content(
         response.usage.completion_tokens,
     )
     assert_cache_attributes(spans[0], response.usage)
+    assert_reasoning_attributes(spans[0], response.usage)
 
     if latest_experimental_enabled:
         assert_messages_attribute(
@@ -1231,6 +1233,7 @@ def test_chat_completion_streaming(
         response_stream_usage.completion_tokens,
     )
     assert_cache_attributes(spans[0], response_stream_usage)
+    assert_reasoning_attributes(spans[0], response_stream_usage)
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:

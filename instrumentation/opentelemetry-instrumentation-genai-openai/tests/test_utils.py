@@ -5,6 +5,7 @@
 
 import base64
 import json
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
@@ -593,6 +594,27 @@ def assert_cache_attributes(span, usage, require_cache_read=False):
         assert (
             span.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]
             == cache_creation
+        )
+
+
+def assert_reasoning_attributes(span, usage):
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning_tokens = (
+        details.get("reasoning_tokens")
+        if isinstance(details, Mapping)
+        else getattr(details, "reasoning_tokens", None)
+    )
+    if reasoning_tokens is None:
+        assert (
+            GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+            not in span.attributes
+        )
+    else:
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+            ]
+            == reasoning_tokens
         )
 
 
