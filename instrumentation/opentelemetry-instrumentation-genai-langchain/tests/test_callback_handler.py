@@ -1601,23 +1601,25 @@ class TestOnLlmEndTokenDetails:
         handler.on_llm_end(response=response, run_id=run_id)
 
         assert llm_inv.input_tokens == 10
-        assert llm_inv.cache_creation_input_tokens == 3
+        assert llm_inv.cache_write_input_tokens == 3
         assert llm_inv.cache_read_input_tokens == 2
         assert llm_inv.thinking_tokens == 5
         assert llm_inv.output_tokens == 20
 
-    def test_audio_tokens_ignored(self):
+    def test_cache_write_tokens_set_on_invocation(self):
         run_id = _run_id()
         handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
         ai_msg = AIMessage(
-            content="hi",
+            content="hi there",
             usage_metadata={
-                "input_tokens": 10,
-                "output_tokens": 20,
-                "total_tokens": 30,
-                "input_token_details": {"audio": 5},
-                "output_token_details": {"audio": 4},
+                "input_tokens": 15,
+                "output_tokens": 25,
+                "total_tokens": 40,
+                "input_token_details": {
+                    "cache_write": 7,
+                    "cache_read": 3,
+                },
             },
         )
         gen = ChatGeneration(
@@ -1627,8 +1629,48 @@ class TestOnLlmEndTokenDetails:
 
         handler.on_llm_end(response=response, run_id=run_id)
 
-        assert llm_inv.input_tokens == 10
-        assert llm_inv.output_tokens == 20
+        assert llm_inv.input_tokens == 15
+        assert llm_inv.cache_write_input_tokens == 7
+        assert llm_inv.cache_read_input_tokens == 3
+        assert llm_inv.output_tokens == 25
+
+    def test_modality_tokens_set_on_invocation(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_token_details": {
+                    "text": 70,
+                    "image": 20,
+                    "audio": 10,
+                },
+                "output_token_details": {
+                    "text": 35,
+                    "image": 10,
+                    "audio": 5,
+                },
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 100
+        assert llm_inv.text_input_tokens == 70
+        assert llm_inv.image_input_tokens == 20
+        assert llm_inv.audio_input_tokens == 10
+        assert llm_inv.output_tokens == 50
+        assert llm_inv.text_output_tokens == 35
+        assert llm_inv.image_output_tokens == 10
+        assert llm_inv.audio_output_tokens == 5
 
 
 # ---------------------------------------------------------------------------
@@ -1646,27 +1688,78 @@ def test_extract_token_details_cache_and_reasoning():
     }
     details = extract_token_details(usage)
     assert details == {
-        "cache_creation_input_tokens": 3,
+        "cache_write_input_tokens": 3,
         "cache_read_input_tokens": 2,
         "reasoning_tokens": 5,
     }
 
 
-def test_extract_token_details_ignores_audio_tokens():
+def test_extract_token_details_cache_write_key():
     usage = {
         "input_tokens": 10,
         "output_tokens": 20,
-        "input_token_details": {"audio": 5},
-        "output_token_details": {"audio": 4},
+        "total_tokens": 30,
+        "input_token_details": {"cache_write": 4, "cache_read": 2},
+        "output_token_details": {"reasoning": 5},
     }
-    assert extract_token_details(usage) == {}
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 4,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+def test_extract_token_details_modalities():
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "input_token_details": {
+            "text": 70,
+            "image": 20,
+            "audio": 10,
+            "cache_write": 15,
+            "cache_read": 25,
+        },
+        "output_token_details": {
+            "text": 30,
+            "image": 15,
+            "audio": 5,
+            "reasoning": 10,
+        },
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 15,
+        "cache_read_input_tokens": 25,
+        "text_input_tokens": 70,
+        "image_input_tokens": 20,
+        "audio_input_tokens": 10,
+        "reasoning_tokens": 10,
+        "text_output_tokens": 30,
+        "image_output_tokens": 15,
+        "audio_output_tokens": 5,
+    }
 
 
 def test_extract_token_details_zero_values_omitted():
     usage = {
         "input_tokens": 10,
         "output_tokens": 20,
-        "input_token_details": {"cache_creation": 0, "cache_read": 0},
+        "input_token_details": {
+            "cache_creation": 0,
+            "cache_write": 0,
+            "cache_read": 0,
+            "text": 0,
+            "image": 0,
+            "audio": 0,
+        },
+        "output_token_details": {
+            "reasoning": 0,
+            "text": 0,
+            "image": 0,
+            "audio": 0,
+        },
     }
     assert extract_token_details(usage) == {}
 
@@ -1674,37 +1767,54 @@ def test_extract_token_details_zero_values_omitted():
 def test_extract_token_details_no_details_key():
     assert extract_token_details({"input_tokens": 1, "output_tokens": 2}) == {}
 
-    def test_legacy_function_call_finish_reason_produces_tool_call_request(
-        self,
-    ):
-        """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequestPart."""
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
 
-        ai_msg = AIMessage(
-            content="",
-            additional_kwargs={
-                "function_call": {
-                    "name": "get_weather",
-                    "arguments": '{"city": "Paris"}',
-                }
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg,
-            generation_info={"finish_reason": "function_call"},
-        )
-        response = LLMResult(generations=[[gen]])
+def test_extract_token_details_boolean_and_non_int_omitted():
+    usage = {
+        "input_token_details": {
+            "cache_write": True,
+            "cache_read": False,
+            "text": "10",
+            "image": None,
+            "audio": -5,
+        },
+        "output_token_details": {
+            "reasoning": True,
+            "text": [10],
+            "image": 0,
+        },
+    }
+    assert extract_token_details(usage) == {}
 
-        handler.on_llm_end(response=response, run_id=run_id)
 
-        assigned: list[OutputMessage] = llm_inv.output_messages
-        assert len(assigned) == 1
-        assert len(assigned[0].parts) == 1
-        part = assigned[0].parts[0]
-        assert isinstance(part, ToolCallRequestPart)
-        assert part.name == "get_weather"
-        assert part.arguments == {"city": "Paris"}
+def test_legacy_function_call_finish_reason_produces_tool_call_request():
+    """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequestPart."""
+    run_id = _run_id()
+    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+    ai_msg = AIMessage(
+        content="",
+        additional_kwargs={
+            "function_call": {
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+            }
+        },
+    )
+    gen = ChatGeneration(
+        message=ai_msg,
+        generation_info={"finish_reason": "function_call"},
+    )
+    response = LLMResult(generations=[[gen]])
+
+    handler.on_llm_end(response=response, run_id=run_id)
+
+    assigned: list[OutputMessage] = llm_inv.output_messages
+    assert len(assigned) == 1
+    assert len(assigned[0].parts) == 1
+    part = assigned[0].parts[0]
+    assert isinstance(part, ToolCallRequestPart)
+    assert part.name == "get_weather"
+    assert part.arguments == {"city": "Paris"}
 
 
 # ---------------------------------------------------------------------------
