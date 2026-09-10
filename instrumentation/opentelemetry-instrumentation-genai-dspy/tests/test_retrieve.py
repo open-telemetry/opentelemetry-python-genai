@@ -26,6 +26,8 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 
+_GEN_AI_RETRIEVAL_TOP_K = "gen_ai.retrieval.top_k"
+
 
 class _DummyPassage:
     def __init__(self, text: str) -> None:
@@ -75,8 +77,8 @@ def test_sync_retrieve_execution(
     assert span.status.status_code == StatusCode.UNSET
     attrs = span.attributes or {}
     assert attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
-    assert attrs.get(GenAI.GEN_AI_REQUEST_TOP_K) == 3
-    assert isinstance(attrs.get(GenAI.GEN_AI_REQUEST_TOP_K), int)
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 3
+    assert isinstance(attrs.get(_GEN_AI_RETRIEVAL_TOP_K), int)
     assert (
         attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT)
         == "What is OpenTelemetry?"
@@ -114,8 +116,8 @@ def test_retrieve_forward_direct_call(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     attrs = spans[0].attributes or {}
-    assert attrs.get(GenAI.GEN_AI_REQUEST_TOP_K) == 2
-    assert isinstance(attrs.get(GenAI.GEN_AI_REQUEST_TOP_K), int)
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
+    assert isinstance(attrs.get(_GEN_AI_RETRIEVAL_TOP_K), int)
     assert attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "Direct call"
 
 
@@ -142,8 +144,8 @@ def test_retrieve_with_positional_k(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     attrs = spans[0].attributes or {}
-    assert attrs.get(GenAI.GEN_AI_REQUEST_TOP_K) == 4
-    assert isinstance(attrs.get(GenAI.GEN_AI_REQUEST_TOP_K), int)
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 4
+    assert isinstance(attrs.get(_GEN_AI_RETRIEVAL_TOP_K), int)
     assert attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "Positional k query"
 
 
@@ -171,8 +173,8 @@ def test_retrieve_without_content_capture(
     span = spans[0]
     attrs = span.attributes or {}
     assert attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
-    assert attrs.get(GenAI.GEN_AI_REQUEST_TOP_K) == 2
-    assert isinstance(attrs.get(GenAI.GEN_AI_REQUEST_TOP_K), int)
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
+    assert isinstance(attrs.get(_GEN_AI_RETRIEVAL_TOP_K), int)
     assert GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT not in attrs
     assert GenAI.GEN_AI_RETRIEVAL_DOCUMENTS not in attrs
 
