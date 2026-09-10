@@ -3,8 +3,12 @@
 
 """Tests for Anthropic message parameter extraction."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
+    set_invocation_response_attributes,
 )
 
 
@@ -47,3 +51,25 @@ def test_extract_params_ignores_non_mapping_extra_body():
     assert params.temperature is None
     assert params.top_p is None
     assert params.top_k is None
+
+
+def test_set_invocation_response_attributes_records_cache_tokens():
+    invocation = MagicMock()
+    message = SimpleNamespace(
+        id="msg_123",
+        model="claude-3-7-sonnet-20250219",
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=20,
+            cache_creation_input_tokens=15,
+            cache_read_input_tokens=5,
+        ),
+    )
+    set_invocation_response_attributes(
+        invocation, message, capture_content=False
+    )
+    assert invocation.input_tokens == 30
+    assert invocation.output_tokens == 20
+    assert invocation.cache_write_input_tokens == 15
+    assert invocation.cache_read_input_tokens == 5

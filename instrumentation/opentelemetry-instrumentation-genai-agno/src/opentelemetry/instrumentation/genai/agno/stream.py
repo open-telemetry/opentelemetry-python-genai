@@ -61,7 +61,7 @@ class _AgentStreamMixin:
                     metrics.cache_read_tokens
                 )
             if getattr(metrics, "cache_write_tokens", None) is not None:
-                self._self_agent_invocation.cache_creation_input_tokens = (
+                self._self_agent_invocation.cache_write_input_tokens = (
                     metrics.cache_write_tokens
                 )
 
