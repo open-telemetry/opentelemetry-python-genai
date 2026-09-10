@@ -2310,3 +2310,157 @@ def test_sync_messages_raw_response_parse_after_exit(
     assert spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
 
     assert raw_response.parse().model == model
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_text_stream_records_response(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """``stream.text_stream`` records the response the same as event iteration."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        text = "".join(stream.text_stream)
+
+    assert text == "Hello!"
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert_span_attributes(
+        span,
+        request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+    assert isinstance(span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID], str)
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+    )
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS], int
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello!"}
+    ]
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_get_final_message_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``get_final_message()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        message = stream.get_final_message()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id=message.id,
+        response_model=message.model,
+        input_tokens=expected_input_tokens(message.usage),
+        output_tokens=message.usage.output_tokens,
+        finish_reasons=[normalize_stop_reason(message.stop_reason)],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_get_final_text_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``get_final_text()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        text = stream.get_final_text()
+
+    assert text == "Hello!"
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_until_done_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``until_done()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        stream.until_done()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_text_stream_user_exception(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error while reading ``text_stream`` propagates and is recorded."""
+    model = "claude-sonnet-4-20250514"
+
+    with pytest.raises(ValueError, match="caller failed"):
+        with anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+        ) as stream:
+            for _ in stream.text_stream:
+                raise ValueError("caller failed")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
