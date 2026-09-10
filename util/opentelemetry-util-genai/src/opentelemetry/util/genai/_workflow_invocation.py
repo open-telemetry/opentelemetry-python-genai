@@ -7,7 +7,6 @@ import timeit
 from dataclasses import asdict
 
 from opentelemetry._logs import Logger
-from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -41,7 +40,7 @@ class WorkflowInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        meter: Meter | _Instruments,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         name: str | None,
@@ -52,7 +51,7 @@ class WorkflowInvocation(GenAIInvocation):
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
         super().__init__(
             tracer,
-            meter,
+            instruments,
             logger,
             completion_hook,
             operation_name=_operation_name,

@@ -105,4 +105,5 @@ class _Instruments:
             explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_WORKFLOW_DURATION_BUCKETS,
         )
 
+
 __all__ = ["_Instruments"]

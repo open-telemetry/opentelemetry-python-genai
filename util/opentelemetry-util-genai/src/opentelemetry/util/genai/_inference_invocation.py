@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
-from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -70,7 +69,7 @@ class InferenceInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        meter: Meter | _Instruments,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -88,7 +87,7 @@ class InferenceInvocation(GenAIInvocation):
         """Use handler.inference(provider) rather than calling this directly."""
         super().__init__(
             tracer,
-            meter,
+            instruments,
             logger,
             completion_hook,
             operation_name=operation_name,
@@ -420,7 +419,7 @@ class LLMInvocation:
     def _start_with_handler(
         self,
         tracer: Tracer,
-        meter: Meter | _Instruments,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         *,
@@ -429,7 +428,7 @@ class LLMInvocation:
         """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
         inv = InferenceInvocation(
             tracer,
-            meter,
+            instruments,
             logger,
             completion_hook,
             self.provider or "",

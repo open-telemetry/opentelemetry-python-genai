@@ -16,7 +16,6 @@ from typing_extensions import Self
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach
-from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -65,7 +64,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         # Individual components instead of TelemetryHandler to avoid a circular
         # import between handler.py and the invocation modules.
         tracer: Tracer,
-        meter: Meter | _Instruments,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         operation_name: str,
@@ -78,9 +77,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
-        self._instruments: _Instruments = (
-            meter if isinstance(meter, _Instruments) else _Instruments(meter)
-        )
+        self._instruments: _Instruments = instruments
         self._logger = logger
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver

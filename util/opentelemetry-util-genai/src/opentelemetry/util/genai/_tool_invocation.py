@@ -6,7 +6,6 @@ from __future__ import annotations
 import timeit
 
 from opentelemetry._logs import Logger
-from opentelemetry.metrics import Meter
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -58,7 +57,7 @@ class ToolInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        meter: Meter | _Instruments,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         name: str,
@@ -79,7 +78,7 @@ class ToolInvocation(GenAIInvocation):
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
         super().__init__(
             tracer,
-            meter,
+            instruments,
             logger,
             completion_hook,
             operation_name=_operation_name,
