@@ -1,0 +1,4 @@
+Report `gen_ai.usage.cache_read.input_tokens` on chat completion spans from
+`usage.prompt_tokens_details.cached_tokens`, for both streaming and
+non-streaming `chat.completions.create` calls, matching what the Responses
+API instrumentation already emits.

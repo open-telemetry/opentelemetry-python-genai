@@ -40,6 +40,7 @@ class _ChatStreamMixin:
     _self_service_tier: str | None
     _self_prompt_tokens: int | None
     _self_completion_tokens: int | None
+    _self_cache_read_input_tokens: int | None
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
         # Set eagerly so the per-chunk streaming timing metrics carry
@@ -97,6 +98,11 @@ class _ChatStreamMixin:
         if usage:
             self._self_completion_tokens = usage.completion_tokens
             self._self_prompt_tokens = usage.prompt_tokens
+            prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
+            if prompt_tokens_details is not None:
+                self._self_cache_read_input_tokens = getattr(
+                    prompt_tokens_details, "cached_tokens", None
+                )
 
     def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
         if not isinstance(chunk, ChatCompletionChunk):
@@ -158,6 +164,7 @@ class _ChatStreamMixin:
         self._self_invocation.response_id = self._self_response_id
         self._self_invocation.input_tokens = self._self_prompt_tokens
         self._self_invocation.output_tokens = self._self_completion_tokens
+        self._self_invocation.cache_read_input_tokens = self._self_cache_read_input_tokens
         finish_reasons = [
             choice.finish_reason
             for choice in self._self_choice_buffers
@@ -198,6 +205,7 @@ class ChatStreamWrapper(
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
+        self._self_cache_read_input_tokens = None
 
 
 class AsyncChatStreamWrapper(
@@ -218,6 +226,7 @@ class AsyncChatStreamWrapper(
         self._self_service_tier = None
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
+        self._self_cache_read_input_tokens = None
 
 
 __all__ = [

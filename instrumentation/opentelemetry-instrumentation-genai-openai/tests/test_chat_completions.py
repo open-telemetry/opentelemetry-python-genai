@@ -1811,3 +1811,70 @@ def chat_completion_multiple_tools_streaming(
 
 def assert_no_invalid_type_warning(caplog):
     assert "Invalid type" not in caplog.text
+
+
+def test_chat_completion_reports_cached_tokens(
+    span_exporter, log_exporter, openai_client, instrument_no_content, vcr
+):
+    latest_experimental_enabled = is_experimental_mode()
+    with vcr.use_cassette("test_chat_completion_reports_cached_tokens.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=USER_ONLY_PROMPT, model=DEFAULT_MODEL, stream=False
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        spans[0],
+        DEFAULT_MODEL,
+        latest_experimental_enabled,
+        response.id,
+        response.model,
+        response.usage.prompt_tokens,
+        response.usage.completion_tokens,
+    )
+
+    assert response.usage.prompt_tokens_details.cached_tokens == 9
+    assert (
+        spans[0].attributes["gen_ai.usage.cache_read.input_tokens"]
+        == response.usage.prompt_tokens_details.cached_tokens
+    )
+
+
+def test_chat_completion_streaming_reports_cached_tokens(
+    span_exporter, log_exporter, openai_client, instrument_no_content, vcr
+):
+    latest_experimental_enabled = is_experimental_mode()
+    with vcr.use_cassette("test_chat_completion_streaming_reports_cached_tokens.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        stream_usage = None
+        stream_usage_id = None
+        stream_usage_model = None
+        for chunk in response:
+            if getattr(chunk, "usage", None):
+                stream_usage = chunk.usage
+                stream_usage_id = chunk.id
+                stream_usage_model = chunk.model
+
+    spans = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        spans[0],
+        DEFAULT_MODEL,
+        latest_experimental_enabled,
+        stream_usage_id,
+        stream_usage_model,
+        stream_usage.prompt_tokens,
+        stream_usage.completion_tokens,
+        response_service_tier="default",
+    )
+
+    assert stream_usage.prompt_tokens_details.cached_tokens == 7
+    assert (
+        spans[0].attributes["gen_ai.usage.cache_read.input_tokens"]
+        == stream_usage.prompt_tokens_details.cached_tokens
+    )
