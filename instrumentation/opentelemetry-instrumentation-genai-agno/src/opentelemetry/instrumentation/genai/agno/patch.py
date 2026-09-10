@@ -81,6 +81,8 @@ _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
 
 
+# wrapt has no unregister API for post-import hooks; monotonic generations
+# invalidate deferred hooks registered during prior instrumentation cycles.
 _instrumentation_generation: int = 0
 _is_instrumented: bool = False
 
