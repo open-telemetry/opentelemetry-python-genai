@@ -181,7 +181,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
         if isinstance(content, str):
             return [TextPart(content=content)]
         if isinstance(content, Iterator):
-            return []
+            return [GenericPart(type="document")]
         if isinstance(content, Iterable):
             return convert_content_to_parts(
                 cast("Iterable[ContentBlock | ContentBlockParam]", content)

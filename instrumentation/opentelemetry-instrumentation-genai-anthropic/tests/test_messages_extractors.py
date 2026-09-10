@@ -297,6 +297,28 @@ def test_nested_content_document_source_preserves_part_order():
     assert parts[0].type == "document"
 
 
+def test_iterator_document_source_is_preserved_without_consuming():
+    def document_content():
+        yield {"type": "text", "text": "First"}
+        yield {"type": "text", "text": "Second"}
+
+    content = document_content()
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {"type": "content", "content": content},
+            }
+        ]
+    )
+
+    assert parts == [GenericPart(type="document")]
+    assert list(content) == [
+        {"type": "text", "text": "First"},
+        {"type": "text", "text": "Second"},
+    ]
+
+
 @pytest.mark.parametrize(
     ("block_type", "media_type", "data"),
     [
