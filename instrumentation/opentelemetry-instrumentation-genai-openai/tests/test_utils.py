@@ -5,7 +5,6 @@
 
 import base64
 import json
-from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,6 +13,7 @@ import pytest
 from opentelemetry.instrumentation.genai.openai.utils import (
     _content_to_parts,
     _prepare_input_messages,
+    get_property_value,
 )
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv._incubating.attributes import (
@@ -572,11 +572,7 @@ def assert_cache_attributes(span, usage, require_cache_read=False):
     details = _get_usage_details(usage)
     assert details is not None
 
-    cached_tokens = (
-        details.get("cached_tokens")
-        if isinstance(details, Mapping)
-        else getattr(details, "cached_tokens", None)
-    )
+    cached_tokens = get_property_value(details, "cached_tokens")
     if require_cache_read:
         assert type(cached_tokens) is int
         assert cached_tokens > 0
