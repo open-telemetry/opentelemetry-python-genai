@@ -5,7 +5,6 @@
 
 import base64
 import json
-from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
@@ -43,6 +42,7 @@ _REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+REASONING_MODEL = "gpt-5.1"
 FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
 # TODO: use the semconv constants once these attributes are released in
 # opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
@@ -64,6 +64,15 @@ CACHEABLE_MESSAGES = [
     {"role": "user", "content": "Reply with OK only."},
 ]
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
+REASONING_PROMPT = [
+    {
+        "role": "user",
+        "content": (
+            "A farmer has 17 sheep and all but 9 run away. "
+            "How many sheep remain? Explain your reasoning."
+        ),
+    }
+]
 USER_ONLY_EXPECTED_INPUT_MESSAGES = [
     {
         "role": "user",
@@ -597,25 +606,25 @@ def assert_cache_attributes(span, usage, require_cache_read=False):
         )
 
 
-def assert_reasoning_attributes(span, usage):
+def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
     details = getattr(usage, "completion_tokens_details", None)
-    reasoning_tokens = (
-        details.get("reasoning_tokens")
-        if isinstance(details, Mapping)
-        else getattr(details, "reasoning_tokens", None)
-    )
+    reasoning_tokens = get_property_value(details, "reasoning_tokens")
+    if require_reasoning:
+        assert type(reasoning_tokens) is int
+        assert reasoning_tokens > 0
+
     if reasoning_tokens is None:
         assert (
             GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
             not in span.attributes
         )
     else:
-        assert (
-            span.attributes[
-                GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
-            ]
-            == reasoning_tokens
-        )
+        emitted = span.attributes[
+            GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        ]
+        assert emitted == reasoning_tokens
+        if require_reasoning:
+            assert type(emitted) is int
 
 
 def assert_message_in_logs(log, event_name, expected_content, parent_span):
