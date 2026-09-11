@@ -92,21 +92,33 @@ def _extract_document_score(doc: Any) -> float | int | None:
         doc_map = cast(Mapping[str, Any], doc)
         score = doc_map.get("score")
         if score is None:
+            score = doc_map.get("relevance_score")
+        if score is None:
             metadata = doc_map.get("metadata")
             if isinstance(metadata, Mapping):
                 meta_map = cast(Mapping[str, Any], metadata)
                 score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
             elif metadata is not None:
                 score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
     else:
         score = getattr(doc, "score", None)
+        if score is None:
+            score = getattr(doc, "relevance_score", None)
         if score is None:
             metadata = getattr(doc, "metadata", None)
             if isinstance(metadata, Mapping):
                 meta_map = cast(Mapping[str, Any], metadata)
                 score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
             elif metadata is not None:
                 score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
 
     if (
         score is not None

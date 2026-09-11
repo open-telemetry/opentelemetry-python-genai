@@ -1800,6 +1800,24 @@ class TestExtractDocumentScore:
 
         assert _extract_document_score(Obj()) == 0.75
 
+    def test_metadata_relevance_score_fallback(self):
+        class Obj:
+            metadata = {"relevance_score": 0.82}
+
+        assert _extract_document_score(Obj()) == 0.82
+
+    def test_attr_relevance_score_fallback(self):
+        class Obj:
+            relevance_score = 0.91
+
+        assert _extract_document_score(Obj()) == 0.91
+
+    def test_precedence_score_over_relevance_score(self):
+        class Obj:
+            metadata = {"score": 0.85, "relevance_score": 0.42}
+
+        assert _extract_document_score(Obj()) == 0.85
+
     def test_precedence_attr_over_metadata(self):
         class Obj:
             score = 0.9
