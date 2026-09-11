@@ -210,6 +210,13 @@ def _set_response_properties(
                 prompt_tokens_details, "cached_tokens"
             )
         set_chat_usage_details(invocation=chat_invocation, usage=result.usage)
+        completion_tokens_details = getattr(
+            result.usage, "completion_tokens_details", None
+        )
+        if completion_tokens_details is not None:
+            chat_invocation.thinking_tokens = get_property_value(
+                completion_tokens_details, "reasoning_tokens"
+            )
 
     if getattr(result, "system_fingerprint", None):
         chat_invocation.attributes.update(

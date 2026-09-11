@@ -1,0 +1,1 @@
+Record metrics `gen_ai.invoke_agent.duration` and `gen_ai.execute_tool.duration` instead of `gen_ai.client.operation.duration`.

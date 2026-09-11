@@ -86,8 +86,8 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    RemoteAgentInvocation,
 )
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
@@ -135,7 +135,7 @@ def _set_co_filename(wrapped: object) -> None:
 
 def _apply_interaction_response_attributes(
     response: Interaction,
-    invocation: InferenceInvocation | AgentInvocation,
+    invocation: InferenceInvocation | RemoteAgentInvocation,
     telemetry_handler: TelemetryHandler,
 ) -> None:
     if isinstance(invocation, InferenceInvocation):
@@ -297,7 +297,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: Iterable[InteractionSSEEvent],
-        invocation: InferenceInvocation | AgentInvocation,
+        invocation: InferenceInvocation | RemoteAgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -329,7 +329,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: AsyncIterable[InteractionSSEEvent],
-        invocation: InferenceInvocation | AgentInvocation,
+        invocation: InferenceInvocation | RemoteAgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -414,7 +414,7 @@ def _start_interactions_invocation(
     telemetry_handler: TelemetryHandler,
     instance: InteractionsResource | AsyncInteractionsResource,
     kwargs: dict[str, Any],
-) -> InferenceInvocation | AgentInvocation:
+) -> InferenceInvocation | RemoteAgentInvocation:
     # Vertex AI does not support the interactions API yet, but eventually will.
     # SDK will raise an exception if model or agent is not passed or if input data is not passed.
     is_vertex, server_address = _get_client_info(instance)
@@ -424,7 +424,7 @@ def _start_interactions_invocation(
         else GenAIAttributes.GenAiSystemValues.GEMINI.value
     )
     if agent := kwargs.get("agent"):
-        invocation: InferenceInvocation | AgentInvocation = (
+        invocation: InferenceInvocation | RemoteAgentInvocation = (
             telemetry_handler.invoke_remote_agent(
                 provider=provider,
                 request_model=kwargs.get("model"),

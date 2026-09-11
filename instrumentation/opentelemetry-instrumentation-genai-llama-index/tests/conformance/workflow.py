@@ -31,8 +31,9 @@ class WorkflowScenario(Scenario):
         "execute_tool": 1,
     }
     expected_metrics = (
-        "gen_ai.client.operation.duration",
         "gen_ai.invoke_workflow.duration",
+        "gen_ai.invoke_agent.duration",
+        "gen_ai.execute_tool.duration",
     )
 
     def run(

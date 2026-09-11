@@ -34,9 +34,9 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     GenAIInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
 )
 from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.types import OutputMessage, Role, TextPart
@@ -422,7 +422,7 @@ def model_generate_stream(handler: TelemetryHandler) -> _Wrapper[Model]:
 
 
 def _record_run_answer(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     output: object,
     *,
@@ -454,7 +454,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
     def __init__(
         self,
         stream: Generator[_RunStreamChunk, None, None],
-        invocation: AgentInvocation,
+        invocation: LocalAgentInvocation,
         agent: MultiStepAgent,
         *,
         capture_content: bool,
@@ -522,7 +522,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
 
 
 def _record_agent(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     bound: dict[str, Any],
     *,
@@ -540,7 +540,7 @@ def _record_agent(
 
 
 def _record_agent_run(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     bound: dict[str, Any],
     result: object,
