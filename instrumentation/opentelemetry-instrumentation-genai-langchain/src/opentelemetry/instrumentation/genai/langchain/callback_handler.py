@@ -284,9 +284,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 request_model = str(model)
                 break
 
-        if request_model is None and (
-            model := (metadata or {}).get("ls_model_name")
-        ) is not None:
+        if (
+            request_model is None
+            and (model := (metadata or {}).get("ls_model_name")) is not None
+        ):
             request_model = str(model)
 
         # Skip telemetry for unsupported request models
