@@ -25,7 +25,11 @@ from opentelemetry.util.genai.types import (
 )
 
 from .chat_buffers import ChoiceBuffer
-from .utils import get_property_value, map_finish_reason
+from .utils import (
+    get_property_value,
+    map_finish_reason,
+    set_chat_usage_details,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -105,6 +109,9 @@ class _ChatStreamMixin:
                 self._self_cached_prompt_tokens = get_property_value(
                     prompt_tokens_details, "cached_tokens"
                 )
+            set_chat_usage_details(
+                invocation=self._self_invocation, usage=usage
+            )
 
     def _process_chunk(self, chunk: ChatCompletionChunk) -> None:
         if not isinstance(chunk, ChatCompletionChunk):
