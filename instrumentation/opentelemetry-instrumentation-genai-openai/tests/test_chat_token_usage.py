@@ -219,6 +219,7 @@ def assert_usage(
         for key, value in span.attributes.items()
         if key.startswith("gen_ai.usage.")
     }
+    print(json.dumps({"exported_usage": actual}, sort_keys=True))
     assert actual == expected
 
 
