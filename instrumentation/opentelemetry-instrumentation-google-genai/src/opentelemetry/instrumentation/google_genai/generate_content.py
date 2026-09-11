@@ -3,7 +3,7 @@
 
 import json
 import os
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, Callable, Iterable
 from typing import Any
 
 from google.genai.models import AsyncModels, Models
@@ -35,6 +35,7 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
+    ModalityTokens,
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
@@ -347,48 +348,15 @@ def _apply_request_attributes(
     )
 
 
-_INPUT_MODALITY_FIELDS = {
-    "text": "text_input_tokens",
-    "image": "image_input_tokens",
-    "audio": "audio_input_tokens",
-}
-_OUTPUT_MODALITY_FIELDS = {
-    "text": "text_output_tokens",
-    "image": "image_output_tokens",
-    "audio": "audio_output_tokens",
-}
-_CACHE_READ_MODALITY_FIELDS = {
-    "text": "text_cache_read_input_tokens",
-    "image": "image_cache_read_input_tokens",
-    "audio": "audio_cache_read_input_tokens",
-}
-
-
-def _set_modality_tokens(
-    invocation: InferenceInvocation,
-    entries: list[ModalityTokenCount] | None,
-    fields: Mapping[str, str],
-) -> None:
+def _modality_tokens(
+    response: GenerateContentResponse, path: str
+) -> ModalityTokens | None:
+    entries: list[ModalityTokenCount] | None = _get_response_property(
+        response, path
+    )
     if entries is None:
-        return
-    # A streaming chunk redelivers the whole breakdown, so an arriving one has
-    # to replace the previous values: a modality that drops out of a later
-    # chunk would otherwise keep a stale count and push the breakdown over the
-    # total reported alongside it.
-    for field_name in fields.values():
-        setattr(invocation, field_name, None)
-    for entry in entries:
-        modality = entry.modality
-        token_count = entry.token_count
-        if modality is None or not isinstance(token_count, int):
-            continue
-        # modality is a MediaModality enum, so str() would yield
-        # "MediaModality.AUDIO" rather than the bare modality name.
-        field_name = fields.get(
-            str(getattr(modality, "value", modality)).lower()
-        )
-        if field_name is not None:
-            setattr(invocation, field_name, token_count)
+        return None
+    return [(entry.modality or "", entry.token_count) for entry in entries]
 
 
 def _get_response_property(response: GenerateContentResponse, path: str):
@@ -468,26 +436,14 @@ def _apply_response_attributes(
         invocation.output_tokens = (
             invocation.output_tokens or 0
         ) + thinking_tokens
-    _set_modality_tokens(
-        invocation,
-        _get_response_property(
-            response, "usage_metadata.prompt_tokens_details"
-        ),
-        _INPUT_MODALITY_FIELDS,
+    invocation.set_input_tokens(
+        _modality_tokens(response, "usage_metadata.prompt_tokens_details")
     )
-    _set_modality_tokens(
-        invocation,
-        _get_response_property(
-            response, "usage_metadata.candidates_tokens_details"
-        ),
-        _OUTPUT_MODALITY_FIELDS,
+    invocation.set_output_tokens(
+        _modality_tokens(response, "usage_metadata.candidates_tokens_details")
     )
-    _set_modality_tokens(
-        invocation,
-        _get_response_property(
-            response, "usage_metadata.cache_tokens_details"
-        ),
-        _CACHE_READ_MODALITY_FIELDS,
+    invocation.set_cache_read_input_tokens(
+        _modality_tokens(response, "usage_metadata.cache_tokens_details")
     )
 
 

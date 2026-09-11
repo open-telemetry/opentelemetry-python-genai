@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
@@ -154,7 +154,14 @@ class CompactionPart:
     type: Literal["compaction"] = "compaction"
 
 
-Modality = Literal["image", "video", "audio", "document"]
+Modality = Literal["text", "image", "video", "audio", "document"]
+
+ModalityTokens: TypeAlias = Iterable[tuple[Modality | str, int | None]]
+"""A per-modality token breakdown, as ``(modality, token count)`` pairs.
+
+The modality may be a plain string or an enum member carrying one as its
+``value``, so a provider SDK's own enum can be passed straight through.
+"""
 
 
 @dataclass()
