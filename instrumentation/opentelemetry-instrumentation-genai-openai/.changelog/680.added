@@ -1,1 +1,1 @@
-Capture reasoning tokens on chat completions
+Capture reasoning tokens - `gen_ai.usage.reasoning.output_tokens` on chat completions
