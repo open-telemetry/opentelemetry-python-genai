@@ -39,11 +39,15 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES,
+    AUDIO_AND_FILE_PROMPT,
     CACHEABLE_MESSAGES,
     DEFAULT_MODEL,
     EXPECTED_TOOL_DEFINITIONS,
     MULTIMODAL_EXPECTED_INPUT_MESSAGES,
     MULTIMODAL_PROMPT,
+    REFUSAL_PROMPT,
+    REFUSAL_TEXT,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
@@ -188,6 +192,47 @@ def test_chat_completion_captures_multimodal_input(
     assert_messages_attribute(
         span.attributes["gen_ai.input.messages"],
         MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
+
+
+def test_chat_completion_captures_audio_and_file_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # input_audio and file parts were dropped: audio becomes a blob with
+    # the media type its format maps to, a file either a reference
+    # (file_id) or a document blob (inline file_data).
+    with vcr.use_cassette("test_chat_completion_audio_and_file_input.yaml"):
+        openai_client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=AUDIO_AND_FILE_PROMPT,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES,
+    )
+
+
+def test_chat_completion_captures_refusal_output(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A refused completion carries content=None and the text in its own
+    # `refusal` field, which used to leave the output message empty.
+    with vcr.use_cassette("test_chat_completion_refusal.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=REFUSAL_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=False,
+        )
+
+    assert response.choices[0].message.content is None
+    assert response.choices[0].message.refusal == REFUSAL_TEXT
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.output.messages"],
+        format_simple_expected_output_message(REFUSAL_TEXT),
     )
 
 
