@@ -9,9 +9,10 @@ OpenTelemetry LlamaIndex Instrumentation
 This package contains OpenTelemetry instrumentation for
 `LlamaIndex <https://github.com/run-llama/llama_index>`_.
 
-It emits ``invoke_agent`` spans for LlamaIndex ``FunctionAgent`` and
-``ReActAgent`` runs, and ``execute_tool`` spans when LlamaIndex executes
-function tools. Model calls
+It emits ``invoke_workflow`` spans for ``AgentWorkflow`` runs,
+``invoke_agent`` spans for standalone and workflow-member ``FunctionAgent``
+and ``ReActAgent`` executions, and ``execute_tool`` spans when LlamaIndex
+executes tools. Model calls
 delegated to provider SDKs are intentionally left to those SDKs' OpenTelemetry
 instrumentations.
 

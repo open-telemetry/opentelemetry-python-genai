@@ -1,0 +1,1 @@
+Capture cached prompt tokens - `gen_ai.usage.cache_read.input_tokens` on chat completions

@@ -490,7 +490,7 @@ def _create_instrumented_interactions_create(
             )
             invocation.stop()
             return response
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 
@@ -534,7 +534,7 @@ def _create_instrumented_async_interactions_create(
             )
             invocation.stop()
             return response
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 
