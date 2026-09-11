@@ -32,7 +32,10 @@ class FakeLM(dspy.LM):
         **kwargs: Any,
     ) -> None:
         super().__init__(
-            model=model, api_key="fake-api-key", model_type=model_type, **kwargs
+            model=model,
+            api_key="fake-api-key",
+            model_type=model_type,
+            **kwargs,
         )
         self._responses = list(responses or ["Paris"])
         self._idx = 0

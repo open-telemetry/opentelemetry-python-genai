@@ -42,7 +42,10 @@ class FakeLM(dspy.LM):
         **kwargs: Any,
     ) -> None:
         super().__init__(
-            model=model, api_key="fake-api-key", model_type=model_type, **kwargs
+            model=model,
+            api_key="fake-api-key",
+            model_type=model_type,
+            **kwargs,
         )
         self._responses = list(responses or ["Paris"])
         self._idx = 0
@@ -139,9 +142,7 @@ def test_lm_call_sync_messages(
     input_messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
     assert len(input_messages) == 1
     assert input_messages[0]["role"] == "user"
-    assert (
-        input_messages[0]["parts"][0]["content"] == "Capital of Germany?"
-    )
+    assert input_messages[0]["parts"][0]["content"] == "Capital of Germany?"
 
 
 def test_lm_call_request_parameters(
@@ -474,7 +475,9 @@ def test_provider_and_model_resolution() -> None:
     assert resolve_provider(MockLM("anthropic/claude-3")) == "anthropic"
     assert resolve_request_model(MockLM("anthropic/claude-3")) == "claude-3"
 
-    assert resolve_provider(MockLM("bedrock/anthropic.claude")) == "aws.bedrock"
+    assert (
+        resolve_provider(MockLM("bedrock/anthropic.claude")) == "aws.bedrock"
+    )
     assert (
         resolve_request_model(MockLM("bedrock/anthropic.claude"))
         == "anthropic.claude"
@@ -520,8 +523,8 @@ def test_extract_message_rich_parts() -> None:
         LMTextPart,
         LMThinkingPart,
         LMToolCallPart,
-        LMToolResultPart,
     )
+
     from opentelemetry.instrumentation.genai.dspy.utils import (
         _extract_single_message,
         extract_lm_output_messages,
@@ -599,7 +602,9 @@ def test_extract_message_rich_parts() -> None:
     lm_resp.outputs[0].parts.append(
         LMToolCallPart(id="call_out", name="calc", args={"a": 2})
     )
-    output_msgs = extract_lm_output_messages(lm_resp, finish_reason="tool_calls")
+    output_msgs = extract_lm_output_messages(
+        lm_resp, finish_reason="tool_calls"
+    )
     assert len(output_msgs) == 1
     assert len(output_msgs[0].parts) == 3
     assert isinstance(output_msgs[0].parts[0], ReasoningPart)
@@ -674,6 +679,7 @@ def test_extract_multimodal_and_generic_parts() -> None:
         LMSourcePart,
         LMVideoPart,
     )
+
     from opentelemetry.instrumentation.genai.dspy.utils import (
         _extract_single_message,
         extract_lm_output_messages,
@@ -688,26 +694,53 @@ def test_extract_multimodal_and_generic_parts() -> None:
     lm_msg = LMMessage(
         role="user",
         parts=[
-            LMImagePart(url="https://example.com/img.png", media_type="image/png"),
-            LMAudioPart(url="https://example.com/audio.mp3", media_type="audio/mp3"),
-            LMVideoPart(url="https://example.com/video.mp4", media_type="video/mp4"),
-            LMDocumentPart(url="https://example.com/doc.pdf", media_type="application/pdf"),
+            LMImagePart(
+                url="https://example.com/img.png", media_type="image/png"
+            ),
+            LMAudioPart(
+                url="https://example.com/audio.mp3", media_type="audio/mp3"
+            ),
+            LMVideoPart(
+                url="https://example.com/video.mp4", media_type="video/mp4"
+            ),
+            LMDocumentPart(
+                url="https://example.com/doc.pdf", media_type="application/pdf"
+            ),
         ],
     )
     msg = _extract_single_message(lm_msg)
     assert msg is not None
     assert len(msg.parts) == 4
-    assert msg.parts[0] == UriPart(mime_type="image/png", modality="image", uri="https://example.com/img.png")
-    assert msg.parts[1] == UriPart(mime_type="audio/mp3", modality="audio", uri="https://example.com/audio.mp3")
-    assert msg.parts[2] == UriPart(mime_type="video/mp4", modality="video", uri="https://example.com/video.mp4")
-    assert msg.parts[3] == UriPart(mime_type="application/pdf", modality="document", uri="https://example.com/doc.pdf")
+    assert msg.parts[0] == UriPart(
+        mime_type="image/png",
+        modality="image",
+        uri="https://example.com/img.png",
+    )
+    assert msg.parts[1] == UriPart(
+        mime_type="audio/mp3",
+        modality="audio",
+        uri="https://example.com/audio.mp3",
+    )
+    assert msg.parts[2] == UriPart(
+        mime_type="video/mp4",
+        modality="video",
+        uri="https://example.com/video.mp4",
+    )
+    assert msg.parts[3] == UriPart(
+        mime_type="application/pdf",
+        modality="document",
+        uri="https://example.com/doc.pdf",
+    )
 
     # Dict with image_url
     dict_msg = _extract_single_message(
         {
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": "https://example.com/pic.jpg"}}
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/pic.jpg"},
+                }
             ],
         }
     )
@@ -750,15 +783,25 @@ def test_extract_multimodal_and_generic_parts() -> None:
         parts=[
             LMImagePart(data="aGVsbG8=", media_type="image/png"),
             LMDocumentPart(data="aGVsbG8=", media_type="application/pdf"),
-            LMBinaryPart(data="aGVsbG8=", media_type="application/octet-stream"),
+            LMBinaryPart(
+                data="aGVsbG8=", media_type="application/octet-stream"
+            ),
         ],
     )
     extracted_blob = _extract_single_message(blob_msg)
     assert extracted_blob is not None
     assert len(extracted_blob.parts) == 3
-    assert extracted_blob.parts[0] == BlobPart(mime_type="image/png", modality="image", content=b"hello")
-    assert extracted_blob.parts[1] == BlobPart(mime_type="application/pdf", modality="document", content=b"hello")
-    assert extracted_blob.parts[2] == BlobPart(mime_type="application/octet-stream", modality="document", content=b"hello")
+    assert extracted_blob.parts[0] == BlobPart(
+        mime_type="image/png", modality="image", content=b"hello"
+    )
+    assert extracted_blob.parts[1] == BlobPart(
+        mime_type="application/pdf", modality="document", content=b"hello"
+    )
+    assert extracted_blob.parts[2] == BlobPart(
+        mime_type="application/octet-stream",
+        modality="document",
+        content=b"hello",
+    )
 
     # LMSourcePart extracted directly and from dict
     from opentelemetry.instrumentation.genai.dspy.utils import _extract_part
@@ -770,12 +813,18 @@ def test_extract_multimodal_and_generic_parts() -> None:
         {
             "role": "user",
             "parts": [
-                {"type": "source", "data": "aGVsbG8=", "media_type": "text/html"}
+                {
+                    "type": "source",
+                    "data": "aGVsbG8=",
+                    "media_type": "text/html",
+                }
             ],
         }
     )
     assert source_dict_msg is not None
-    assert source_dict_msg.parts[0] == BlobPart(mime_type="text/html", modality="document", content=b"hello")
+    assert source_dict_msg.parts[0] == BlobPart(
+        mime_type="text/html", modality="document", content=b"hello"
+    )
 
     # 3. Inline audio / video omitted as GenericPart
     av_msg = LMMessage(
@@ -854,7 +903,9 @@ def test_extract_multimodal_and_generic_parts() -> None:
     out_msgs = extract_lm_output_messages(lm_resp)
     assert len(out_msgs) == 1
     assert len(out_msgs[0].parts) == 3
-    assert out_msgs[0].parts[1] == UriPart(mime_type="image/png", modality="image", uri="https://example.com/out.png")
+    assert out_msgs[0].parts[1] == UriPart(
+        mime_type="image/png",
+        modality="image",
+        uri="https://example.com/out.png",
+    )
     assert out_msgs[0].parts[2] == GenericPart(type="citation")
-
-
