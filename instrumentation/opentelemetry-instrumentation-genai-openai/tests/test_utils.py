@@ -613,7 +613,7 @@ def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
         assert type(reasoning_tokens) is int
         assert reasoning_tokens > 0
 
-    if reasoning_tokens is None:
+    if not reasoning_tokens:
         assert (
             GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
             not in span.attributes
