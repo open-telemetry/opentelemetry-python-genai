@@ -27,7 +27,7 @@ from opentelemetry.instrumentation.genai.qwen_agent.utils import (
     find_tool_call_id,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import AgentInvocation
+from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import SyncStreamWrapper
 
 
@@ -41,7 +41,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
     def __init__(
         self,
         stream: Any,
-        invocation: AgentInvocation,
+        invocation: LocalAgentInvocation,
         capture_content: bool,
     ) -> None:
         super().__init__(stream)

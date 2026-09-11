@@ -39,8 +39,8 @@ from opentelemetry.context import Context, attach, detach
 from opentelemetry.trace import set_span_in_context
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     GenAIInvocation,
+    LocalAgentInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
@@ -70,13 +70,13 @@ _ACTIVE_WORKFLOW_TOOL: ContextVar[tuple[str, ToolInvocation] | None] = (
 
 
 _MEMBER_AGENT_CONTEXTS: MutableMapping[
-    AgentInvocation, contextvars.Context
+    LocalAgentInvocation, contextvars.Context
 ] = WeakKeyDictionary()
 
 
 def _start_member_agent(
-    start: Callable[[], AgentInvocation],
-) -> AgentInvocation:
+    start: Callable[[], LocalAgentInvocation],
+) -> LocalAgentInvocation:
     """Open a member-agent invocation inside a context this module owns.
 
     The invocation stays open across workflow steps, and each step runs in its
@@ -91,7 +91,7 @@ def _start_member_agent(
 
 
 def _finish_member_agent(
-    invocation: AgentInvocation, error: BaseException | None = None
+    invocation: LocalAgentInvocation, error: BaseException | None = None
 ) -> None:
     """Finish a member-agent invocation in the context that started it."""
 
@@ -420,7 +420,7 @@ def _workflow_tool_definitions(
     return definitions or None
 
 
-def _set_agent_output(invocation: AgentInvocation, result: Any) -> None:
+def _set_agent_output(invocation: LocalAgentInvocation, result: Any) -> None:
     """Copy the final chat response out of LlamaIndex's workflow result."""
     output = getattr(result, "result", None)
     response = getattr(output, "response", None)
@@ -428,14 +428,16 @@ def _set_agent_output(invocation: AgentInvocation, result: Any) -> None:
         invocation.output_messages = [_output_message(response)]
 
 
-def _set_agent_step_output(invocation: AgentInvocation, result: Any) -> None:
+def _set_agent_step_output(
+    invocation: LocalAgentInvocation, result: Any
+) -> None:
     """Copy a member agent's response out of an AgentWorkflow step."""
     if isinstance(result, AgentOutput):
         invocation.output_messages = [_output_message(result.response)]
 
 
 def _set_return_direct_agent_output(
-    invocation: AgentInvocation, tool_output: ToolOutput
+    invocation: LocalAgentInvocation, tool_output: ToolOutput
 ) -> None:
     """Record the response synthesized by a return-direct tool execution."""
     invocation.output_messages = [
@@ -507,11 +509,13 @@ class _LlamaIndexInvocation(BaseSpan):
     ) = PrivateAttr()
     _workflow_agents: dict[str, BaseWorkflowAgent] = PrivateAttr()
     _workflow_agents_by_run_id: dict[str, BaseWorkflowAgent] = PrivateAttr()
-    _workflow_invocations_by_run_id: dict[str, AgentInvocation] = PrivateAttr()
-    _workflow_invocations_by_key: dict[tuple[str, str], AgentInvocation] = (
+    _workflow_invocations_by_run_id: dict[str, LocalAgentInvocation] = (
         PrivateAttr()
     )
-    _workflow_agent_invocation: AgentInvocation | None = PrivateAttr()
+    _workflow_invocations_by_key: dict[
+        tuple[str, str], LocalAgentInvocation
+    ] = PrivateAttr()
+    _workflow_agent_invocation: LocalAgentInvocation | None = PrivateAttr()
     _workflow_handoff: bool = PrivateAttr()
     _workflow_agent_context_token: Token[Context] | None = PrivateAttr()
     _tool_parent_context_token: Token[Context] | None = PrivateAttr()
@@ -522,7 +526,7 @@ class _LlamaIndexInvocation(BaseSpan):
     _workflow_tool_counts: dict[str, int] = PrivateAttr()
     _workflow_return_direct_runs: set[str] = PrivateAttr()
     _workflow_tool_errors: dict[str, BaseException] = PrivateAttr()
-    _workflow_pending_handoffs: dict[str, AgentInvocation] = PrivateAttr()
+    _workflow_pending_handoffs: dict[str, LocalAgentInvocation] = PrivateAttr()
 
     def __init__(
         self,
@@ -539,7 +543,7 @@ class _LlamaIndexInvocation(BaseSpan):
         workflow_agents: Mapping[str, BaseWorkflowAgent] | None = None,
         workflow_run_id: str | None = None,
         workflow_agent: BaseWorkflowAgent | None = None,
-        workflow_agent_invocation: AgentInvocation | None = None,
+        workflow_agent_invocation: LocalAgentInvocation | None = None,
         workflow_handoff: bool = False,
         tool_parent_context_token: Token[Context] | None = None,
     ) -> None:
@@ -591,7 +595,7 @@ class _LlamaIndexInvocation(BaseSpan):
 
     def workflow_invocation_for_run_id(
         self, run_id: str | None, agent_name: str | None = None
-    ) -> AgentInvocation | None:
+    ) -> LocalAgentInvocation | None:
         """Return the reusable member-agent invocation for a workflow run."""
         if self._workflow_agent_invocation is not None:
             return self._workflow_agent_invocation
@@ -602,13 +606,15 @@ class _LlamaIndexInvocation(BaseSpan):
         return self._workflow_invocations_by_run_id.get(run_id)
 
     def register_workflow_invocation(
-        self, run_id: str, agent_name: str, invocation: AgentInvocation
+        self, run_id: str, agent_name: str, invocation: LocalAgentInvocation
     ) -> None:
         """Keep one member-agent invocation open across workflow turns."""
         self._workflow_invocations_by_run_id[run_id] = invocation
         self._workflow_invocations_by_key[(run_id, agent_name)] = invocation
 
-    def remove_workflow_invocation(self, invocation: AgentInvocation) -> None:
+    def remove_workflow_invocation(
+        self, invocation: LocalAgentInvocation
+    ) -> None:
         """Forget a completed member invocation so a later turn can restart it."""
         for key, value in list(self._workflow_invocations_by_key.items()):
             if value is invocation:
@@ -666,7 +672,7 @@ class _LlamaIndexInvocation(BaseSpan):
     def set_return_direct_agent_output(
         self,
         run_id: str,
-        invocation: AgentInvocation,
+        invocation: LocalAgentInvocation,
         tool_output: ToolOutput,
     ) -> None:
         """Keep the first successful return-direct result to arrive."""
@@ -698,12 +704,12 @@ class _LlamaIndexInvocation(BaseSpan):
         return True
 
     def set_pending_handoff(
-        self, run_id: str, invocation: AgentInvocation
+        self, run_id: str, invocation: LocalAgentInvocation
     ) -> None:
         """Hold a handing-off agent open until its whole turn has drained."""
         self._workflow_pending_handoffs[run_id] = invocation
 
-    def take_pending_handoff(self, run_id: str) -> AgentInvocation | None:
+    def take_pending_handoff(self, run_id: str) -> LocalAgentInvocation | None:
         """Claim the handing-off agent owed a close, if there is one."""
         return self._workflow_pending_handoffs.pop(run_id, None)
 
@@ -739,7 +745,7 @@ class _LlamaIndexInvocation(BaseSpan):
                 if name == agent_name:
                     _set_agent_step_output(invocation, output)
                     break
-        invocations: list[AgentInvocation] = []
+        invocations: list[LocalAgentInvocation] = []
         for candidate in self._workflow_invocations_by_key.values():
             if all(candidate is not existing for existing in invocations):
                 invocations.append(candidate)
@@ -791,7 +797,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         workflow_agents: Mapping[str, BaseWorkflowAgent] | None = None
         workflow_run_id: str | None = None
         workflow_agent: BaseWorkflowAgent | None = None
-        workflow_agent_invocation: AgentInvocation | None = None
+        workflow_agent_invocation: LocalAgentInvocation | None = None
         workflow_handoff = False
         member_agent_step = False
         workflow_tool_token: (
@@ -926,7 +932,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 else None
             )
             if active_invocation is None and parent is not None:
-                if isinstance(parent._invocation, AgentInvocation):
+                if isinstance(parent._invocation, LocalAgentInvocation):
                     active_invocation = parent._invocation
             workflow_run_id = (
                 tags.get("llamaindex.run_id") if tags is not None else None
@@ -1050,7 +1056,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
     def _release_workflow_invocation(
         self,
         span: _LlamaIndexInvocation,
-        invocation: AgentInvocation,
+        invocation: LocalAgentInvocation,
     ) -> None:
         """Drop a finished member invocation so a later turn opens a new span."""
         parent = self.open_spans.get(span.parent_id or "")
@@ -1119,7 +1125,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             span.finalize_workflow_agents(
                 result=result if capture_content else None
             )
-        elif isinstance(span._invocation, AgentInvocation):
+        elif isinstance(span._invocation, LocalAgentInvocation):
             span.reset_tool_attributes()
             span.reset_workflow_tool()
             if self._handler.should_capture_content():
@@ -1202,14 +1208,14 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 span._invocation.stop()
             else:
                 span._invocation.fail(err)
-        elif isinstance(span._invocation, AgentInvocation):
+        elif isinstance(span._invocation, LocalAgentInvocation):
             _finish_member_agent(span._invocation, err)
         elif err is None:
             span._invocation.stop()
         else:
             span._invocation.fail(err)
         span.reset_tool_parent_context()
-        if isinstance(span._invocation, AgentInvocation):
+        if isinstance(span._invocation, LocalAgentInvocation):
             span.reset_workflow_agent()
             self._release_workflow_invocation(span, span._invocation)
         elif isinstance(span._invocation, ToolInvocation):

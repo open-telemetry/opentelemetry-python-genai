@@ -44,11 +44,9 @@ from opentelemetry._logs import (
 from opentelemetry.metrics import Meter, MeterProvider, get_meter
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
-    SpanKind,
     TracerProvider,
     get_tracer,
 )
-from opentelemetry.util.genai._agent_invocation import AgentInvocation
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error
@@ -57,9 +55,12 @@ from opentelemetry.util.genai.completion_hook import (
     _NoOpCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
     EmbeddingInvocation,
     FetchResponseInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
+    RemoteAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
@@ -462,12 +463,11 @@ class TelemetryHandler:
         Set remaining attributes (agent_name, etc.) on the returned invocation,
         then call invocation.stop() or invocation.fail().
         """
-        return AgentInvocation(
+        return LocalAgentInvocation(
             self._tracer,
             self._instruments,
             self._logger,
             self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
             content_capturing_mode=self._content_capturing_mode,
@@ -492,13 +492,12 @@ class TelemetryHandler:
         Set remaining attributes (agent_name, etc.) on the returned invocation,
         then call invocation.stop() or invocation.fail().
         """
-        return AgentInvocation(
+        return RemoteAgentInvocation(
             self._tracer,
             self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
-            span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
             server_address=server_address,
@@ -511,7 +510,7 @@ class TelemetryHandler:
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+    ) -> LocalAgentInvocation:
         """Returns an agent invocation (INTERNAL span kind). Starts span when called.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
@@ -522,12 +521,11 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return AgentInvocation(
+        return LocalAgentInvocation(
             self._tracer,
             self._instruments,
             self._logger,
             self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
             content_capturing_mode=self._content_capturing_mode,
@@ -541,7 +539,9 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+        agent_id: str | None = None,
+        agent_version: str | None = None,
+    ) -> RemoteAgentInvocation:
         """Returns an agent invocation (CLIENT span kind). Starts span when called.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
@@ -552,15 +552,16 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return AgentInvocation(
+        return RemoteAgentInvocation(
             self._tracer,
             self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
-            span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
+            agent_id=agent_id,
+            agent_version=agent_version,
             server_address=server_address,
             server_port=server_port,
             content_capturing_mode=self._content_capturing_mode,
