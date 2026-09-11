@@ -377,4 +377,3 @@ class RemoteAgentInvocation(AgentInvocation):
 
     def _record_metrics(self) -> None:
         self._record_client_metrics()
-
