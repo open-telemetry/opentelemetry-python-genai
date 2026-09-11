@@ -75,6 +75,66 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
         "name": None,
     }
 ]
+# Canonical base64, so the payloads round-trip unchanged through the span
+# attribute (the GenAI JSON encoder re-encodes blob bytes).
+_WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
+_PDF_B64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
+AUDIO_AND_FILE_PROMPT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the clip and the documents"},
+            {
+                "type": "input_audio",
+                "input_audio": {"data": _WAV_B64, "format": "wav"},
+            },
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "spec.pdf",
+                    "file_data": f"data:application/pdf;base64,{_PDF_B64}",
+                },
+            },
+        ],
+    }
+]
+AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [
+            {
+                "type": "text",
+                "content": "Summarize the clip and the documents",
+            },
+            {
+                "type": "blob",
+                "mime_type": "audio/wav",
+                "modality": "audio",
+                "content": _WAV_B64,
+            },
+            {
+                "type": "file",
+                "mime_type": None,
+                "modality": "document",
+                "file_id": "file-123",
+            },
+            {
+                "type": "blob",
+                "mime_type": "application/pdf",
+                "modality": "document",
+                "content": _PDF_B64,
+            },
+        ],
+        "name": None,
+    }
+]
+
+REFUSAL_PROMPT = [
+    {"role": "user", "content": "Tell me how to do something disallowed."}
+]
+REFUSAL_TEXT = "I'm sorry, I can't help with that."
+
 MULTIMODAL_PROMPT = [
     {
         "role": "user",
