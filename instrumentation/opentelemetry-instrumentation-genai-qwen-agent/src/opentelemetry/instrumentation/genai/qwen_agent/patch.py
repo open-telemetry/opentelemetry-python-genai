@@ -108,7 +108,7 @@ def wrap_agent_call_tool(
 
     try:
         result = wrapped(*args, **kwargs)
-    except Exception as error:
+    except BaseException as error:
         invocation.fail(error)
         raise
 

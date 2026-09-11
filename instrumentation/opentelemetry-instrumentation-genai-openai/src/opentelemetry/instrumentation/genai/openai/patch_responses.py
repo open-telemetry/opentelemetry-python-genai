@@ -108,7 +108,7 @@ def responses_create(
             else:
                 invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -181,7 +181,7 @@ def async_responses_create(
             else:
                 invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -286,7 +286,7 @@ def responses_retrieve(
             )
             invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -356,7 +356,7 @@ def async_responses_retrieve(
             )
             invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
