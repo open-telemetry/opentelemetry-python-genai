@@ -805,6 +805,33 @@ def test_chat_model_preserves_input_and_output_message_names(
     assert output_messages[0]["role"] == "assistant"
 
 
+def test_chat_model_uses_ls_model_name_from_metadata(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    ):
+        model = FakeMessagesListChatModel(
+            responses=[AIMessage(content="Hello")]
+        )
+        model.invoke(
+            [HumanMessage(content="Hi")],
+            config={"metadata": {"ls_model_name": "custom-chat-model"}},
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
+        == "custom-chat-model"
+    )
+
+
 def assert_openai_completion_attributes(
     span: ReadableSpan, response: Optional, verify_content: bool = True
 ):

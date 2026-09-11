@@ -2799,22 +2799,6 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     assert blob.content == _REAL_PNG_BYTES
 
 
-def test_on_chat_model_start_uses_ls_model_name_from_metadata():
-    run_id = _run_id()
-    handler, telemetry, _ = _make_handler_with_llm_invocation(run_id)
-
-    handler.on_chat_model_start(
-        serialized={},
-        messages=[[HumanMessage(content="Hello")]],
-        run_id=run_id,
-        metadata={"ls_model_name": "canonical-model"},
-    )
-
-    telemetry.inference.assert_called_once_with(
-        "unknown", request_model="canonical-model"
-    )
-
-
 def test_on_chat_model_start_prefers_provider_model_over_ls_model_name():
     run_id = _run_id()
     handler, telemetry, _ = _make_handler_with_llm_invocation(run_id)
