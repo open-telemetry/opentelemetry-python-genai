@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import timeit
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Final
 
 from opentelemetry._logs import Logger
@@ -38,7 +38,7 @@ _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
 )
 
 
-class AgentInvocation(GenAIInvocation):
+class AgentInvocation(GenAIInvocation, ABC):
     """Base class representing a GenAI agent invocation (invoke_agent span).
 
     Use handler.invoke_local_agent() or handler.invoke_remote_agent()
