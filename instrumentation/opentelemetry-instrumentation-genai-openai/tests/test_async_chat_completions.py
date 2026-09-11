@@ -168,6 +168,7 @@ async def test_async_chat_completion_streaming_reports_cached_tokens(
         require_cache_read=True,
     )
 
+
 @pytest.mark.asyncio()
 async def test_async_chat_completion_reports_reasoning_tokens(
     span_exporter, async_openai_client, instrument_no_content, vcr
@@ -187,6 +188,7 @@ async def test_async_chat_completion_reports_reasoning_tokens(
     assert_reasoning_attributes(
         spans[0], response.usage, require_reasoning=True
     )
+
 
 @pytest.mark.asyncio()
 async def test_async_chat_completion_captures_multimodal_input(

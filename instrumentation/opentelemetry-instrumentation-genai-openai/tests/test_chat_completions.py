@@ -178,6 +178,7 @@ def test_chat_completion_streaming_reports_cached_tokens(
         require_cache_read=True,
     )
 
+
 def test_chat_completion_reports_reasoning_tokens(
     span_exporter, openai_client, instrument_no_content, vcr
 ):
