@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import inspect
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import copy, deepcopy
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
@@ -21,14 +21,23 @@ from wrapt import (
 
 from opentelemetry.instrumentation.genai.dspy.utils import (
     SENTINEL_TOOL_NAMES,
+    _safe_float,
+    _safe_int,
+    _safe_stop_sequences,
+    apply_usage_to_invocation,
     extract_input_content,
+    extract_lm_input_messages,
+    extract_lm_output_messages,
     extract_output_content,
     prepare_tool_definitions,
+    resolve_provider,
+    resolve_request_model,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
+    InferenceInvocation,
     RetrievalInvocation,
     ToolInvocation,
 )
@@ -40,6 +49,8 @@ from opentelemetry.util.genai.types import (
 
 if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
+    from dspy.clients.lm import LM
+    from dspy.core.types import LMResponse
     from dspy.primitives.module import Module
     from dspy.primitives.prediction import Prediction
     from dspy.retrievers.retrieve import Retrieve
@@ -217,6 +228,20 @@ def patch_dspy(handler: TelemetryHandler) -> None:
                 _react_aforward(handler, "dspy.ReActV2"),
             )
 
+    if hasattr(dspy, "LM"):
+        lm_module = dspy.LM.__module__
+        lm_name = dspy.LM.__name__
+        _wrap_function(
+            lm_module,
+            f"{lm_name}.__call__",
+            _lm_call(handler),
+        )
+        _wrap_function(
+            lm_module,
+            f"{lm_name}.acall",
+            _lm_acall(handler),
+        )
+
 
 def unpatch_dspy() -> None:
     """Remove patches from DSPy classes."""
@@ -237,6 +262,157 @@ def unpatch_dspy() -> None:
     if react_v2_cls is not None:
         unwrap(react_v2_cls, "forward")
         unwrap(react_v2_cls, "aforward")
+
+    if hasattr(dspy, "LM"):
+        unwrap(dspy.LM, "__call__")
+        unwrap(dspy.LM, "acall")
+
+
+def _start_lm_invocation(
+    handler: TelemetryHandler,
+    instance: LM,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> InferenceInvocation:
+    provider = resolve_provider(instance)
+    request_model = resolve_request_model(instance)
+
+    invocation = handler.inference(
+        provider=provider,
+        request_model=request_model,
+    )
+
+    merged_kwargs = {**getattr(instance, "kwargs", {}), **kwargs}
+
+    invocation.temperature = _safe_float(merged_kwargs.get("temperature"))
+    invocation.max_tokens = _safe_int(merged_kwargs.get("max_tokens"))
+    invocation.top_p = _safe_float(
+        merged_kwargs.get("top_p")
+        if merged_kwargs.get("top_p") is not None
+        else merged_kwargs.get("p")
+    )
+    invocation.frequency_penalty = _safe_float(
+        merged_kwargs.get("frequency_penalty")
+    )
+    invocation.presence_penalty = _safe_float(
+        merged_kwargs.get("presence_penalty")
+    )
+    invocation.seed = _safe_int(merged_kwargs.get("seed"))
+
+    invocation.stop_sequences = _safe_stop_sequences(merged_kwargs.get("stop"))
+
+    choice_count = _safe_int(merged_kwargs.get("n"))
+    if choice_count is not None and choice_count != 1:
+        invocation.request_choice_count = choice_count
+
+    if handler.should_capture_content():
+        invocation.input_messages = extract_lm_input_messages(args, kwargs)
+
+    return invocation
+
+
+def _get_field(obj: Any, key: str) -> Any:
+    if isinstance(obj, Mapping):
+        return cast(Mapping[str, Any], obj).get(key)
+    return getattr(obj, key, None)
+
+
+def _set_lm_invocation_response(
+    handler: TelemetryHandler,
+    invocation: InferenceInvocation,
+    instance: LM,
+    result: LMResponse | list[dict[str, Any] | str],
+) -> None:
+    if not isinstance(result, list):
+        if result.model:
+            invocation.response_model_name = str(result.model)
+        if result.response_id:
+            invocation.response_id = str(result.response_id)
+
+        usage_dict = result.usage_as_dict()
+        if usage_dict:
+            apply_usage_to_invocation(invocation, usage_dict)
+
+        finish_reasons = [
+            out.finish_reason for out in result.outputs if out.finish_reason
+        ]
+        if finish_reasons:
+            invocation.finish_reasons = finish_reasons
+
+        if handler.should_capture_content():
+            invocation.output_messages = extract_lm_output_messages(result)
+        return
+
+    # DSPy 3.x LM calls return a legacy list by default unless experimental=True
+    # or an LMRequest is used. DSPy appends each call's metadata to instance.history,
+    # so history[-1] corresponds to the invocation that just finished.
+    finish_reason: str | None = None
+    history: Sequence[Mapping[str, Any]] | None = getattr(
+        instance, "history", None
+    )
+    if isinstance(history, Sequence) and history:
+        last_entry = history[-1]
+        resp_model = last_entry.get("response_model") or last_entry.get(
+            "model"
+        )
+        if resp_model:
+            invocation.response_model_name = str(resp_model)
+
+        usage = last_entry.get("usage")
+        if isinstance(usage, Mapping):
+            apply_usage_to_invocation(
+                invocation, cast(Mapping[str, Any], usage)
+            )
+
+        resp_obj: Any = last_entry.get("response")
+        if resp_obj is not None:
+            resp_id = _get_field(resp_obj, "id")
+            if resp_id:
+                invocation.response_id = str(resp_id)
+
+            choices = _get_field(resp_obj, "choices")
+            if isinstance(choices, Sequence) and choices:
+                fr = _get_field(choices[0], "finish_reason")
+                if fr:
+                    finish_reason = str(fr)
+                    invocation.finish_reasons = [finish_reason]
+
+    if handler.should_capture_content():
+        invocation.output_messages = extract_lm_output_messages(
+            result, finish_reason=finish_reason
+        )
+
+
+def _lm_call(handler: TelemetryHandler) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: LM,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_lm_invocation(handler, instance, args, kwargs)
+        with invocation:
+            result = wrapped(*args, **kwargs)
+            _set_lm_invocation_response(handler, invocation, instance, result)
+            return result
+
+    return traced_method
+
+
+def _lm_acall(handler: TelemetryHandler) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: LM,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_lm_invocation(handler, instance, args, kwargs)
+        with invocation:
+            result = await wrapped(*args, **kwargs)
+            _set_lm_invocation_response(handler, invocation, instance, result)
+            return result
+
+    return traced_method
 
 
 def _extract_tool_arguments(
