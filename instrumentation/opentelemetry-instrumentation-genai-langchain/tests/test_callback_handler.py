@@ -2799,6 +2799,42 @@ def test_on_chat_model_start_captures_input_messages_when_content_enabled():
     assert blob.content == _REAL_PNG_BYTES
 
 
+def test_on_chat_model_start_captures_top_k_and_choice_count():
+    run_id = _run_id()
+    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content="Hello")]],
+        run_id=run_id,
+        invocation_params={
+            "params": {
+                "model_name": "gpt-4o",
+                "top_k": 40,
+                "n": 3,
+            }
+        },
+    )
+
+    assert llm_inv.top_k == 40
+    assert llm_inv.request_choice_count == 3
+
+
+def test_on_chat_model_start_defaults_top_k_and_choice_count_to_none():
+    run_id = _run_id()
+    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+    handler.on_chat_model_start(
+        serialized={},
+        messages=[[HumanMessage(content="Hello")]],
+        run_id=run_id,
+        invocation_params={"model_name": "gpt-4o"},
+    )
+
+    assert llm_inv.top_k is None
+    assert llm_inv.request_choice_count is None
+
+
 def test_on_chat_model_start_preserves_message_name():
     run_id = _run_id()
     handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
