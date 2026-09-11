@@ -158,15 +158,16 @@ class TestOnChainStartWorkflow:
             handler._invocation_manager.get_invocation(run_id) is workflow_inv
         )
 
-    def test_workflow_name_from_serialized(self):
+    def test_workflow_name_from_callback(self):
         handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
-            serialized={"name": "MyLangGraph"},
+            serialized={},
             inputs={},
             run_id=run_id,
             parent_run_id=None,
+            name="MyLangGraph",
         )
 
         telemetry.workflow.assert_called_once_with(name="MyLangGraph")
