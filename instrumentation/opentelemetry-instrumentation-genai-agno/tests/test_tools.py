@@ -9,10 +9,11 @@ import asyncio
 import json
 from unittest.mock import patch
 
+import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.tools import Toolkit
-from agno.tools.function import Function
+from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
 from opentelemetry.instrumentation.genai.agno.utils import (
@@ -256,3 +257,226 @@ def test_agent_run_without_tools(
     span = spans[0]
     assert span.name == "invoke_agent test-no-tools-agent"
     assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+
+
+def test_tool_call_execute_sync(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    def multiply(a: int, b: int) -> int:
+        """Multiply two numbers."""
+        return a * b
+
+    call = FunctionCall(
+        function=Function.from_callable(multiply),
+        arguments={"a": 3, "b": 4},
+        call_id="call_sync_1",
+    )
+    result = call.execute()
+    assert result.status == "success"
+    assert result.result == 12
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "execute_tool multiply"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "execute_tool"
+    )
+    assert span.attributes.get(GenAIAttributes.GEN_AI_TOOL_NAME) == "multiply"
+    assert span.attributes.get(GenAIAttributes.GEN_AI_TOOL_TYPE) == "function"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID)
+        == "call_sync_1"
+    )
+    assert span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT) == "12"
+
+
+def test_tool_call_execute_streaming_success(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    def stream_gen(prefix: str):
+        """Yield chunks."""
+        yield f"{prefix}_1"
+        yield f"{prefix}_2"
+
+    call = FunctionCall(
+        function=Function.from_callable(stream_gen),
+        arguments={"prefix": "part"},
+        call_id="call_stream_1",
+    )
+    result = call.execute()
+    assert result.status == "success"
+
+    # Span must not be closed yet before draining
+    assert len(span_exporter.get_finished_spans()) == 0
+
+    items = list(result.result)
+    assert items == ["part_1", "part_2"]
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "execute_tool stream_gen"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID)
+        == "call_stream_1"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT)
+        == "part_1part_2"
+    )
+
+
+def test_tool_call_execute_streaming_error(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    def failing_stream():
+        """Yield then raise."""
+        yield "first"
+        raise ValueError("stream-side error")
+
+    call = FunctionCall(
+        function=Function.from_callable(failing_stream),
+        arguments={},
+        call_id="call_err_1",
+    )
+    result = call.execute()
+    assert result.status == "success"
+
+    with pytest.raises(ValueError, match="stream-side error"):
+        list(result.result)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get("error.type") == "ValueError"
+
+
+def test_tool_call_execute_streaming_caller_error(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    def good_stream():
+        """Yield chunks."""
+        yield "chunk_a"
+        yield "chunk_b"
+
+    call = FunctionCall(
+        function=Function.from_callable(good_stream),
+        arguments={},
+        call_id="call_caller_err",
+    )
+    result = call.execute()
+    assert result.status == "success"
+
+    with pytest.raises(RuntimeError, match="caller-side failure"):
+        with result.result as stream:
+            for item in stream:
+                if item == "chunk_a":
+                    raise RuntimeError("caller-side failure")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get("error.type") == "RuntimeError"
+
+
+def test_tool_call_aexecute_streaming_success(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    async def async_stream_gen(prefix: str):
+        """Yield async chunks."""
+        yield f"{prefix}_async_1"
+        yield f"{prefix}_async_2"
+
+    call = FunctionCall(
+        function=Function.from_callable(async_stream_gen),
+        arguments={"prefix": "async_part"},
+        call_id="call_astream_1",
+    )
+
+    async def _test() -> None:
+        result = await call.aexecute()
+        assert result.status == "success"
+        assert len(span_exporter.get_finished_spans()) == 0
+
+        chunks = [chunk async for chunk in result.result]
+        assert chunks == ["async_part_async_1", "async_part_async_2"]
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "execute_tool async_stream_gen"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID)
+        == "call_astream_1"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT)
+        == "async_part_async_1async_part_async_2"
+    )
+
+
+def test_tool_call_aexecute_streaming_error(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    async def failing_async_stream():
+        """Yield then raise."""
+        yield "first_async"
+        raise ValueError("async stream failure")
+
+    call = FunctionCall(
+        function=Function.from_callable(failing_async_stream),
+        arguments={},
+        call_id="call_aerr_1",
+    )
+
+    async def _test() -> None:
+        result = await call.aexecute()
+        with pytest.raises(ValueError, match="async stream failure"):
+            _ = [c async for c in result.result]
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get("error.type") == "ValueError"
+
+
+def test_tool_call_aexecute_streaming_caller_error(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    async def good_async_stream():
+        yield "a"
+        yield "b"
+
+    call = FunctionCall(
+        function=Function.from_callable(good_async_stream),
+        arguments={},
+        call_id="call_acaller_err",
+    )
+
+    async def _test() -> None:
+        result = await call.aexecute()
+        with pytest.raises(RuntimeError, match="caller async error"):
+            async with result.result as stream:
+                async for chunk in stream:
+                    if chunk == "a":
+                        raise RuntimeError("caller async error")
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get("error.type") == "RuntimeError"

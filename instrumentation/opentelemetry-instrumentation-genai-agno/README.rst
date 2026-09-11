@@ -34,6 +34,7 @@ The instrumentation automatically traces:
 * ``Team.run`` and ``Team.arun``
 * ``Workflow.run`` and ``Workflow.arun``
 * ``FunctionCall.execute`` and ``FunctionCall.aexecute``
+* ``Knowledge.search`` and ``Knowledge.asearch``
 
 Configuration
 -------------

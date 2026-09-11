@@ -18,6 +18,7 @@ from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
 from opentelemetry.instrumentation.genai.agno.patch import (
+    _fail_tool_invocation,
     _set_tool_invocation_output,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -224,9 +225,11 @@ def test_failed_tool_result_is_not_captured() -> None:
     invocation = MagicMock()
     invocation.tool_result = None
 
+    result = SimpleNamespace(status="failure", error="tool failed")
+    _fail_tool_invocation(invocation, result)
     _set_tool_invocation_output(
         invocation,
-        SimpleNamespace(status="failure", error="tool failed"),
+        result,
         capture_content=True,
     )
 
@@ -736,3 +739,132 @@ def test_set_tool_invocation_output_structured_result(
         "status": "ok",
         "code": 200,
     }
+
+
+def test_agent_run_attributes(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that Agent.run extracts description and model attributes."""
+    agent = Agent(
+        id="agent-custom-id",
+        name="attribute-agent",
+        description="Custom agent description",
+        model=MockModel(id="custom-model", provider="custom_provider"),
+    )
+
+    def mock_response(*args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(content="Response")
+
+    with (
+        patch("agno.models.base.Model.response", side_effect=mock_response),
+    ):
+        res = agent.run("hello")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "invoke_agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
+        == "attribute-agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_DESCRIPTION)
+        == "Custom agent description"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "custom-model"
+    )
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+
+
+def test_agent_arun_attributes(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that Agent.arun extracts description and model attributes."""
+    agent = Agent(
+        id="async-agent-id",
+        name="async-attribute-agent",
+        description="Async description",
+        model=MockModel(id="custom-async-model", provider="custom_provider"),
+    )
+
+    async def mock_aresponse(*args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(content="Async response")
+
+    async def _run_async() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse", side_effect=mock_aresponse
+        ):
+            res = await agent.arun("async hello")
+            assert res is not None
+
+    asyncio.run(_run_async())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
+        == "async-attribute-agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_DESCRIPTION)
+        == "Async description"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "custom-async-model"
+    )
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes
+
+
+def test_agent_run_attributes_from_run_output(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test extracting model from RunOutput when not present on Agent."""
+    import agno.agent
+    from agno.agent import RunOutput
+
+    agent = Agent(name="unconfigured-agent", model=MockModel(id=None))
+
+    mock_run_output = RunOutput(
+        agent_id="extracted-agent-id",
+        model="extracted-model",
+        model_provider="ExtractedProvider",
+        content="Hello output",
+    )
+
+    dispatch_target = (
+        "agno.agent._run.run_dispatch"
+        if hasattr(agno.agent, "_run")
+        else "agno.agent.agent.Agent._run"
+    )
+
+    with (
+        patch(dispatch_target, return_value=mock_run_output),
+    ):
+        res = agent.run("test")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "extracted-model"
+    )
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes
