@@ -98,6 +98,7 @@ from opentelemetry.util.genai.types import (
     GenericPart,
     GenericToolDefinition,
     InputMessage,
+    ModalityTokens,
     OutputMessage,
     Role,
     TextPart,
@@ -152,47 +153,30 @@ def _apply_interaction_response_attributes(
     if isinstance(invocation, InferenceInvocation):
         invocation.thinking_tokens = usage.total_thought_tokens
 
-        def _set_modality_tokens(
-            entries: Any,
-            text_attr: str,
-            image_attr: str,
-            audio_attr: str,
-        ) -> None:
-            for entry in entries or []:
-                modality = _get_field(entry, "modality")
-                tokens = _get_field(entry, "tokens")
-                if modality and tokens is not None:
-                    m = str(modality).lower()
-                    if m == "text":
-                        setattr(invocation, text_attr, tokens)
-                    elif m == "image":
-                        setattr(invocation, image_attr, tokens)
-                    elif m == "audio":
-                        setattr(invocation, audio_attr, tokens)
-
-        _set_modality_tokens(
-            _get_field(usage, "input_tokens_by_modality"),
-            "text_input_tokens",
-            "image_input_tokens",
-            "audio_input_tokens",
+        invocation.set_input_tokens(
+            _modality_tokens(usage, "input_tokens_by_modality")
         )
-        _set_modality_tokens(
-            _get_field(usage, "output_tokens_by_modality"),
-            "text_output_tokens",
-            "image_output_tokens",
-            "audio_output_tokens",
+        invocation.set_output_tokens(
+            _modality_tokens(usage, "output_tokens_by_modality")
         )
-        _set_modality_tokens(
-            _get_field(usage, "cached_tokens_by_modality"),
-            "text_cache_read_input_tokens",
-            "image_cache_read_input_tokens",
-            "audio_cache_read_input_tokens",
+        invocation.set_cache_read_input_tokens(
+            _modality_tokens(usage, "cached_tokens_by_modality")
         )
 
     if telemetry_handler.should_capture_content():
         invocation.output_messages = _interactions_response_to_messages(
             response
         )
+
+
+def _modality_tokens(usage: Any, name: str) -> ModalityTokens | None:
+    entries = _get_field(usage, name)
+    if entries is None:
+        return None
+    return [
+        (_get_field(entry, "modality") or "", _get_field(entry, "tokens"))
+        for entry in entries
+    ]
 
 
 def _get_field(obj: Any, name: str) -> Any:

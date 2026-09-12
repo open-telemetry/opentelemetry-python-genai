@@ -1664,14 +1664,48 @@ class TestOnLlmEndTokenDetails:
 
         handler.on_llm_end(response=response, run_id=run_id)
 
+        # The breakdown is applied by InferenceInvocation, so the handler's
+        # contract is the pairs it forwards. util-genai covers the mapping
+        # from those pairs onto span attributes.
         assert llm_inv.input_tokens == 100
-        assert llm_inv.text_input_tokens == 70
-        assert llm_inv.image_input_tokens == 20
-        assert llm_inv.audio_input_tokens == 10
         assert llm_inv.output_tokens == 50
-        assert llm_inv.text_output_tokens == 35
-        assert llm_inv.image_output_tokens == 10
-        assert llm_inv.audio_output_tokens == 5
+        # LangChain's pydantic model reorders the details mapping, so compare
+        # the pairs rather than their order.
+        (input_pairs,), _ = llm_inv.set_input_tokens.call_args
+        assert sorted(input_pairs) == [
+            ("audio", 10),
+            ("image", 20),
+            ("text", 70),
+        ]
+        (output_pairs,), _ = llm_inv.set_output_tokens.call_args
+        assert sorted(output_pairs) == [
+            ("audio", 5),
+            ("image", 10),
+            ("text", 35),
+        ]
+
+    def test_absent_token_details_forward_none(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "total_tokens": 3,
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        llm_inv.set_input_tokens.assert_called_once_with(None)
+        llm_inv.set_output_tokens.assert_called_once_with(None)
 
 
 # ---------------------------------------------------------------------------
@@ -1729,17 +1763,13 @@ def test_extract_token_details_modalities():
             "reasoning": 10,
         },
     }
+    # Modality break-downs are forwarded to InferenceInvocation rather than
+    # flattened here, so only cache and reasoning remain.
     details = extract_token_details(usage)
     assert details == {
         "cache_write_input_tokens": 15,
         "cache_read_input_tokens": 25,
-        "text_input_tokens": 70,
-        "image_input_tokens": 20,
-        "audio_input_tokens": 10,
         "reasoning_tokens": 10,
-        "text_output_tokens": 30,
-        "image_output_tokens": 15,
-        "audio_output_tokens": 5,
     }
 
 

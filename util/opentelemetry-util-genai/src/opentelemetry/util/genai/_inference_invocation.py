@@ -24,6 +24,7 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
+    ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
     ToolDefinition,
@@ -52,6 +53,21 @@ _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
 _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
     "gen_ai.usage.audio.cache_read.input_tokens"
 )
+_INPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    "text": "text_input_tokens",
+    "image": "image_input_tokens",
+    "audio": "audio_input_tokens",
+}
+_OUTPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    "text": "text_output_tokens",
+    "image": "image_output_tokens",
+    "audio": "audio_output_tokens",
+}
+_CACHE_READ_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    "text": "text_cache_read_input_tokens",
+    "image": "image_cache_read_input_tokens",
+    "audio": "audio_cache_read_input_tokens",
+}
 _GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
 _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
     "gen_ai.request.previous_response.id"
@@ -148,6 +164,61 @@ class InferenceInvocation(GenAIInvocation):
         # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
         self._start(self._get_start_attributes())
+
+    def set_input_tokens(self, entries: ModalityTokens | None) -> None:
+        """Record the per-modality breakdown of the input tokens.
+
+        Sets ``gen_ai.usage.{text,image,audio}.input_tokens`` from
+        ``entries``, an iterable of ``(modality, token count)`` pairs.
+        The modality may be a plain string or an enum member carrying one as
+        its ``value``; anything outside text, image and audio is dropped, as is
+        a count that is not a non-negative :class:`int`.
+
+        The breakdown is replaced wholesale, so a modality missing from
+        ``entries`` is cleared. Pass ``None`` to leave the current values
+        alone, which is what a streaming chunk carrying no usage should do.
+        """
+        self._set_modality_tokens(_INPUT_MODALITY_FIELDS, entries)
+
+    def set_output_tokens(self, entries: ModalityTokens | None) -> None:
+        """Record the per-modality breakdown of the output tokens.
+
+        Sets ``gen_ai.usage.{text,image,audio}.output_tokens``. See
+        :meth:`set_input_tokens` for the argument contract.
+        """
+        self._set_modality_tokens(_OUTPUT_MODALITY_FIELDS, entries)
+
+    def set_cache_read_input_tokens(
+        self, entries: ModalityTokens | None
+    ) -> None:
+        """Record the per-modality breakdown of the cache read input tokens.
+
+        Sets ``gen_ai.usage.{text,image,audio}.cache_read.input_tokens``. See
+        :meth:`set_input_tokens` for the argument contract.
+        """
+        self._set_modality_tokens(_CACHE_READ_MODALITY_FIELDS, entries)
+
+    def _set_modality_tokens(
+        self, fields: Mapping[str, str], entries: ModalityTokens | None
+    ) -> None:
+        if entries is None:
+            return
+        for field_name in fields.values():
+            setattr(self, field_name, None)
+        for modality, token_count in entries:
+            if (
+                not isinstance(token_count, int)
+                or isinstance(token_count, bool)
+                or token_count < 0
+            ):
+                continue
+            # modality may be an enum, whose str() is "MediaModality.AUDIO"
+            # rather than the bare name.
+            field_name = fields.get(
+                str(getattr(modality, "value", modality)).lower()
+            )
+            if field_name is not None:
+                setattr(self, field_name, token_count)
 
     @property
     def cache_creation_input_tokens(self) -> int | None:

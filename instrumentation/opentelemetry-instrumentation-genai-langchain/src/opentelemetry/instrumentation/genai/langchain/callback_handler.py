@@ -36,6 +36,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     is_stream_end_marker,
     make_input_message,
     make_last_output_message,
+    modality_tokens,
     normalize_provider,
     prepare_tool_definitions,
     resolve_response_model_and_id,
@@ -564,35 +565,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         ) is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
 
-                        if (
-                            text_in := token_details.get("text_input_tokens")
-                        ) is not None:
-                            llm_invocation.text_input_tokens = text_in
-                        if (
-                            image_in := token_details.get("image_input_tokens")
-                        ) is not None:
-                            llm_invocation.image_input_tokens = image_in
-                        if (
-                            audio_in := token_details.get("audio_input_tokens")
-                        ) is not None:
-                            llm_invocation.audio_input_tokens = audio_in
-
-                        if (
-                            text_out := token_details.get("text_output_tokens")
-                        ) is not None:
-                            llm_invocation.text_output_tokens = text_out
-                        if (
-                            image_out := token_details.get(
-                                "image_output_tokens"
+                        llm_invocation.set_input_tokens(
+                            modality_tokens(
+                                usage_metadata, "input_token_details"
                             )
-                        ) is not None:
-                            llm_invocation.image_output_tokens = image_out
-                        if (
-                            audio_out := token_details.get(
-                                "audio_output_tokens"
+                        )
+                        llm_invocation.set_output_tokens(
+                            modality_tokens(
+                                usage_metadata, "output_token_details"
                             )
-                        ) is not None:
-                            llm_invocation.audio_output_tokens = audio_out
+                        )
 
                         llm_invocation.output_tokens = output_tokens
 
