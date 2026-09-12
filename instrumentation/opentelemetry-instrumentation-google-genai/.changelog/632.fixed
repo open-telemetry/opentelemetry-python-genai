@@ -1,0 +1,1 @@
+Emit telemetry under the `opentelemetry.instrumentation.google_genai` instrumentation scope instead of `opentelemetry.util.genai.handler`

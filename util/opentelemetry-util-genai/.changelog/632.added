@@ -1,0 +1,1 @@
+Add instrumentation_scope_name and instrumentation_scope_version to TelemetryHandler so telemetry carries the instrumentation library's scope

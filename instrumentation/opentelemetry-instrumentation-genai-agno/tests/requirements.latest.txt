@@ -38,7 +38,7 @@
 # the newest supported version of external dependencies.
 
 agno~=3.0.9
-wrapt>=2.2.2
+wrapt>=2.4.1
 fastapi
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
