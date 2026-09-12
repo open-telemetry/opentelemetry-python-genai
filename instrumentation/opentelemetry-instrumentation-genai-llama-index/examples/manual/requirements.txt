@@ -1,5 +1,5 @@
 llama-index-core~=0.14
-llama-index-llms-openai~=0.7
+llama-index-llms-openai~=0.8
 
 opentelemetry-sdk~=1.43.0
 opentelemetry-exporter-otlp-proto-grpc~=1.43.0
