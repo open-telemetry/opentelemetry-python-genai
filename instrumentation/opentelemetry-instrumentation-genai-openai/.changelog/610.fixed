@@ -1,0 +1,1 @@
+Record response telemetry for ``with_streaming_response`` calls on the async client, whose ``parse()`` returns a coroutine, and end the span for a parsed stream the caller abandons.
