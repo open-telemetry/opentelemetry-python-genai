@@ -100,7 +100,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_name: str = span_name
         self._span_kind: SpanKind = span_kind
         self._context_token: ContextToken | None = None
-        self._monotonic_start_s: float
+        self._monotonic_start_s: float = timeit.default_timer()
+        self.already_started: bool = False
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
         # (gen_ai.request.stream); the timing fields are populated by
@@ -133,14 +134,21 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         Args:
             attributes: Initial span attributes available for sampling decisions.
         """
+        if self.already_started:
+            return
+
         self.span = self._tracer.start_span(
             name=self._span_name,
             kind=self._span_kind,
             attributes=attributes,
         )
-        self._span_context = set_span_in_context(self.span)
+        self._span_context = self._create_span_context()
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)
+
+    def _create_span_context(self) -> Context:
+        """Create the context to attach for this invocation's span."""
+        return set_span_in_context(self.span)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
@@ -152,7 +160,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def record_stream_chunk(self) -> None:
         """Mark the request as streamed and record one output chunk arriving."""
-        if self._context_token is None:
+        if self._context_token is None and not self.already_started:
             return
         self._request_stream = True
         self._on_stream_chunk(timeit.default_timer())
@@ -173,9 +181,14 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
         self._stream_last_chunk_at = chunk_at
         delta = max(chunk_at - last_chunk_at, 0.0)
-        attributes = self._get_metric_attributes()
-        if self._ttfc_seconds is None:
+        is_first_chunk = self._ttfc_seconds is None
+        if is_first_chunk:
             self._ttfc_seconds = delta
+        if self.already_started:
+            return
+
+        attributes = self._get_metric_attributes()
+        if is_first_chunk:
             self._instruments.time_to_first_chunk.record(
                 delta,
                 attributes=attributes,
@@ -244,12 +257,19 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             log_record=log_record,
         )
 
+    def _finish_already_started(self, error: Error | None = None) -> None:
+        """Handle finish when the invocation was already started upstream."""
+
     @abstractmethod
     def _apply_finish(self, error: Error | None = None) -> None:
         """Apply finish telemetry (attributes, metrics, events)."""
 
     def _finish(self, error: Error | None = None) -> None:
         """Apply finish telemetry and end the span. Finishes at most once."""
+        if self.already_started:
+            self._finish_already_started(error)
+            return
+
         if self._context_token is None:
             return
         # Clear up front so a nested or repeated finish is a no-op even if

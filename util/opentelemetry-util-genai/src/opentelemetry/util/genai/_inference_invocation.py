@@ -8,11 +8,19 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.semconv.attributes import server_attributes
+from opentelemetry.semconv.attributes import (
+    error_attributes,
+    server_attributes,
+)
 from opentelemetry.trace import INVALID_SPAN, Span, SpanKind, Tracer
+from opentelemetry.util.genai._context import (
+    get_inference_attributes,
+    set_inference_attributes,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
@@ -33,6 +41,16 @@ from opentelemetry.util.genai.utils import (
     should_emit_event,
 )
 from opentelemetry.util.types import AttributeValue
+
+_METRIC_SEMCONV_KEYS = (
+    GenAI.GEN_AI_OPERATION_NAME,
+    GenAI.GEN_AI_PROVIDER_NAME,
+    GenAI.GEN_AI_REQUEST_MODEL,
+    GenAI.GEN_AI_RESPONSE_MODEL,
+    server_attributes.SERVER_ADDRESS,
+    server_attributes.SERVER_PORT,
+    error_attributes.ERROR_TYPE,
+)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -58,6 +76,80 @@ _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
 )
 _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
+
+_FIELD_TO_SEMCONV: Final[dict[str, str]] = {
+    "conversation_id": GenAI.GEN_AI_CONVERSATION_ID,
+    "temperature": GenAI.GEN_AI_REQUEST_TEMPERATURE,
+    "top_p": GenAI.GEN_AI_REQUEST_TOP_P,
+    "top_k": GenAI.GEN_AI_REQUEST_TOP_K,
+    "frequency_penalty": GenAI.GEN_AI_REQUEST_FREQUENCY_PENALTY,
+    "presence_penalty": GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY,
+    "max_tokens": GenAI.GEN_AI_REQUEST_MAX_TOKENS,
+    "stop_sequences": GenAI.GEN_AI_REQUEST_STOP_SEQUENCES,
+    "seed": GenAI.GEN_AI_REQUEST_SEED,
+    "finish_reasons": GenAI.GEN_AI_RESPONSE_FINISH_REASONS,
+    "_response_model_name": GenAI.GEN_AI_RESPONSE_MODEL,
+    "response_model_name": GenAI.GEN_AI_RESPONSE_MODEL,
+    "response_id": GenAI.GEN_AI_RESPONSE_ID,
+    "input_tokens": GenAI.GEN_AI_USAGE_INPUT_TOKENS,
+    "output_tokens": GenAI.GEN_AI_USAGE_OUTPUT_TOKENS,
+    "thinking_tokens": GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    "cache_write_input_tokens": _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+    "cache_creation_input_tokens": _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+    "cache_read_input_tokens": GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+    "text_input_tokens": _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
+    "image_input_tokens": _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
+    "audio_input_tokens": _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+    "text_output_tokens": _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
+    "image_output_tokens": _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
+    "audio_output_tokens": _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+    "text_cache_read_input_tokens": _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
+    "image_cache_read_input_tokens": _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+    "audio_cache_read_input_tokens": _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+    "reasoning_level": _GEN_AI_REQUEST_REASONING_LEVEL,
+    "previous_response_id": _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+    "conversation_compacted": _GEN_AI_CONVERSATION_COMPACTED,
+    "prompt_name": GenAI.GEN_AI_PROMPT_NAME,
+    "prompt_version": _GEN_AI_PROMPT_VERSION,
+    "request_choice_count": GenAI.GEN_AI_REQUEST_CHOICE_COUNT,
+    "output_type": GenAI.GEN_AI_OUTPUT_TYPE,
+    "_request_stream": GenAI.GEN_AI_REQUEST_STREAM,
+    "_ttfc_seconds": GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+}
+# Content attributes are omitted from context because capture rules, representations,
+# and presence in attributes may differ between spans and events.
+_OPT_IN_MESSAGE_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        "input_messages",
+        "output_messages",
+        "system_instruction",
+        "tool_definitions",
+        "prompt_variables",
+    }
+)
+
+
+def _filter_context_attributes(
+    context_attributes: Mapping[str, AttributeValue],
+    *,
+    exclude_keys: set[str] | None = None,
+) -> dict[str, AttributeValue]:
+    filtered: dict[str, AttributeValue] = {}
+    for key, value in context_attributes.items():
+        if exclude_keys is not None and key in exclude_keys:
+            continue
+        if (
+            value == 0
+            and key.startswith("gen_ai.usage.")
+            and key
+            not in (
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS,
+                GenAI.GEN_AI_USAGE_OUTPUT_TOKENS,
+            )
+        ):
+            continue
+        filtered[key] = value
+    return filtered
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -147,7 +239,41 @@ class InferenceInvocation(GenAIInvocation):
         # Rebuilt once per streaming chunk, so cache it and invalidate via
         # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
+
+        existing_attrs = get_inference_attributes()
+        if existing_attrs is not None:
+            self.already_started = True
+            self._context_attributes: dict[str, AttributeValue] = (
+                existing_attrs
+            )
+            self._context_attributes.update(self._get_start_attributes())
+        else:
+            self.already_started = False
+            self._context_attributes = dict(self._get_start_attributes())
+
         self._start(self._get_start_attributes())
+
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        if name in _OPT_IN_MESSAGE_ATTRIBUTES:
+            return
+        # Custom attributes set on self.attributes are currently missing from
+        # context, which can be addressed by adding an explicit set_attribute method.
+        if (
+            hasattr(self, "_context_attributes")
+            and name in _FIELD_TO_SEMCONV
+            and value is not None
+        ):
+            if isinstance(value, (str, bool, int, float)):
+                self._context_attributes[_FIELD_TO_SEMCONV[name]] = value
+            elif name == "stop_sequences" and self.stop_sequences is not None:
+                self._context_attributes[_FIELD_TO_SEMCONV[name]] = (
+                    self.stop_sequences
+                )
+            elif name == "finish_reasons" and self.finish_reasons is not None:
+                self._context_attributes[_FIELD_TO_SEMCONV[name]] = (
+                    self.finish_reasons
+                )
 
     @property
     def cache_creation_input_tokens(self) -> int | None:
@@ -304,6 +430,23 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
+    def _create_span_context(self) -> Context:
+        ctx = super()._create_span_context()
+        return set_inference_attributes(self._context_attributes, context=ctx)
+
+    def _get_context_attributes(self) -> dict[str, AttributeValue]:
+        attrs = self._get_start_attributes()
+        attrs.update(self._get_attributes())
+        attrs.update(self.attributes)
+        # Message attributes are excluded because spans and events format
+        # content differently and evaluate capture rules independently.
+        return attrs
+
+    def _finish_already_started(self, error: Error | None = None) -> None:
+        # Error attributes are not recorded on inner finish to isolate errors;
+        # the outer invocation records them only if the error escapes unhandled.
+        self._context_attributes.update(self._get_context_attributes())
+
     def _invalidate_metric_attributes(self) -> None:
         """Drop the cached metric attributes so the next read rebuilds them.
 
@@ -320,6 +463,9 @@ class InferenceInvocation(GenAIInvocation):
             if self._response_model_name is not None:
                 attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self._response_model_name
             attrs.update(self.metric_attributes)
+            for key in _METRIC_SEMCONV_KEYS:
+                if key not in attrs and key in self._context_attributes:
+                    attrs[key] = self._context_attributes[key]
             self._cached_metric_attributes = attrs
         return self._cached_metric_attributes
 
@@ -330,21 +476,40 @@ class InferenceInvocation(GenAIInvocation):
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        if self.input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = self.input_tokens
-        if self.output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
-                self.output_tokens
+        input_tokens = self.input_tokens
+        if input_tokens is None:
+            ctx_input = self._context_attributes.get(
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS
             )
+            if isinstance(ctx_input, int):
+                input_tokens = ctx_input
+        if input_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = input_tokens
+
+        output_tokens = self.output_tokens
+        if output_tokens is None:
+            ctx_output = self._context_attributes.get(
+                GenAI.GEN_AI_USAGE_OUTPUT_TOKENS
+            )
+            if isinstance(ctx_output, int):
+                output_tokens = ctx_output
+        if output_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = output_tokens
         return counts
 
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        attributes = self._get_attributes()
+        attributes = _filter_context_attributes(
+            self._context_attributes,
+            exclude_keys=set(self._get_start_attributes()),
+        )
+        attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=True))
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
+        self._context_attributes.update(self._get_context_attributes())
+        self._invalidate_metric_attributes()
         self._record_client_metrics()
         log_record = self._maybe_create_event()
         self._call_completion_hook(
@@ -366,7 +531,8 @@ class InferenceInvocation(GenAIInvocation):
         if not should_emit_event():
             return None
 
-        attributes = self._get_start_attributes()
+        attributes = _filter_context_attributes(self._context_attributes)
+        attributes.update(self._get_start_attributes())
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
@@ -489,4 +655,12 @@ class LLMInvocation:
             self._inference_invocation.span
             if self._inference_invocation is not None
             else INVALID_SPAN
+        )
+
+    @property
+    def already_started(self) -> bool:
+        return (
+            self._inference_invocation.already_started
+            if self._inference_invocation is not None
+            else False
         )

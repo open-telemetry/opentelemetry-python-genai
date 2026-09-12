@@ -192,7 +192,12 @@ class SyncStreamWrapper(
             raise
         invocation = self._self_invocation
         chunk_at = timeit.default_timer() if invocation is not None else None
-        self._process_chunk(chunk)
+        # Inner stream wrappers skip chunk accumulation to avoid duplicate
+        # message buffering in memory.
+        if invocation is None or not getattr(
+            invocation, "already_started", False
+        ):
+            self._process_chunk(chunk)
         # Record after _process_chunk so response.model is on the metrics.
         if invocation is not None and chunk_at is not None:
             invocation._on_stream_chunk(chunk_at)
@@ -352,7 +357,12 @@ class AsyncStreamWrapper(
 
         invocation = self._self_invocation
         chunk_at = timeit.default_timer() if invocation is not None else None
-        self._process_chunk(chunk)
+        # Inner stream wrappers skip chunk accumulation to avoid duplicate
+        # message buffering in memory.
+        if invocation is None or not getattr(
+            invocation, "already_started", False
+        ):
+            self._process_chunk(chunk)
         # Record after _process_chunk so response.model is on the metrics.
         if invocation is not None and chunk_at is not None:
             invocation._on_stream_chunk(chunk_at)
