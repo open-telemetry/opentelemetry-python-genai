@@ -37,12 +37,14 @@ from langchain_core.outputs import (
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
+    _usage_metadata_candidates,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _media_part,
     _normalize_role,
     extract_token_details,
+    extract_usage_tokens,
     make_input_message,
     make_last_output_message,
     make_output_message,
@@ -1673,6 +1675,86 @@ class TestOnLlmEndTokenDetails:
         assert llm_inv.image_output_tokens == 10
         assert llm_inv.audio_output_tokens == 5
 
+    @pytest.mark.parametrize(
+        ("generation_info", "llm_output", "input_tokens", "output_tokens"),
+        [
+            (
+                {"finish_reason": "stop"},
+                {
+                    "token_usage": {
+                        "prompt_tokens": 13,
+                        "completion_tokens": 7,
+                    }
+                },
+                13,
+                7,
+            ),
+            (
+                {"finish_reason": "stop"},
+                {"usage": {"input_tokens": 10, "output_tokens": 4}},
+                10,
+                4,
+            ),
+            (
+                {
+                    "finish_reason": "stop",
+                    "usage_metadata": {
+                        "input_tokens": 11,
+                        "output_tokens": 5,
+                    },
+                },
+                None,
+                11,
+                5,
+            ),
+        ],
+    )
+    def test_token_usage_falls_back_to_alternate_metadata(
+        self,
+        generation_info,
+        llm_output,
+        input_tokens,
+        output_tokens,
+    ):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="hi")
+        gen = ChatGeneration(message=ai_msg, generation_info=generation_info)
+        response = LLMResult(generations=[[gen]], llm_output=llm_output)
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == input_tokens
+        assert llm_inv.output_tokens == output_tokens
+
+    def test_empty_generation_info_usage_does_not_mask_llm_output(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="hi")
+        gen = ChatGeneration(
+            message=ai_msg,
+            generation_info={
+                "finish_reason": "stop",
+                "usage_metadata": {},
+            },
+        )
+        response = LLMResult(
+            generations=[[gen]],
+            llm_output={
+                "token_usage": {
+                    "prompt_tokens": 13,
+                    "completion_tokens": 7,
+                },
+            },
+        )
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 13
+        assert llm_inv.output_tokens == 7
+
 
 # ---------------------------------------------------------------------------
 # utils.extract_token_details
@@ -1767,6 +1849,37 @@ def test_extract_token_details_zero_values_omitted():
 
 def test_extract_token_details_no_details_key():
     assert extract_token_details({"input_tokens": 1, "output_tokens": 2}) == {}
+
+
+def test_extract_usage_tokens_langchain_keys():
+    assert extract_usage_tokens({"input_tokens": 10, "output_tokens": 20}) == (
+        10,
+        20,
+    )
+
+
+def test_extract_usage_tokens_openai_keys():
+    assert extract_usage_tokens(
+        {"prompt_tokens": 10, "completion_tokens": 20}
+    ) == (10, 20)
+
+
+def test_extract_usage_tokens_ignores_bool_and_unknown_values():
+    assert extract_usage_tokens(
+        {"input_tokens": True, "output_tokens": "20"}
+    ) == (None, None)
+
+
+def test_usage_metadata_candidates_handles_missing_message_usage_metadata():
+    chat_generation = mock.Mock(
+        message=object(),
+        generation_info={},
+    )
+    llm_output = {"token_usage": {"prompt_tokens": 10}}
+
+    assert _usage_metadata_candidates(chat_generation, llm_output) == [
+        llm_output["token_usage"]
+    ]
 
 
 def test_extract_token_details_boolean_and_non_int_omitted():
