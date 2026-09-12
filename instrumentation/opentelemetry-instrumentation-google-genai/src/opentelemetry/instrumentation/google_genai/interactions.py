@@ -20,6 +20,7 @@ try:
     from google.genai._interactions.types.interaction_sse_event import (
         InteractionSSEEvent,
     )
+    from google.genai._interactions.types.step import Step
 
     _HAS_INTERACTIONS = True
 except ImportError:
@@ -37,6 +38,7 @@ except ImportError:
         from google.genai._gaos.types.interactions import (
             Interaction,
             InteractionSSEEvent,
+            Step,
             Usage,
         )
         from google.genai._gaos.types.interactions import (
@@ -69,6 +71,9 @@ except ImportError:
         class InteractionSSEEvent:
             pass
 
+        class Step:
+            pass
+
         class Stream:
             pass
 
@@ -98,8 +103,11 @@ from opentelemetry.util.genai.types import (
     GenericPart,
     GenericToolDefinition,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -201,6 +209,103 @@ def _get_field(obj: Any, name: str) -> Any:
     return getattr(obj, name, None)
 
 
+_SERVER_TOOL_CALL_NAMES = {
+    "code_execution_call": "code_execution",
+    "file_search_call": "file_search",
+    "google_maps_call": "google_maps",
+    "google_search_call": "google_search",
+    "mcp_server_tool_call": "mcp",
+    "processing_call": "processing",
+    "retrieval_call": "retrieval",
+    "url_context_call": "url_context",
+}
+
+_SERVER_TOOL_RESPONSE_NAMES = {
+    "code_execution_result": "code_execution",
+    "file_search_result": "file_search",
+    "google_maps_result": "google_maps",
+    "google_search_result": "google_search",
+    "mcp_server_tool_result": "mcp",
+    "processing_result": "processing",
+    "retrieval_result": "retrieval",
+    "url_context_result": "url_context",
+}
+
+_TOOL_STEP_TYPES = {
+    "function_call",
+    "function_result",
+    *_SERVER_TOOL_CALL_NAMES,
+    *_SERVER_TOOL_RESPONSE_NAMES,
+}
+
+
+def _to_server_tool_part(
+    item: Step | dict[str, object],
+) -> MessagePart | None:
+    item_type = item.get("type") if isinstance(item, dict) else item.type
+    tool_name = _SERVER_TOOL_CALL_NAMES.get(item_type)
+    response_name = _SERVER_TOOL_RESPONSE_NAMES.get(item_type)
+    if tool_name is None and response_name is None:
+        return None
+
+    if isinstance(item, dict):
+        payload = dict(item)
+    else:
+        payload = item.model_dump(exclude_none=True, mode="json")
+
+    item_id = payload.pop("id", None)
+    call_id = payload.pop("call_id", None)
+    payload.pop("type", None)
+    name = payload.pop("name", None)
+    canonical_name = tool_name or response_name
+    if canonical_name is None:
+        return None
+    payload["type"] = canonical_name
+
+    if response_name is not None:
+        return ServerToolCallResponsePart(
+            id=call_id if isinstance(call_id, str) else None,
+            server_tool_call_response=payload,
+        )
+    return ServerToolCallPart(
+        id=item_id if isinstance(item_id, str) else None,
+        name=name if isinstance(name, str) else canonical_name,
+        server_tool_call=payload,
+    )
+
+
+def _interaction_item_to_part(
+    item: Step | dict[str, object],
+) -> MessagePart | None:
+    if isinstance(item, dict):
+        item_type = item.get("type")
+        item_id = item.get("id")
+        name = item.get("name")
+        arguments = item.get("arguments")
+        call_id = item.get("call_id")
+        result = item.get("result")
+    else:
+        item_type = item.type
+        item_id = item.id if item_type == "function_call" else None
+        name = item.name if item_type == "function_call" else None
+        arguments = item.arguments if item_type == "function_call" else None
+        call_id = item.call_id if item_type == "function_result" else None
+        result = item.result if item_type == "function_result" else None
+
+    if item_type == "function_call":
+        return ToolCallRequestPart(
+            id=item_id if isinstance(item_id, str) else None,
+            name=name if isinstance(name, str) else "",
+            arguments=arguments,
+        )
+    if item_type == "function_result":
+        return ToolCallResponsePart(
+            id=call_id if isinstance(call_id, str) else None,
+            response=result,
+        )
+    return _to_server_tool_part(item)
+
+
 # Logic for parsing Input is tricky:
 # https://github.com/open-telemetry/donation-openinference/blob/6cdd644d79fccf50aedcb614187f924ddfcafb7b/python/instrumentation/openinference-instrumentation-google-genai/src/openinference/instrumentation/google_genai/interactions_attributes.py#L103
 # It doesn't make sense for this to be a List[InputMessage] (per semconv),
@@ -222,24 +327,21 @@ def _interactions_input_to_messages(
     if not isinstance(input_data, Sequence):
         input_data = [input_data]
 
-    parts = []
+    parts: list[MessagePart] = []
     for item in input_data:
-        item_type = _get_field(item, "type")
-        if item_type == "function_call":
-            call_id = _get_field(item, "id")
-            name = _get_field(item, "name")
-            arguments = _get_field(item, "arguments")
-            part = ToolCallRequestPart(
-                id=call_id, name=name or "", arguments=arguments
-            )
-            parts.append(part)
-        elif item_type == "function_result":
-            call_id = _get_field(item, "call_id")
-            result = _get_field(item, "result")
-            part = ToolCallResponsePart(id=call_id, response=result)
-            parts.append(part)
-        elif isinstance(item, str):
+        if isinstance(item, str):
             parts.append(TextPart(content=item))
+            continue
+
+        item_type = _get_field(item, "type")
+        message_part = None
+        if isinstance(item, dict):
+            message_part = _interaction_item_to_part(item)
+        elif item_type in _TOOL_STEP_TYPES:
+            message_part = _interaction_item_to_part(cast(Step, item))
+
+        if message_part is not None:
+            parts.append(message_part)
         elif item_type == "text":
             part = TextPart(content=_get_field(item, "text") or "")
             parts.append(part)
@@ -283,11 +385,26 @@ def _get_interaction_output_text(interaction: Interaction) -> str:
 def _interactions_response_to_messages(
     interaction: Interaction,
 ) -> list[OutputMessage]:
-    output_text = _get_interaction_output_text(interaction)
+    parts: list[MessagePart] = []
+    for step in interaction.steps or []:
+        if part := _interaction_item_to_part(step):
+            parts.append(part)
+            continue
+        if step.type != "model_output":
+            continue
+        for item in step.content or []:
+            if item.type == "text" and isinstance(item.text, str):
+                text = item.text
+                parts.append(TextPart(content=text))
+
+    if not any(isinstance(part, TextPart) for part in parts):
+        parts.append(
+            TextPart(content=_get_interaction_output_text(interaction))
+        )
     return [
         OutputMessage(
             role=Role.ASSISTANT.value,
-            parts=[TextPart(content=output_text)],
+            parts=parts,
             finish_reason="stop",
         )
     ]

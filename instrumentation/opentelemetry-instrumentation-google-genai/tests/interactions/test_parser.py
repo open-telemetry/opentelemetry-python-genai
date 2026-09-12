@@ -8,11 +8,14 @@ import unittest.mock
 
 from opentelemetry.instrumentation.google_genai.interactions import (
     _HAS_INTERACTIONS,
+    Interaction,
     _interactions_input_to_messages,
     _interactions_response_to_messages,
 )
 from opentelemetry.util.genai.types import (
     GenericPart,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -97,6 +100,39 @@ class TestInteractionsParser(unittest.TestCase):
         self.assertEqual(messages[0].parts[0].id, "call-123")
         self.assertEqual(messages[0].parts[0].response, {"val": 10})
 
+    def test_input_to_messages_server_tool_steps(self) -> None:
+        steps = [
+            {
+                "type": "google_search_call",
+                "id": "search-1",
+                "arguments": {"query": "OpenTelemetry"},
+            },
+            {
+                "type": "google_search_result",
+                "call_id": "search-1",
+                "result": [],
+            },
+        ]
+
+        parts = _interactions_input_to_messages(steps)[0].parts
+
+        self.assertIsInstance(parts[0], ServerToolCallPart)
+        self.assertEqual(parts[0].id, "search-1")
+        self.assertEqual(parts[0].name, "google_search")
+        self.assertEqual(
+            parts[0].server_tool_call,
+            {
+                "arguments": {"query": "OpenTelemetry"},
+                "type": "google_search",
+            },
+        )
+        self.assertIsInstance(parts[1], ServerToolCallResponsePart)
+        self.assertEqual(parts[1].id, "search-1")
+        self.assertEqual(
+            parts[1].server_tool_call_response,
+            {"result": [], "type": "google_search"},
+        )
+
     def test_input_to_messages_generic_fallback(self) -> None:
         steps = [{"type": "some_unsupported_type"}]
         messages = _interactions_input_to_messages(steps)
@@ -127,3 +163,61 @@ class TestInteractionsParser(unittest.TestCase):
         self.assertEqual(len(messages[0].parts), 1)
         self.assertIsInstance(messages[0].parts[0], TextPart)
         self.assertEqual(messages[0].parts[0].content, "Model response text")
+
+    def test_response_to_messages_includes_tool_steps(self) -> None:
+        interaction = Interaction.model_validate(
+            {
+                "id": "interaction-1",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "output_text": "Search complete",
+                "steps": [
+                    {
+                        "type": "mcp_server_tool_call",
+                        "id": "mcp-1",
+                        "name": "search",
+                        "server_name": "docs",
+                        "arguments": {"query": "OpenTelemetry"},
+                    },
+                    {
+                        "type": "mcp_server_tool_result",
+                        "call_id": "mcp-1",
+                        "name": "search",
+                        "server_name": "docs",
+                        "result": {"items": []},
+                    },
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {"type": "text", "text": "Search complete"}
+                        ],
+                    },
+                ],
+            }
+        )
+
+        parts = _interactions_response_to_messages(interaction)[0].parts
+
+        self.assertIsInstance(parts[0], ServerToolCallPart)
+        self.assertEqual(parts[0].id, "mcp-1")
+        self.assertEqual(parts[0].name, "search")
+        self.assertEqual(
+            parts[0].server_tool_call,
+            {
+                "server_name": "docs",
+                "arguments": {"query": "OpenTelemetry"},
+                "type": "mcp",
+            },
+        )
+        self.assertIsInstance(parts[1], ServerToolCallResponsePart)
+        self.assertEqual(parts[1].id, "mcp-1")
+        self.assertEqual(
+            parts[1].server_tool_call_response,
+            {
+                "server_name": "docs",
+                "result": {"items": []},
+                "type": "mcp",
+            },
+        )
+        self.assertEqual(parts[2], TextPart(content="Search complete"))
