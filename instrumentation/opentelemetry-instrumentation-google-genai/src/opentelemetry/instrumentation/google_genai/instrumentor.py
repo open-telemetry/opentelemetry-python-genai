@@ -63,7 +63,7 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=completion_hook,
-            instrumentation_scope_name="opentelemetry.instrumentation.google_genai",
+            instrumentation_scope_name=__package__,
             instrumentation_scope_version=__version__,
         )
         self._generate_content_snapshot = instrument_generate_content(

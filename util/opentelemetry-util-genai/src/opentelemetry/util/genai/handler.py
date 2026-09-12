@@ -95,9 +95,9 @@ class TelemetryHandler:
         Args:
             instrumentation_scope_name: the name of the instrumentation library
                 emitting the telemetry, reported as the instrumentation scope
-                name. Instrumentations must pass their own ``__name__`` so that
-                telemetry is attributable to them; it defaults to this module
-                for backwards compatibility.
+                name. Instrumentations must pass their dotted package path so
+                telemetry is attributable to them; it defaults to this module for
+                backwards compatibility.
             instrumentation_scope_version: the version of the instrumentation
                 library, reported as the instrumentation scope version.
         """

@@ -37,7 +37,7 @@ class BedrockInstrumentor(BaseInstrumentor):
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=completion_hook,
-            instrumentation_scope_name=__name__,
+            instrumentation_scope_name=__package__,
             instrumentation_scope_version=__version__,
         )
         patch_bedrock(self._handler)
