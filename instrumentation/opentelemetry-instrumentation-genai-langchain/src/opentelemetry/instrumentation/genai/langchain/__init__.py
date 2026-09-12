@@ -38,6 +38,10 @@ from opentelemetry.instrumentation.genai.langchain.agent_context import (
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
+from opentelemetry.instrumentation.genai.langchain.lifecycle import (
+    instrument_checkpointers,
+    uninstrument_checkpointers,
+)
 from opentelemetry.instrumentation.genai.langchain.package import _instruments
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
@@ -86,6 +90,10 @@ class LangChainInstrumentor(BaseInstrumentor):
         )
         self._instrument_agent_entry_points()
 
+        # LangGraph only: report every checkpoint the graph's saver persists.
+        # No-op when LangGraph is not installed.
+        instrument_checkpointers(otel_callback_handler)
+
     @staticmethod
     def _instrument_agent_entry_points() -> None:
         """Recover the create_agent provenance the callback metadata does not carry."""
@@ -105,6 +113,7 @@ class LangChainInstrumentor(BaseInstrumentor):
         Cleanup instrumentation (unwrap).
         """
         unwrap("langchain_core.callbacks.base.BaseCallbackManager", "__init__")
+        uninstrument_checkpointers()
         try:
             import langgraph.pregel
 

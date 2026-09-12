@@ -16,6 +16,8 @@ application:
 * **Agent spans** for agent invocations nested inside a workflow, including the
   agent name, id, description, and conversation/session id when available.
 * **Tool spans** for tool calls made during a run.
+* **Lifecycle events** for LangGraph durable executions that pause, checkpoint,
+  and resume, correlated with the workflow span.
 
 The spans nest to reflect the graph, so a single graph invocation produces a
 workflow span with the agent, tool, and model calls it triggered as children.
@@ -95,6 +97,21 @@ calls nested underneath.
             "research": "",
         }
     )
+
+LangGraph durable executions
+----------------------------
+
+When a LangGraph graph pauses on ``interrupt()``, the instrumentation emits a
+``gen_ai.agent.paused`` event carrying the interrupt id LangGraph minted and the
+checkpoint it paused at. Resuming the graph with ``Command(resume=...)`` emits
+``gen_ai.agent.resumed`` naming that same checkpoint. If the graph was compiled
+with a checkpointer, every checkpoint the saver persists emits a
+``gen_ai.agent.checkpointed`` event; LangGraph writes one checkpoint per
+superstep, so these are per-step records.
+
+No interrupt payload or graph state is recorded: the events carry only ids
+LangGraph itself produced. These event and attribute names are candidate
+semantic conventions and may change.
 
 Configuration
 -------------
