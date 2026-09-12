@@ -14,12 +14,13 @@ from opentelemetry.test.weaver_live_check import WeaverLiveCheck
 from opentelemetry.test_util_genai.conformance import Scenario, run_conformance
 
 from .conformance.agent import AgentScenario
+from .conformance.retrieval import RetrievalScenario
 from .conformance.workflow import WorkflowScenario
 
 
 @pytest.mark.parametrize(
     "scenario",
-    [AgentScenario(), WorkflowScenario()],
+    [AgentScenario(), WorkflowScenario(), RetrievalScenario()],
     ids=lambda scenario: type(scenario).__name__,
 )
 def test_conformance(
