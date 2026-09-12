@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import UUID
@@ -78,6 +79,85 @@ def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
         if conversation_id:
             return str(conversation_id)
     return None
+
+
+def _extract_document_score(doc: Any) -> float | int | None:
+    """Extract relevance score polymorphically from a Document or Mapping.
+
+    Checks doc.score first, then falls back to doc.metadata['score'].
+    Also defensively supports Mapping/dict documents and duck-typed objects.
+    """
+    score: Any = None
+    if isinstance(doc, Mapping):
+        doc_map = cast(Mapping[str, Any], doc)
+        score = doc_map.get("score")
+        if score is None:
+            score = doc_map.get("relevance_score")
+        if score is None:
+            metadata = doc_map.get("metadata")
+            if isinstance(metadata, Mapping):
+                meta_map = cast(Mapping[str, Any], metadata)
+                score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
+            elif metadata is not None:
+                score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
+    else:
+        score = getattr(doc, "score", None)
+        if score is None:
+            score = getattr(doc, "relevance_score", None)
+        if score is None:
+            metadata = getattr(doc, "metadata", None)
+            if isinstance(metadata, Mapping):
+                meta_map = cast(Mapping[str, Any], metadata)
+                score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
+            elif metadata is not None:
+                score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
+
+    if (
+        score is not None
+        and not isinstance(score, bool)
+        and isinstance(score, (int, float))
+    ):
+        if isinstance(score, float) and not math.isfinite(score):
+            return None
+        return score
+
+    return None
+
+
+def _document_to_dict(doc: Any) -> dict[str, Any]:
+    """Convert a Document, duck-typed document object, or Mapping to a dict.
+
+    Extracts content (checking page_content first, then content), id,
+    and conditionally score if present and numeric.
+    """
+    if isinstance(doc, Mapping):
+        doc_map = cast(Mapping[str, Any], doc)
+        content = doc_map.get("page_content")
+        if content is None:
+            content = doc_map.get("content")
+        doc_id = doc_map.get("id")
+    else:
+        content = getattr(doc, "page_content", None)
+        if content is None:
+            content = getattr(doc, "content", None)
+        doc_id = getattr(doc, "id", None)
+
+    doc_dict: dict[str, Any] = {
+        "content": content,
+        "id": doc_id,
+    }
+    score = _extract_document_score(doc)
+    if score is not None:
+        doc_dict["score"] = score
+    return doc_dict
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -749,11 +829,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         if self._telemetry_handler.should_capture_content():
             invocation.documents = [
-                {
-                    "content": doc.page_content,
-                    "id": doc.id,
-                }
-                for doc in documents
+                _document_to_dict(doc) for doc in documents
             ]
         invocation.stop()
         if not invocation.span.is_recording():
