@@ -6,9 +6,22 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from anthropic.types import (
+    ServerToolUseBlock,
+    WebSearchToolResultBlock,
+    WebSearchToolResultError,
+)
+
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
     set_invocation_response_attributes,
+)
+from opentelemetry.instrumentation.genai.anthropic.utils import (
+    _convert_content_block_to_part,
+)
+from opentelemetry.util.genai.types import (
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
 )
 
 
@@ -73,3 +86,80 @@ def test_set_invocation_response_attributes_records_cache_tokens():
     assert invocation.output_tokens == 20
     assert invocation.cache_write_input_tokens == 15
     assert invocation.cache_read_input_tokens == 5
+
+
+def test_convert_server_tool_use_block():
+    part = _convert_content_block_to_part(
+        ServerToolUseBlock(
+            id="srvtoolu_123",
+            input={"query": "OpenTelemetry"},
+            name="web_search",
+            type="server_tool_use",
+        )
+    )
+
+    assert isinstance(part, ServerToolCallPart)
+    assert part.id == "srvtoolu_123"
+    assert part.name == "web_search"
+    assert part.server_tool_call == {
+        "input": {"query": "OpenTelemetry"},
+        "type": "web_search",
+    }
+
+
+def test_convert_server_tool_result_block():
+    part = _convert_content_block_to_part(
+        WebSearchToolResultBlock(
+            content=WebSearchToolResultError(
+                error_code="unavailable",
+                type="web_search_tool_result_error",
+            ),
+            tool_use_id="srvtoolu_123",
+            type="web_search_tool_result",
+        )
+    )
+
+    assert isinstance(part, ServerToolCallResponsePart)
+    assert part.id == "srvtoolu_123"
+    assert part.server_tool_call_response == {
+        "content": {
+            "error_code": "unavailable",
+            "type": "web_search_tool_result_error",
+        },
+        "type": "web_search",
+    }
+
+
+def test_convert_server_tool_dicts():
+    call = _convert_content_block_to_part(
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_123",
+            "name": "web_fetch",
+            "input": {"url": "https://opentelemetry.io"},
+        }
+    )
+    response = _convert_content_block_to_part(
+        {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_123",
+            "content": {
+                "type": "web_fetch_result",
+                "url": "https://opentelemetry.io",
+            },
+        }
+    )
+
+    assert isinstance(call, ServerToolCallPart)
+    assert call.server_tool_call == {
+        "input": {"url": "https://opentelemetry.io"},
+        "type": "web_fetch",
+    }
+    assert isinstance(response, ServerToolCallResponsePart)
+    assert response.server_tool_call_response == {
+        "content": {
+            "type": "web_fetch_result",
+            "url": "https://opentelemetry.io",
+        },
+        "type": "web_fetch",
+    }
