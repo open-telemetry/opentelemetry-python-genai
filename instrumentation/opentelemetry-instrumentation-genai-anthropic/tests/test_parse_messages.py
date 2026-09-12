@@ -52,6 +52,9 @@ def _assert_parsed_response(response) -> None:
     parsed_blocks = [
         getattr(block, "parsed", None) for block in response.content
     ]
+    parsed_blocks.extend(
+        getattr(block, "parsed_output", None) for block in response.content
+    )
     text_blocks = [getattr(block, "text", None) for block in response.content]
     text_payloads = [
         json.loads(text)
@@ -300,3 +303,210 @@ async def test_async_messages_parse_api_error(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert ErrorAttributes.ERROR_TYPE in span.attributes
     assert "NotFoundError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+try:
+    from anthropic.resources.beta.messages import Messages as _BetaMessages
+
+    _beta_parse_supported = hasattr(_BetaMessages, "parse")
+except (ImportError, AttributeError):
+    _beta_parse_supported = False
+
+
+@pytest.mark.skipif(
+    not _beta_parse_supported,
+    reason="anthropic SDK does not support beta.messages.parse",
+)
+@pytest.mark.vcr()
+def test_sync_beta_messages_parse_basic(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """BetaMessages.parse should emit a chat span for structured output."""
+    model = "claude-haiku-4-5"
+
+    response = anthropic_client.beta.messages.parse(
+        model=model,
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": "Return JSON with a greeting field set to hello.",
+            }
+        ],
+        output_format=Greeting,
+    )
+
+    _assert_parsed_response(response)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_parse_span(spans[0], model=model, response=response)
+
+
+@pytest.mark.skipif(
+    not _beta_parse_supported,
+    reason="anthropic SDK does not support beta.messages.parse",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_beta_messages_parse_basic(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """AsyncBetaMessages.parse should emit a chat span for structured output."""
+    model = "claude-haiku-4-5"
+
+    response = await async_anthropic_client.beta.messages.parse(
+        model=model,
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": "Return JSON with a greeting field set to hello.",
+            }
+        ],
+        output_format=Greeting,
+    )
+
+    _assert_parsed_response(response)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_parse_span(spans[0], model=model, response=response)
+
+
+@pytest.mark.skipif(
+    not _beta_parse_supported,
+    reason="anthropic SDK does not support beta.messages.parse",
+)
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_sync_beta_messages_create_api_error")
+def test_sync_beta_messages_parse_api_error(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """BetaMessages.parse should record API errors."""
+    model = "invalid-model-name"
+
+    with pytest.raises(NotFoundError):
+        anthropic_client.beta.messages.parse(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            output_format=Greeting,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert ErrorAttributes.ERROR_TYPE in span.attributes
+    assert "NotFoundError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+@pytest.mark.skipif(
+    not _beta_parse_supported,
+    reason="anthropic SDK does not support beta.messages.parse",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_create_api_error")
+async def test_async_beta_messages_parse_api_error(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """AsyncBetaMessages.parse should record API errors."""
+    model = "invalid-model-name"
+
+    with pytest.raises(NotFoundError):
+        await async_anthropic_client.beta.messages.parse(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            output_format=Greeting,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert ErrorAttributes.ERROR_TYPE in span.attributes
+    assert "NotFoundError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+@pytest.mark.skipif(
+    not _beta_parse_supported,
+    reason="anthropic SDK does not support beta.messages.parse",
+)
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_sync_beta_messages_parse_basic")
+def test_sync_beta_messages_parse_captures_content(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """BetaMessages.parse should capture input and output messages."""
+    model = "claude-haiku-4-5"
+
+    anthropic_client.beta.messages.parse(
+        model=model,
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": "Return JSON with a greeting field set to hello.",
+            }
+        ],
+        output_format=Greeting,
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"][0]["type"] == "text"
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"]
+
+
+@pytest.mark.skipif(
+    not _beta_parse_supported,
+    reason="anthropic SDK does not support beta.messages.parse",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_parse_basic")
+async def test_async_beta_messages_parse_captures_content(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """AsyncBetaMessages.parse should capture input and output messages."""
+    model = "claude-haiku-4-5"
+
+    await async_anthropic_client.beta.messages.parse(
+        model=model,
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": "Return JSON with a greeting field set to hello.",
+            }
+        ],
+        output_format=Greeting,
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"][0]["type"] == "text"
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"]

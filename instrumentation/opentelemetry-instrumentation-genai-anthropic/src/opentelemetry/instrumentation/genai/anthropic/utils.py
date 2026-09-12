@@ -20,13 +20,17 @@ from anthropic.types import (
     ThinkingBlock,
     ThinkingDelta,
     ToolUseBlock,
-    WebSearchToolResultBlock,
 )
 
 from opentelemetry.util.genai.types import (
     BlobPart,
+    CompactionPart,
+    FilePart,
+    GenericPart,
     MessagePart,
     ReasoningPart,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -40,6 +44,44 @@ if TYPE_CHECKING:
         ContentBlockParam,
         RawContentBlockDelta,
     )
+    from anthropic.types.beta import (
+        BetaContentBlock,
+        BetaContentBlockParam,
+        BetaRedactedThinkingBlock,
+        BetaTextBlock,
+        BetaThinkingBlock,
+        BetaToolUseBlock,
+    )
+    from anthropic.types.beta import (
+        BetaMessage as AnthropicBetaMessage,
+    )
+else:
+    try:
+        import anthropic.types.beta as _beta_types
+    except (ImportError, AttributeError):
+        _beta_types = None
+
+    def _get_beta_type(name: str) -> type:
+        cls = getattr(_beta_types, name, None)
+        return cls if isinstance(cls, type) else type(name, (), {})
+
+    AnthropicBetaMessage = _get_beta_type("BetaMessage")
+    BetaRedactedThinkingBlock = _get_beta_type("BetaRedactedThinkingBlock")
+    BetaTextBlock = _get_beta_type("BetaTextBlock")
+    BetaThinkingBlock = _get_beta_type("BetaThinkingBlock")
+    BetaToolUseBlock = _get_beta_type("BetaToolUseBlock")
+
+
+__all__ = [
+    "AnthropicBetaMessage",
+    "convert_content_to_parts",
+    "create_stream_block_state",
+    "is_anthropic_async_stream",
+    "is_anthropic_stream",
+    "normalize_finish_reason",
+    "stream_block_state_to_part",
+    "update_stream_block_state",
+]
 
 
 def is_anthropic_stream(value: object) -> bool:
@@ -137,9 +179,34 @@ def _convert_dict_block_to_part(
             id=str(block.get("id", "")),
         )
 
+    if block_type in ("server_tool_use", "mcp_tool_use"):
+        server_tool_call: dict[str, Any] = {
+            "type": block_type,
+            "arguments": block.get("input"),
+        }
+        for key in ("caller", "server_name"):
+            value = block.get(key)
+            if value is not None:
+                server_tool_call[key] = value
+        return ServerToolCallPart(
+            name=str(block.get("name", "")),
+            server_tool_call=server_tool_call,
+            id=str(block.get("id", "")),
+        )
+
     if block_type == "tool_result":
         return ToolCallResponsePart(
             response=block.get("content"),
+            id=str(block.get("tool_use_id", "")),
+        )
+
+    if isinstance(block_type, str) and block_type.endswith("_tool_result"):
+        return ServerToolCallResponsePart(
+            server_tool_call_response={
+                key: value
+                for key, value in block.items()
+                if key != "tool_use_id"
+            },
             id=str(block.get("tool_use_id", "")),
         )
 
@@ -149,35 +216,69 @@ def _convert_dict_block_to_part(
             content=str(thinking) if thinking is not None else ""
         )
 
-    if block_type in ("image", "audio", "video", "document", "file"):
-        return _extract_base64_blob(block.get("source"), str(block_type))
+    if block_type == "container_upload":
+        file_id = block.get("file_id")
+        if isinstance(file_id, str):
+            return FilePart(
+                mime_type=None,
+                modality="document",
+                file_id=file_id,
+            )
 
-    return None
+    if block_type == "compaction":
+        content = block.get("content")
+        return CompactionPart(
+            content=content if isinstance(content, str) else None
+        )
+
+    if block_type in ("image", "audio", "video", "document", "file"):
+        part = _extract_base64_blob(block.get("source"), str(block_type))
+        if part is not None:
+            return part
+
+    return (
+        GenericPart(type=str(block_type)) if block_type is not None else None
+    )
 
 
 def _convert_content_block_to_part(
-    block: ContentBlock | ContentBlockParam,
+    block: ContentBlock
+    | ContentBlockParam
+    | BetaContentBlock
+    | BetaContentBlockParam,
 ) -> MessagePart | None:
     """Convert an Anthropic content block to a MessagePart."""
-    if isinstance(block, TextBlock):
+    if isinstance(block, (TextBlock, BetaTextBlock)):
         return TextPart(content=block.text)
 
-    if isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
+    if isinstance(block, (ToolUseBlock, BetaToolUseBlock)):
         return ToolCallRequestPart(
             arguments=block.input, name=block.name, id=block.id
         )
 
-    if isinstance(block, (ThinkingBlock, RedactedThinkingBlock)):
+    if isinstance(
+        block,
+        (
+            ThinkingBlock,
+            RedactedThinkingBlock,
+            BetaThinkingBlock,
+            BetaRedactedThinkingBlock,
+        ),
+    ):
         content = (
-            block.thinking if isinstance(block, ThinkingBlock) else block.data
+            block.thinking
+            if isinstance(block, (ThinkingBlock, BetaThinkingBlock))
+            else block.data
         )
         return ReasoningPart(content=content)
 
-    if isinstance(block, WebSearchToolResultBlock):
-        return ToolCallResponsePart(
-            response=block.model_dump().get("content"),
-            id=block.tool_use_id,
-        )
+    model_dump = getattr(block, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return _convert_dict_block_to_part(
+                cast(Mapping[str, Any], dumped)
+            )
 
     if not hasattr(block, "get"):
         return None
@@ -185,7 +286,14 @@ def _convert_content_block_to_part(
 
 
 def convert_content_to_parts(
-    content: str | Iterable[ContentBlock | ContentBlockParam] | None,
+    content: str
+    | Iterable[
+        ContentBlock
+        | ContentBlockParam
+        | BetaContentBlock
+        | BetaContentBlockParam
+    ]
+    | None,
 ) -> list[MessagePart]:
     if content is None:
         return []

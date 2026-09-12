@@ -39,6 +39,12 @@ from .utils import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from anthropic.resources.beta.messages import (
+        AsyncMessages as AsyncBetaMessages,
+    )
+    from anthropic.resources.beta.messages import (
+        Messages as BetaMessages,
+    )
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import (
         Message,
@@ -49,6 +55,16 @@ if TYPE_CHECKING:
         ToolChoiceParam,
         ToolUnionParam,
         Usage,
+    )
+    from anthropic.types.beta import (
+        BetaMessage,
+        BetaMessageParam,
+        BetaMetadataParam,
+        BetaTextBlockParam,
+        BetaThinkingConfigParam,
+        BetaToolChoiceParam,
+        BetaToolUnionParam,
+        BetaUsage,
     )
 
 
@@ -61,8 +77,8 @@ class MessageRequestParams:
     top_p: float | None = None
     stop_sequences: Sequence[str] | None = None
     stream: bool | None = None
-    messages: Iterable[MessageParam] | None = None
-    system: str | Iterable[TextBlockParam] | None = None
+    messages: Iterable[MessageParam | BetaMessageParam] | None = None
+    system: str | Iterable[TextBlockParam | BetaTextBlockParam] | None = None
 
 
 @dataclass
@@ -74,7 +90,7 @@ class UsageTokens:
 
 
 def extract_usage_tokens(
-    usage: Usage | MessageDeltaUsage | None,
+    usage: Usage | BetaUsage | MessageDeltaUsage | None,
 ) -> UsageTokens:
     if usage is None:
         return UsageTokens()
@@ -106,7 +122,7 @@ def extract_usage_tokens(
 
 
 def get_input_messages(
-    messages: Iterable[MessageParam] | None,
+    messages: Iterable[MessageParam | BetaMessageParam] | None,
 ) -> list[InputMessage]:
     if messages is None:
         return []
@@ -119,7 +135,7 @@ def get_input_messages(
 
 
 def get_system_instruction(
-    system: str | Iterable[TextBlockParam] | None,
+    system: str | Iterable[TextBlockParam | BetaTextBlockParam] | None,
 ) -> list[SystemInstructionPart]:
     if system is None:
         return []
@@ -133,7 +149,7 @@ def get_system_instruction(
 
 
 def get_output_messages_from_message(
-    message: Message | None,
+    message: Message | BetaMessage | None,
 ) -> list[OutputMessage]:
     if message is None:
         return []
@@ -151,7 +167,7 @@ def get_output_messages_from_message(
 
 def set_invocation_response_attributes(
     invocation: InferenceInvocation,
-    message: Message | None,
+    message: Message | BetaMessage | None,
     capture_content: bool,
 ) -> None:
     if message is None:
@@ -177,17 +193,17 @@ def set_invocation_response_attributes(
 def extract_params(  # pylint: disable=too-many-locals
     *,
     max_tokens: int | None = None,
-    messages: Iterable[MessageParam] | None = None,
+    messages: Iterable[MessageParam | BetaMessageParam] | None = None,
     model: str | None = None,
-    metadata: MetadataParam | None = None,
+    metadata: MetadataParam | BetaMetadataParam | None = None,
     service_tier: str | None = None,
     stop_sequences: Sequence[str] | None = None,
     stream: bool | None = None,
-    system: str | Iterable[TextBlockParam] | None = None,
+    system: str | Iterable[TextBlockParam | BetaTextBlockParam] | None = None,
     temperature: float | None = None,
-    thinking: ThinkingConfigParam | None = None,
-    tool_choice: ToolChoiceParam | None = None,
-    tools: Iterable[ToolUnionParam] | None = None,
+    thinking: ThinkingConfigParam | BetaThinkingConfigParam | None = None,
+    tool_choice: ToolChoiceParam | BetaToolChoiceParam | None = None,
+    tools: Iterable[ToolUnionParam | BetaToolUnionParam] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
     extra_headers: Mapping[str, str] | None = None,
@@ -236,7 +252,10 @@ def extract_params(  # pylint: disable=too-many-locals
 
 
 def get_server_address_and_port(
-    client_instance: Messages | AsyncMessages,
+    client_instance: Messages
+    | AsyncMessages
+    | BetaMessages
+    | AsyncBetaMessages,
 ) -> tuple[str | None, int | None]:
     base_client = getattr(client_instance, "_client", None)
     base_url = getattr(base_client, "base_url", None)
@@ -258,7 +277,11 @@ def get_server_address_and_port(
 
 
 def get_llm_request_attributes(
-    params: MessageRequestParams, client_instance: Messages | AsyncMessages
+    params: MessageRequestParams,
+    client_instance: Messages
+    | AsyncMessages
+    | BetaMessages
+    | AsyncBetaMessages,
 ) -> dict[str, AttributeValue]:
     attributes: dict[str, AttributeValue | None] = {
         GenAIAttributes.GEN_AI_OPERATION_NAME: GenAIAttributes.GenAiOperationNameValues.CHAT.value,
