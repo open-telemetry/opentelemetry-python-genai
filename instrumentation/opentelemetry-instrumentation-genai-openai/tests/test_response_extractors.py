@@ -1,12 +1,16 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
+import json
+from dataclasses import asdict
 from types import SimpleNamespace
 from unittest import mock
 
 import openai
 import pytest
 from openai import NOT_GIVEN
+from pydantic import BaseModel
 
 from opentelemetry.instrumentation.genai.openai import response_extractors
 from opentelemetry.instrumentation.genai.openai.utils import get_served_model
@@ -20,18 +24,33 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     LLMInvocation,
     TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     UriPart,
 )
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 try:
     # Responses types are not available in the oldest supported OpenAI SDK.
     # pylint: disable-next=no-name-in-module
     from openai.types.responses.response import Response
 
+    # pylint: disable-next=no-name-in-module
+    from openai.types.responses.response_function_tool_call import (
+        ResponseFunctionToolCall,
+    )
+
+    # pylint: disable-next=no-name-in-module
+    from openai.types.responses.response_input_text import ResponseInputText
+
     HAS_RESPONSES_TYPES = True
 except ImportError:
     Response = None
+    ResponseFunctionToolCall = None
+    ResponseInputText = None
     HAS_RESPONSES_TYPES = False
+
+_UTC_2026 = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
 pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_TYPES,
@@ -256,6 +275,298 @@ def test_extract_input_messages_extracts_name(loaded_module):
         ("assistant", "Bob"),
         ("user", None),
     ]
+
+
+def test_extract_input_messages_records_tool_loop_history(loaded_module):
+    """A tool-call turn replayed as input must survive as tool_call/tool_call_response."""
+    messages = loaded_module.get_input_messages(
+        [
+            {"role": "user", "content": "Where is order 42?"},
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_abc",
+                "name": "lookup_order",
+                "arguments": '{"order_id": 42}',
+                "status": "completed",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_abc",
+                "output": "Order 42 shipped on Tuesday.",
+            },
+        ]
+    )
+
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+
+    (tool_call,) = messages[1].parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.type == "tool_call"
+    assert tool_call.id == "call_abc"
+    assert tool_call.name == "lookup_order"
+    assert tool_call.arguments == {"order_id": 42}
+
+    (tool_response,) = messages[2].parts
+    assert isinstance(tool_response, ToolCallResponsePart)
+    assert tool_response.type == "tool_call_response"
+    # The response part must be pairable with the call that produced it.
+    assert tool_response.id == tool_call.id
+    assert tool_response.response == "Order 42 shipped on Tuesday."
+
+
+def test_extract_input_messages_handles_tool_items_as_sdk_models(
+    loaded_module,
+):
+    """Callers replay `response.output` items verbatim, so they arrive as models."""
+    messages = loaded_module.get_input_messages(
+        [
+            ResponseFunctionToolCall(
+                id="fc_1",
+                call_id="call_abc",
+                name="lookup_order",
+                arguments='{"order_id": 42}',
+                type="function_call",
+                status="completed",
+            ),
+            SimpleNamespace(
+                type="function_call_output",
+                call_id="call_abc",
+                output="shipped",
+            ),
+        ]
+    )
+
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    assert messages[0].parts[0].arguments == {"order_id": 42}
+    assert messages[1].parts[0].response == "shipped"
+
+
+def test_extract_input_messages_tool_items_serialize_onto_a_span(
+    loaded_module,
+):
+    """Structured tool output arrives as SDK models the span serializer can't encode."""
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "function_call_output",
+                "call_id": "call_abc",
+                "output": [
+                    ResponseInputText(type="input_text", text="shipped")
+                ],
+            },
+        ]
+    )
+
+    (message,) = messages
+    # gen_ai_json_dumps raises TypeError on a value it cannot encode.
+    (serialized,) = json.loads(gen_ai_json_dumps([asdict(message)]))
+    (response_item,) = serialized["parts"][0]["response"]
+    assert response_item["type"] == "input_text"
+    assert response_item["text"] == "shipped"
+
+
+def test_extract_input_messages_tool_output_reduces_to_plain_data(
+    loaded_module,
+):
+    """A structured tool output must reach the span as encodable data.
+
+    `gen_ai_json_dumps` raises on anything it cannot encode, and that exception
+    would surface from the caller's `responses.create(...)`.
+    """
+
+    class Nested(BaseModel):
+        text: str
+
+    class Wrapper(BaseModel):
+        nested: Nested
+        when: datetime.datetime
+
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "function_call_output",
+                "call_id": "call_abc",
+                "output": [
+                    ResponseInputText(type="input_text", text="shipped"),
+                    # A dumped model holds its own models, so the dump has to
+                    # be walked rather than returned as-is.
+                    Wrapper(nested=Nested(text="inner"), when=_UTC_2026),
+                ],
+            },
+        ]
+    )
+
+    (message,) = messages
+    (serialized,) = json.loads(gen_ai_json_dumps([asdict(message)]))
+    item, wrapper = serialized["parts"][0]["response"]
+    assert item["type"] == "input_text"
+    assert item["text"] == "shipped"
+    assert wrapper["nested"] == {"text": "inner"}
+    # A datetime is not something a tool output can hold, so it is dropped
+    # instead of being turned into a guessed string.
+    assert wrapper["when"] is None
+
+
+def test_extract_input_messages_tolerates_incomplete_tool_items(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            # No `call_id`: see _get_call_id on why `id` stands in for it.
+            {"type": "function_call", "id": "fc_1", "name": "f"},
+            # Unparsable arguments are recorded as the raw string.
+            {
+                "type": "function_call",
+                "call_id": "call_bad",
+                "name": "f",
+                "arguments": "not-json",
+            },
+            {"type": "function_call_output"},
+        ]
+    )
+
+    assert [message.role for message in messages] == [
+        "assistant",
+        "assistant",
+        "tool",
+    ]
+    assert messages[0].parts[0].id == "fc_1"
+    assert messages[0].parts[0].arguments is None
+    assert messages[1].parts[0].arguments == "not-json"
+    assert messages[2].parts[0].id is None
+    assert messages[2].parts[0].response is None
+
+
+def test_extract_input_messages_pair_ids_when_provider_omits_call_id(
+    loaded_module,
+):
+    """Defensive: no provider is known to omit `call_id`, which is required.
+
+    If one did, a caller would have only the item's `id` for the output item's
+    `call_id`, so both sides must resolve it the same way to stay correlatable.
+    """
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "lookup_order",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "fc_1",
+                "output": "ok",
+            },
+        ]
+    )
+
+    parts = [part for message in messages for part in message.parts]
+    ids = {part.type: part.id for part in parts}
+    assert ids == {"tool_call": "fc_1", "tool_call_response": "fc_1"}
+
+
+def test_extract_input_messages_records_parallel_tool_calls(loaded_module):
+    """Each `function_call` item becomes its own assistant message.
+
+    Responses items are flat, so N parallel calls arrive as N items; Chat
+    Completions instead nests N `tool_call` parts in one assistant message.
+    """
+    messages = loaded_module.get_input_messages(
+        [
+            {"role": "user", "content": "Weather in both cities?"},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "get_current_weather",
+                "arguments": '{"location":"Seattle, WA"}',
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "get_current_weather",
+                "arguments": '{"location":"Boston, MA"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "raining",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_2",
+                "output": "sunny",
+            },
+        ]
+    )
+
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "assistant",
+        "tool",
+        "tool",
+    ]
+    assert [part.id for message in messages[1:] for part in message.parts] == [
+        "call_1",
+        "call_2",
+        "call_1",
+        "call_2",
+    ]
+
+
+def test_extract_input_messages_records_custom_tool_calls(loaded_module):
+    """A custom tool's `input` is free-form text, not a JSON arguments string."""
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_custom",
+                "name": "run_sql",
+                "input": "SELECT 1",
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_custom",
+                "output": "1 row",
+            },
+        ]
+    )
+
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    (tool_call,) = messages[0].parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.name == "run_sql"
+    # Not JSON-parsed: "SELECT 1" is the argument, verbatim.
+    assert tool_call.arguments == "SELECT 1"
+
+    (tool_response,) = messages[1].parts
+    assert isinstance(tool_response, ToolCallResponsePart)
+    assert tool_response.id == tool_call.id == "call_custom"
+    assert tool_response.response == "1 row"
+
+
+def test_extract_input_messages_without_tool_part_types(loaded_module):
+    tool_items = [
+        {
+            "type": "function_call",
+            "call_id": "call_abc",
+            "name": "f",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_abc", "output": "x"},
+    ]
+
+    with (
+        mock.patch.object(loaded_module, "ToolCall", None),
+        mock.patch.object(loaded_module, "ToolCallResponsePart", None),
+    ):
+        assert loaded_module.get_input_messages(tool_items) == []
 
 
 def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
