@@ -45,7 +45,7 @@ numpy
 soundfile==0.14.0
 python-dateutil==2.9.0.post0
 tqdm==4.70.1
-wrapt==2.2.2
+wrapt==2.4.1
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e util/opentelemetry-util-genai
