@@ -126,9 +126,9 @@ class ToolCallingScenario(Scenario):
                     for tool_call in first_response.tool_calls:
                         with tool_handler.tool(
                             tool_call["name"],
-                            tool_call_id=tool_call["id"],
                             tool_type="function",
                         ) as invocation:
+                            invocation.tool_call_id = tool_call["id"]
                             result = _execute_weather_tool(
                                 json.dumps(tool_call["args"])
                             )

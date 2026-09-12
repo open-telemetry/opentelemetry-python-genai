@@ -1,0 +1,1 @@
+Record failed Anthropic invocations when cancellation raises a `BaseException`.

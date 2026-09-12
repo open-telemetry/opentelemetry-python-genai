@@ -11,6 +11,10 @@ from typing import Any, cast
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    ChatMessage,
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
     ToolMessage,
     convert_to_messages,
 )
@@ -27,6 +31,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -76,18 +81,29 @@ def normalize_provider(metadata: dict[str, Any] | None) -> str | None:
     return _PROVIDER_NAME_OVERRIDES.get(raw, raw)
 
 
-# LangChain ``BaseMessage.type`` -> spec ``role`` value. Anything not in the
-# map is passed through unchanged so future LangChain message types still emit
-# telemetry without code changes here.
-_ROLE_MAP: dict[str, str] = {
-    "human": "user",
-    "ai": "assistant",
-    "function": "tool",
-}
+_ROLE_BY_CLASS: tuple[tuple[type[BaseMessage], Role], ...] = (
+    (ToolMessage, Role.TOOL),
+    (FunctionMessage, Role.TOOL),
+    (AIMessage, Role.ASSISTANT),
+    (HumanMessage, Role.USER),
+    (SystemMessage, Role.SYSTEM),
+)
 
 
-def _normalize_role(message: BaseMessage) -> str:
-    return _ROLE_MAP.get(message.type, message.type)
+def _normalize_role(message: BaseMessage) -> str | None:
+    # ChatMessage is not binding to a specific role
+    # but it carries a role in the `role` field.
+    if isinstance(message, ChatMessage):
+        return message.role or None
+    for message_class, role in _ROLE_BY_CLASS:
+        if isinstance(message, message_class):
+            return role.value
+    return None
+
+
+def _message_name(message: BaseMessage) -> str | None:
+    name = getattr(message, "name", None)
+    return str(name) if name is not None else None
 
 
 def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
@@ -327,20 +343,27 @@ def to_input_messages(
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
+    materialized = list(messages)
     try:
         normalized_messages: Iterable[BaseMessage] = convert_to_messages(
-            list(messages)
+            materialized
         )
     except Exception:  # pylint: disable=broad-except
         normalized_messages = [
-            m for m in messages if isinstance(m, BaseMessage)
+            m for m in materialized if isinstance(m, BaseMessage)
         ]
     result: list[InputMessage] = []
     for message in normalized_messages:
         parts = _message_parts(message)
         if not parts and not _has_content(message):
             continue
-        result.append(InputMessage(role=_normalize_role(message), parts=parts))
+        result.append(
+            InputMessage(
+                role=_normalize_role(message) or Role.USER.value,
+                parts=parts,
+                name=_message_name(message),
+            )
+        )
     return result
 
 
@@ -368,9 +391,10 @@ def to_output_messages(
             continue
         result.append(
             OutputMessage(
-                role=_normalize_role(message),
+                role=_normalize_role(message) or Role.ASSISTANT.value,
                 parts=parts,
                 finish_reason=finish_reason,
+                name=_message_name(message),
             )
         )
     return result
@@ -463,7 +487,11 @@ def make_input_message(data: Any) -> list[InputMessage]:
     if input_data:
         serialized = serialize(input_data)
         if serialized:
-            return [InputMessage(role="user", parts=[TextPart(serialized)])]
+            return [
+                InputMessage(
+                    role=Role.USER.value, parts=[TextPart(serialized)]
+                )
+            ]
     return []
 
 
@@ -589,7 +617,7 @@ def resolve_response_model_and_id(
 
 
 def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
-    """Extract cache/reasoning token break-downs from LangChain usage metadata."""
+    """Extract cache, reasoning, and modality token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
     raw_input_details = usage_metadata.get("input_token_details")
@@ -605,16 +633,42 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
         else {}
     )
 
-    cache_creation = input_details.get("cache_creation")
-    if isinstance(cache_creation, int) and cache_creation:
-        token_details["cache_creation_input_tokens"] = cache_creation
+    def _get_positive_int(d: dict[str, Any], key: str) -> int | None:
+        val = d.get(key)
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+            return val
+        return None
 
-    cache_read = input_details.get("cache_read")
-    if isinstance(cache_read, int) and cache_read:
+    cache_write = _get_positive_int(input_details, "cache_write")
+    if cache_write is None:
+        cache_write = _get_positive_int(input_details, "cache_creation")
+    if cache_write is not None:
+        token_details["cache_write_input_tokens"] = cache_write
+
+    if (
+        cache_read := _get_positive_int(input_details, "cache_read")
+    ) is not None:
         token_details["cache_read_input_tokens"] = cache_read
 
-    reasoning = output_details.get("reasoning")
-    if isinstance(reasoning, int) and reasoning:
+    if (
+        reasoning := _get_positive_int(output_details, "reasoning")
+    ) is not None:
         token_details["reasoning_tokens"] = reasoning
+
+    # Input modality breakdowns
+    if (text_in := _get_positive_int(input_details, "text")) is not None:
+        token_details["text_input_tokens"] = text_in
+    if (image_in := _get_positive_int(input_details, "image")) is not None:
+        token_details["image_input_tokens"] = image_in
+    if (audio_in := _get_positive_int(input_details, "audio")) is not None:
+        token_details["audio_input_tokens"] = audio_in
+
+    # Output modality breakdowns
+    if (text_out := _get_positive_int(output_details, "text")) is not None:
+        token_details["text_output_tokens"] = text_out
+    if (image_out := _get_positive_int(output_details, "image")) is not None:
+        token_details["image_output_tokens"] = image_out
+    if (audio_out := _get_positive_int(output_details, "audio")) is not None:
+        token_details["audio_output_tokens"] = audio_out
 
     return token_details

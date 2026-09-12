@@ -1,0 +1,1 @@
+Add `reasoning_level`, `previous_response_id`, `conversation_compacted`, and `prompt.*` attributes to inference invocations.

@@ -1,0 +1,1 @@
+Deprecate passing `tool_call_id` and `tool_description` as keyword arguments to `handler.tool()`.

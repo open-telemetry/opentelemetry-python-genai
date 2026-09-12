@@ -23,6 +23,7 @@ from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
     create_chat_invocation,
+    get_property_value,
     get_server_address_and_port,
     get_value,
     is_streaming,
@@ -82,7 +83,7 @@ def chat_completions_create_v_new(
             _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             chat_invocation.fail(error)
             raise
 
@@ -114,7 +115,7 @@ def async_chat_completions_create_v_new(
             chat_invocation.stop()
             return result
 
-        except Exception as error:
+        except BaseException as error:
             chat_invocation.fail(error)
             raise
 
@@ -129,7 +130,7 @@ def embeddings_create(handler: TelemetryHandler):
 
         try:
             result = wrapped(*args, **kwargs)
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -148,7 +149,7 @@ def async_embeddings_create(handler: TelemetryHandler):
 
         try:
             result = await wrapped(*args, **kwargs)
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -200,6 +201,20 @@ def _set_response_properties(
     if getattr(result, "usage", None):
         chat_invocation.input_tokens = result.usage.prompt_tokens
         chat_invocation.output_tokens = result.usage.completion_tokens
+        prompt_tokens_details = getattr(
+            result.usage, "prompt_tokens_details", None
+        )
+        if prompt_tokens_details is not None:
+            chat_invocation.cache_read_input_tokens = get_property_value(
+                prompt_tokens_details, "cached_tokens"
+            )
+        completion_tokens_details = getattr(
+            result.usage, "completion_tokens_details", None
+        )
+        if completion_tokens_details is not None:
+            chat_invocation.thinking_tokens = get_property_value(
+                completion_tokens_details, "reasoning_tokens"
+            )
 
     if getattr(result, "system_fingerprint", None):
         chat_invocation.attributes.update(

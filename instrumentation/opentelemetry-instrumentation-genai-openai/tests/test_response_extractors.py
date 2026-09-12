@@ -4,7 +4,9 @@
 from types import SimpleNamespace
 from unittest import mock
 
+import openai
 import pytest
+from openai import NOT_GIVEN
 
 from opentelemetry.instrumentation.genai.openai import response_extractors
 from opentelemetry.instrumentation.genai.openai.utils import get_served_model
@@ -12,9 +14,13 @@ from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     GenericToolDefinition,
     LLMInvocation,
+    TextPart,
+    UriPart,
 )
 
 try:
@@ -99,23 +105,156 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
             SimpleNamespace(
                 role="assistant",
                 content=[
-                    {"text": "Second"},
+                    {"type": "input_text", "text": "Second"},
                     SimpleNamespace(text="Third"),
-                    {"type": "input_image", "image_url": "ignored"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                    },
                 ],
             ),
             {"role": None, "content": "ignored"},
+            {
+                "role": "user",
+                "content": [{"type": "input_audio", "audio_url": "ignored"}],
+            },
         ]
     )
 
     assert [
         (msg.role, [part.content for part in msg.parts]) for msg in from_string
     ] == [("user", ["Hello"])]
-    assert [
-        (msg.role, [part.content for part in msg.parts]) for msg in from_list
-    ] == [
-        ("user", ["First"]),
-        ("assistant", ["Second", "Third"]),
+    assert [(msg.role, msg.parts) for msg in from_list] == [
+        ("user", [TextPart(content="First")]),
+        (
+            "assistant",
+            [
+                TextPart(content="Second"),
+                TextPart(content="Third"),
+                UriPart(
+                    mime_type=None,
+                    modality="image",
+                    uri="https://example.com/image.png",
+                ),
+            ],
+        ),
+    ]
+
+
+def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "role": "assistant",
+                "name": "example_assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hello!",
+                        "annotations": [],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        ("user", [TextPart(content="Hi")]),
+        ("assistant", [TextPart(content="Hello!")]),
+    ]
+    assert messages[1].name == "example_assistant"
+
+
+def test_extract_input_messages_supports_sdk_response_output(loaded_module):
+    response = _make_response(
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "First response",
+                        "annotations": [],
+                    },
+                    {
+                        "type": "output_text",
+                        "text": "Second response",
+                        "annotations": [],
+                    },
+                ],
+            }
+        ]
+    )
+
+    messages = loaded_module.get_input_messages(response.output)
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        (
+            "assistant",
+            [
+                TextPart(content="First response"),
+                TextPart(content="Second response"),
+            ],
+        )
+    ]
+
+
+def test_extract_input_messages_supports_image_data_url_and_file_id(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,aGVsbG8=",
+                    },
+                    {"type": "input_image", "file_id": "file-123"},
+                ],
+            }
+        ]
+    )
+
+    assert messages[0].parts == [
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        ),
+        BlobPart(
+            mime_type="image/png",
+            modality="image",
+            content=b"hello",
+        ),
+        FilePart(mime_type=None, modality="image", file_id="file-123"),
+    ]
+
+
+def test_extract_input_messages_extracts_name(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {"role": "user", "content": "Hello", "name": "Alice"},
+            SimpleNamespace(role="assistant", content="Hi", name="Bob"),
+            {"role": "user", "content": "How are you?"},
+        ]
+    )
+    assert [(msg.role, msg.name) for msg in messages] == [
+        ("user", "Alice"),
+        ("assistant", "Bob"),
+        ("user", None),
     ]
 
 
@@ -181,7 +320,7 @@ def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
     assert [(msg.role, msg.finish_reason) for msg in messages] == [
         ("assistant", "stop"),
         ("assistant", "incomplete"),
-        ("assistant", "tool_calls"),
+        ("assistant", "tool_call"),
         ("assistant", "stop"),
     ]
     assert [part.content for part in messages[0].parts] == [
@@ -321,6 +460,64 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
     assert loaded_module.extract_params(text="plain").output_type is None
 
 
+def test_extract_conversation_id_handles_supported_shapes(loaded_module):
+    assert (
+        loaded_module.extract_params(conversation="conv_abc").conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation={"id": "conv_abc"}
+        ).conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation=SimpleNamespace(id="conv_abc")
+        ).conversation_id
+        == "conv_abc"
+    )
+
+
+# Sentinels a caller can pass explicitly instead of a conversation. A current
+# SDK defaults `conversation` to `omit`, which the oldest supported one lacks.
+_UNSET_SENTINELS = [openai.NOT_GIVEN]
+if hasattr(openai, "omit"):
+    _UNSET_SENTINELS.append(openai.omit)
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        None,
+        *_UNSET_SENTINELS,
+        "",
+        {},
+        {"id": ""},
+        {"id": 42},
+        42,
+        SimpleNamespace(),
+    ],
+)
+def test_extract_conversation_id_ignores_unusable_values(
+    loaded_module, conversation
+):
+    assert (
+        loaded_module.extract_params(conversation=conversation).conversation_id
+        is None
+    )
+
+
+def test_apply_request_attributes_sets_conversation_id(loaded_module):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    loaded_module.apply_request_attributes(
+        invocation,
+        loaded_module.extract_params(conversation="conv_abc"),
+        False,
+    )
+    assert invocation.conversation_id == "conv_abc"
+
+
 def test_extractors_handle_missing_genai_types_import(loaded_module):
     with (
         mock.patch.object(loaded_module, "TextPart", None),
@@ -375,10 +572,35 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
     assert invocation.input_tokens == 11
     assert invocation.output_tokens == 7
     assert invocation.cache_read_input_tokens == 3
-    assert invocation.cache_creation_input_tokens == 5
+    assert invocation.cache_write_input_tokens == 0
     assert invocation.attributes == {
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER: "scale",
     }
+
+
+def test_set_invocation_response_attributes_falls_back_to_cache_creation(
+    loaded_module,
+):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    usage = loaded_module.ResponseUsage.model_construct(
+        input_tokens=11,
+        output_tokens=7,
+        input_tokens_details=SimpleNamespace(cache_creation_input_tokens=5),
+        output_tokens_details=None,
+    )
+    result = loaded_module.Response.model_construct(
+        id="resp_123",
+        model="gpt-4.1",
+        usage=usage,
+        output=[],
+        service_tier=None,
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, result, capture_content=False
+    )
+
+    assert invocation.cache_write_input_tokens == 5
 
 
 def test_set_invocation_response_attributes_prefers_raw_served_model_header(
@@ -623,6 +845,124 @@ def test_get_tool_definitions_from_response_returns_none_without_tools(
         loaded_module.get_tool_definitions_from_response(_make_response())
         is None
     )
+
+
+def test_extract_params_captures_request_tools(loaded_module):
+    """`tools` on the create request is the source for gen_ai.tool.definitions."""
+    tools = [{"type": "function", "name": "get_weather"}]
+
+    assert loaded_module.extract_params(tools=tools).tools == tools
+    assert loaded_module.extract_params().tools is None
+    assert loaded_module.extract_params(tools=[]).tools is None
+    assert loaded_module.extract_params(tools=NOT_GIVEN).tools is None
+
+
+def test_extract_params_accepts_reusable_non_sequence_tool_iterables(
+    loaded_module,
+):
+    """The SDK takes any `Iterable[ToolParam]`, not just a list."""
+    tool = {"type": "function", "name": "get_weather"}
+
+    from_set = loaded_module.extract_params(
+        tools={"unhashable": tool}.values()
+    )
+    assert list(from_set.tools) == [tool]
+
+    from_tuple = loaded_module.extract_params(tools=(tool,))
+    assert list(from_tuple.tools) == [tool]
+
+
+def test_extract_params_does_not_drain_a_one_shot_tools_iterable(
+    loaded_module,
+):
+    """Consuming the caller's iterator would leave the SDK with no tools."""
+    tool = {"type": "function", "name": "get_weather"}
+    tools = iter([tool])
+
+    assert loaded_module.extract_params(tools=tools).tools is None
+    # The SDK still gets to read it.
+    assert list(tools) == [tool]
+
+
+def test_get_tool_definitions_maps_request_tools(loaded_module):
+    """Request tools use the same flat shape as the ones echoed on a response."""
+    definitions = loaded_module.get_tool_definitions(
+        [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+                "strict": True,
+            },
+            {"type": "web_search_preview"},
+            {"no": "type"},
+        ]
+    )
+
+    function_definition, builtin_definition = definitions
+    assert isinstance(function_definition, FunctionToolDefinition)
+    assert function_definition.type == "function"
+    assert function_definition.name == "get_weather"
+    assert function_definition.description == "Get the weather"
+    assert function_definition.parameters == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+    }
+    assert isinstance(builtin_definition, GenericToolDefinition)
+    assert builtin_definition.type == "web_search_preview"
+    assert builtin_definition.name == "web_search_preview"
+
+
+def test_get_tool_definitions_returns_none_without_usable_tools(loaded_module):
+    assert loaded_module.get_tool_definitions(None) is None
+    assert loaded_module.get_tool_definitions([]) is None
+    assert loaded_module.get_tool_definitions([{"no": "type"}]) is None
+
+
+def _make_request_invocation():
+    return SimpleNamespace(
+        temperature=None,
+        top_p=None,
+        max_tokens=None,
+        system_instruction=[],
+        input_messages=[],
+        tool_definitions=None,
+        attributes={},
+    )
+
+
+def test_apply_request_attributes_captures_tool_definitions(loaded_module):
+    """Tool definitions are captured only when content capture is enabled."""
+    params = loaded_module.extract_params(
+        model="gpt-4.1",
+        input="What is the weather?",
+        tools=[
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": None,
+                "parameters": {"type": "object"},
+            }
+        ],
+    )
+
+    captured = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        captured, params, capture_content=True
+    )
+    (definition,) = captured.tool_definitions
+    assert isinstance(definition, FunctionToolDefinition)
+    assert definition.name == "get_weather"
+
+    not_captured = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        not_captured, params, capture_content=False
+    )
+    assert not_captured.tool_definitions is None
 
 
 def test_set_fetch_response_attributes_captures_tool_definitions(

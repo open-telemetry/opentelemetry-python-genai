@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -17,6 +17,7 @@ from opentelemetry.semconv._incubating.attributes import (
 
 from ._raw_response import ParsableResponse
 from .utils import (
+    _content_to_parts,
     _openai_response_format_to_output_type,
     get_property_value,
     get_served_model,
@@ -26,6 +27,7 @@ from .utils import (
 if TYPE_CHECKING:
     from openai.types.responses.response import Response
     from openai.types.responses.response_usage import ResponseUsage
+    from openai.types.responses.tool_param import ToolParam
 
     from opentelemetry.util.genai.types import (
         Error,
@@ -68,6 +70,7 @@ try:
         InputMessage,
         OutputMessage,
         ReasoningPart,
+        Role,
         TextPart,
     )
     from opentelemetry.util.genai.types import (
@@ -80,6 +83,7 @@ except ImportError:
     InputMessage = None
     OutputMessage = None
     ReasoningPart = None
+    Role = None
     TextPart = None
     ToolCall = None
 
@@ -89,10 +93,12 @@ class ResponseRequestParams:
     model: str | None = None
     instructions: str | None = None
     input: str | Sequence[object] | None = None
+    conversation_id: str | None = None
     max_output_tokens: int | None = None
     service_tier: str | None = None
     temperature: float | None = None
     output_type: str | None = None
+    tools: Sequence[ToolParam] | None = None
     top_p: float | None = None
 
 
@@ -102,6 +108,7 @@ class UsageTokens:
     output_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
 
 
 def _get_field(value: object, field_name: str) -> object | None:
@@ -116,6 +123,21 @@ def _get_sequence(value: object) -> Sequence[object]:
     ):
         return value
     return ()
+
+
+def _get_tools(value: object) -> Sequence[ToolParam] | None:
+    """Materialize a request's ``tools`` without draining a one-shot iterable.
+
+    The SDK accepts any ``Iterable[ToolParam]``, so a plain ``Sequence`` check
+    would drop set- and view-backed collections. An ``Iterator`` is skipped
+    rather than consumed: draining it here would leave the SDK with no tools to
+    send.
+    """
+    if isinstance(value, (str, bytes, bytearray, Iterator)):
+        return None
+    if isinstance(value, Iterable):
+        return cast("Sequence[ToolParam]", list(value)) or None
+    return None
 
 
 def _get_int(value: object) -> int | None:
@@ -141,15 +163,28 @@ def _extract_output_type_from_value(text_config: object) -> str | None:
     return None
 
 
+def _extract_conversation_id(conversation: object) -> str | None:
+    """Return the conversation id the ``conversation`` parameter names."""
+    if isinstance(conversation, str):
+        return conversation or None
+
+    conversation_id = _get_field(conversation, "id")
+    if isinstance(conversation_id, str) and conversation_id:
+        return conversation_id
+    return None
+
+
 def extract_params(
     *,
     model: str | None = None,
     instructions: str | None = None,
     input_items: str | Sequence[object] | None = None,
+    conversation: object | None = None,
     max_output_tokens: int | None = None,
     service_tier: str | None = None,
     temperature: float | None = None,
     text: object | None = None,
+    tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
     **_kwargs: object,
 ) -> ResponseRequestParams:
@@ -168,6 +203,7 @@ def extract_params(
             )
             else None
         ),
+        conversation_id=_extract_conversation_id(conversation),
         max_output_tokens=_get_int(max_output_tokens),
         service_tier=(
             service_tier
@@ -176,6 +212,7 @@ def extract_params(
         ),
         temperature=_get_float(temperature),
         output_type=_extract_output_type_from_value(text),
+        tools=_get_tools(tools),
         top_p=_get_float(top_p),
     )
 
@@ -194,7 +231,9 @@ def get_input_messages(
 
     if isinstance(input_value, str):
         return [
-            InputMessage(role="user", parts=[TextPart(content=input_value)])
+            InputMessage(
+                role=Role.USER.value, parts=[TextPart(content=input_value)]
+            )
         ]
 
     messages: list[InputMessage] = []
@@ -203,20 +242,13 @@ def get_input_messages(
         if not isinstance(role, str):
             continue
 
-        content = _get_field(item, "content")
-        if isinstance(content, str):
-            messages.append(
-                InputMessage(role=role, parts=[TextPart(content=content)])
-            )
-            continue
-
-        parts = []
-        for part in _get_sequence(content):
-            text = _get_field(part, "text")
-            if isinstance(text, str):
-                parts.append(TextPart(content=text))
+        name = _get_field(item, "name")
+        name_str = str(name) if name is not None else None
+        parts = _content_to_parts(_get_field(item, "content"))
         if parts:
-            messages.append(InputMessage(role=role, parts=parts))
+            messages.append(
+                InputMessage(role=role, parts=parts, name=name_str)
+            )
 
     return messages
 
@@ -291,10 +323,10 @@ def _finish_reason_from_status(
     return None
 
 
-def get_tool_definitions_from_response(
-    response: Response | None,
+def get_tool_definitions(
+    tools: Iterable[ToolParam] | None,
 ) -> list[ToolDefinition] | None:
-    """Return the tool definitions carried on a fetched response.
+    """Map Responses API tool entries onto tool definition models.
 
     Responses API tools are flat -- a function tool holds ``name``,
     ``description`` and ``parameters`` directly, unlike the Chat Completions
@@ -303,15 +335,10 @@ def get_tool_definitions_from_response(
     so they are reported as generic definitions keyed by their type.
     """
     if (
-        Response is None
-        or not isinstance(response, Response)
+        not tools
         or FunctionToolDefinition is None
         or GenericToolDefinition is None
     ):
-        return None
-
-    tools = response.tools
-    if not tools:
         return None
 
     definitions: list[ToolDefinition] = []
@@ -336,6 +363,15 @@ def get_tool_definitions_from_response(
                 )
             )
     return definitions or None
+
+
+def get_tool_definitions_from_response(
+    response: Response | None,
+) -> list[ToolDefinition] | None:
+    """Return the tool definitions carried on a fetched response."""
+    if Response is None or not isinstance(response, Response):
+        return None
+    return get_tool_definitions(response.tools)
 
 
 def _response_types_available() -> bool:
@@ -383,7 +419,7 @@ def get_output_messages_from_response(
 
             messages.append(
                 OutputMessage(
-                    role="assistant",
+                    role=Role.ASSISTANT.value,
                     parts=[
                         ToolCall(
                             id=item.call_id if item.call_id else item.id,
@@ -393,7 +429,7 @@ def get_output_messages_from_response(
                             ),
                         )
                     ],
-                    finish_reason="tool_calls",
+                    finish_reason="tool_call",
                 )
             )
             continue
@@ -407,7 +443,7 @@ def get_output_messages_from_response(
             if parts:
                 messages.append(
                     OutputMessage(
-                        role="assistant",
+                        role=Role.ASSISTANT.value,
                         parts=parts,
                         finish_reason=finish_reason,
                     )
@@ -519,6 +555,7 @@ def apply_request_attributes(
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
+    invocation.conversation_id = params.conversation_id
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens
@@ -538,6 +575,7 @@ def apply_request_attributes(
             params.instructions
         )
         invocation.input_messages = get_input_messages(params.input)
+        invocation.tool_definitions = get_tool_definitions(params.tools)
 
 
 def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
@@ -549,20 +587,28 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
         return UsageTokens()
 
     details = usage.input_tokens_details
+    cache_creation = (
+        details.cache_creation_input_tokens
+        if details is not None
+        and hasattr(details, "cache_creation_input_tokens")
+        else None
+    )
+    cache_write = (
+        getattr(details, "cache_write_tokens", None)
+        if details is not None
+        else None
+    )
+    if cache_write is None:
+        cache_write = cache_creation
     return UsageTokens(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        # `cache_creation_input_tokens` is not present on every SDK version's
-        # input token details model, so keep this attribute access guarded for
-        # compatibility across the supported OpenAI range.
-        cache_creation_input_tokens=(
-            details.cache_creation_input_tokens
-            if details is not None
-            and hasattr(details, "cache_creation_input_tokens")
-            else None
-        ),
+        cache_creation_input_tokens=cache_creation,
+        cache_write_input_tokens=cache_write,
         cache_read_input_tokens=(
-            details.cached_tokens if details is not None else None
+            getattr(details, "cached_tokens", None)
+            if details is not None
+            else None
         ),
     )
 
@@ -621,7 +667,7 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(response.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
-    invocation.cache_creation_input_tokens = tokens.cache_creation_input_tokens
+    invocation.cache_write_input_tokens = tokens.cache_write_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
     finish_reasons = extract_finish_reasons(response)

@@ -45,7 +45,7 @@ Factory methods on `TelemetryHandler` (`handler.py`):
 - `embedding(provider, request_model, *, server_address, server_port)` → `EmbeddingInvocation`
 - `retrieval(*, data_source_id, provider, request_model, server_address, server_port)` → `RetrievalInvocation`
 - `fetch_response(provider, *, response_id, server_address, server_port)` → `FetchResponseInvocation`
-- `tool(name, *, arguments, tool_call_id, tool_type, tool_description)` → `ToolInvocation`
+- `tool(name, *, tool_type, agent_name, tool_call_id=None, tool_description=None)` → `ToolInvocation` (passing tool_call_id/tool_description is deprecated; set invocation.tool_call_id / invocation.tool_description instead)
 - `workflow(name)` → `WorkflowInvocation`
 
 The returned object can also be used as a context manager (`with ... as invocation:`) when the span lifetime maps cleanly to a `with` block.

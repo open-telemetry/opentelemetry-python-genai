@@ -41,29 +41,30 @@ from opentelemetry._logs import (
     LoggerProvider,
     get_logger,
 )
-from opentelemetry.metrics import MeterProvider, get_meter
+from opentelemetry.metrics import Meter, MeterProvider, get_meter
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
-    SpanKind,
     TracerProvider,
     get_tracer,
 )
-from opentelemetry.util.genai._agent_invocation import AgentInvocation
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
     EmbeddingInvocation,
     FetchResponseInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
+    RemoteAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -92,19 +93,20 @@ class TelemetryHandler:
             tracer_provider,
             schema_url=schema_url,
         )
-        meter = get_meter(
+        meter: Meter = get_meter(
             __name__, meter_provider=meter_provider, schema_url=schema_url
         )
-        self._metrics_recorder = InvocationMetricsRecorder(meter)
+        self._instruments = _Instruments(meter)
         self._logger = get_logger(
             __name__,
             __version__,
             logger_provider,
             schema_url=schema_url,
         )
+        self._content_capturing_mode = get_content_capturing_mode()
         self._completion_hook = completion_hook or _NoOpCompletionHook()
         self._capture_content = (
-            get_content_capturing_mode()
+            self._content_capturing_mode
             in (
                 ContentCapturingMode.SPAN_ONLY,
                 ContentCapturingMode.EVENT_ONLY,
@@ -150,7 +152,7 @@ class TelemetryHandler:
         """
         return InferenceInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider,
@@ -158,6 +160,7 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             operation_name=operation_name,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_llm(self, invocation: LLMInvocation) -> LLMInvocation:
@@ -168,9 +171,10 @@ class TelemetryHandler:
         """
         invocation._start_with_handler(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
+            content_capturing_mode=self._content_capturing_mode,
         )
         return invocation
 
@@ -192,13 +196,14 @@ class TelemetryHandler:
         """
         return EmbeddingInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider,
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def retrieval(
@@ -220,7 +225,7 @@ class TelemetryHandler:
         """
         return RetrievalInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             data_source_id=data_source_id,
@@ -228,14 +233,15 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_tool(
         self,
         name: str,
         *,
-        tool_call_id: str | None = None,
         tool_type: str | None = None,
+        tool_call_id: str | None = None,
         tool_description: str | None = None,
     ) -> ToolInvocation:
         """Create and start a tool invocation.
@@ -248,13 +254,14 @@ class TelemetryHandler:
         """
         return ToolInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
-            tool_call_id=tool_call_id,
             tool_type=tool_type,
+            tool_call_id=tool_call_id,
             tool_description=tool_description,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_workflow(
@@ -272,10 +279,11 @@ class TelemetryHandler:
         """
         return WorkflowInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def stop_llm(self, invocation: LLMInvocation) -> LLMInvocation:  # pylint: disable=no-self-use
@@ -326,7 +334,7 @@ class TelemetryHandler:
         """
         return InferenceInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -335,6 +343,7 @@ class TelemetryHandler:
             server_port=server_port,
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def embedding(
@@ -355,13 +364,14 @@ class TelemetryHandler:
         """
         return EmbeddingInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def fetch_response(
@@ -388,7 +398,7 @@ class TelemetryHandler:
         """
         return FetchResponseInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -397,17 +407,24 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             error_type_resolver=error_type_resolver,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def tool(
         self,
         name: str,
         *,
-        tool_call_id: str | None = None,
         tool_type: str | None = None,
+        agent_name: str | None = None,
+        tool_call_id: str | None = None,
         tool_description: str | None = None,
     ) -> ToolInvocation:
         """Returns a Tool invocation. Starts span when called.
+
+        .. deprecated:: 1.2b0
+            Passing ``tool_call_id`` or ``tool_description`` as keyword
+            arguments is deprecated. Set ``invocation.tool_call_id`` and
+            ``invocation.tool_description`` on the returned invocation instead.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
         to finalize the span upon exiting. If not used as a ContextManager, the caller is
@@ -415,17 +432,19 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         Recommended to set ``invocation.arguments`` and ``invocation.tool_result`` on the
-        invocation object but only if `invocation.should_capture_content_on_span` is True.
+        invocation object but only if `invocation.should_capture_content` is True.
         """
         return ToolInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
-            tool_call_id=tool_call_id,
             tool_type=tool_type,
+            agent_name=agent_name,
+            tool_call_id=tool_call_id,
             tool_description=tool_description,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_invoke_local_agent(
@@ -444,14 +463,14 @@ class TelemetryHandler:
         Set remaining attributes (agent_name, etc.) on the returned invocation,
         then call invocation.stop() or invocation.fail().
         """
-        return AgentInvocation(
+        return LocalAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def start_invoke_remote_agent(
@@ -473,17 +492,17 @@ class TelemetryHandler:
         Set remaining attributes (agent_name, etc.) on the returned invocation,
         then call invocation.stop() or invocation.fail().
         """
-        return AgentInvocation(
+        return RemoteAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
-            span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def invoke_local_agent(
@@ -491,7 +510,7 @@ class TelemetryHandler:
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+    ) -> LocalAgentInvocation:
         """Returns an agent invocation (INTERNAL span kind). Starts span when called.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
@@ -502,14 +521,14 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return AgentInvocation(
+        return LocalAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def invoke_remote_agent(
@@ -520,7 +539,9 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+        agent_id: str | None = None,
+        agent_version: str | None = None,
+    ) -> RemoteAgentInvocation:
         """Returns an agent invocation (CLIENT span kind). Starts span when called.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
@@ -531,17 +552,19 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return AgentInvocation(
+        return RemoteAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
-            span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
+            agent_id=agent_id,
+            agent_version=agent_version,
             server_address=server_address,
             server_port=server_port,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
     def workflow(
@@ -558,10 +581,11 @@ class TelemetryHandler:
         """
         return WorkflowInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
+            content_capturing_mode=self._content_capturing_mode,
         )
 
 

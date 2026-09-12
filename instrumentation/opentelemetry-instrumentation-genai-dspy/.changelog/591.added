@@ -1,0 +1,1 @@
+Support copy and deepcopy on wrapped DSPy methods to ensure compatibility with DSPy compilation and optimizers.

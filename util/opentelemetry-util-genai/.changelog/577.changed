@@ -1,0 +1,1 @@
+Remove `tool_call_id` and `tool_description` from `execute_tool` start attributes and set them on the invocation instance instead.

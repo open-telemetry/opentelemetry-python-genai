@@ -1,0 +1,2 @@
+Add a ``Role`` enum mirroring the message roles the GenAI semantic conventions
+define, which the generated semconv package does not expose

@@ -1,0 +1,2 @@
+Resolve message roles by class so streaming chunk messages no longer report
+their class name (``AIMessageChunk``) as the role

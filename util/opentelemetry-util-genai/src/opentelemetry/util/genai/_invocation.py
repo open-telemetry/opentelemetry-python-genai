@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any, TypeAlias, cast
+
+from typing_extensions import Self
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import Context, attach, detach
@@ -21,13 +23,18 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import INVALID_SPAN as _INVALID_SPAN
 from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.util.genai.completion_hook import (
+    CompletionHook,
+    _NoOpCompletionHook,
+)
 from opentelemetry.util.genai.types import (
     Error,
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
@@ -37,8 +44,7 @@ from opentelemetry.util.genai.utils import (
 )
 from opentelemetry.util.types import AttributeValue
 
-if TYPE_CHECKING:
-    from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
+_GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 
 
 ContextToken: TypeAlias = Token[Context]
@@ -58,7 +64,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         # Individual components instead of TelemetryHandler to avoid a circular
         # import between handler.py and the invocation modules.
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         operation_name: str,
@@ -67,13 +73,20 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        *,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
-        self._metrics_recorder = metrics_recorder
+        self._instruments: _Instruments = instruments
         self._logger = logger
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
+        self._content_capturing_mode: ContentCapturingMode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
         self.attributes: dict[str, AttributeValue] = (
             {} if attributes is None else attributes
         )
@@ -95,6 +108,22 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._request_stream: bool | None = None
         self._ttfc_seconds: float | None = None
         self._stream_last_chunk_at: float | None = None
+
+    @property
+    def should_capture_content(self) -> bool:
+        """Return True when message content should be captured for this invocation."""
+        return self._content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ) or not isinstance(self._completion_hook, _NoOpCompletionHook)
+
+    @property
+    def _should_capture_content_on_span(self) -> bool:
+        return self._content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
 
     def _start(
         self, attributes: dict[str, AttributeValue] | None = None
@@ -147,17 +176,40 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         attributes = self._get_metric_attributes()
         if self._ttfc_seconds is None:
             self._ttfc_seconds = delta
-            self._metrics_recorder.record_time_to_first_chunk(
+            self._instruments.time_to_first_chunk.record(
                 delta,
                 attributes=attributes,
                 context=self._span_context,
             )
         else:
-            self._metrics_recorder.record_time_per_chunk(
+            self._instruments.time_per_output_chunk.record(
                 delta,
                 attributes=attributes,
                 context=self._span_context,
             )
+
+    def _record_client_metrics(self) -> None:
+        """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
+        attributes = self._get_metric_attributes()
+        duration_seconds = max(
+            timeit.default_timer() - self._monotonic_start_s,
+            0.0,
+        )
+        self._instruments.operation_duration.record(
+            duration_seconds,
+            attributes=attributes,
+            context=self._span_context,
+        )
+
+        token_counts = self._get_metric_token_counts()
+        if token_counts:
+            for token_type, token_count in token_counts.items():
+                self._instruments.token_usage.record(
+                    token_count,
+                    attributes=attributes
+                    | {GenAI.GEN_AI_TOKEN_TYPE: token_type},
+                    context=self._span_context,
+                )
 
     def _apply_error_attributes(self, error: Error) -> None:
         """Apply error status and error.type attribute to the span, events, and metrics."""
@@ -170,7 +222,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         *,
         inputs: list[InputMessage] | None = None,
         outputs: list[OutputMessage] | None = None,
-        system_instruction: list[MessagePart] | None = None,
+        system_instruction: list[SystemInstructionPart]
+        | list[MessagePart]
+        | None = None,
         tool_definitions: list[ToolDefinition] | None = None,
         log_record: LogRecord | None = None,
     ) -> None:
@@ -182,7 +236,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._completion_hook.on_completion(
             inputs=inputs or [],
             outputs=outputs or [],
-            system_instruction=system_instruction or [],
+            system_instruction=cast(
+                "list[MessagePart]", system_instruction or []
+            ),
             tool_definitions=tool_definitions,
             span=self.span,
             log_record=log_record,
@@ -218,7 +274,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             error = Error.from_exception(error, self._error_type_resolver)
         self._finish(error)
 
-    def __enter__(self) -> GenAIInvocation:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -227,7 +283,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if exc_value is not None and isinstance(exc_value, Exception):
+        if exc_value is not None:
             self.fail(exc_value)
         else:
             self.stop()
@@ -237,21 +293,31 @@ def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
     output_messages: Sequence[OutputMessage],
-    system_instruction: Sequence[MessagePart],
+    system_instruction: Sequence[SystemInstructionPart | MessagePart],
     tool_definitions: Sequence[ToolDefinition] | None,
+    prompt_variables: Mapping[str, object] | None = None,
     for_span: bool,
+    content_capturing_mode: ContentCapturingMode | None = None,
 ) -> dict[str, Any]:
     """Serialize messages, system instructions, and tool definitions into attributes.
 
     Args:
         input_messages: Input messages to serialize.
         output_messages: Output messages to serialize.
-        system_instruction: System instructions to serialize.
+        system_instruction: System instructions to serialize. Passing ``MessagePart``
+            is deprecated; use ``SystemInstructionPart``.
         tool_definitions: Tool definitions to serialize (may be None).
+        prompt_variables: Prompt template variables to serialize (may be None).
         for_span: If True, serialize for span attributes (JSON string);
                   if False, serialize for event attributes (list of dicts).
+        content_capturing_mode: Configured content capturing mode; if None,
+                                reads from environment.
     """
-    mode = get_content_capturing_mode()
+    mode = (
+        get_content_capturing_mode()
+        if content_capturing_mode is None
+        else content_capturing_mode
+    )
     allowed_modes = (
         (
             ContentCapturingMode.SPAN_ONLY,
@@ -295,4 +361,10 @@ def get_content_attributes(
             serialize(tool_definitions) if tool_definitions else None,
         ),
     )
-    return {key: value for key, value in optional_attrs if value is not None}
+    result = {key: value for key, value in optional_attrs if value is not None}
+    if prompt_variables:
+        for k, v in prompt_variables.items():
+            result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = (
+                v if isinstance(v, str) else gen_ai_json_dumps(v)
+            )
+    return result

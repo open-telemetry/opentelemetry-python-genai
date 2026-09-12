@@ -86,8 +86,8 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    RemoteAgentInvocation,
 )
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
@@ -99,6 +99,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     OutputMessage,
+    Role,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -134,7 +135,7 @@ def _set_co_filename(wrapped: object) -> None:
 
 def _apply_interaction_response_attributes(
     response: Interaction,
-    invocation: InferenceInvocation | AgentInvocation,
+    invocation: InferenceInvocation | RemoteAgentInvocation,
     telemetry_handler: TelemetryHandler,
 ) -> None:
     if isinstance(invocation, InferenceInvocation):
@@ -146,9 +147,47 @@ def _apply_interaction_response_attributes(
 
     invocation.input_tokens = usage.total_input_tokens
     invocation.output_tokens = usage.total_output_tokens
+    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
     if isinstance(invocation, InferenceInvocation):
         invocation.thinking_tokens = usage.total_thought_tokens
-    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
+        def _set_modality_tokens(
+            entries: Any,
+            text_attr: str,
+            image_attr: str,
+            audio_attr: str,
+        ) -> None:
+            for entry in entries or []:
+                modality = _get_field(entry, "modality")
+                tokens = _get_field(entry, "tokens")
+                if modality and tokens is not None:
+                    m = str(modality).lower()
+                    if m == "text":
+                        setattr(invocation, text_attr, tokens)
+                    elif m == "image":
+                        setattr(invocation, image_attr, tokens)
+                    elif m == "audio":
+                        setattr(invocation, audio_attr, tokens)
+
+        _set_modality_tokens(
+            _get_field(usage, "input_tokens_by_modality"),
+            "text_input_tokens",
+            "image_input_tokens",
+            "audio_input_tokens",
+        )
+        _set_modality_tokens(
+            _get_field(usage, "output_tokens_by_modality"),
+            "text_output_tokens",
+            "image_output_tokens",
+            "audio_output_tokens",
+        )
+        _set_modality_tokens(
+            _get_field(usage, "cached_tokens_by_modality"),
+            "text_cache_read_input_tokens",
+            "image_cache_read_input_tokens",
+            "audio_cache_read_input_tokens",
+        )
 
     if telemetry_handler.should_capture_content():
         invocation.output_messages = _interactions_response_to_messages(
@@ -175,7 +214,9 @@ def _interactions_input_to_messages(
         return []
     if isinstance(input_data, str):
         return [
-            InputMessage(role="user", parts=[TextPart(content=input_data)])
+            InputMessage(
+                role=Role.USER.value, parts=[TextPart(content=input_data)]
+            )
         ]
 
     if not isinstance(input_data, Sequence):
@@ -210,10 +251,10 @@ def _interactions_input_to_messages(
             )
             parts.append(part)
         elif item_type is not None:
-            part = GenericPart(type=item_type, value=type(item).__name__)
+            part = GenericPart(type=item_type)
             parts.append(part)
 
-    return [InputMessage(role="user", parts=parts)]
+    return [InputMessage(role=Role.USER.value, parts=parts)]
 
 
 def _get_interaction_output_text(interaction: Interaction) -> str:
@@ -245,7 +286,7 @@ def _interactions_response_to_messages(
     output_text = _get_interaction_output_text(interaction)
     return [
         OutputMessage(
-            role="assistant",
+            role=Role.ASSISTANT.value,
             parts=[TextPart(content=output_text)],
             finish_reason="stop",
         )
@@ -256,7 +297,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: Iterable[InteractionSSEEvent],
-        invocation: InferenceInvocation | AgentInvocation,
+        invocation: InferenceInvocation | RemoteAgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -288,7 +329,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: AsyncIterable[InteractionSSEEvent],
-        invocation: InferenceInvocation | AgentInvocation,
+        invocation: InferenceInvocation | RemoteAgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -373,7 +414,7 @@ def _start_interactions_invocation(
     telemetry_handler: TelemetryHandler,
     instance: InteractionsResource | AsyncInteractionsResource,
     kwargs: dict[str, Any],
-) -> InferenceInvocation | AgentInvocation:
+) -> InferenceInvocation | RemoteAgentInvocation:
     # Vertex AI does not support the interactions API yet, but eventually will.
     # SDK will raise an exception if model or agent is not passed or if input data is not passed.
     is_vertex, server_address = _get_client_info(instance)
@@ -383,7 +424,7 @@ def _start_interactions_invocation(
         else GenAIAttributes.GenAiSystemValues.GEMINI.value
     )
     if agent := kwargs.get("agent"):
-        invocation: InferenceInvocation | AgentInvocation = (
+        invocation: InferenceInvocation | RemoteAgentInvocation = (
             telemetry_handler.invoke_remote_agent(
                 provider=provider,
                 request_model=kwargs.get("model"),
@@ -436,20 +477,20 @@ def _create_instrumented_interactions_create(
             telemetry_handler, instance, kwargs
         )
 
-        if kwargs.get("stream", False):
-            return InteractionsStreamWrapper(
-                wrapped(*args, **kwargs),
-                invocation,
-                telemetry_handler,
-            )
         try:
+            if kwargs.get("stream", False):
+                return InteractionsStreamWrapper(
+                    wrapped(*args, **kwargs),
+                    invocation,
+                    telemetry_handler,
+                )
             response = wrapped(*args, **kwargs)
             _apply_interaction_response_attributes(
                 response, invocation, telemetry_handler
             )
             invocation.stop()
             return response
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 
@@ -477,13 +518,13 @@ def _create_instrumented_async_interactions_create(
             telemetry_handler, instance, kwargs
         )
 
-        if kwargs.get("stream", False):
-            return AsyncInteractionsStreamWrapper(
-                await wrapped(*args, **kwargs),
-                invocation,
-                telemetry_handler,
-            )
         try:
+            if kwargs.get("stream", False):
+                return AsyncInteractionsStreamWrapper(
+                    await wrapped(*args, **kwargs),
+                    invocation,
+                    telemetry_handler,
+                )
             response = cast(
                 Interaction,
                 await wrapped(*args, **kwargs),
@@ -493,7 +534,7 @@ def _create_instrumented_async_interactions_create(
             )
             invocation.stop()
             return response
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 

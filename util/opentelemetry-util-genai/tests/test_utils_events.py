@@ -20,7 +20,10 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.util.genai.handler import get_telemetry_handler
+from opentelemetry.util.genai.handler import (
+    TelemetryHandler,
+    get_telemetry_handler,
+)
 from opentelemetry.util.genai.types import Error
 
 from .test_utils import (
@@ -46,6 +49,8 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(self.log_exporter)
         )
+        self.tracer_provider = tracer_provider
+        self.logger_provider = logger_provider
         self.telemetry_handler = get_telemetry_handler(
             tracer_provider=tracer_provider, logger_provider=logger_provider
         )
@@ -64,7 +69,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event(self):
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="event-model"
         )
         invocation.input_messages = [_create_input_message("test query")]
@@ -138,6 +147,12 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(log_record.trace_id, span.context.trace_id)
         self.assertEqual(log_record.span_id, span.context.span_id)
 
+        # In EVENT_ONLY mode, messages must not be attached to span
+        span_attrs = span.attributes or {}
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, span_attrs)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, span_attrs)
+        self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
+
     @patch.dict(
         os.environ,
         {
@@ -150,7 +165,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         chat_generation = _create_output_message("combined response")
         system_instruction = _create_system_instruction("System prompt here")
 
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="combined-model"
         )
         invocation.input_messages = [message]
@@ -335,7 +354,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         chat_generation = _create_output_message("span and event response")
         system_instruction = _create_system_instruction("System prompt")
 
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="span-and-event-model"
         )
         invocation.input_messages = [message]

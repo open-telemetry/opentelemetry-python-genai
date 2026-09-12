@@ -22,7 +22,7 @@
 # file. In particular, please see:
 #
 #   openai-v2: {[testenv]test_deps}
-#   openai-v2: -r {toxinidir}/instrumentation/opentelemetry-instrumentation-genai-openai/tests/requirements.openai-v2.txt
+#   openai-v2: -r {toxinidir}/instrumentation/opentelemetry-instrumentation-genai-openai/tests/requirements.v2.txt
 #
 # This provides additional dependencies, namely:
 #

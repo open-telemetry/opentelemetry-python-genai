@@ -81,6 +81,8 @@ This package sets the following span attributes on LLM invocations:
 - ``gen_ai.response.id``: Str(chatcmpl-Bz8yrvPnydD9pObv625n2CGBPHS13)
 - ``gen_ai.usage.input_tokens``: Int(24)
 - ``gen_ai.usage.output_tokens``: Int(7)
+- ``gen_ai.usage.cache_write.input_tokens``: Int(10)
+- ``gen_ai.usage.cache_read.input_tokens``: Int(5)
 
 **Request parameter attributes (when provided):**
 

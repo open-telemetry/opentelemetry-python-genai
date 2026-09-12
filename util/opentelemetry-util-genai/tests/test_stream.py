@@ -133,6 +133,16 @@ def test_sync_stream_wrapper_fails_stream_errors():
     assert wrapper._self_failures == [error]
 
 
+def test_sync_stream_wrapper_fails_base_exception_stream_errors():
+    error = asyncio.CancelledError()
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(error=error))
+
+    with pytest.raises(asyncio.CancelledError):
+        next(wrapper)
+
+    assert wrapper._self_failures == [error]
+
+
 def test_sync_stream_wrapper_close_stops_once():
     stream = _FakeSyncStream(chunks=["chunk"])
     wrapper = _TestSyncStreamWrapper(stream)
@@ -152,6 +162,19 @@ def test_sync_stream_wrapper_close_fails_with_close_error():
     )
 
     with pytest.raises(RuntimeError, match="close failure"):
+        wrapper.close()
+
+    assert wrapper._self_failures == [error]
+    assert wrapper._self_stop_count == 0
+
+
+def test_sync_stream_wrapper_close_fails_with_base_exception():
+    error = asyncio.CancelledError()
+    wrapper = _TestSyncStreamWrapper(
+        _FakeSyncStream(chunks=["chunk"], close_error=error)
+    )
+
+    with pytest.raises(asyncio.CancelledError):
         wrapper.close()
 
     assert wrapper._self_failures == [error]
@@ -306,6 +329,19 @@ def test_async_stream_wrapper_fails_stream_errors():
     asyncio.run(exercise())
 
 
+def test_async_stream_wrapper_fails_base_exception_stream_errors():
+    async def exercise():
+        error = asyncio.CancelledError()
+        wrapper = _TestAsyncStreamWrapper(_FakeAsyncStream(error=error))
+
+        with pytest.raises(asyncio.CancelledError):
+            await anext(wrapper)
+
+        assert wrapper._self_failures == [error]
+
+    asyncio.run(exercise())
+
+
 def test_async_stream_wrapper_close_stops_once():
     async def exercise():
         stream = _FakeAsyncStream(chunks=["chunk"])
@@ -329,6 +365,22 @@ def test_async_stream_wrapper_close_fails_with_close_error():
         )
 
         with pytest.raises(RuntimeError, match="close failure"):
+            await wrapper.close()
+
+        assert wrapper._self_failures == [error]
+        assert wrapper._self_stop_count == 0
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_close_fails_with_base_exception():
+    async def exercise():
+        error = asyncio.CancelledError()
+        wrapper = _TestAsyncStreamWrapper(
+            _FakeAsyncStream(chunks=["chunk"], close_error=error)
+        )
+
+        with pytest.raises(asyncio.CancelledError):
             await wrapper.close()
 
         assert wrapper._self_failures == [error]
@@ -810,6 +862,21 @@ def test_sync_manager_wrapper_fails_invocation_when_enter_raises():
     assert invocation.failures == [error]
 
 
+def test_sync_manager_wrapper_fails_invocation_when_enter_is_cancelled():
+    error = asyncio.CancelledError()
+    invocation = _FakeInvocation()
+    wrapper = _TestSyncManagerWrapper(
+        _FakeSyncManager(_FakeSyncStream(), enter_error=error),
+        lambda: invocation,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        with wrapper:
+            pass
+
+    assert invocation.failures == [error]
+
+
 def test_sync_manager_wrapper_forwards_caller_error_to_stream_wrapper():
     manager = _FakeSyncManager(_FakeSyncStream())
     wrapper = _TestSyncManagerWrapper(manager, _FakeInvocation)
@@ -841,6 +908,18 @@ def test_sync_manager_wrapper_finalizes_stream_when_exit_raises():
 
     stream_wrapper = wrapper.__enter__()
     with pytest.raises(RuntimeError, match="manager failure"):
+        wrapper.__exit__(None, None, None)
+
+    assert stream_wrapper._self_failures == [manager_error]
+
+
+def test_sync_manager_wrapper_finalizes_stream_when_exit_is_cancelled():
+    manager_error = asyncio.CancelledError()
+    manager = _FakeSyncManager(_FakeSyncStream(), exit_error=manager_error)
+    wrapper = _TestSyncManagerWrapper(manager, _FakeInvocation)
+
+    stream_wrapper = wrapper.__enter__()
+    with pytest.raises(asyncio.CancelledError):
         wrapper.__exit__(None, None, None)
 
     assert stream_wrapper._self_failures == [manager_error]
@@ -894,6 +973,24 @@ def test_async_manager_wrapper_fails_invocation_when_enter_raises():
     asyncio.run(exercise())
 
 
+def test_async_manager_wrapper_fails_invocation_when_enter_is_cancelled():
+    async def exercise():
+        error = asyncio.CancelledError()
+        invocation = _FakeInvocation()
+        wrapper = _TestAsyncManagerWrapper(
+            _FakeAsyncManager(_FakeAsyncStream(), enter_error=error),
+            lambda: invocation,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            async with wrapper:
+                pass
+
+        assert invocation.failures == [error]
+
+    asyncio.run(exercise())
+
+
 def test_async_manager_wrapper_forwards_caller_error_to_stream_wrapper():
     async def exercise():
         manager = _FakeAsyncManager(_FakeAsyncStream())
@@ -934,6 +1031,23 @@ def test_async_manager_wrapper_finalizes_stream_when_exit_raises():
 
         stream_wrapper = await wrapper.__aenter__()
         with pytest.raises(RuntimeError, match="manager failure"):
+            await wrapper.__aexit__(None, None, None)
+
+        assert stream_wrapper._self_failures == [manager_error]
+
+    asyncio.run(exercise())
+
+
+def test_async_manager_wrapper_finalizes_stream_when_exit_is_cancelled():
+    async def exercise():
+        manager_error = asyncio.CancelledError()
+        manager = _FakeAsyncManager(
+            _FakeAsyncStream(), exit_error=manager_error
+        )
+        wrapper = _TestAsyncManagerWrapper(manager, _FakeInvocation)
+
+        stream_wrapper = await wrapper.__aenter__()
+        with pytest.raises(asyncio.CancelledError):
             await wrapper.__aexit__(None, None, None)
 
         assert stream_wrapper._self_failures == [manager_error]

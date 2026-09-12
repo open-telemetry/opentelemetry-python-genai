@@ -6,13 +6,51 @@
 Tests the public API: classify_chain_run, resolve_agent_name.
 """
 
+from __future__ import annotations
+
 import uuid
+from typing import Any
+
+import langchain.agents
+import pytest
+from langchain_core.language_models.fake_chat_models import (
+    FakeMessagesListChatModel,
+)
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+from typing_extensions import Self
 
 from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     OperationName,
     classify_chain_run,
     resolve_agent_name,
 )
+
+
+class _FakeModel(FakeMessagesListChatModel):
+    def bind_tools(
+        self,
+        tools: Any,
+        *,
+        tool_choice: Any = None,
+        **kwargs: Any,
+    ) -> Self:
+        return self
+
+
+@tool
+def _noop() -> str:
+    """Do nothing."""
+    return "ok"
+
+
+def _create_agent(*args: Any, **kwargs: Any) -> Any:
+    create_agent = getattr(langchain.agents, "create_agent", None)
+    if create_agent is None:
+        pytest.skip("create_agent requires a newer langchain version")
+    return create_agent(*args, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # resolve_agent_name
@@ -85,6 +123,36 @@ class TestResolveAgentName:
         )
         assert result == "42"
         assert isinstance(result, str)
+
+    def test_metadata_rename_wins_without_ancestors(self):
+        result = resolve_agent_name(
+            serialized={},
+            metadata={"agent_name": "renamed"},
+            kwargs={},
+            declared_agent_name="declared",
+            ancestor_agent_names=set(),
+        )
+        assert result == "renamed"
+
+    def test_inherited_metadata_name_falls_through_to_declared_name(self):
+        result = resolve_agent_name(
+            serialized={},
+            metadata={"agent_name": "outer"},
+            kwargs={},
+            declared_agent_name="inner",
+            ancestor_agent_names={"outer", "middle"},
+        )
+        assert result == "inner"
+
+    def test_inherited_grandparent_name_falls_through_to_declared_name(self):
+        result = resolve_agent_name(
+            serialized={},
+            metadata={"agent_name": "OUTER"},
+            kwargs={},
+            declared_agent_name="inner",
+            ancestor_agent_names={"outer", "middle"},
+        )
+        assert result == "inner"
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +240,125 @@ class TestClassifyChainRun:
         )
         assert result == OperationName.INVOKE_AGENT
 
+    def test_internal_langgraph_node_is_not_agent(
+        self, span_exporter, start_instrumentation
+    ):
+        _create_agent(
+            _FakeModel(responses=[AIMessage(content="done")]),
+            [_noop],
+            name="my_agent",
+        ).invoke({"messages": [("user", "hi")]})
+
+        spans = span_exporter.get_finished_spans()
+        assert [span.name for span in spans] == ["invoke_agent my_agent"]
+        agent_span = spans[0]
+        assert agent_span.parent is None
+        assert agent_span.attributes["gen_ai.agent.name"] == "my_agent"
+
+    def test_nested_agent_gets_its_own_span_under_the_calling_tool(
+        self, span_exporter, start_instrumentation
+    ):
+        inner = _create_agent(
+            _FakeModel(responses=[AIMessage(content="inner done")]),
+            [_noop],
+            name="inner_agent",
+        )
+
+        @tool
+        def delegate(config: RunnableConfig) -> str:
+            """Delegate to the inner agent."""
+            result = inner.invoke({"messages": [("user", "work")]}, config)
+            return str(result["messages"][-1].content)
+
+        outer = _create_agent(
+            _FakeModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {"name": "delegate", "args": {}, "id": "call-1"}
+                        ],
+                    ),
+                    AIMessage(content="outer done"),
+                ]
+            ),
+            [delegate],
+            name="outer_agent",
+        )
+        outer.invoke({"messages": [("user", "start")]})
+
+        spans = span_exporter.get_finished_spans()
+        assert [span.name for span in spans] == [
+            "invoke_agent inner_agent",
+            "execute_tool delegate",
+            "invoke_agent outer_agent",
+        ]
+        inner_agent, tool_span, outer_agent = spans
+        assert outer_agent.parent is None
+        assert tool_span.parent.span_id == outer_agent.context.span_id
+        assert inner_agent.parent.span_id == tool_span.context.span_id
+        assert inner_agent.attributes["gen_ai.agent.name"] == "inner_agent"
+        assert outer_agent.attributes["gen_ai.agent.name"] == "outer_agent"
+        assert tool_span.attributes["gen_ai.agent.name"] == "outer_agent"
+
+    def test_unnamed_nested_agent_has_no_placeholder_name(
+        self, span_exporter, start_instrumentation
+    ):
+        inner = _create_agent(
+            _FakeModel(responses=[AIMessage(content="inner done")]),
+            [_noop],
+        )
+
+        @tool
+        def delegate(config: RunnableConfig) -> str:
+            """Delegate to the unnamed inner agent."""
+            result = inner.invoke({"messages": [("user", "work")]}, config)
+            return str(result["messages"][-1].content)
+
+        outer = _create_agent(
+            _FakeModel(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {"name": "delegate", "args": {}, "id": "call-1"}
+                        ],
+                    ),
+                    AIMessage(content="outer done"),
+                ]
+            ),
+            [delegate],
+            name="outer_agent",
+        )
+        outer.invoke({"messages": [("user", "start")]})
+
+        spans = span_exporter.get_finished_spans()
+        assert [span.name for span in spans] == [
+            "invoke_agent",
+            "execute_tool delegate",
+            "invoke_agent outer_agent",
+        ]
+        inner_agent, tool_span, outer_agent = spans
+        assert outer_agent.parent is None
+        assert tool_span.parent.span_id == outer_agent.context.span_id
+        assert inner_agent.parent.span_id == tool_span.context.span_id
+        assert "gen_ai.agent.name" not in inner_agent.attributes
+        assert outer_agent.attributes["gen_ai.agent.name"] == "outer_agent"
+        assert tool_span.attributes["gen_ai.agent.name"] == "outer_agent"
+
+    def test_explicit_otel_agent_metadata_overrides_node_inference(self):
+        result = classify_chain_run(
+            serialized={},
+            metadata={
+                "agent_type": "react",
+                "lc_agent_name": "my_agent",
+                "langgraph_node": "model",
+            },
+            kwargs={},
+            parent_run_id=uuid.uuid4(),
+        )
+        assert result == OperationName.INVOKE_AGENT
+
     def test_langgraph_node_metadata_with_parent_is_suppressed(self):
         # langgraph_node alone is no longer an agent signal in _has_agent_signals;
         # it is only used by resolve_agent_name for name resolution.
@@ -241,6 +428,19 @@ class TestClassifyChainRun:
             metadata={"otel_agent_span": False},
             kwargs={},
             parent_run_id=uuid.uuid4(),
+        )
+        assert result is None
+
+    def test_otel_agent_span_false_suppresses_inferred_langchain_agent(self):
+        result = classify_chain_run(
+            serialized={},
+            metadata={
+                "otel_agent_span": False,
+                "lc_agent_name": "my_agent",
+                "ls_integration": "langchain_create_agent",
+            },
+            kwargs={},
+            parent_run_id=None,
         )
         assert result is None
 

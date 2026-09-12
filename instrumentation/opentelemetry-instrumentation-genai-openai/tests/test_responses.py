@@ -36,6 +36,7 @@ from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
     DEFAULT_MODEL,
+    EXPECTED_TOOL_DEFINITIONS,
     GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
@@ -58,10 +59,12 @@ try:
     _create_params = set(inspect.signature(_Responses.create).parameters)
     _has_tools_param = "tools" in _create_params
     _has_reasoning_param = "reasoning" in _create_params
+    _has_conversation_param = "conversation" in _create_params
 except ImportError:
     HAS_RESPONSES_API = False
     _has_tools_param = False
     _has_reasoning_param = False
+    _has_conversation_param = False
 
 
 pytestmark = pytest.mark.skipif(
@@ -76,6 +79,7 @@ EXPECTED_SYSTEM_INSTRUCTIONS = [
     }
 ]
 INVALID_MODEL = "this-model-does-not-exist"
+CONVERSATION_ID = "conv_0a1b2c3d4e5f60718293a4b5c6d7e8f9"
 REASONING_MODEL = "gpt-5.4"
 REASONING_PROMPT = """
 Write a bash script that takes a matrix represented as a string with
@@ -117,6 +121,17 @@ def _assert_response_content(span, response, log_exporter):
         format_simple_expected_output_message(response.output_text),
     )
     assert len(log_exporter.get_finished_logs()) == 0
+
+
+def _assert_conversation_id(span):
+    """Assert the conversation id landed, or is absent when the SDK lacks the param."""
+    if _has_conversation_param:
+        assert (
+            span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
+            == CONVERSATION_ID
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_CONVERSATION_ID not in span.attributes
 
 
 def _assert_request_attrs(
@@ -557,6 +572,9 @@ def test_responses_create_with_all_params(
 ):
     _skip_if_not_latest()
 
+    conversation_kwargs = (
+        {"conversation": CONVERSATION_ID} if _has_conversation_param else {}
+    )
     response = openai_client.responses.create(
         model=DEFAULT_MODEL,
         instructions=SYSTEM_INSTRUCTIONS,
@@ -566,6 +584,7 @@ def test_responses_create_with_all_params(
         top_p=0.9,
         service_tier="default",
         text={"format": {"type": "text"}},
+        **conversation_kwargs,
     )
 
     (span,) = span_exporter.get_finished_spans()
@@ -587,6 +606,27 @@ def test_responses_create_with_all_params(
         max_tokens=50,
         output_type="text",
     )
+    _assert_conversation_id(span)
+
+
+@pytest.mark.cassette("test_responses_stream_until_done[content_mode0]")
+@pytest.mark.vcr()
+def test_responses_stream_records_conversation_id(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+        service_tier="default",
+        conversation=CONVERSATION_ID,
+    ) as stream:
+        stream.get_final_response()
+
+    (span,) = span_exporter.get_finished_spans()
+    _assert_conversation_id(span)
 
 
 @pytest.mark.vcr()
@@ -1188,6 +1228,11 @@ def test_responses_create_captures_tool_call_content(
     )
     assert input_messages[0]["role"] == "user"
 
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS],
+        EXPECTED_TOOL_DEFINITIONS,
+    )
+
     output_messages = _load_span_messages(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
@@ -1200,6 +1245,63 @@ def test_responses_create_captures_tool_call_content(
     assert len(tool_call_parts) > 0
     assert tool_call_parts[0]["name"] == "get_current_weather"
     assert "arguments" in tool_call_parts[0]
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+def test_responses_create_streaming_captures_tool_definitions(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """The definitions come from the request, so a streamed call records them too."""
+    _skip_if_not_latest()
+
+    # Reuses the plain streaming cassette: VCR does not match on the request
+    # body and this attribute is read off the request, not the response.
+    with vcr.use_cassette(
+        "test_responses_create_streaming_captures_content[content_mode0].yaml"
+    ):
+        with openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            input=USER_ONLY_PROMPT[0]["content"],
+            tools=[get_responses_weather_tool_definition()],
+            stream=True,
+        ) as stream:
+            _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS],
+        EXPECTED_TOOL_DEFINITIONS,
+    )
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.stream",
+)
+def test_responses_stream_captures_tool_definitions(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """`responses.stream()` builds its invocation separately from `create`."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_stream_captures_content[content_mode0].yaml"
+    ):
+        with openai_client.responses.stream(
+            model=DEFAULT_MODEL,
+            input=USER_ONLY_PROMPT[0]["content"],
+            tools=[get_responses_weather_tool_definition()],
+        ) as stream:
+            _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS],
+        EXPECTED_TOOL_DEFINITIONS,
+    )
 
 
 @pytest.mark.vcr()

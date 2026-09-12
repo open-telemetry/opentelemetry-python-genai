@@ -21,7 +21,7 @@ import json
 import pytest
 from openai import AsyncOpenAI, OpenAI
 
-# Only pinned in requirements.openai-v2.txt; other envs (openai v3+ uses
+# Only pinned in requirements.v2.txt; other envs (openai v3+ uses
 # httpx2, oldest has no httpx instrumentation) skip this module.
 httpx = pytest.importorskip("httpx")
 HTTPXClientInstrumentor = pytest.importorskip(

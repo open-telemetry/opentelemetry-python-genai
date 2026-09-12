@@ -35,6 +35,7 @@ class WorkflowScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
+        "gen_ai.invoke_workflow.duration",
     )
     # langchain can't populate server.address on chat spans.
     expected_violations = (

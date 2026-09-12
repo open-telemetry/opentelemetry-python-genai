@@ -143,13 +143,13 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
     def test_stop_sets_top_k(self) -> None:
         invocation = self.handler.retrieval()
-        invocation.top_k = 10.0
+        invocation.top_k = 10
         invocation.stop()
 
         spans = self._get_finished_spans()
-        value = spans[0].attributes[GenAI.GEN_AI_REQUEST_TOP_K]
-        self.assertIsInstance(value, float)
-        self.assertEqual(value, 10.0)
+        value = spans[0].attributes["gen_ai.retrieval.top_k"]
+        self.assertIsInstance(value, int)
+        self.assertEqual(value, 10)
 
     @patch.dict(
         os.environ,
@@ -158,7 +158,8 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         },
     )
     def test_stop_sets_query_text_when_content_capture_enabled(self) -> None:
-        invocation = self.handler.retrieval()
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.retrieval()
         invocation.query_text = "What is the capital of France?"
         invocation.stop()
 
@@ -186,8 +187,9 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         },
     )
     def test_stop_sets_documents_when_content_capture_enabled(self) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
         docs = [{"id": "doc_1", "score": 0.95}, {"id": "doc_2", "score": 0.87}]
-        invocation = self.handler.retrieval()
+        invocation = handler.retrieval()
         invocation.documents = docs
         invocation.stop()
 
@@ -195,6 +197,29 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         raw = spans[0].attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
         self.assertIsInstance(raw, str)
         self.assertEqual(json.loads(raw), docs)
+
+    @patch.dict(
+        os.environ,
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY",
+        },
+    )
+    def test_stop_suppresses_query_text_and_docs_in_event_only_mode(
+        self,
+    ) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        docs = [{"id": "doc_1", "score": 0.95}]
+        invocation = handler.retrieval()
+        assert invocation.should_capture_content is True
+        invocation.query_text = "What is the capital of France?"
+        invocation.documents = docs
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        self.assertNotIn(
+            GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT, spans[0].attributes
+        )
+        self.assertNotIn(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS, spans[0].attributes)
 
     def test_stop_suppresses_documents_when_content_capture_disabled(
         self,
@@ -305,13 +330,13 @@ class TelemetryHandlerRetrievalContextManagerTest(_RetrievalTestBase):
 
     def test_context_manager_sets_attributes_on_span(self) -> None:
         with self.handler.retrieval(provider="weaviate") as inv:
-            inv.top_k = 5.0
+            inv.top_k = 5
 
         spans = self._get_finished_spans()
         attrs = spans[0].attributes
         self.assertEqual(attrs[GenAI.GEN_AI_PROVIDER_NAME], "weaviate")
-        self.assertIsInstance(attrs[GenAI.GEN_AI_REQUEST_TOP_K], float)
-        self.assertEqual(attrs[GenAI.GEN_AI_REQUEST_TOP_K], 5.0)
+        self.assertIsInstance(attrs["gen_ai.retrieval.top_k"], int)
+        self.assertEqual(attrs["gen_ai.retrieval.top_k"], 5)
 
 
 class TelemetryHandlerRetrievalSamplingTest(_RetrievalTestBase):

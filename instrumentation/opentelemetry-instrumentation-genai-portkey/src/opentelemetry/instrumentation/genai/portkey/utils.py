@@ -20,6 +20,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    Role,
     Text,
     ToolCallRequest,
     ToolCallResponse,
@@ -210,7 +211,7 @@ def _prepare_output_messages(
         finish_reason = get_property_value(choice, "finish_reason") or "stop"
         parts: list[MessagePart] = []
         message = get_property_value(choice, "message")
-        role = "assistant"
+        role = Role.ASSISTANT.value
         if message is not None:
             msg_role = get_property_value(message, "role")
             if msg_role:
