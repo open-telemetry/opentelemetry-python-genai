@@ -294,6 +294,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         request_model = request_model.removeprefix("models/")
 
         # Initialize variables with default values to avoid "possibly unbound" errors
+        request_choice_count = None
+        top_k = None
         top_p = None
         frequency_penalty = None
         presence_penalty = None
@@ -303,6 +305,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         max_tokens = None
 
         if params is not None:
+            request_choice_count = params.get("n")
+            top_k = params.get("top_k")
             top_p = params.get("top_p")
             frequency_penalty = params.get("frequency_penalty")
             presence_penalty = params.get("presence_penalty")
@@ -346,6 +350,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
+        llm_invocation.top_k = top_k
+        llm_invocation.request_choice_count = request_choice_count
         llm_invocation.frequency_penalty = frequency_penalty
         llm_invocation.presence_penalty = presence_penalty
         llm_invocation.stop_sequences = stop_sequences
