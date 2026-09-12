@@ -1,0 +1,363 @@
+interactions:
+- request:
+    body: |-
+      {}
+    headers:
+      authorization:
+      - Bearer test_openai_api_key
+      content-type:
+      - application/json
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-test-crewai-success",
+          "object": "chat.completion",
+          "created": 1731456237,
+          "model": "gpt-4o-mini-2024-07-18",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "This is a test.",
+                "refusal": null
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 20,
+            "completion_tokens": 5,
+            "total_tokens": 25,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "system_fingerprint": "fp_test"
+        }
+    headers:
+      Content-Type:
+      - application/json
+      Set-Cookie: test_set_cookie
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      x-request-id:
+      - req_test_crewai_success
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Researcher. A concise research assistant\nYour personal goal is: Answer the question accurately"
+          },
+          {
+            "role": "user",
+            "content": "\nCurrent Task: Say this is a test.\n\nThis is the expected criteria for your final answer: A short confirmation.\nyou MUST return the actual complete content as the final answer, not a summary.\n\nProvide your complete response:"
+          }
+        ],
+        "model": "gpt-4o-mini"
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '428'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 2.54.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 2.54.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.5
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Incorrect API key provided: test_ope*******_key. You can find your API key at https://platform.openai.com/account/api-keys.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_api_key"
+          }
+        }
+    headers:
+      access-control-expose-headers:
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a2e4eadb6d1bc698-EWR
+      connection:
+      - keep-alive
+      content-length:
+      - '269'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 20 Aug 2026 22:43:31 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      vary:
+      - Origin
+      x-content-type-options:
+      - nosniff
+      x-openai-proxy-wasm:
+      - v0.1
+      x-request-id:
+      - req_58827c9e510a4394b3a7c17d95064fc0
+    status:
+      code: 401
+      message: Unauthorized
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Researcher. A concise research assistant\nYour personal goal is: Answer the question accurately"
+          },
+          {
+            "role": "user",
+            "content": "\nCurrent Task: Say this is a test.\n\nThis is the expected criteria for your final answer: A short confirmation.\nyou MUST return the actual complete content as the final answer, not a summary.\n\nProvide your complete response:"
+          }
+        ],
+        "model": "gpt-4o-mini"
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '428'
+      content-type:
+      - application/json
+      cookie:
+      - __cf_bm=cJo9TcrHf.ofxIJyDuI6NxLwNP9gg7Pcz8RhrFPt7qE-1787265811.7414775-1.0.1.1-eWjq4MqWRZLWLbmxId_inKMEy6rqVd7zOsHEUxd83zhK9H_SyTHB_dFe9Wmk8qn07Ygt9q7mWtYx_hw9Wi0GU.Rf3veGcyWpcTDfzouXL_CvMYkfuS1gcY5MXZ3OLEt5;
+        _cfuvid=am9oQZ2E39h_JipRfaOgJGpOupaxcDFPq2EhN5ty32U-1787265811.7414775-1.0.1.1-yOAI9bg2q69lpQNX5ZG6e2b9osZqDcZViWZHOWn7sIU
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 2.54.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 2.54.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.5
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Incorrect API key provided: test_ope*******_key. You can find your API key at https://platform.openai.com/account/api-keys.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_api_key"
+          }
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      access-control-expose-headers:
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a2e4eadddc27c698-EWR
+      connection:
+      - keep-alive
+      content-length:
+      - '269'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 20 Aug 2026 22:43:32 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      vary:
+      - Origin
+      x-content-type-options:
+      - nosniff
+      x-openai-proxy-wasm:
+      - v0.1
+      x-request-id:
+      - req_838d078a725f476b8a407e05c3a1ba6d
+    status:
+      code: 401
+      message: Unauthorized
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Researcher. A concise research assistant\nYour personal goal is: Answer the question accurately"
+          },
+          {
+            "role": "user",
+            "content": "\nCurrent Task: Say this is a test.\n\nThis is the expected criteria for your final answer: A short confirmation.\nyou MUST return the actual complete content as the final answer, not a summary.\n\nProvide your complete response:"
+          }
+        ],
+        "model": "gpt-4o-mini"
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '428'
+      content-type:
+      - application/json
+      cookie:
+      - __cf_bm=cJo9TcrHf.ofxIJyDuI6NxLwNP9gg7Pcz8RhrFPt7qE-1787265811.7414775-1.0.1.1-eWjq4MqWRZLWLbmxId_inKMEy6rqVd7zOsHEUxd83zhK9H_SyTHB_dFe9Wmk8qn07Ygt9q7mWtYx_hw9Wi0GU.Rf3veGcyWpcTDfzouXL_CvMYkfuS1gcY5MXZ3OLEt5;
+        _cfuvid=am9oQZ2E39h_JipRfaOgJGpOupaxcDFPq2EhN5ty32U-1787265811.7414775-1.0.1.1-yOAI9bg2q69lpQNX5ZG6e2b9osZqDcZViWZHOWn7sIU
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 2.54.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 2.54.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.5
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Incorrect API key provided: test_ope*******_key. You can find your API key at https://platform.openai.com/account/api-keys.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_api_key"
+          }
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      access-control-expose-headers:
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a2e4eadebec2c698-EWR
+      connection:
+      - keep-alive
+      content-length:
+      - '269'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 20 Aug 2026 22:43:32 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      vary:
+      - Origin
+      x-content-type-options:
+      - nosniff
+      x-openai-proxy-wasm:
+      - v0.1
+      x-request-id:
+      - req_e0ac4e2ae0a34a4988ec67d4a597aa14
+    status:
+      code: 401
+      message: Unauthorized
+version: 1

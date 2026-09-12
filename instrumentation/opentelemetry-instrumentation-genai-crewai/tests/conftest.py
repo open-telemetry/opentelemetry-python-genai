@@ -12,8 +12,34 @@ from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.test_util_genai.vcr import (
+    scrub_response_headers_overwrite,
+)
 
-pytest_plugins = ["opentelemetry.test_util_genai.fixtures"]
+pytest_plugins = [
+    "opentelemetry.test_util_genai.fixtures",
+    "opentelemetry.test_util_genai.vcr",
+]
+
+
+@pytest.fixture(scope="module")
+def vcr_config() -> dict[str, object]:
+    """Configure VCR to remove account-identifying OpenAI values."""
+    return {
+        "filter_headers": [
+            ("authorization", "Bearer test_openai_api_key"),
+            ("openai-organization", "test_openai_org_id"),
+            ("openai-project", "test_openai_project_id"),
+        ],
+        "decode_compressed_response": True,
+        "before_record_response": scrub_response_headers_overwrite(
+            {
+                "openai-organization": "test_openai_org_id",
+                "openai-project": "test_openai_project_id",
+                "Set-Cookie": "test_set_cookie",
+            }
+        ),
+    }
 
 
 @pytest.fixture

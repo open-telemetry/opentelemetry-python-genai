@@ -27,14 +27,21 @@ class CrewAIInstrumentor(BaseInstrumentor):
         completion_hook = (
             kwargs.get("completion_hook") or load_completion_hook()
         )
-        TelemetryHandler(
+        telemetry_handler = TelemetryHandler(
             tracer_provider=kwargs.get("tracer_provider"),
             meter_provider=kwargs.get("meter_provider"),
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=completion_hook,
         )
-        # CrewAI patching will be added in a follow-up change.
+        from opentelemetry.instrumentation.genai.crewai.event_listener import (
+            CrewAIEventListener,
+        )
+
+        self._event_listener = CrewAIEventListener(telemetry_handler)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable CrewAI instrumentation."""
-        # CrewAI unpatching will be added in a follow-up change.
+        listener = getattr(self, "_event_listener", None)
+        if listener is not None:
+            listener.shutdown()
+            self._event_listener = None
