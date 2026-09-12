@@ -27,6 +27,7 @@ from .utils import (
     get_server_address_and_port,
     get_value,
     is_streaming,
+    set_chat_usage_details,
 )
 
 _logger = logging.getLogger(__name__)
@@ -208,6 +209,7 @@ def _set_response_properties(
             chat_invocation.cache_read_input_tokens = get_property_value(
                 prompt_tokens_details, "cached_tokens"
             )
+        set_chat_usage_details(invocation=chat_invocation, usage=result.usage)
         completion_tokens_details = getattr(
             result.usage, "completion_tokens_details", None
         )
