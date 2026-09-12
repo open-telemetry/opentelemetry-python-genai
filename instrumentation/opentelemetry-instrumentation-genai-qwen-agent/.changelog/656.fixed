@@ -1,0 +1,1 @@
+Record failed Qwen Agent tool invocations when cancellation raises a `BaseException`.

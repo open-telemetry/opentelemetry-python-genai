@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import pytest
-from llama_index.core.agent.workflow import FunctionAgent, ReActAgent
+from llama_index.core.agent.workflow import (
+    AgentWorkflow,
+    FunctionAgent,
+    ReActAgent,
+)
 from llama_index.core.base.llms.types import ToolCallBlock
 from llama_index.core.llms import ChatMessage, MockFunctionCallingLLM
 from llama_index.core.tools import FunctionTool
@@ -84,6 +88,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
         llm=openai_llm,
         streaming=False,
     )
+    provider_workflow = AgentWorkflow(agents=[provider_agent])
 
     providers = {
         "tracer_provider": tracer_provider,
@@ -95,7 +100,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
             await function_agent.run(user_msg="What is the weather in Paris?")
             await react_agent.run(user_msg="What is two plus two?")
             with vcr.use_cassette("inference.yaml"):
-                await provider_agent.run(user_msg="Hello!")
+                await provider_workflow.run(user_msg="Hello!")
 
     spans = span_exporter.get_finished_spans()
     operations = [
@@ -103,6 +108,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
         for span in spans
     ]
     assert operations.count("invoke_agent") == 3
+    assert operations.count("invoke_workflow") == 1
     assert operations.count("execute_tool") == 1
     assert operations.count("chat") == 1
     assert all(isinstance(operation, str) for operation in operations)
@@ -112,6 +118,7 @@ async def test_agent_tool_and_inference_instrumentation_compose(
     function_span = spans_by_name["invoke_agent weather-agent"]
     inference_span = spans_by_name["chat gpt-4o-mini"]
     provider_span = spans_by_name["invoke_agent provider-agent"]
+    workflow_span = spans_by_name["invoke_workflow AgentWorkflow"]
 
     assert tool_span.context.trace_id == function_span.context.trace_id
     assert tool_span.parent is not None
@@ -119,6 +126,9 @@ async def test_agent_tool_and_inference_instrumentation_compose(
     assert inference_span.context.trace_id == provider_span.context.trace_id
     assert inference_span.parent is not None
     assert inference_span.parent.span_id == provider_span.context.span_id
+    assert provider_span.context.trace_id == workflow_span.context.trace_id
+    assert provider_span.parent is not None
+    assert provider_span.parent.span_id == workflow_span.context.span_id
 
 
 @pytest.mark.asyncio
@@ -166,6 +176,57 @@ async def test_agent_and_inference_provider_errors_compose(
         inference_span.attributes[ErrorAttributes.ERROR_TYPE]
         == "openai.RateLimitError"
     )
+    assert inference_span.context.trace_id == agent_span.context.trace_id
+    assert inference_span.parent is not None
+    assert inference_span.parent.span_id == agent_span.context.span_id
+
+
+@pytest.mark.asyncio
+async def test_standalone_agent_nests_provider_inference(
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    openai_llm,
+    vcr,
+) -> None:
+    """A provider chat span nests under a standalone agent, not just a member.
+
+    ``BaseWorkflowAgent.run`` takes a different path through the span handler
+    than an ``AgentWorkflow`` member step, so both need their own coverage.
+    """
+    OpenAIInstrumentor = pytest.importorskip(
+        "opentelemetry.instrumentation.genai.openai"
+    ).OpenAIInstrumentor
+
+    agent = FunctionAgent(
+        name="standalone-agent",
+        llm=openai_llm,
+        streaming=False,
+    )
+    providers = {
+        "tracer_provider": tracer_provider,
+        "logger_provider": logger_provider,
+        "meter_provider": meter_provider,
+    }
+    with instrument(LlamaIndexInstrumentor(), **providers):
+        with instrument(OpenAIInstrumentor(), **providers):
+            with vcr.use_cassette("inference.yaml"):
+                await agent.run(user_msg="Hello!")
+
+    spans = span_exporter.get_finished_spans()
+    operations = [
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        for span in spans
+    ]
+    # A standalone run emits no workflow span.
+    assert operations.count("invoke_workflow") == 0
+    assert operations.count("invoke_agent") == 1
+
+    spans_by_name = {span.name: span for span in spans}
+    agent_span = spans_by_name["invoke_agent standalone-agent"]
+    inference_span = spans_by_name["chat gpt-4o-mini"]
+
     assert inference_span.context.trace_id == agent_span.context.trace_id
     assert inference_span.parent is not None
     assert inference_span.parent.span_id == agent_span.context.span_id

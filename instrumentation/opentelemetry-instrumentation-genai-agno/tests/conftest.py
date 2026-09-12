@@ -26,6 +26,21 @@ def instrument_agno(tracer_provider, logger_provider, meter_provider):
 
 
 @pytest.fixture
+def instrument_agno_content_capture(
+    tracer_provider, logger_provider, meter_provider
+):
+    """Fixture to instrument Agno with SPAN_ONLY content capture enabled."""
+    with instrument(
+        AgnoInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ) as instrumentor:
+        yield instrumentor
+
+
+@pytest.fixture
 def uninstrument_agno():
     """Fixture to ensure Agno is uninstrumented after test."""
     yield

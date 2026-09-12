@@ -5,13 +5,105 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     ToolDefinition,
 )
+
+
+@runtime_checkable
+class _ModelDumpJson(Protocol):
+    def model_dump_json(self) -> str: ...
+
+
+@runtime_checkable
+class _JsonDump(Protocol):
+    def json(self) -> str: ...
+
+
+@runtime_checkable
+class _ModelDump(Protocol):
+    def model_dump(self) -> Any: ...
+
+
+@runtime_checkable
+class _DictDump(Protocol):
+    def dict(self) -> Any: ...
+
+
+def _json_default(obj: object) -> object:
+    if isinstance(obj, type):
+        return str(obj)
+    if isinstance(obj, _ModelDump):
+        try:
+            return obj.model_dump()
+        except Exception:
+            pass
+    if isinstance(obj, _DictDump):
+        try:
+            return obj.dict()
+        except Exception:
+            pass
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        try:
+            return dataclasses.asdict(obj)
+        except Exception:
+            pass
+    return str(obj)
+
+
+def format_content(val: object) -> str:
+    """Format content into a string, converting structured objects to JSON."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, type):
+        return str(val)
+    if isinstance(val, _ModelDumpJson):
+        try:
+            return str(val.model_dump_json())
+        except Exception:
+            pass
+    if isinstance(val, _JsonDump):
+        try:
+            return str(val.json())
+        except Exception:
+            pass
+    if isinstance(val, _ModelDump):
+        try:
+            return json.dumps(
+                val.model_dump(), ensure_ascii=False, default=_json_default
+            )
+        except Exception:
+            pass
+    if isinstance(val, _DictDump):
+        try:
+            return json.dumps(
+                val.dict(), ensure_ascii=False, default=_json_default
+            )
+        except Exception:
+            pass
+    if dataclasses.is_dataclass(val) and not isinstance(val, type):
+        try:
+            return json.dumps(
+                dataclasses.asdict(val),
+                ensure_ascii=False,
+                default=_json_default,
+            )
+        except Exception:
+            pass
+    if isinstance(val, (dict, list)):
+        try:
+            return json.dumps(val, ensure_ascii=False, default=_json_default)
+        except Exception:
+            pass
+    return str(cast(object, val))
 
 
 def _get_property_value(obj: Any, property_name: str) -> Any:

@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any
+import logging
+from collections.abc import ValuesView
+from typing import Any, cast
 from unittest.mock import patch
 from uuid import UUID
 
@@ -36,14 +39,16 @@ from llama_index.core.workflow.errors import WorkflowRuntimeError
 from openai import RateLimitError
 
 from opentelemetry.instrumentation.genai.llama_index._handler import (
+    LlamaIndexSpanHandler,
     _agent_input,
     _input_message,
+    _LlamaIndexInvocation,
     _method_name,
     _output_message,
     _set_agent_output,
     _tool_definition,
 )
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -51,6 +56,7 @@ from opentelemetry.semconv.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     BlobPart,
     GenericToolDefinition,
@@ -837,7 +843,7 @@ async def test_unknown_tool_output_marks_tool_span_as_error(
 
 
 @pytest.mark.asyncio
-async def test_agent_workflow_emits_tool_span(
+async def test_agent_workflow_emits_span_hierarchy(
     span_exporter, instrument_llama_index
 ) -> None:
     def echo(value: str) -> str:
@@ -871,12 +877,492 @@ async def test_agent_workflow_emits_tool_span(
 
     result = await workflow.run(user_msg="Call echo")
     assert result.response.content == "done"
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    workflow_attrs = dict(workflow_span.attributes or {})
+    assert workflow_span.kind == SpanKind.INTERNAL
+    assert workflow_span.parent is None
+    assert (
+        workflow_attrs[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == "invoke_workflow"
+    )
+    assert (
+        workflow_attrs[GenAIAttributes.GEN_AI_WORKFLOW_NAME] == "AgentWorkflow"
+    )
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent workflow-agent")
+    assert len(agent_spans) == 1
+    assert all(
+        span.parent is not None
+        and span.parent.span_id == workflow_span.context.span_id
+        and span.context.trace_id == workflow_span.context.trace_id
+        for span in agent_spans
+    )
+
     tool_spans = _spans_named(span_exporter, "execute_tool echo")
     assert len(tool_spans) == 1
-    assert tool_spans[0].parent is None
+    assert tool_spans[0].parent is not None
+    assert tool_spans[0].parent.span_id == agent_spans[0].context.span_id
+    assert tool_spans[0].context.trace_id == workflow_span.context.trace_id
 
     FunctionTool.from_defaults(echo)(value="after workflow")
-    assert len(_spans_named(span_exporter, "execute_tool echo")) == 2
+    tool_spans = _spans_named(span_exporter, "execute_tool echo")
+    assert len(tool_spans) == 2
+    assert tool_spans[1].parent is None
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_streaming_member_span_hierarchy(
+    span_exporter, instrument_llama_index
+) -> None:
+    agent = FunctionAgent(
+        name="streaming-workflow-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=lambda messages, **kwargs: ChatMessage(
+                role="assistant", content="streamed answer"
+            ),
+        ),
+        streaming=True,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    result = await workflow.run(user_msg="Answer by streaming")
+    assert result.response.content == "streamed answer"
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(
+        span_exporter, "invoke_agent streaming-workflow-agent"
+    )[0]
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == workflow_span.context.span_id
+    assert agent_span.context.trace_id == workflow_span.context.trace_id
+    assert workflow_span.status.status_code == StatusCode.UNSET
+    assert agent_span.status.status_code == StatusCode.UNSET
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_streaming_member_error_finalization(
+    span_exporter, instrument_llama_index
+) -> None:
+    error = ConnectionError("workflow stream disconnected")
+
+    async def response_stream():
+        yield ChatResponse(
+            message=ChatMessage(role="assistant", content="partial response")
+        )
+        raise error
+
+    async def failing_stream(*args, **kwargs):
+        return response_stream()
+
+    agent = ReActAgent(
+        name="streaming-react-workflow-agent",
+        llm=MockFunctionCallingLLM(is_chat_model=True),
+        streaming=True,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    with patch.object(
+        MockFunctionCallingLLM, "astream_chat", side_effect=failing_stream
+    ):
+        with pytest.raises(ConnectionError) as exc_info:
+            await workflow.run(user_msg="Answer by streaming")
+
+    assert exc_info.value is error
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(
+        span_exporter, "invoke_agent streaming-react-workflow-agent"
+    )[0]
+    assert workflow_span.status.status_code == StatusCode.ERROR
+    assert agent_span.status.status_code == StatusCode.ERROR
+    _assert_error_type(workflow_span, "ConnectionError")
+    _assert_error_type(agent_span, "ConnectionError")
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_captures_early_stopping_response(
+    span_exporter, instrument_llama_index_with_content
+) -> None:
+    responses = iter(
+        [
+            ChatMessage(
+                role="assistant",
+                blocks=[
+                    ToolCallBlock(
+                        tool_call_id="echo-call",
+                        tool_name="echo",
+                        tool_kwargs={"value": "partial"},
+                    )
+                ],
+            ),
+            ChatMessage(role="assistant", content="generated answer"),
+        ]
+    )
+
+    agent = FunctionAgent(
+        name="early-stopping-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=lambda messages, **kwargs: next(responses),
+        ),
+        tools=[FunctionTool.from_defaults(lambda value: value, name="echo")],
+        streaming=False,
+        early_stopping_method="generate",
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    result = await workflow.run(
+        user_msg="Answer this",
+        max_iterations=1,
+        early_stopping_method="generate",
+    )
+    assert result.response.content == "generated answer"
+
+    agent_span = _spans_named(
+        span_exporter, "invoke_agent early-stopping-agent"
+    )[0]
+    agent_output = json.loads(
+        agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    )
+    assert agent_output[0]["parts"] == [
+        {"type": "text", "content": "generated answer"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_captures_first_arriving_return_direct_result(
+    span_exporter, instrument_llama_index_with_content
+) -> None:
+    async def first() -> str:
+        await asyncio.sleep(0.02)
+        return "FIRST"
+
+    async def second() -> str:
+        return "SECOND"
+
+    def response_generator(messages, **kwargs):
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="first-call",
+                    tool_name="first",
+                    tool_kwargs={},
+                ),
+                ToolCallBlock(
+                    tool_call_id="second-call",
+                    tool_name="second",
+                    tool_kwargs={},
+                ),
+            ],
+        )
+
+    agent = FunctionAgent(
+        name="arrival-order-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        tools=[
+            FunctionTool.from_defaults(async_fn=first, return_direct=True),
+            FunctionTool.from_defaults(async_fn=second, return_direct=True),
+        ],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    result = await workflow.run(user_msg="Call both tools")
+    assert result.response.content == "SECOND"
+
+    agent_span = _spans_named(
+        span_exporter, "invoke_agent arrival-order-agent"
+    )[0]
+    agent_output = json.loads(
+        agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    )
+    assert agent_output[0]["parts"] == [{"type": "text", "content": "SECOND"}]
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_uses_configured_workflow_name(
+    span_exporter, instrument_llama_index
+) -> None:
+    def response_generator(messages, **kwargs):
+        return ChatMessage(role="assistant", content="workflow complete")
+
+    agent = FunctionAgent(
+        name="named-workflow-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(
+        agents=[agent],
+        workflow_name="customer-support-workflow",
+    )
+
+    await workflow.run(user_msg="Run the workflow")
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow customer-support-workflow"
+    )[0]
+    assert workflow_span.attributes[GenAIAttributes.GEN_AI_WORKFLOW_NAME] == (
+        "customer-support-workflow"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_uses_executing_agent_tool_metadata(
+    span_exporter, instrument_llama_index
+) -> None:
+    def response_generator(messages, **kwargs):
+        if any(message.role.value == "tool" for message in messages):
+            return ChatMessage(role="assistant", content="workflow complete")
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="duplicate-tool-call",
+                    tool_name="lookup",
+                    tool_kwargs={"value": "hello"},
+                )
+            ],
+        )
+
+    def first_lookup(value: str) -> str:
+        return f"first: {value}"
+
+    class GenericLookupTool(AsyncBaseTool):
+        @property
+        def metadata(self) -> ToolMetadata:
+            return ToolMetadata(
+                name="lookup", description="Second lookup description."
+            )
+
+        def call(self, value: str) -> ToolOutput:
+            return ToolOutput(
+                tool_name="lookup",
+                content=f"second: {value}",
+                raw_input={"value": value},
+                raw_output=value,
+            )
+
+        async def acall(self, value: str) -> ToolOutput:
+            return self.call(value)
+
+    first_agent = FunctionAgent(
+        name="first-agent",
+        description="First agent.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=lambda messages, **kwargs: ChatMessage(
+                role="assistant", content="first complete"
+            ),
+        ),
+        tools=[
+            FunctionTool.from_defaults(
+                first_lookup,
+                name="lookup",
+                description="First lookup description.",
+            )
+        ],
+        streaming=False,
+    )
+    second_agent = FunctionAgent(
+        name="second-agent",
+        description="Second agent.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        tools=[GenericLookupTool()],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(
+        agents=[first_agent, second_agent],
+        root_agent="second-agent",
+    )
+
+    await workflow.run(user_msg="Use lookup")
+
+    tool_span = _spans_named(span_exporter, "execute_tool lookup")[0]
+    assert tool_span.attributes[GenAIAttributes.GEN_AI_TOOL_DESCRIPTION] == (
+        "Second lookup description."
+    )
+    assert tool_span.attributes[GenAIAttributes.GEN_AI_TOOL_TYPE] == (
+        "GenericLookupTool"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_captures_content(
+    span_exporter, instrument_llama_index_with_content
+) -> None:
+    def response_generator(messages, **kwargs):
+        return ChatMessage(role="assistant", content="workflow complete")
+
+    agent = FunctionAgent(
+        name="content-agent",
+        system_prompt="Answer briefly.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    await workflow.run(user_msg="Run the workflow")
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(span_exporter, "invoke_agent content-agent")[0]
+    workflow_attrs = dict(workflow_span.attributes or {})
+    agent_attrs = dict(agent_span.attributes or {})
+    assert json.loads(
+        workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    ) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Run the workflow"}],
+            "name": None,
+        }
+    ]
+    assert json.loads(workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[
+        0
+    ]["parts"] == [{"type": "text", "content": "workflow complete"}]
+    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Run the workflow"}],
+            "name": None,
+        }
+    ]
+    assert json.loads(
+        agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
+    ) == [{"type": "text", "content": "Answer briefly."}]
+    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[0][
+        "parts"
+    ] == [{"type": "text", "content": "workflow complete"}]
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_error_marks_workflow_and_agent_spans(
+    span_exporter, instrument_llama_index
+) -> None:
+    error = RuntimeError("workflow agent failed")
+
+    def response_generator(messages, **kwargs):
+        raise error
+
+    agent = FunctionAgent(
+        name="failing-workflow-agent",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    with pytest.raises(RuntimeError) as caught:
+        await workflow.run(user_msg="Fail")
+    assert caught.value is error
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    agent_span = _spans_named(
+        span_exporter, "invoke_agent failing-workflow-agent"
+    )[0]
+    for span in (workflow_span, agent_span):
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_instruments_function_and_react_members(
+    span_exporter, instrument_llama_index
+) -> None:
+    def function_response(messages, **kwargs):
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="handoff-call",
+                    tool_name="handoff",
+                    tool_kwargs={
+                        "to_agent": "react-member",
+                        "reason": "The ReAct agent should answer.",
+                    },
+                )
+            ],
+        )
+
+    def react_response(messages, **kwargs):
+        return ChatMessage(
+            role="assistant",
+            content="Thought: I can answer.\nAnswer: complete",
+        )
+
+    function_agent = FunctionAgent(
+        name="function-member",
+        description="Routes the request.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=function_response,
+        ),
+        streaming=False,
+    )
+    react_agent = ReActAgent(
+        name="react-member",
+        description="Answers the request.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=react_response,
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(
+        agents=[function_agent, react_agent],
+        root_agent="function-member",
+    )
+
+    result = await workflow.run(user_msg="Complete the request")
+    assert result.response.content == "complete"
+
+    workflow_span = _spans_named(
+        span_exporter, "invoke_workflow AgentWorkflow"
+    )[0]
+    function_span = _spans_named(
+        span_exporter, "invoke_agent function-member"
+    )[0]
+    react_span = _spans_named(span_exporter, "invoke_agent react-member")[0]
+    handoff_span = _spans_named(span_exporter, "execute_tool handoff")[0]
+    assert (
+        handoff_span.attributes[GenAIAttributes.GEN_AI_TOOL_TYPE] == "function"
+    )
+    for span in (function_span, react_span):
+        assert span.parent is not None
+        assert span.parent.span_id == workflow_span.context.span_id
+        assert span.context.trace_id == workflow_span.context.trace_id
+    assert handoff_span.parent is not None
+    assert handoff_span.parent.span_id == function_span.context.span_id
+    assert handoff_span.context.trace_id == workflow_span.context.trace_id
+    # The handing-off agent stays open until its handoff tool call ends, so
+    # the tool span falls inside its parent rather than after it.
+    assert handoff_span.start_time >= function_span.start_time
+    assert handoff_span.end_time <= function_span.end_time
 
 
 def test_sync_tool_span(
@@ -974,3 +1460,276 @@ def test_tool_error_re_raises(span_exporter, instrument_llama_index) -> None:
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_releases_member_invocation_on_failure(
+    span_exporter, instrument_llama_index
+) -> None:
+    """A dropped agent step must not leave its ended invocation reusable."""
+
+    def response_generator(messages, **kwargs):
+        if any(message.role.value == "tool" for message in messages):
+            raise RuntimeError("llm failed")
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="call-1",
+                    tool_name="echo",
+                    tool_kwargs={"value": "hello"},
+                )
+            ],
+        )
+
+    agent = FunctionAgent(
+        name="failing-agent",
+        description="Fails after a tool call.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=response_generator,
+        ),
+        tools=[
+            FunctionTool.from_defaults(
+                lambda value: value, name="echo", description="Echoes."
+            )
+        ],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[agent])
+
+    registries: list[_LlamaIndexInvocation] = []
+    register = _LlamaIndexInvocation.register_workflow_invocation
+
+    def capture(self, run_id, agent_name, invocation):
+        registries.append(self)
+        return register(self, run_id, agent_name, invocation)
+
+    with patch.object(
+        _LlamaIndexInvocation, "register_workflow_invocation", capture
+    ):
+        with pytest.raises(RuntimeError, match="llm failed"):
+            await workflow.run(user_msg="Use echo")
+
+    assert registries, "no member invocation was ever registered"
+    for parent in registries:
+        assert parent._workflow_invocations_by_key == {}
+        assert parent._workflow_invocations_by_run_id == {}
+
+    agent_span = _spans_named(span_exporter, "invoke_agent failing-agent")[0]
+    assert agent_span.status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_handoff_turn_contains_its_sibling_tools(
+    span_exporter, instrument_llama_index
+) -> None:
+    """A turn may request a handoff alongside other tools; all nest in the agent."""
+
+    def handoff_and_echo(to_agent: str):
+        def _generate(messages, **kwargs):
+            return ChatMessage(
+                role="assistant",
+                blocks=[
+                    ToolCallBlock(
+                        tool_call_id=f"handoff-{to_agent}",
+                        tool_name="handoff",
+                        tool_kwargs={"to_agent": to_agent, "reason": "next"},
+                    ),
+                    ToolCallBlock(
+                        tool_call_id="echo-1",
+                        tool_name="echo",
+                        tool_kwargs={"value": "hi"},
+                    ),
+                ],
+            )
+
+        return _generate
+
+    def only_handoff(to_agent: str):
+        def _generate(messages, **kwargs):
+            return ChatMessage(
+                role="assistant",
+                blocks=[
+                    ToolCallBlock(
+                        tool_call_id=f"handoff-{to_agent}",
+                        tool_name="handoff",
+                        tool_kwargs={"to_agent": to_agent, "reason": "next"},
+                    )
+                ],
+            )
+
+        return _generate
+
+    first = FunctionAgent(
+        name="first",
+        description="Hands off and echoes.",
+        can_handoff_to=["second"],
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True, response_generator=handoff_and_echo("second")
+        ),
+        tools=[
+            FunctionTool.from_defaults(
+                lambda value: value, name="echo", description="Echoes."
+            )
+        ],
+        streaming=False,
+    )
+    second = FunctionAgent(
+        name="second",
+        description="Hands off again.",
+        can_handoff_to=["third"],
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True, response_generator=only_handoff("third")
+        ),
+        streaming=False,
+    )
+    third = FunctionAgent(
+        name="third",
+        description="Answers.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=lambda messages, **kwargs: ChatMessage(
+                role="assistant", content="done"
+            ),
+        ),
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[first, second, third], root_agent="first")
+
+    await workflow.run(user_msg="Start")
+
+    first_span = _spans_named(span_exporter, "invoke_agent first")[0]
+    second_span = _spans_named(span_exporter, "invoke_agent second")[0]
+    third_span = _spans_named(span_exporter, "invoke_agent third")[0]
+    echo_span = _spans_named(span_exporter, "execute_tool echo")[0]
+
+    # The sibling tool belongs to the agent that requested it, not the workflow.
+    assert echo_span.parent is not None
+    assert echo_span.parent.span_id == first_span.context.span_id
+    assert echo_span.start_time >= first_span.start_time
+    assert echo_span.end_time <= first_span.end_time
+
+    # Each member closes before the next one starts.
+    assert first_span.end_time <= second_span.start_time
+    assert second_span.end_time <= third_span.start_time
+
+
+@pytest.mark.asyncio
+async def test_agent_workflow_does_not_log_context_detach_failures(
+    span_exporter, instrument_llama_index
+) -> None:
+    """Member-agent spans outlive the task that opened them.
+
+    ``TelemetryHandler`` attaches the span to the context that was current when
+    the invocation started, and that attachment can only be undone from the same
+    context. Finishing from a later step's task would make
+    ``opentelemetry.context.detach`` raise, which it logs with a traceback.
+    """
+
+    class _DetachFailures(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            if "Failed to detach context" in record.getMessage():
+                self.records.append(record)
+
+    def handoff_then_answer(to_agent: str):
+        def _generate(messages, **kwargs):
+            if any(message.role.value == "tool" for message in messages):
+                return ChatMessage(role="assistant", content="done")
+            return ChatMessage(
+                role="assistant",
+                blocks=[
+                    ToolCallBlock(
+                        tool_call_id="handoff-1",
+                        tool_name="handoff",
+                        tool_kwargs={"to_agent": to_agent, "reason": "next"},
+                    )
+                ],
+            )
+
+        return _generate
+
+    router = FunctionAgent(
+        name="router",
+        description="Routes.",
+        can_handoff_to=["worker"],
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=handoff_then_answer("worker"),
+        ),
+        streaming=False,
+    )
+    worker = FunctionAgent(
+        name="worker",
+        description="Answers using a tool.",
+        llm=MockFunctionCallingLLM(
+            is_chat_model=True,
+            response_generator=_tool_then_answer("echo", "hello"),
+        ),
+        tools=[
+            FunctionTool.from_defaults(
+                lambda value: value, name="echo", description="Echoes."
+            )
+        ],
+        streaming=False,
+    )
+    workflow = AgentWorkflow(agents=[router, worker], root_agent="router")
+
+    failures = _DetachFailures()
+    context_logger = logging.getLogger("opentelemetry.context")
+    context_logger.addHandler(failures)
+    try:
+        await workflow.run(user_msg="Start")
+    finally:
+        context_logger.removeHandler(failures)
+
+    assert [record.getMessage() for record in failures.records] == []
+    # The spans the cross-task finishes produce are still correct.
+    assert len(_spans_named(span_exporter, "invoke_agent router")) == 1
+    assert len(_spans_named(span_exporter, "invoke_agent worker")) == 1
+
+
+def _tool_then_answer(tool_name: str, value: str):
+    def _generate(messages, **kwargs):
+        if any(message.role.value == "tool" for message in messages):
+            return ChatMessage(role="assistant", content="done")
+        return ChatMessage(
+            role="assistant",
+            blocks=[
+                ToolCallBlock(
+                    tool_call_id="tool-1",
+                    tool_name=tool_name,
+                    tool_kwargs={"value": value},
+                )
+            ],
+        )
+
+    return _generate
+
+
+def test_open_span_lookup_holds_the_handler_lock() -> None:
+    """``open_spans`` is mutated under the lock from LlamaIndex worker threads.
+
+    Iterating it unguarded raises ``RuntimeError: dictionary changed size during
+    iteration``, which the dispatcher swallows -- losing the tool span silently.
+    """
+    handler = LlamaIndexSpanHandler(
+        handler=TelemetryHandler(tracer_provider=TracerProvider())
+    )
+
+    class _RecordingSpans(dict[str, _LlamaIndexInvocation]):
+        locked_during_iteration: bool | None = None
+
+        def values(self) -> ValuesView[_LlamaIndexInvocation]:
+            self.locked_during_iteration = handler.lock.locked()
+            return super().values()
+
+    handler.open_spans = _RecordingSpans()
+
+    assert handler._is_open_tool(cast(Any, object())) is False
+    assert handler.open_spans.locked_during_iteration is True
+    assert handler.lock.locked() is False

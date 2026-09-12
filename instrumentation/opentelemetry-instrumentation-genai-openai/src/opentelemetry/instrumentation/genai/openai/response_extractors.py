@@ -17,6 +17,7 @@ from opentelemetry.semconv._incubating.attributes import (
 
 from ._raw_response import ParsableResponse
 from .utils import (
+    _content_to_parts,
     _openai_response_format_to_output_type,
     get_property_value,
     get_served_model,
@@ -92,6 +93,7 @@ class ResponseRequestParams:
     model: str | None = None
     instructions: str | None = None
     input: str | Sequence[object] | None = None
+    conversation_id: str | None = None
     max_output_tokens: int | None = None
     service_tier: str | None = None
     temperature: float | None = None
@@ -106,6 +108,7 @@ class UsageTokens:
     output_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
 
 
 def _get_field(value: object, field_name: str) -> object | None:
@@ -160,11 +163,23 @@ def _extract_output_type_from_value(text_config: object) -> str | None:
     return None
 
 
+def _extract_conversation_id(conversation: object) -> str | None:
+    """Return the conversation id the ``conversation`` parameter names."""
+    if isinstance(conversation, str):
+        return conversation or None
+
+    conversation_id = _get_field(conversation, "id")
+    if isinstance(conversation_id, str) and conversation_id:
+        return conversation_id
+    return None
+
+
 def extract_params(
     *,
     model: str | None = None,
     instructions: str | None = None,
     input_items: str | Sequence[object] | None = None,
+    conversation: object | None = None,
     max_output_tokens: int | None = None,
     service_tier: str | None = None,
     temperature: float | None = None,
@@ -188,6 +203,7 @@ def extract_params(
             )
             else None
         ),
+        conversation_id=_extract_conversation_id(conversation),
         max_output_tokens=_get_int(max_output_tokens),
         service_tier=(
             service_tier
@@ -228,23 +244,7 @@ def get_input_messages(
 
         name = _get_field(item, "name")
         name_str = str(name) if name is not None else None
-
-        content = _get_field(item, "content")
-        if isinstance(content, str):
-            messages.append(
-                InputMessage(
-                    role=role,
-                    parts=[TextPart(content=content)],
-                    name=name_str,
-                )
-            )
-            continue
-
-        parts = []
-        for part in _get_sequence(content):
-            text = _get_field(part, "text")
-            if isinstance(text, str):
-                parts.append(TextPart(content=text))
+        parts = _content_to_parts(_get_field(item, "content"))
         if parts:
             messages.append(
                 InputMessage(role=role, parts=parts, name=name_str)
@@ -555,6 +555,7 @@ def apply_request_attributes(
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
+    invocation.conversation_id = params.conversation_id
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens
@@ -586,20 +587,28 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
         return UsageTokens()
 
     details = usage.input_tokens_details
+    cache_creation = (
+        details.cache_creation_input_tokens
+        if details is not None
+        and hasattr(details, "cache_creation_input_tokens")
+        else None
+    )
+    cache_write = (
+        getattr(details, "cache_write_tokens", None)
+        if details is not None
+        else None
+    )
+    if cache_write is None:
+        cache_write = cache_creation
     return UsageTokens(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        # `cache_creation_input_tokens` is not present on every SDK version's
-        # input token details model, so keep this attribute access guarded for
-        # compatibility across the supported OpenAI range.
-        cache_creation_input_tokens=(
-            details.cache_creation_input_tokens
-            if details is not None
-            and hasattr(details, "cache_creation_input_tokens")
-            else None
-        ),
+        cache_creation_input_tokens=cache_creation,
+        cache_write_input_tokens=cache_write,
         cache_read_input_tokens=(
-            details.cached_tokens if details is not None else None
+            getattr(details, "cached_tokens", None)
+            if details is not None
+            else None
         ),
     )
 
@@ -658,7 +667,7 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(response.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
-    invocation.cache_creation_input_tokens = tokens.cache_creation_input_tokens
+    invocation.cache_write_input_tokens = tokens.cache_write_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
     finish_reasons = extract_finish_reasons(response)

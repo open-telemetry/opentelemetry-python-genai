@@ -11,6 +11,7 @@ that targeted the removed ``get_llm_request_attributes`` /
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,6 +26,7 @@ from opentelemetry.instrumentation.genai.openai.patch import (
     _create_embedding_invocation as create_embedding_invocation,
 )
 from opentelemetry.instrumentation.genai.openai.patch import (
+    async_embeddings_create,
     embeddings_create,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -278,3 +280,38 @@ def test_wrapped_call_exception_is_recorded_and_reraised(
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes["error.type"] == "ValueError"
+
+
+def test_wrapped_call_base_exception_is_recorded_and_reraised(
+    handler, span_exporter
+):
+    def wrapped(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    traced = embeddings_create(handler)
+    with pytest.raises(asyncio.CancelledError):
+        traced(wrapped, _make_client(), (), {"model": "m"})
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes["error.type"] == "asyncio.exceptions.CancelledError"
+
+
+def test_async_wrapped_call_base_exception_is_recorded_and_reraised(
+    handler, span_exporter
+):
+    async def exercise():
+        async def wrapped(*_args, **_kwargs):
+            raise asyncio.CancelledError()
+
+        traced = async_embeddings_create(handler)
+        with pytest.raises(asyncio.CancelledError):
+            await traced(wrapped, _make_client(), (), {"model": "m"})
+
+    asyncio.run(exercise())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes["error.type"] == "asyncio.exceptions.CancelledError"

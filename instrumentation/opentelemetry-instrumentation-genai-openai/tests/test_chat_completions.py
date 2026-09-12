@@ -39,15 +39,22 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    CACHEABLE_MESSAGES,
     DEFAULT_MODEL,
     EXPECTED_TOOL_DEFINITIONS,
+    MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    MULTIMODAL_PROMPT,
+    REASONING_MODEL,
+    REASONING_PROMPT,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
     WEATHER_TOOL_PROMPT,
     assert_all_attributes,
+    assert_cache_attributes,
     assert_message_in_logs,
     assert_messages_attribute,
+    assert_reasoning_attributes,
     format_simple_expected_output_message,
     get_current_weather_tool_definition,
 )
@@ -78,6 +85,8 @@ def test_chat_completion_with_content(
         response.usage.prompt_tokens,
         response.usage.completion_tokens,
     )
+    assert_cache_attributes(spans[0], response.usage)
+    assert_reasoning_attributes(spans[0], response.usage)
 
     if latest_experimental_enabled:
         assert_messages_attribute(
@@ -110,6 +119,100 @@ def test_chat_completion_with_content(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+def test_chat_completion_reports_cached_tokens(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_chat_completion_cached_tokens.yaml"):
+        openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=False,
+        )
+        response = openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=False,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert_cache_attributes(
+        spans[-1],
+        response.usage,
+        require_cache_read=True,
+    )
+
+
+def test_chat_completion_streaming_reports_cached_tokens(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_chat_completion_streaming_cached_tokens.yaml"):
+        openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=False,
+        )
+        stream = openai_client.chat.completions.create(
+            messages=CACHEABLE_MESSAGES,
+            model=DEFAULT_MODEL,
+            max_tokens=8,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        usage = None
+        for chunk in stream:
+            if chunk.usage is not None:
+                usage = chunk.usage
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert usage is not None
+    assert_cache_attributes(
+        spans[-1],
+        usage,
+        require_cache_read=True,
+    )
+
+
+def test_chat_completion_reports_reasoning_tokens(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_chat_completion_reasoning_tokens.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=REASONING_PROMPT,
+            model=REASONING_MODEL,
+            stream=False,
+            extra_body={
+                "max_completion_tokens": 1024,
+                "reasoning_effort": "medium",
+            },
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert_reasoning_attributes(
+        spans[0], response.usage, require_reasoning=True
+    )
+
+
+def test_chat_completion_captures_multimodal_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    with vcr.use_cassette("chat_completions_multimodal_conformance.yaml"):
+        openai_client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=MULTIMODAL_PROMPT,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
 
 
 def test_chat_completion_with_named_input_message(
@@ -1151,6 +1254,8 @@ def test_chat_completion_streaming(
         response_stream_usage.prompt_tokens,
         response_stream_usage.completion_tokens,
     )
+    assert_cache_attributes(spans[0], response_stream_usage)
+    assert_reasoning_attributes(spans[0], response_stream_usage)
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
@@ -1181,6 +1286,54 @@ def test_chat_completion_streaming(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+def test_chat_completion_streaming_reports_reasoning_tokens(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    usage = None
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_reasoning_tokens.yaml"
+    ):
+        response = openai_client.chat.completions.create(
+            messages=REASONING_PROMPT,
+            model=REASONING_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+            extra_body={
+                "max_completion_tokens": 1024,
+                "reasoning_effort": "medium",
+            },
+        )
+        for chunk in response:
+            if getattr(chunk, "usage", None) is not None:
+                usage = chunk.usage
+
+    assert usage is not None
+    spans = span_exporter.get_finished_spans()
+    assert_reasoning_attributes(spans[0], usage, require_reasoning=True)
+
+
+def test_chat_completion_streaming_captures_multimodal_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_multimodal_input.yaml"
+    ):
+        response = openai_client.chat.completions.create(
+            model="gpt-4.1",
+            messages=MULTIMODAL_PROMPT,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        for _ in response:
+            pass
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
 
 
 def test_chat_completion_streaming_user_exception_propagates(

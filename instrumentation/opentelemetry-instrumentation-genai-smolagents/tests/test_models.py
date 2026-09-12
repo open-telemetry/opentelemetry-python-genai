@@ -12,6 +12,7 @@ the stubbed runtime pieces built in ``test_utils``.
 
 from __future__ import annotations
 
+import gc
 import inspect
 import json
 from collections.abc import Generator
@@ -20,7 +21,6 @@ from typing import Any
 import pytest
 from smolagents.models import ChatMessage, MessageRole
 
-from opentelemetry.context import Context
 from opentelemetry.instrumentation.genai.smolagents import (
     patch as patch_module,
 )
@@ -36,7 +36,6 @@ from opentelemetry.instrumentation.genai.smolagents.patch import (
 from opentelemetry.instrumentation.genai.smolagents.provider import (
     resolve_provider,
 )
-from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -202,37 +201,6 @@ def test_runtime_error_is_recorded_and_reraised(
     assert attr(span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) is None
 
 
-class _LifecycleRecorder(SpanProcessor):
-    """Records span starts and ends.
-
-    The exporter only sees a span once it ends, so an unfinished span reads
-    there as no span at all.
-    """
-
-    def __init__(self) -> None:
-        self.started: list[str] = []
-        self.ended: list[str] = []
-
-    def on_start(
-        self, span: Span, parent_context: Context | None = None
-    ) -> None:
-        self.started.append(span.name)
-
-    def on_end(self, span: ReadableSpan) -> None:
-        self.ended.append(span.name)
-
-    @property
-    def leaked(self) -> list[str]:
-        return self.started[len(self.ended) :]
-
-
-@pytest.fixture
-def lifecycle(tracer_provider) -> _LifecycleRecorder:
-    recorder = _LifecycleRecorder()
-    tracer_provider.add_span_processor(recorder)
-    return recorder
-
-
 def test_lifecycle_recorder_sees_the_happy_path(
     instrument_with_content, lifecycle
 ) -> None:
@@ -279,28 +247,36 @@ def test_bad_tool_does_not_leak_a_span(
 
 
 @pytest.mark.parametrize(
-    "conversion", ["to_input_messages", "to_output_message"]
+    ("method", "conversion"),
+    [
+        ("generate", "to_input_messages"),
+        ("generate", "to_output_message"),
+        ("generate_stream", "to_input_messages"),
+    ],
 )
-def test_a_failed_conversion_does_not_break_the_call(
+def test_a_failed_conversion_finalizes_the_span(
     instrument_with_content,
     span_exporter,
     lifecycle,
     monkeypatch: pytest.MonkeyPatch,
+    method: str,
     conversion: str,
 ) -> None:
-    # A shape the conversion cannot read drops the content from the span, and
-    # changes nothing else.
     def raise_error(*args: Any, **kwargs: Any) -> Any:
         raise ValueError("unexpected message shape")
 
     monkeypatch.setattr(patch_module, conversion, raise_error)
 
-    output = transformers_model().generate(messages=MESSAGES)
-    assert output.content == "In Paris"
+    model = transformers_model()
+    with pytest.raises(ValueError, match="unexpected message shape"):
+        if method == "generate_stream":
+            model.generate_stream(messages=MESSAGES)
+        else:
+            model.generate(messages=MESSAGES)
 
     (span,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
-    assert span.status.status_code == StatusCode.UNSET
-    assert attr(span, GenAI.GEN_AI_USAGE_INPUT_TOKENS) == 3
+    assert span.status.status_code == StatusCode.ERROR
+    assert attr(span, error_attributes.ERROR_TYPE) == "ValueError"
     assert lifecycle.leaked == []
 
 
@@ -613,6 +589,43 @@ def _failing_streamer(
 ) -> Generator[str, None, None]:
     yield from chunks
     raise error
+
+
+def _first_model_chunk_only(model: Any) -> None:
+    for _ in model.generate_stream(messages=MESSAGES):
+        break
+
+
+def test_abandoned_model_stream_finalizes_the_span(
+    instrument_with_content, span_exporter, lifecycle
+) -> None:
+    model = transformers_model(stream_chunks=["In ", "Paris"])
+    _first_model_chunk_only(model)
+    gc.collect()
+
+    assert (
+        len(spans_by_operation(span_exporter.get_finished_spans(), "chat"))
+        == 1
+    )
+    assert lifecycle.leaked == []
+
+
+def test_abandoned_model_stream_does_not_leak_context(
+    instrument_with_content, span_exporter, tracer_provider
+) -> None:
+    model = transformers_model(stream_chunks=["In ", "Paris"])
+    _first_model_chunk_only(model)
+    gc.collect()
+
+    with tracer_provider.get_tracer("test").start_as_current_span("unrelated"):
+        pass
+
+    (unrelated,) = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name == "unrelated"
+    ]
+    assert unrelated.parent is None
 
 
 def test_generate_stream_is_lazy_and_records_the_drained_response(

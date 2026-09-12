@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.semconv._incubating.attributes import (
@@ -11,13 +13,13 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import INVALID_SPAN, Span, SpanKind, Tracer
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
@@ -32,6 +34,31 @@ from opentelemetry.util.genai.utils import (
 )
 from opentelemetry.util.types import AttributeValue
 
+_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
+    "gen_ai.usage.cache_write.input_tokens"
+)
+_GEN_AI_USAGE_TEXT_INPUT_TOKENS: Final = "gen_ai.usage.text.input_tokens"
+_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: Final = "gen_ai.usage.image.input_tokens"
+_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: Final = "gen_ai.usage.audio.input_tokens"
+_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: Final = "gen_ai.usage.text.output_tokens"
+_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.image.output_tokens"
+_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: Final = "gen_ai.usage.audio.output_tokens"
+_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.text.cache_read.input_tokens"
+)
+_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.image.cache_read.input_tokens"
+)
+_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
+    "gen_ai.usage.audio.cache_read.input_tokens"
+)
+_GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
+_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
+    "gen_ai.request.previous_response.id"
+)
+_GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
+_GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
+
 
 class InferenceInvocation(GenAIInvocation):
     """Represents a single LLM chat/completion call.
@@ -42,7 +69,7 @@ class InferenceInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -60,7 +87,7 @@ class InferenceInvocation(GenAIInvocation):
         """Use handler.inference(provider) rather than calling this directly."""
         super().__init__(
             tracer,
-            metrics_recorder,
+            instruments,
             logger,
             completion_hook,
             operation_name=operation_name,
@@ -96,8 +123,23 @@ class InferenceInvocation(GenAIInvocation):
         self.max_tokens: int | None = None
         self.stop_sequences: list[str] | None = None
         self.seed: int | None = None
-        self.cache_creation_input_tokens: int | None = None
+        self.cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
+        self.text_input_tokens: int | None = None
+        self.image_input_tokens: int | None = None
+        self.audio_input_tokens: int | None = None
+        self.text_output_tokens: int | None = None
+        self.image_output_tokens: int | None = None
+        self.audio_output_tokens: int | None = None
+        self.text_cache_read_input_tokens: int | None = None
+        self.image_cache_read_input_tokens: int | None = None
+        self.audio_cache_read_input_tokens: int | None = None
+        self.reasoning_level: str | None = None
+        self.previous_response_id: str | None = None
+        self.conversation_compacted: bool | None = None
+        self.prompt_name: str | None = None
+        self.prompt_version: str | None = None
+        self.prompt_variables: Mapping[str, object] | None = None
         self.tool_definitions: list[ToolDefinition] | None = None
         self.top_k: float | None = None
         self.request_choice_count: int | None = None
@@ -106,6 +148,18 @@ class InferenceInvocation(GenAIInvocation):
         # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
         self._start(self._get_start_attributes())
+
+    @property
+    def cache_creation_input_tokens(self) -> int | None:
+        """
+        .. deprecated:: 1.3b0
+            Use :attr:`cache_write_input_tokens` instead.
+        """
+        return self.cache_write_input_tokens
+
+    @cache_creation_input_tokens.setter
+    def cache_creation_input_tokens(self, value: int | None) -> None:
+        self.cache_write_input_tokens = value
 
     @property
     def response_model_name(self) -> str | None:
@@ -125,6 +179,7 @@ class InferenceInvocation(GenAIInvocation):
             output_messages=self.output_messages,
             system_instruction=self.system_instruction,
             tool_definitions=self.tool_definitions,
+            prompt_variables=self.prompt_variables,
             for_span=for_span,
             content_capturing_mode=self._content_capturing_mode,
         )
@@ -174,16 +229,72 @@ class InferenceInvocation(GenAIInvocation):
             (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (
-                GenAI.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-                self.cache_creation_input_tokens,
+                _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+                self.cache_write_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.cache_read_input_tokens,
+                self.cache_read_input_tokens or None,
             ),
             (
                 GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-                self.thinking_tokens,
+                self.thinking_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
+                self.text_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
+                self.image_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
+                self.audio_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
+                self.text_output_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
+                self.image_output_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
+                self.audio_output_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
+                self.text_cache_read_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
+                self.image_cache_read_input_tokens or None,
+            ),
+            (
+                _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
+                self.audio_cache_read_input_tokens or None,
+            ),
+            (
+                _GEN_AI_REQUEST_REASONING_LEVEL,
+                self.reasoning_level,
+            ),
+            (
+                _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
+                self.previous_response_id,
+            ),
+            (
+                _GEN_AI_CONVERSATION_COMPACTED,
+                True if self.conversation_compacted else None,
+            ),
+            (
+                GenAI.GEN_AI_PROMPT_NAME,
+                self.prompt_name,
+            ),
+            (
+                _GEN_AI_PROMPT_VERSION,
+                self.prompt_version,
             ),
             (
                 GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
@@ -234,7 +345,7 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_message_attributes(for_span=True))
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()
         log_record = self._maybe_create_event()
         self._call_completion_hook(
             inputs=self.input_messages,
@@ -286,6 +397,7 @@ class LLMInvocation:
     finish_reasons: list[str] | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+
     attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Additional attributes to set on spans and/or events. Not set on metrics."""
     metric_attributes: dict[str, AttributeValue] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
@@ -307,7 +419,7 @@ class LLMInvocation:
     def _start_with_handler(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         *,
@@ -316,7 +428,7 @@ class LLMInvocation:
         """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
         inv = InferenceInvocation(
             tracer,
-            metrics_recorder,
+            instruments,
             logger,
             completion_hook,
             self.provider or "",
@@ -333,6 +445,7 @@ class LLMInvocation:
         inv.finish_reasons = self.finish_reasons
         inv.input_tokens = self.input_tokens
         inv.output_tokens = self.output_tokens
+
         inv.temperature = self.temperature
         inv.top_p = self.top_p
         inv.frequency_penalty = self.frequency_penalty
@@ -358,6 +471,7 @@ class LLMInvocation:
         inv.finish_reasons = self.finish_reasons
         inv.input_tokens = self.input_tokens
         inv.output_tokens = self.output_tokens
+
         inv.temperature = self.temperature
         inv.top_p = self.top_p
         inv.frequency_penalty = self.frequency_penalty

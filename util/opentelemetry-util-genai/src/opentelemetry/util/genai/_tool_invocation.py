@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+import timeit
+
 from opentelemetry._logs import Logger
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     gen_ai_json_dumps,
@@ -55,7 +57,7 @@ class ToolInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         name: str,
@@ -76,7 +78,7 @@ class ToolInvocation(GenAIInvocation):
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
         super().__init__(
             tracer,
-            metrics_recorder,
+            instruments,
             logger,
             completion_hook,
             operation_name=_operation_name,
@@ -119,8 +121,12 @@ class ToolInvocation(GenAIInvocation):
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+            GenAI.GEN_AI_TOOL_NAME: self._name,
         }
+        if self._tool_type is not None:
+            attrs[GenAI.GEN_AI_TOOL_TYPE] = self._tool_type
+        if self._agent_name is not None:
+            attrs[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
         attrs.update(self.metric_attributes)
         return attrs
 
@@ -150,4 +156,15 @@ class ToolInvocation(GenAIInvocation):
         }
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_metrics()
+
+    def _record_metrics(self) -> None:
+        duration_seconds = max(
+            timeit.default_timer() - self._monotonic_start_s,
+            0.0,
+        )
+        self._instruments.execute_tool_duration.record(
+            duration_seconds,
+            attributes=self._get_metric_attributes(),
+            context=self._span_context,
+        )

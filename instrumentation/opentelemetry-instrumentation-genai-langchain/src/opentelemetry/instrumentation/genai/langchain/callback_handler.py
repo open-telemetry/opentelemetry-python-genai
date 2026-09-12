@@ -173,7 +173,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent.input_messages = make_input_message(inputs)
 
                     if metadata:
-                        agent.agent_id = metadata.get("agent_id")
                         agent.agent_description = metadata.get(
                             "agent_description"
                         )
@@ -283,6 +282,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if (model := (metadata or {}).get(model_tag)) is not None:
                 request_model = str(model)
                 break
+
+        if request_model is None and metadata:
+            if model := metadata.get("ls_model_name"):
+                request_model = str(model)
 
         # Skip telemetry for unsupported request models
         if request_model is None:
@@ -536,29 +539,60 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         ):
                             output_tokens = 0
 
-                        # Cache/reasoning break-downs (Anthropic, OpenAI
-                        # reasoning models, Bedrock). Audio tokens are dropped
-                        # (no GenAI semconv attribute).
+                        # Cache, reasoning, and modality token break-downs
                         token_details = extract_token_details(
                             cast(dict[str, Any], usage_metadata)
                         )
-                        cache_creation = token_details.get(
-                            "cache_creation_input_tokens"
-                        )
-                        if cache_creation is not None:
-                            llm_invocation.cache_creation_input_tokens = (
-                                cache_creation
+                        if (
+                            cache_write := token_details.get(
+                                "cache_write_input_tokens"
                             )
-                        cache_read = token_details.get(
-                            "cache_read_input_tokens"
-                        )
-                        if cache_read is not None:
+                        ) is not None:
+                            llm_invocation.cache_write_input_tokens = (
+                                cache_write
+                            )
+                        if (
+                            cache_read := token_details.get(
+                                "cache_read_input_tokens"
+                            )
+                        ) is not None:
                             llm_invocation.cache_read_input_tokens = cache_read
-                        reasoning_tokens = token_details.get(
-                            "reasoning_tokens"
-                        )
-                        if reasoning_tokens is not None:
+                        if (
+                            reasoning_tokens := token_details.get(
+                                "reasoning_tokens"
+                            )
+                        ) is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
+
+                        if (
+                            text_in := token_details.get("text_input_tokens")
+                        ) is not None:
+                            llm_invocation.text_input_tokens = text_in
+                        if (
+                            image_in := token_details.get("image_input_tokens")
+                        ) is not None:
+                            llm_invocation.image_input_tokens = image_in
+                        if (
+                            audio_in := token_details.get("audio_input_tokens")
+                        ) is not None:
+                            llm_invocation.audio_input_tokens = audio_in
+
+                        if (
+                            text_out := token_details.get("text_output_tokens")
+                        ) is not None:
+                            llm_invocation.text_output_tokens = text_out
+                        if (
+                            image_out := token_details.get(
+                                "image_output_tokens"
+                            )
+                        ) is not None:
+                            llm_invocation.image_output_tokens = image_out
+                        if (
+                            audio_out := token_details.get(
+                                "audio_output_tokens"
+                            )
+                        ) is not None:
+                            llm_invocation.audio_output_tokens = audio_out
 
                         llm_invocation.output_tokens = output_tokens
 
