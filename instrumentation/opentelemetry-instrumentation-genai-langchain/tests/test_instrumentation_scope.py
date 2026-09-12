@@ -8,5 +8,7 @@ from opentelemetry.test_util_genai.scope import TelemetryHandlerScopeTest
 
 class TestInstrumentationScope(TelemetryHandlerScopeTest):
     instrumentor_class = LangChainInstrumentor
-    instrumentation_scope_name = "opentelemetry.instrumentation.genai.langchain"
+    instrumentation_scope_name = (
+        "opentelemetry.instrumentation.genai.langchain"
+    )
     instrumentation_scope_version = __version__
