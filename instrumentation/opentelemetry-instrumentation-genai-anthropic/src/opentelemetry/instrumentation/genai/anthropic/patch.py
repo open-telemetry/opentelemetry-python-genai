@@ -25,7 +25,11 @@ from .messages_extractors import (
     get_server_address_and_port,
     get_system_instruction,
 )
-from .utils import is_anthropic_async_stream, is_anthropic_stream
+from .utils import (
+    AnthropicBetaMessage,
+    is_anthropic_async_stream,
+    is_anthropic_stream,
+)
 from .wrappers import (
     AsyncMessagesStreamManagerWrapper,
     AsyncMessagesStreamWrapper,
@@ -37,12 +41,25 @@ from .wrappers import (
 if TYPE_CHECKING:
     from anthropic._streaming import AsyncStream as AnthropicAsyncStream
     from anthropic._streaming import Stream as AnthropicStream
+    from anthropic.lib.streaming._beta_messages import (  # pylint: disable=no-name-in-module
+        BetaAsyncMessageStreamManager,
+        BetaMessageStreamManager,
+    )
     from anthropic.lib.streaming._messages import (  # pylint: disable=no-name-in-module
         AsyncMessageStreamManager,
         MessageStreamManager,
     )
+    from anthropic.resources.beta.messages import (
+        AsyncMessages as AsyncBetaMessages,
+    )
+    from anthropic.resources.beta.messages import (
+        Messages as BetaMessages,
+    )
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import RawMessageStreamEvent
+    from anthropic.types.beta import (
+        BetaRawMessageStreamEvent,
+    )
 
 
 _logger = logging.getLogger(__name__)
@@ -106,12 +123,22 @@ def _is_raw_response(result: object) -> bool:
     return hasattr(result, "parse") and hasattr(result, "http_response")
 
 
+def _is_beta_resource(instance: object) -> bool:
+    """Whether ``instance`` belongs to the Anthropic beta resources hierarchy."""
+    return any(
+        cls.__module__.startswith("anthropic.resources.beta")
+        for cls in instance.__class__.__mro__
+    )
+
+
 def messages_create(
     handler: TelemetryHandler,
 ) -> Callable[
     ...,
     AnthropicMessage
+    | AnthropicBetaMessage
     | AnthropicStream[RawMessageStreamEvent]
+    | AnthropicStream[BetaRawMessageStreamEvent]
     | MessagesStreamWrapper[None],
 ]:
     """Wrap the `create` method of the `Messages` class to trace it."""
@@ -120,14 +147,19 @@ def messages_create(
     def traced_method(
         wrapped: Callable[
             ...,
-            AnthropicMessage | AnthropicStream[RawMessageStreamEvent],
+            AnthropicMessage
+            | AnthropicBetaMessage
+            | AnthropicStream[RawMessageStreamEvent]
+            | AnthropicStream[BetaRawMessageStreamEvent],
         ],
-        instance: Messages,
+        instance: Messages | BetaMessages,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> (
         AnthropicMessage
+        | AnthropicBetaMessage
         | AnthropicStream[RawMessageStreamEvent]
+        | AnthropicStream[BetaRawMessageStreamEvent]
         | MessagesStreamWrapper[None]
     ):
         invocation = _create_invocation(
@@ -142,22 +174,30 @@ def messages_create(
             invocation.fail(exc)
             raise
 
+        is_beta = _is_beta_resource(instance)
+
         if is_anthropic_stream(result):
             return MessagesStreamWrapper(
-                cast("AnthropicStream[RawMessageStreamEvent]", result),
+                cast(
+                    "AnthropicStream[RawMessageStreamEvent] | AnthropicStream[BetaRawMessageStreamEvent]",
+                    result,
+                ),
                 invocation,
                 capture_content,
+                is_beta=is_beta,
             )
         if _is_raw_response(result):
-            return wrap_raw_response(result, invocation, capture_content)
+            return wrap_raw_response(
+                result, invocation, capture_content, is_beta=is_beta
+            )
 
-        if isinstance(result, AnthropicMessage):
+        if isinstance(result, (AnthropicMessage, AnthropicBetaMessage)):
             MessageWrapper(result, capture_content).extract_into(invocation)
         invocation.stop()
         return result
 
     return cast(
-        'Callable[..., "AnthropicMessage" | "AnthropicStream[RawMessageStreamEvent]" | MessagesStreamWrapper[None]]',
+        "Callable[..., AnthropicMessage | AnthropicBetaMessage | AnthropicStream[RawMessageStreamEvent] | AnthropicStream[BetaRawMessageStreamEvent] | MessagesStreamWrapper[None]]",
         traced_method,
     )
 
@@ -167,7 +207,9 @@ def async_messages_create(
 ) -> Callable[
     ...,
     AnthropicMessage
+    | AnthropicBetaMessage
     | AnthropicAsyncStream[RawMessageStreamEvent]
+    | AnthropicAsyncStream[BetaRawMessageStreamEvent]
     | AsyncMessagesStreamWrapper[None],
 ]:
     """Wrap the async `create` method of the `AsyncMessages` class."""
@@ -177,15 +219,20 @@ def async_messages_create(
         wrapped: Callable[
             ...,
             Awaitable[
-                AnthropicMessage | AnthropicAsyncStream[RawMessageStreamEvent]
+                AnthropicMessage
+                | AnthropicBetaMessage
+                | AnthropicAsyncStream[RawMessageStreamEvent]
+                | AnthropicAsyncStream[BetaRawMessageStreamEvent]
             ],
         ],
-        instance: AsyncMessages,
+        instance: AsyncMessages | AsyncBetaMessages,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> (
         AnthropicMessage
+        | AnthropicBetaMessage
         | AnthropicAsyncStream[RawMessageStreamEvent]
+        | AnthropicAsyncStream[BetaRawMessageStreamEvent]
         | AsyncMessagesStreamWrapper[None]
     ):
         invocation = _create_invocation(
@@ -198,29 +245,37 @@ def async_messages_create(
             invocation.fail(exc)
             raise
 
+        is_beta = _is_beta_resource(instance)
+
         if is_anthropic_async_stream(result):
             return AsyncMessagesStreamWrapper(
-                cast("AnthropicAsyncStream[RawMessageStreamEvent]", result),
+                cast(
+                    "AnthropicAsyncStream[RawMessageStreamEvent] | AnthropicAsyncStream[BetaRawMessageStreamEvent]",
+                    result,
+                ),
                 invocation,
                 capture_content,
+                is_beta=is_beta,
             )
         if _is_raw_response(result):
-            return wrap_raw_response(result, invocation, capture_content)
+            return wrap_raw_response(
+                result, invocation, capture_content, is_beta=is_beta
+            )
 
-        if isinstance(result, AnthropicMessage):
+        if isinstance(result, (AnthropicMessage, AnthropicBetaMessage)):
             MessageWrapper(result, capture_content).extract_into(invocation)
         invocation.stop()
         return result
 
     return cast(
-        'Callable[..., "AnthropicMessage" | "AnthropicAsyncStream[RawMessageStreamEvent]" | AsyncMessagesStreamWrapper[None]]',
+        "Callable[..., AnthropicMessage | AnthropicBetaMessage | AnthropicAsyncStream[RawMessageStreamEvent] | AnthropicAsyncStream[BetaRawMessageStreamEvent] | AsyncMessagesStreamWrapper[None]]",
         traced_method,
     )
 
 
 def _create_invocation(
     handler: TelemetryHandler,
-    instance: Messages | AsyncMessages,
+    instance: Messages | AsyncMessages | BetaMessages | AsyncBetaMessages,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     capture_content: bool,
@@ -260,17 +315,21 @@ def messages_stream(
     capture_content = handler.should_capture_content()
 
     def traced_method(
-        wrapped: Callable[..., MessageStreamManager],
-        instance: Messages,
+        wrapped: Callable[
+            ..., MessageStreamManager[Any] | BetaMessageStreamManager[Any]
+        ],
+        instance: Messages | BetaMessages,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> MessagesStreamManagerWrapper[Any]:
+        is_beta = _is_beta_resource(instance)
         return MessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(
                 handler, instance, args, kwargs, capture_content
             ),
             capture_content,
+            is_beta=is_beta,
         )
 
     return cast(
@@ -285,17 +344,23 @@ def async_messages_stream(
     capture_content = handler.should_capture_content()
 
     def traced_method(
-        wrapped: Callable[..., AsyncMessageStreamManager[Any]],
-        instance: AsyncMessages,
+        wrapped: Callable[
+            ...,
+            AsyncMessageStreamManager[Any]
+            | BetaAsyncMessageStreamManager[Any],
+        ],
+        instance: AsyncMessages | AsyncBetaMessages,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> AsyncMessagesStreamManagerWrapper[Any]:
+        is_beta = _is_beta_resource(instance)
         return AsyncMessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(
                 handler, instance, args, kwargs, capture_content
             ),
             capture_content,
+            is_beta=is_beta,
         )
 
     return cast(

@@ -2093,3 +2093,631 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
     assert first_stops == [True]
     assert second_stops == [True]
     assert http_response.close_calls == 1
+
+
+try:
+    from anthropic.resources.beta.messages import (
+        AsyncMessages as _AsyncBetaMessages,
+    )
+
+    _beta_supported = hasattr(_AsyncBetaMessages, "create")
+except (ImportError, AttributeError):
+    _beta_supported = False
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_beta_messages_create_basic(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test basic async beta message creation produces correct span."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    response = await async_anthropic_client.beta.messages.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.name == f"chat {model}"
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "anthropic"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == response.id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == response.model
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    ] == expected_input_tokens(response.usage)
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == response.usage.output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        normalize_stop_reason(response.stop_reason),
+    )
+    assert (
+        span.attributes[ServerAttributes.SERVER_ADDRESS] == "api.anthropic.com"
+    )
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_beta_messages_create_with_content(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """Test async beta message creation captures input and output content."""
+    model = "claude-sonnet-4-6"
+    prompt = "Say hello in one word."
+    messages = [{"role": "user", "content": prompt}]
+
+    response = await async_anthropic_client.beta.messages.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == f"chat {model}"
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "anthropic"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == response.id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == response.model
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    ] == expected_input_tokens(response.usage)
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == response.usage.output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        normalize_stop_reason(response.stop_reason),
+    )
+    assert (
+        span.attributes[ServerAttributes.SERVER_ADDRESS] == "api.anthropic.com"
+    )
+
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"][0]["type"] == "text"
+    assert input_messages[0]["parts"][0]["content"] == prompt
+
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert len(output_messages) == 1
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": response.content[0].text}
+    ]
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_beta_messages_create_api_error(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that API errors in async beta message creation are recorded."""
+    model = "invalid-model-name"
+    messages = [{"role": "user", "content": "Hello"}]
+
+    with pytest.raises(NotFoundError):
+        await async_anthropic_client.beta.messages.create(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert ErrorAttributes.ERROR_TYPE in span.attributes
+    assert "NotFoundError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_beta_messages_create_streaming(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test streaming async beta message creation produces correct span."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    stream = await async_anthropic_client.beta.messages.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    )
+    assert isinstance(stream, AsyncMessagesStreamWrapper)
+
+    async with stream:
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.name == f"chat {model}"
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "anthropic"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+    assert (
+        span.attributes[ServerAttributes.SERVER_ADDRESS] == "api.anthropic.com"
+    )
+
+
+# Anthropic 0.51 omitted ?beta=true on async stream requests, while newer versions
+# include it; omit query from matching so the cassette matches both.
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+async def test_async_beta_messages_stream(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test streaming async beta message stream produces correct span."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    async with async_anthropic_client.beta.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+    span = spans[0]
+    assert span.name == f"chat {model}"
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "anthropic"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+    assert (
+        span.attributes[ServerAttributes.SERVER_ADDRESS] == "api.anthropic.com"
+    )
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+async def test_async_beta_messages_with_raw_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that with_raw_response.create on async beta messages produces correct span."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    raw_response = (
+        await async_anthropic_client.beta.messages.with_raw_response.create(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+        )
+    )
+    response = await _parse_raw_response(raw_response)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == f"chat {model}"
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "anthropic"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == response.id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == response.model
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    ] == expected_input_tokens(response.usage)
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == response.usage.output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        normalize_stop_reason(response.stop_reason),
+    )
+    assert (
+        span.attributes[ServerAttributes.SERVER_ADDRESS] == "api.anthropic.com"
+    )
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_create_streaming")
+async def test_async_beta_messages_with_streaming_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test async beta message creation with streaming response produces correct span."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    async with (
+        async_anthropic_client.beta.messages.with_streaming_response.create(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+            stream=True,
+        ) as raw_response
+    ):
+        stream = await raw_response.parse()
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == f"chat {model}"
+    assert span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME] == "chat"
+    assert span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME] == "anthropic"
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+    assert (
+        span.attributes[ServerAttributes.SERVER_ADDRESS] == "api.anthropic.com"
+    )
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_stream")
+async def test_async_beta_messages_stream_interrupted_mid_iteration(
+    monkeypatch, span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that mid-stream network failures in async beta stream propagate and record error.type."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    class ErrorInjectingStreamDelegate:
+        def __init__(self, inner):
+            self._inner = inner
+            self._count = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._count == 1:
+                raise ConnectionError("connection reset during stream")
+            self._count += 1
+            return await self._inner.__anext__()
+
+        async def close(self):
+            return await self._inner.close()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    async with async_anthropic_client.beta.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        monkeypatch.setattr(
+            stream, "stream", ErrorInjectingStreamDelegate(stream.stream)
+        )
+        with pytest.raises(
+            ConnectionError, match="connection reset during stream"
+        ):
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_stream")
+async def test_async_beta_messages_stream_user_exception(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that user raised exceptions from async beta.messages.stream are propagated."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        async with async_anthropic_client.beta.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+        ) as stream:
+            async for _ in stream:
+                raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_create_streaming")
+async def test_async_beta_messages_create_streaming_with_content(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """Test content capture on async beta create(stream=True)."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    stream = await async_anthropic_client.beta.messages.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    )
+
+    async with stream:
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello"}
+    ]
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_stream")
+async def test_async_beta_messages_stream_with_content(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """Test content capture on async beta.messages.stream()."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    async with async_anthropic_client.beta.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    input_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello"}
+    ]
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_create_streaming")
+async def test_async_beta_messages_create_streaming_interrupted_mid_iteration(
+    monkeypatch, span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that mid-stream network failures in async beta create(stream=True) propagate and record error.type."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    class ErrorInjectingStreamDelegate:
+        def __init__(self, inner):
+            self._inner = inner
+            self._count = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._count == 1:
+                raise ConnectionError("connection reset during stream")
+            self._count += 1
+            return await self._inner.__anext__()
+
+        async def close(self):
+            return await self._inner.close()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    stream = await async_anthropic_client.beta.messages.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    )
+    monkeypatch.setattr(
+        stream, "stream", ErrorInjectingStreamDelegate(stream.stream)
+    )
+
+    with pytest.raises(
+        ConnectionError, match="connection reset during stream"
+    ):
+        async with stream:
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_create_streaming")
+async def test_async_beta_messages_create_streaming_user_exception(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Test that user raised exceptions in async beta create(stream=True) are propagated."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    stream = await async_anthropic_client.beta.messages.create(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+        stream=True,
+    )
+
+    with pytest.raises(ValueError, match="User raised exception"):
+        async with stream:
+            async for _ in stream:
+                raise ValueError("User raised exception")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.skipif(
+    not _beta_supported,
+    reason="anthropic SDK does not support beta.messages",
+)
+@pytest.mark.asyncio
+@pytest.mark.vcr(match_on=["method", "scheme", "host", "port", "path"])
+@pytest.mark.cassette("test_async_beta_messages_stream")
+async def test_async_beta_messages_stream_closed_early_by_caller(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Caller-closing AsyncBetaMessages.stream early finalizes without error."""
+    model = "claude-sonnet-4-6"
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+
+    async with async_anthropic_client.beta.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=messages,
+    ) as stream:
+        await anext(stream)
+        await stream.close()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
