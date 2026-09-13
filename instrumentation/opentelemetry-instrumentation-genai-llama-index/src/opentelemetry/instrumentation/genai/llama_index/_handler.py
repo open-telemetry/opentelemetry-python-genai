@@ -10,7 +10,7 @@ from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from contextvars import ContextVar, Token
 from mimetypes import guess_type
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 from weakref import WeakKeyDictionary
 
 from llama_index.core.agent.workflow.base_agent import BaseWorkflowAgent
@@ -38,14 +38,19 @@ from llama_index.core.tools import BaseTool, FunctionTool, ToolOutput
 from pydantic import PrivateAttr
 
 from opentelemetry.context import Context, attach, detach
-from opentelemetry.trace import set_span_in_context
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    GenAIInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
+)
+
+_AnyInvocation: TypeAlias = (
+    WorkflowInvocation
+    | LocalAgentInvocation
+    | ToolInvocation
+    | RetrievalInvocation
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
@@ -552,7 +557,7 @@ def _tool_arguments(
 class _LlamaIndexInvocation(BaseSpan):
     """Pair a LlamaIndex span ID with the GenAI invocation it controls."""
 
-    _invocation: GenAIInvocation = PrivateAttr()
+    _invocation: _AnyInvocation = PrivateAttr()
     _tool_attributes_token: (
         Token[dict[str, _ToolExecutionAttributes] | None] | None
     ) = PrivateAttr()
@@ -567,7 +572,6 @@ class _LlamaIndexInvocation(BaseSpan):
     _workflow_agent_invocation: LocalAgentInvocation | None = PrivateAttr()
     _workflow_handoff: bool = PrivateAttr()
     _workflow_agent_context_token: Token[Context] | None = PrivateAttr()
-    _tool_parent_context_token: Token[Context] | None = PrivateAttr()
     _workflow_tool_token: Token[tuple[str, ToolInvocation] | None] | None = (
         PrivateAttr()
     )
@@ -582,7 +586,7 @@ class _LlamaIndexInvocation(BaseSpan):
         *,
         id_: str,
         parent_id: str | None,
-        invocation: GenAIInvocation,
+        invocation: _AnyInvocation,
         tool_attributes_token: Token[
             dict[str, _ToolExecutionAttributes] | None
         ]
@@ -594,7 +598,6 @@ class _LlamaIndexInvocation(BaseSpan):
         workflow_agent: BaseWorkflowAgent | None = None,
         workflow_agent_invocation: LocalAgentInvocation | None = None,
         workflow_handoff: bool = False,
-        tool_parent_context_token: Token[Context] | None = None,
     ) -> None:
         """Create the adapter used by LlamaIndex's span-handler lifecycle."""
         super().__init__(id_=id_, parent_id=parent_id)
@@ -609,7 +612,6 @@ class _LlamaIndexInvocation(BaseSpan):
         self._workflow_agent_invocation = workflow_agent_invocation
         self._workflow_handoff = workflow_handoff
         self._workflow_agent_context_token = None
-        self._tool_parent_context_token = tool_parent_context_token
         self._workflow_tool_counts = {}
         self._workflow_return_direct_runs = set()
         self._workflow_tool_errors = {}
@@ -693,15 +695,6 @@ class _LlamaIndexInvocation(BaseSpan):
                 pass
             self._workflow_tool_token = None
 
-    def reset_tool_parent_context(self) -> None:
-        """Detach the agent context after the tool span has finished."""
-        if self._tool_parent_context_token is not None:
-            try:
-                detach(self._tool_parent_context_token)
-            except ValueError:
-                pass
-            self._tool_parent_context_token = None
-
     def expect_workflow_tools(self, run_id: str, count: int) -> None:
         """Record how many tool calls the agent's current turn requested.
 
@@ -766,7 +759,7 @@ class _LlamaIndexInvocation(BaseSpan):
         """Make a resumed member-agent span current for this workflow step."""
         if self._workflow_agent_context_token is None:
             self._workflow_agent_context_token = attach(
-                set_span_in_context(self._invocation.span)
+                self._invocation.context
             )
 
     def reset_workflow_agent(self) -> None:
@@ -839,7 +832,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         can emit inference telemetry, and nested tool callbacks are deduplicated.
         """
         method_name = _method_name(id_)
-        invocation: GenAIInvocation
+        invocation: _AnyInvocation
         tool_attributes_token: (
             Token[dict[str, _ToolExecutionAttributes] | None] | None
         ) = None
@@ -852,7 +845,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         workflow_tool_token: (
             Token[tuple[str, ToolInvocation] | None] | None
         ) = None
-        tool_parent_context_token: Token[Context] | None = None
 
         if isinstance(instance, AgentWorkflow) and method_name == "run":
             capture_content = self._handler.should_capture_content()
@@ -1012,22 +1004,16 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             # The member-agent span stays open across workflow steps, each of
             # which runs in its own asyncio task. Pass its context explicitly
             # so the tool span nests under the agent that requested the call.
-            agent_context_token = (
-                attach(set_span_in_context(active_invocation.span))
-                if active_invocation is not None
-                else None
+            tool_invocation = self._handler.tool(
+                tool_call.tool_name,
+                tool_type=tool_type,
+                agent_name=getattr(active_invocation, "_agent_name", None),
+                context=(
+                    active_invocation.context
+                    if active_invocation is not None
+                    else None
+                ),
             )
-            try:
-                tool_invocation = self._handler.tool(
-                    tool_call.tool_name,
-                    tool_type=tool_type,
-                    agent_name=getattr(active_invocation, "_agent_name", None),
-                )
-            except BaseException:
-                if agent_context_token is not None:
-                    detach(agent_context_token)
-                raise
-            tool_parent_context_token = agent_context_token
             workflow_tool_token = _ACTIVE_WORKFLOW_TOOL.set(
                 (tool_call.tool_name, tool_invocation)
             )
@@ -1089,7 +1075,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             invocation=invocation,
             tool_attributes_token=tool_attributes_token,
             workflow_tool_token=workflow_tool_token,
-            tool_parent_context_token=tool_parent_context_token,
             workflow_agents=workflow_agents,
             workflow_run_id=workflow_run_id,
             workflow_agent=workflow_agent,
@@ -1199,7 +1184,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         elif isinstance(span._invocation, RetrievalInvocation):
             if span._invocation.should_capture_content:
                 span._invocation.documents = _retrieval_documents(result)
-        elif isinstance(span._invocation, ToolInvocation):
+        else:
             span.reset_workflow_tool()
             tool_output: ToolOutput | None = None
             if isinstance(result, ToolCallResult):
@@ -1236,7 +1221,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                         else RuntimeError(tool_output.content)
                     )
                     span._invocation.fail(error)
-                    span.reset_tool_parent_context()
                     self._finish_workflow_tool(
                         span,
                         handoff_succeeded=False,
@@ -1244,7 +1228,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                     )
                     return span
         span._invocation.stop()
-        span.reset_tool_parent_context()
         if isinstance(span._invocation, ToolInvocation):
             self._finish_workflow_tool(span)
         return span
@@ -1275,7 +1258,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             span._invocation.stop()
         else:
             span._invocation.fail(err)
-        span.reset_tool_parent_context()
         if isinstance(span._invocation, LocalAgentInvocation):
             span.reset_workflow_agent()
             self._release_workflow_invocation(span, span._invocation)
