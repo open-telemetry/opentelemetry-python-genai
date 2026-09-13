@@ -34,7 +34,6 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    GenAIInvocation,
     InferenceInvocation,
     LocalAgentInvocation,
 )
@@ -75,7 +74,8 @@ _RunStreamChunk: TypeAlias = (
 
 
 def _finish(
-    invocation: GenAIInvocation, error: BaseException | None = None
+    invocation: InferenceInvocation | LocalAgentInvocation,
+    error: BaseException | None = None,
 ) -> None:
     if error is not None:
         invocation.fail(error)
