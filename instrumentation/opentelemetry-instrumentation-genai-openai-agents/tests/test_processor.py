@@ -106,6 +106,7 @@ def test_function_span_creates_tool_invocation() -> None:
         tool_type="function",
     )
     tool_invocation = handler.tool.return_value
+    assert "gen_ai.provider.name" not in tool_invocation.metric_attributes
 
     # Input and output both get populated on the agents library span_data
     # while the tool runs, i.e. after on_span_start; our on_span_end reads
