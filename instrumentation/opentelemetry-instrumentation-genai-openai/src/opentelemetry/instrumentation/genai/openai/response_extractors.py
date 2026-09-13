@@ -253,11 +253,14 @@ def get_input_messages(
     return messages
 
 
-def _extract_output_parts(content_blocks: Sequence[object]) -> list[TextPart]:
+def _extract_output_parts(
+    content_blocks: Sequence[object] | None,
+) -> list[TextPart]:
     if (
         TextPart is None
         or ResponseOutputText is None
         or ResponseOutputRefusal is None
+        or not content_blocks
     ):
         return []
 
@@ -270,14 +273,22 @@ def _extract_output_parts(content_blocks: Sequence[object]) -> list[TextPart]:
     return parts
 
 
-def _parse_tool_call_arguments(arguments: str | None) -> object:
+def _parse_tool_call_arguments(arguments: object) -> object:
     if arguments is None:
         return None
 
-    try:
-        return json.loads(arguments)
-    except (TypeError, ValueError):
-        return arguments
+    if hasattr(arguments, "model_dump") and callable(arguments.model_dump):
+        return arguments.model_dump(mode="json", exclude_unset=True)
+    if hasattr(arguments, "dict") and callable(arguments.dict):
+        return arguments.dict(exclude_unset=True)
+
+    if isinstance(arguments, str):
+        try:
+            return json.loads(arguments)
+        except (TypeError, ValueError):
+            return arguments
+
+    return arguments
 
 
 def _extract_reasoning_parts(
@@ -375,12 +386,7 @@ def get_tool_definitions_from_response(
 
 
 def _response_types_available() -> bool:
-    return (
-        Response is not None
-        and ResponseOutputMessage is not None
-        and ResponseFunctionToolCall is not None
-        and ResponseReasoningItem is not None
-    )
+    return Response is not None and ResponseOutputMessage is not None
 
 
 def get_output_messages_from_response(
@@ -410,23 +416,99 @@ def get_output_messages_from_response(
             )
             continue
 
-        if isinstance(item, ResponseFunctionToolCall):
-            if ToolCall is None or item.status not in {
-                "completed",
-                "incomplete",
-            }:
+        is_rf_tool_call = ResponseFunctionToolCall is not None and isinstance(
+            item, ResponseFunctionToolCall
+        )
+        is_duck_tool_call = (
+            not is_rf_tool_call
+            and (
+                hasattr(item, "call_id")
+                or hasattr(item, "id")
+                or (
+                    isinstance(item, Mapping)
+                    and ("call_id" in item or "id" in item)
+                )
+            )
+            and (
+                (hasattr(item, "name") and hasattr(item, "arguments"))
+                or (
+                    isinstance(item, Mapping)
+                    and "name" in item
+                    and "arguments" in item
+                )
+                or hasattr(item, "function")
+                or (isinstance(item, Mapping) and "function" in item)
+            )
+            and (
+                getattr(item, "type", None)
+                in {"tool_call", "function_call", "function"}
+                or (
+                    isinstance(item, Mapping)
+                    and item.get("type")
+                    in {"tool_call", "function_call", "function"}
+                )
+                or getattr(item, "status", None) in {"completed", "incomplete"}
+                or (
+                    isinstance(item, Mapping)
+                    and item.get("status") in {"completed", "incomplete"}
+                )
+            )
+        )
+
+        if is_rf_tool_call or is_duck_tool_call:
+            status = (
+                item.get("status")
+                if isinstance(item, Mapping)
+                else getattr(item, "status", None)
+            )
+            if ToolCall is None or (
+                status is not None
+                and status not in {"completed", "incomplete"}
+            ):
                 continue
+
+            call_id = (
+                (item.get("call_id") or item.get("id"))
+                if isinstance(item, Mapping)
+                else (
+                    getattr(item, "call_id", None) or getattr(item, "id", None)
+                )
+            )
+            name = (
+                item.get("name")
+                if isinstance(item, Mapping)
+                else getattr(item, "name", None)
+            )
+            raw_args = (
+                item.get("arguments")
+                if isinstance(item, Mapping)
+                else getattr(item, "arguments", None)
+            )
+            fn = (
+                item.get("function")
+                if isinstance(item, Mapping)
+                else getattr(item, "function", None)
+            )
+            if fn is not None:
+                if isinstance(fn, Mapping):
+                    if name is None:
+                        name = fn.get("name")
+                    if raw_args is None:
+                        raw_args = fn.get("arguments")
+                else:
+                    if name is None:
+                        name = getattr(fn, "name", None)
+                    if raw_args is None:
+                        raw_args = getattr(fn, "arguments", None)
 
             messages.append(
                 OutputMessage(
                     role=Role.ASSISTANT.value,
                     parts=[
                         ToolCall(
-                            id=item.call_id if item.call_id else item.id,
-                            name=item.name,
-                            arguments=_parse_tool_call_arguments(
-                                item.arguments
-                            ),
+                            id=str(call_id) if call_id is not None else None,
+                            name=str(name) if name is not None else None,
+                            arguments=_parse_tool_call_arguments(raw_args),
                         )
                     ],
                     finish_reason="tool_call",
@@ -434,7 +516,9 @@ def get_output_messages_from_response(
             )
             continue
 
-        if isinstance(item, ResponseReasoningItem):
+        if ResponseReasoningItem is not None and isinstance(
+            item, ResponseReasoningItem
+        ):
             finish_reason = _finish_reason_from_status(item.status)
             if finish_reason is None:
                 continue
@@ -456,7 +540,6 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
     if (
         Response is None
         or ResponseOutputMessage is None
-        or ResponseFunctionToolCall is None
         or not isinstance(response, Response)
     ):
         return []
@@ -473,12 +556,54 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
 
     finish_reasons: list[str] = []
     for item in response.output:
-        if isinstance(item, ResponseFunctionToolCall) and item.status in {
-            "completed",
-            "incomplete",
-        }:
-            finish_reasons.append("tool_calls")
-            continue
+        is_rf_tool_call = ResponseFunctionToolCall is not None and isinstance(
+            item, ResponseFunctionToolCall
+        )
+        is_duck_tool_call = (
+            not is_rf_tool_call
+            and (
+                hasattr(item, "call_id")
+                or hasattr(item, "id")
+                or (
+                    isinstance(item, Mapping)
+                    and ("call_id" in item or "id" in item)
+                )
+            )
+            and (
+                (hasattr(item, "name") and hasattr(item, "arguments"))
+                or (
+                    isinstance(item, Mapping)
+                    and "name" in item
+                    and "arguments" in item
+                )
+                or hasattr(item, "function")
+                or (isinstance(item, Mapping) and "function" in item)
+            )
+            and (
+                getattr(item, "type", None)
+                in {"tool_call", "function_call", "function"}
+                or (
+                    isinstance(item, Mapping)
+                    and item.get("type")
+                    in {"tool_call", "function_call", "function"}
+                )
+                or getattr(item, "status", None) in {"completed", "incomplete"}
+                or (
+                    isinstance(item, Mapping)
+                    and item.get("status") in {"completed", "incomplete"}
+                )
+            )
+        )
+
+        if is_rf_tool_call or is_duck_tool_call:
+            status = (
+                item.get("status")
+                if isinstance(item, Mapping)
+                else getattr(item, "status", None)
+            )
+            if status is None or status in {"completed", "incomplete"}:
+                finish_reasons.append("tool_calls")
+                continue
 
         if not isinstance(item, ResponseOutputMessage):
             continue
@@ -488,7 +613,11 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
     finish_reasons = list(dict.fromkeys(finish_reasons))
     if finish_reasons:
         return finish_reasons
-    return [response_finish_reason] if response_finish_reason else []
+
+    if response_finish_reason is not None:
+        return [response_finish_reason]
+
+    return []
 
 
 def get_response_error(

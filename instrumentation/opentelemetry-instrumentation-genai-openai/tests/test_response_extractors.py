@@ -22,15 +22,22 @@ from opentelemetry.util.genai.types import (
     TextPart,
     UriPart,
 )
+from opentelemetry.util.genai.types import (
+    ToolCallRequestPart as ToolCall,
+)
 
 try:
     # Responses types are not available in the oldest supported OpenAI SDK.
     # pylint: disable-next=no-name-in-module
     from openai.types.responses.response import Response
+    from openai.types.responses.response_function_tool_call import (
+        ResponseFunctionToolCall,
+    )
 
     HAS_RESPONSES_TYPES = True
 except ImportError:
     Response = None
+    ResponseFunctionToolCall = None
     HAS_RESPONSES_TYPES = False
 
 pytestmark = pytest.mark.skipif(
@@ -1082,3 +1089,151 @@ def test_get_served_model_empty_string():
 def test_get_served_model_falsy_values_return_none(value):
     headers = {"x-ms-served-model": value}
     assert get_served_model(headers) is None
+
+
+def test_get_output_messages_from_response_function_tool_call_json_string(
+    loaded_module,
+):
+    assert ResponseFunctionToolCall is not None
+    tool_call = ResponseFunctionToolCall(
+        arguments='{"location": "Tokyo", "unit": "celsius"}',
+        call_id="call_abc123",
+        name="get_current_weather",
+        type="function_call",
+        status="completed",
+    )
+    response = _make_response(output=[tool_call])
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    assert len(messages) == 1
+    msg = messages[0]
+    assert msg.role == "assistant"
+    assert msg.finish_reason == "tool_call"
+    assert len(msg.parts) == 1
+    part = msg.parts[0]
+    assert isinstance(part, ToolCall)
+    assert part.id == "call_abc123"
+    assert part.name == "get_current_weather"
+    assert part.arguments == {"location": "Tokyo", "unit": "celsius"}
+
+
+def test_get_output_messages_from_response_function_tool_call_pydantic_v2(
+    loaded_module,
+):
+    class ArgsMock:
+        def model_dump(self, mode="json", exclude_unset=True):
+            return {"query": "otel", "limit": 10}
+
+    tool_call = SimpleNamespace(
+        id="call_pydantic_v2",
+        call_id="call_pydantic_v2",
+        name="search_documents",
+        arguments=ArgsMock(),
+        type="function_call",
+        status="completed",
+    )
+    response = Response.model_construct(output=[tool_call])
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    assert len(messages) == 1
+    assert messages[0].parts[0].arguments == {"query": "otel", "limit": 10}
+
+
+def test_get_output_messages_from_response_function_tool_call_pydantic_v1(
+    loaded_module,
+):
+    class V1ArgsMock:
+        def dict(self, exclude_unset=True):
+            return {"model": "gpt-4", "max_tokens": 100}
+
+    tool_call = SimpleNamespace(
+        call_id="call_pydantic_v1",
+        name="run_model",
+        arguments=V1ArgsMock(),
+        type="function_call",
+        status="completed",
+    )
+    response = Response.model_construct(output=[tool_call])
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    assert len(messages) == 1
+    assert messages[0].parts[0].arguments == {
+        "model": "gpt-4",
+        "max_tokens": 100,
+    }
+
+
+def test_get_output_messages_from_response_duck_typed_and_mapping(
+    loaded_module,
+):
+    # Mapping representation with 'function' sub-dict
+    dict_call = {
+        "id": "call_fn_dict",
+        "type": "function",
+        "function": {"name": "calc", "arguments": '{"x": 10}'},
+        "status": "completed",
+    }
+    # Duck-typed object with 'function' sub-object
+    duck_call = SimpleNamespace(
+        id="call_fn_obj",
+        type="tool_call",
+        function=SimpleNamespace(name="format", arguments={"indent": 2}),
+        status="incomplete",
+    )
+    # In-progress / ignored status
+    ignored_call = {
+        "id": "call_in_prog",
+        "type": "tool_call",
+        "name": "calc",
+        "arguments": "{}",
+        "status": "in_progress",
+    }
+
+    response = Response.model_construct()
+    response.output = [dict_call, duck_call, ignored_call]
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    assert len(messages) == 2
+    assert messages[0].parts[0].id == "call_fn_dict"
+    assert messages[0].parts[0].name == "calc"
+    assert messages[0].parts[0].arguments == {"x": 10}
+    assert messages[1].parts[0].id == "call_fn_obj"
+    assert messages[1].parts[0].name == "format"
+    assert messages[1].parts[0].arguments == {"indent": 2}
+
+
+def test_extract_finish_reasons_with_tool_calls(loaded_module):
+    tool_call_1 = ResponseFunctionToolCall(
+        arguments="{}",
+        call_id="call_1",
+        name="fn1",
+        type="function_call",
+        status="completed",
+    )
+    tool_call_2 = ResponseFunctionToolCall(
+        arguments="{}",
+        call_id="call_2",
+        name="fn2",
+        type="function_call",
+        status="incomplete",
+    )
+    in_progress_call = ResponseFunctionToolCall(
+        arguments="{}",
+        call_id="call_3",
+        name="fn3",
+        type="function_call",
+        status="in_progress",
+    )
+
+    # Completed tool call sets finish_reasons to ['tool_calls']
+    resp1 = _make_response(output=[tool_call_1, tool_call_2])
+    assert loaded_module.extract_finish_reasons(resp1) == ["tool_calls"]
+
+    # In-progress tool calls are ignored; falls back to response status
+    resp2 = _make_response(output=[in_progress_call], status="completed")
+    assert loaded_module.extract_finish_reasons(resp2) == ["stop"]
+
+
+def test_parse_tool_call_arguments_non_json_string(loaded_module):
+    raw = "unparseable string {"
+    assert loaded_module._parse_tool_call_arguments(raw) == raw
