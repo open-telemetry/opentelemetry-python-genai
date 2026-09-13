@@ -141,7 +141,7 @@ class InferenceInvocation(GenAIInvocation):
         self.prompt_version: str | None = None
         self.prompt_variables: Mapping[str, object] | None = None
         self.tool_definitions: list[ToolDefinition] | None = None
-        self.top_k: float | None = None
+        self.top_k: int | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
         # Rebuilt once per streaming chunk, so cache it and invalidate via

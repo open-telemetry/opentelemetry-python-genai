@@ -339,6 +339,7 @@ class TestTelemetryHandler(unittest.TestCase):
             invocation.attributes = {"custom_attr": "value"}
             invocation.temperature = 0.5
             invocation.top_p = 0.9
+            invocation.top_k = 40
             invocation.stop_sequences = ["stop"]
             invocation.finish_reasons = ["stop"]
             invocation.response_model_name = "test-response-model"
@@ -367,6 +368,7 @@ class TestTelemetryHandler(unittest.TestCase):
                 GenAI.GEN_AI_SYSTEM_INSTRUCTIONS: AnyNonNone(),
                 GenAI.GEN_AI_REQUEST_TEMPERATURE: 0.5,
                 GenAI.GEN_AI_REQUEST_TOP_P: 0.9,
+                GenAI.GEN_AI_REQUEST_TOP_K: 40,
                 GenAI.GEN_AI_REQUEST_STOP_SEQUENCES: ("stop",),
                 GenAI.GEN_AI_RESPONSE_FINISH_REASONS: ("stop",),
                 GenAI.GEN_AI_RESPONSE_MODEL: "test-response-model",
@@ -379,6 +381,7 @@ class TestTelemetryHandler(unittest.TestCase):
                 "custom_attr": "value",
             },
         )
+        self.assertIsInstance(span_attrs[GenAI.GEN_AI_REQUEST_TOP_K], int)
 
         input_message = _get_single_message(
             span_attrs, "gen_ai.input.messages"
