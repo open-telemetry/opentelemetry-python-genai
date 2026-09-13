@@ -93,6 +93,21 @@ class StreamingTestCase(TestCase):
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 3)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
 
+    def test_records_streaming_timing_metrics(self):
+        self.configure_valid_response(text="First response")
+        self.configure_valid_response(text="Second response")
+
+        self.generate_content(
+            model="gemini-2.0-flash", contents="Does this work?"
+        )
+
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_to_first_chunk"
+        )
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_per_output_chunk"
+        )
+
     def test_log_has_extra_genai_attributes(self):
         self.configure_valid_response(text="Yep, it works!")
         tok = context_api.attach(

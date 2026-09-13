@@ -394,6 +394,9 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_to_first_chunk"
+        )
 
     def test_generates_agent_span(self) -> None:
         self.configure_valid_interaction()
