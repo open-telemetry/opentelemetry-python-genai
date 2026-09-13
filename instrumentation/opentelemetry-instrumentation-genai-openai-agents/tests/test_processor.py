@@ -84,9 +84,7 @@ def test_agent_span_creates_invoke_local_agent() -> None:
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
 
 
-def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
-    None
-):
+def test_function_span_creates_tool_invocation() -> None:
     handler = _build_handler()
     handler.tool.return_value = MagicMock(
         spec=ToolInvocation,
@@ -108,10 +106,6 @@ def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
         tool_type="function",
     )
     tool_invocation = handler.tool.return_value
-
-    assert (
-        tool_invocation.metric_attributes["gen_ai.provider.name"] == "openai"
-    )
 
     # Input and output both get populated on the agents library span_data
     # while the tool runs, i.e. after on_span_start; our on_span_end reads

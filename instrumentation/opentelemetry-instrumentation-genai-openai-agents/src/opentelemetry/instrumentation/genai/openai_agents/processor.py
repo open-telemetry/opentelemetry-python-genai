@@ -43,9 +43,6 @@ from agents.tracing.span_data import (
     FunctionSpanData,
 )
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
 )
@@ -116,13 +113,6 @@ class GenAITracingProcessor(TracingProcessor):
             invocation = self._handler.tool(
                 name=span_data.name,
                 tool_type="function",
-            )
-
-            # ToolInvocation does not include provider in metric attributes
-            # by default; set it so gen_ai.client.operation.duration carries
-            # the required gen_ai.provider.name attribute.
-            invocation.metric_attributes[GenAI.GEN_AI_PROVIDER_NAME] = (
-                self._provider
             )
             self._invocations[span] = invocation
             return
