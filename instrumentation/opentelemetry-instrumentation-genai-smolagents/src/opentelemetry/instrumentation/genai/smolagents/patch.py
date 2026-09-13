@@ -224,7 +224,7 @@ def _apply_request_parameters(
 
     invocation.temperature = _coerce_float(merged.get("temperature"))
     invocation.top_p = _coerce_float(merged.get("top_p"))
-    invocation.top_k = _coerce_float(merged.get("top_k"))
+    invocation.top_k = _coerce_int(merged.get("top_k"))
     invocation.frequency_penalty = _coerce_float(
         merged.get("frequency_penalty")
     )
