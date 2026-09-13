@@ -417,7 +417,6 @@ def test_responses_retrieve_streaming(
         response_model=response.model,
         response_status="completed",
         finish_reasons=("stop",),
-        request_stream=True,
         stream_cursor=str(RETRIEVE_STREAM_CURSOR),
         response_service_tier=response.service_tier,
     )
@@ -476,7 +475,7 @@ def test_responses_retrieve_with_streaming_response_stays_lazy(
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
         == RETRIEVE_RESPONSE_ID
     )
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in span.attributes
     assert response.id == RETRIEVE_RESPONSE_ID
 
 

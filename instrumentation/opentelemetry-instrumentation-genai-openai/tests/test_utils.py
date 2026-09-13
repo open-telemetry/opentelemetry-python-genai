@@ -386,7 +386,6 @@ def assert_fetch_response_attributes(
     response_model: str | None = None,
     response_status: str | None = None,
     finish_reasons: tuple | None = None,
-    request_stream: bool | None = None,
     stream_cursor: str | None = None,
     response_service_tier: str | None = None,
     server_address: str = "api.openai.com",
@@ -419,6 +418,7 @@ def assert_fetch_response_attributes(
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
     assert GenAIAttributes.GEN_AI_REQUEST_MODEL not in span.attributes
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in span.attributes
 
     _assert_optional_attribute(
         span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response_model
@@ -426,9 +426,6 @@ def assert_fetch_response_attributes(
     _assert_optional_attribute(span, GEN_AI_RESPONSE_STATUS, response_status)
     _assert_optional_attribute(
         span, GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons
-    )
-    _assert_optional_attribute(
-        span, GenAIAttributes.GEN_AI_REQUEST_STREAM, request_stream
     )
     _assert_optional_attribute(
         span, GEN_AI_REQUEST_STREAM_CURSOR, stream_cursor
