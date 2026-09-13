@@ -40,7 +40,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 
 from ..common.base import TestCase as CommonTestCaseBase
-from .util import create_mock_completed_event, create_mock_interaction
+from .util import (
+    create_mock_completed_event,
+    create_mock_content_event,
+    create_mock_interaction,
+)
 
 
 class TestCase(CommonTestCaseBase):
@@ -97,8 +101,9 @@ class TestCase(CommonTestCaseBase):
                 self._interaction_index += 1
 
             if kwargs.get("stream"):
+                content_event = create_mock_content_event()
                 completed_event = create_mock_completed_event(result)
-                return [completed_event]
+                return [content_event, completed_event]
             return result
 
         mock.side_effect = e or _default_impl
@@ -387,8 +392,8 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].interaction.id, "stream-id-1")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].interaction.id, "stream-id-1")
 
         self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
@@ -396,6 +401,9 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
         self.otel.assert_has_metrics_data_named(
             "gen_ai.client.operation.time_to_first_chunk"
+        )
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_per_output_chunk"
         )
 
     def test_generates_agent_span(self) -> None:
@@ -425,8 +433,8 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].interaction.id, "stream-id-2")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].interaction.id, "stream-id-2")
 
         self.otel.assert_has_span_named("invoke_agent my_agent")
         span = self.otel.get_span_named("invoke_agent my_agent")
