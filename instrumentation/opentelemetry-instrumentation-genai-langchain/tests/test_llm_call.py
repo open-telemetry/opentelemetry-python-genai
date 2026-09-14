@@ -804,6 +804,59 @@ def test_chat_model_preserves_input_and_output_message_names(
     assert output_messages[0]["name"] == "assistant_bob"
     assert output_messages[0]["role"] == "assistant"
 
+    assert gen_ai_attributes.GEN_AI_REQUEST_TOP_K not in span.attributes
+    assert (
+        gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT not in span.attributes
+    )
+
+
+def test_chat_model_captures_top_k_and_choice_count(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    class _TestModel(FakeMessagesListChatModel):
+        model_name: str = "test-model"
+        top_k: int = 40
+        n: int = 3
+
+        @property
+        def _identifying_params(self):
+            return {
+                "model_name": self.model_name,
+                "top_k": self.top_k,
+                "n": self.n,
+            }
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+    ):
+        model = _TestModel(responses=[AIMessage(content="Hello there!")])
+        model.invoke([HumanMessage(content="Hi!")])
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert (
+        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT] == 3
+    )
+
+    (log,) = log_exporter.get_finished_logs()
+    assert (
+        log.log_record.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
+    )
+    assert (
+        log.log_record.attributes[
+            gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT
+        ]
+        == 3
+    )
+
 
 def test_chat_model_uses_ls_model_name_from_metadata(
     span_exporter,
