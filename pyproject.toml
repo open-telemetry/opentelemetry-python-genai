@@ -15,7 +15,11 @@ dependencies = [
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
   "opentelemetry-instrumentation-genai-bedrock[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
+
   "opentelemetry-instrumentation-genai-crewai[instruments]",
+
+  "opentelemetry-instrumentation-genai-cohere[instruments]",
+
   "opentelemetry-instrumentation-genai-dspy[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
@@ -26,8 +30,6 @@ dependencies = [
   "opentelemetry-instrumentation-genai-smolagents[instruments]",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
 ]
-
-
 # https://docs.astral.sh/uv/reference/settings/
 [tool.uv]
 package = false # https://docs.astral.sh/uv/reference/settings/#package
@@ -50,7 +52,11 @@ opentelemetry-instrumentation-genai-agno = { workspace = true }
 opentelemetry-instrumentation-genai-anthropic = { workspace = true }
 opentelemetry-instrumentation-genai-bedrock = { workspace = true }
 opentelemetry-instrumentation-genai-claude-agent-sdk = { workspace = true }
+
 opentelemetry-instrumentation-genai-crewai = { workspace = true }
+
+opentelemetry-instrumentation-genai-cohere = { workspace = true }
+
 opentelemetry-instrumentation-genai-dspy = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }
 opentelemetry-instrumentation-genai-langchain = { workspace = true }
@@ -60,8 +66,6 @@ opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
 opentelemetry-instrumentation-genai-qwen-agent = { workspace = true }
 opentelemetry-instrumentation-genai-smolagents = { workspace = true }
 opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
-
-
 # https://docs.astral.sh/uv/reference/settings/#workspace
 [tool.uv.workspace]
 members = [
@@ -106,8 +110,6 @@ known-third-party = [
 
 [tool.ruff.format]
 docstring-code-format = true
-
-
 # https://github.com/microsoft/pyright/blob/main/docs/configuration.md#type-check-rule-overrides
 [tool.pyright]
 typeCheckingMode = "strict"
@@ -122,7 +124,11 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-bedrock",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
+
   "instrumentation/opentelemetry-instrumentation-genai-crewai",
+
+  "instrumentation/opentelemetry-instrumentation-genai-cohere",
+
   "instrumentation/opentelemetry-instrumentation-genai-dspy",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
@@ -145,8 +151,13 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-bedrock/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
+
   "instrumentation/opentelemetry-instrumentation-genai-crewai/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-crewai/examples/**/*.py",
+
+  "instrumentation/opentelemetry-instrumentation-genai-cohere/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-cohere/examples/**/*.py",
+
   "instrumentation/opentelemetry-instrumentation-genai-dspy/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-dspy/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
