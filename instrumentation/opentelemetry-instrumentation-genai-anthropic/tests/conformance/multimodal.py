@@ -161,7 +161,7 @@ class MultimodalScenario(Scenario):
         assert input_messages[0]["role"] == "user"
 
         parts = input_messages[0]["parts"]
-        assert len(parts) == 9
+        assert len(parts) == 10
         assert parts[0] == {
             "type": "text",
             "content": "Describe these images.",
@@ -186,7 +186,7 @@ class MultimodalScenario(Scenario):
         }
         assert parts[4] == {
             "type": "uri",
-            "mime_type": "application/pdf",
+            "mime_type": None,
             "modality": "document",
             "uri": "https://example.com/document.pdf",
         }
@@ -197,15 +197,22 @@ class MultimodalScenario(Scenario):
             "content": "RG9jdW1lbnQgdGV4dA==",
         }
         assert parts[6] == {
-            "type": "document",
+            "type": "text",
+            "content": "Nested text",
         }
         assert parts[7] == {
+            "type": "uri",
+            "mime_type": None,
+            "modality": "image",
+            "uri": "https://example.com/nested.png",
+        }
+        assert parts[8] == {
             "type": "file",
             "mime_type": None,
             "modality": "image",
             "file_id": "file-image",
         }
-        assert parts[8] == {
+        assert parts[9] == {
             "type": "file",
             "mime_type": None,
             "modality": "document",

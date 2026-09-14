@@ -44,6 +44,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
+from .conftest import (
+    assert_multimodal_input,
+    multimodal_input_message,
+)
+
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
@@ -105,118 +110,6 @@ def _assert_weather_tool_definitions(span):
             "parameters": _WEATHER_TOOL["input_schema"],
         }
     ]
-
-
-def _multimodal_input_message():
-    return {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Describe these images."},
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": "QUJD",
-                },
-            },
-            {
-                "type": "image",
-                "source": {
-                    "type": "url",
-                    "url": "https://example.com/image.png",
-                },
-            },
-            {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": "QUJD",
-                },
-            },
-            {
-                "type": "document",
-                "source": {
-                    "type": "url",
-                    "url": "https://example.com/document.pdf",
-                },
-            },
-            {
-                "type": "document",
-                "source": {
-                    "type": "text",
-                    "media_type": "text/plain",
-                    "data": "Document text",
-                },
-            },
-            {
-                "type": "document",
-                "title": "Reference",
-                "context": "Use the nested content.",
-                "citations": {"enabled": True},
-                "source": {
-                    "type": "content",
-                    "content": [
-                        {"type": "text", "text": "Nested text"},
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "url",
-                                "url": "https://example.com/nested.png",
-                            },
-                        },
-                    ],
-                },
-            },
-        ],
-    }
-
-
-def _assert_multimodal_input(span):
-    messages = _load_span_messages(span, GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    assert len(messages) == 1
-    assert messages[0]["role"] == "user"
-
-    parts = messages[0]["parts"]
-    assert len(parts) == 7
-    assert parts[0] == {
-        "type": "text",
-        "content": "Describe these images.",
-    }
-    assert parts[1] == {
-        "type": "blob",
-        "mime_type": "image/png",
-        "modality": "image",
-        "content": "QUJD",
-    }
-    assert parts[2] == {
-        "type": "uri",
-        "mime_type": None,
-        "modality": "image",
-        "uri": "https://example.com/image.png",
-    }
-    assert parts[3] == {
-        "type": "blob",
-        "mime_type": "application/pdf",
-        "modality": "document",
-        "content": "QUJD",
-    }
-    assert parts[4] == {
-        "type": "uri",
-        "mime_type": "application/pdf",
-        "modality": "document",
-        "uri": "https://example.com/document.pdf",
-    }
-    assert parts[5] == {
-        "type": "blob",
-        "mime_type": "text/plain",
-        "modality": "document",
-        "content": "RG9jdW1lbnQgdGV4dA==",
-    }
-    assert parts[6] == {
-        "type": "document",
-    }
 
 
 class _AsyncErrorInjectingStreamDelegate:
@@ -370,12 +263,12 @@ async def test_async_messages_create_captures_multimodal_content(
         await async_anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=100,
-            messages=[_multimodal_input_message()],
+            messages=[multimodal_input_message()],
         )
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    _assert_multimodal_input(spans[0])
+    assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio
@@ -600,7 +493,7 @@ async def test_async_messages_create_streaming_captures_multimodal_content(
         stream = await async_anthropic_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=100,
-            messages=[_multimodal_input_message()],
+            messages=[multimodal_input_message()],
             stream=True,
         )
         async with stream:
@@ -609,7 +502,7 @@ async def test_async_messages_create_streaming_captures_multimodal_content(
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    _assert_multimodal_input(spans[0])
+    assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio
