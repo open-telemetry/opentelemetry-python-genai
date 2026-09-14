@@ -3,6 +3,8 @@
 
 """Tests for GoogleGenAiSdkInstrumentor."""
 
+import os
+
 from google.genai.models import AsyncModels, Models
 
 from opentelemetry.instrumentation.google_genai import (
@@ -14,6 +16,9 @@ from opentelemetry.instrumentation.google_genai.interactions import (
     InteractionsResource,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+)
 
 
 def test_co_filename_on_wrapped_functions(
@@ -58,3 +63,29 @@ def test_co_filename_on_wrapped_functions(
         ), (
             f"Expected opentelemetry/instrumentation/google_genai removed from {co_filename} upon uninstrument"
         )
+
+
+def test_instrument_does_not_mutate_emit_event_env(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
+    monkeypatch.delenv(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, raising=False)
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        assert OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT not in os.environ
+
+
+def test_instrument_preserves_explicit_emit_event_env(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "false")
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        assert os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT) == "false"

@@ -842,7 +842,6 @@ def instrument_generate_content(
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
 ) -> object:
-    os.environ["OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"] = "true"
     snapshot = _MethodsSnapshot()
     wrapped = wrap_function_wrapper(
         "google.genai.models",
