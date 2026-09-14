@@ -1,0 +1,152 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "Reply with one short word.",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-5.1",
+        "n": 3,
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '108'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 2.48.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 3.7.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.15
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "Okay",
+                "refusal": null,
+                "role": "assistant"
+              }
+            },
+            {
+              "finish_reason": "stop",
+              "index": 1,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "Okay",
+                "refusal": null,
+                "role": "assistant"
+              }
+            },
+            {
+              "finish_reason": "stop",
+              "index": 2,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "Okay",
+                "refusal": null,
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789402853,
+          "id": "chatcmpl-EO3iH8BjWLEPGDghInTosUBN4mUPS",
+          "model": "gpt-5.1-2025-11-13",
+          "object": "chat.completion",
+          "service_tier": "default",
+          "system_fingerprint": null,
+          "usage": {
+            "completion_tokens": 33,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "prompt_tokens": 12,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 0
+            },
+            "total_tokens": 45
+          }
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      content-length:
+      - '2710'
+      content-type:
+      - application/json
+      date:
+      - Mon, 14 Sep 2026 16:20:53 GMT
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      x-accel-buffering:
+      - 'no'
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-abusepenalty-active:
+      - 'False'
+      x-ratelimit-key:
+      - gpt-5.1
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '500000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '499988'
+      x-ratelimit-renewalperiod-requests:
+      - '60'
+      x-ratelimit-renewalperiod-tokens:
+      - '60'
+      x-ratelimit-reset-requests:
+      - '0'
+      x-ratelimit-reset-tokens:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1
