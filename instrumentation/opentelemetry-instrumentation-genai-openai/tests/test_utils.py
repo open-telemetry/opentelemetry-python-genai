@@ -5,6 +5,7 @@
 
 import base64
 import json
+from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any
 
@@ -468,6 +469,134 @@ def get_current_weather_tool_definition():
     }
 
 
+TOOL_CALL_ID = "call_90uO5LcGP5vTBTCrjyhYtWsA"
+TOOL_LOOP_PROMPT = "What's the weather in Seattle right now?"
+TOOL_LOOP_OUTPUT = '{"temperature": 14, "unit": "C", "conditions": "rain"}'
+
+
+def get_responses_tool_loop_input():
+    """The input a caller replays on the turn after a tool call.
+
+    Responses API input is a flat item list: the assistant's tool call and the
+    tool result are siblings of the user message, not nested inside it.
+    """
+    return [
+        {"role": "user", "content": TOOL_LOOP_PROMPT},
+        {
+            "type": "function_call",
+            "id": "fc_0bedf6e1ffba28050069e2f402203c8196b45065342d00ed17",
+            "call_id": TOOL_CALL_ID,
+            "name": "get_current_weather",
+            "arguments": '{"location":"Seattle, WA"}',
+            "status": "completed",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": TOOL_CALL_ID,
+            "output": TOOL_LOOP_OUTPUT,
+        },
+    ]
+
+
+EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [{"type": "text", "content": TOOL_LOOP_PROMPT}],
+        "name": None,
+    },
+    {
+        "role": "assistant",
+        "parts": [
+            {
+                "type": "tool_call",
+                "id": TOOL_CALL_ID,
+                "name": "get_current_weather",
+                "arguments": {"location": "Seattle, WA"},
+            }
+        ],
+        "name": None,
+    },
+    {
+        "role": "tool",
+        "parts": [
+            {
+                "type": "tool_call_response",
+                "id": TOOL_CALL_ID,
+                "response": TOOL_LOOP_OUTPUT,
+            }
+        ],
+        "name": None,
+    },
+]
+
+CUSTOM_TOOL_MODEL = "gpt-5-mini"
+CUSTOM_TOOL_CALL_ID = "call_d4JQwp4PqjmpNV4fiBLCvack"
+CUSTOM_TOOL_INPUT = "SELECT COUNT(*) AS count FROM users;\n"
+CUSTOM_TOOL_OUTPUT = "42 rows"
+
+
+def get_responses_custom_tool_definition():
+    return {
+        "type": "custom",
+        "name": "run_sql",
+        "description": "Run a read-only SQL query and return rows.",
+    }
+
+
+def get_responses_custom_tool_loop_input():
+    """The input a caller replays after a custom-tool call, as recorded."""
+    return [
+        {
+            "id": "rs_021487c99c6b4d6f006a9e6ccb6af887d0b12a2253b8e3e3f8",
+            "summary": [],
+            "type": "reasoning",
+            "content": [],
+            "encrypted_content": "gAAAAABqnmzMN9RqmH9jGxjmoJdoO3La",
+        },
+        {
+            "call_id": CUSTOM_TOOL_CALL_ID,
+            "input": CUSTOM_TOOL_INPUT,
+            "name": "run_sql",
+            "type": "custom_tool_call",
+            "id": "ctc_021487c99c6b4d6f006a9e6ccc0f2c87d09587d31dc59b609c",
+            "status": "completed",
+        },
+        {
+            "type": "custom_tool_call_output",
+            "call_id": CUSTOM_TOOL_CALL_ID,
+            "output": CUSTOM_TOOL_OUTPUT,
+        },
+    ]
+
+
+EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [
+    {
+        "role": "assistant",
+        "parts": [
+            {
+                "type": "tool_call",
+                "id": CUSTOM_TOOL_CALL_ID,
+                "name": "run_sql",
+                # Free-form text, so recorded verbatim rather than JSON-parsed.
+                "arguments": CUSTOM_TOOL_INPUT,
+            }
+        ],
+        "name": None,
+    },
+    {
+        "role": "tool",
+        "parts": [
+            {
+                "type": "tool_call_response",
+                "id": CUSTOM_TOOL_CALL_ID,
+                "response": CUSTOM_TOOL_OUTPUT,
+            }
+        ],
+        "name": None,
+    },
+]
+
+
 def get_responses_weather_tool_definition():
     return {
         "type": "function",
@@ -669,3 +798,30 @@ def assert_embedding_attributes(
         assert span.attributes["gen_ai.embeddings.dimension.count"] == len(
             response.data[0].embedding
         )
+
+
+def test_prepare_input_messages_reduces_tool_content_to_data():
+    """A tool result may hold SDK models, which the span serializer rejects."""
+    from pydantic import BaseModel
+
+    from opentelemetry.instrumentation.genai.openai.utils import (
+        _prepare_input_messages,
+    )
+    from opentelemetry.util.genai.utils import gen_ai_json_dumps
+
+    class Part(BaseModel):
+        text: str
+
+    (message,) = _prepare_input_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [Part(text="shipped")],
+            }
+        ]
+    )
+
+    (serialized,) = json.loads(gen_ai_json_dumps([asdict(message)]))
+    (item,) = serialized["parts"][0]["response"]
+    assert item["text"] == "shipped"
