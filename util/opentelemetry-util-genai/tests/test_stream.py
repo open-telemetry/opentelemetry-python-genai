@@ -13,8 +13,10 @@ import pytest
 from opentelemetry.util.genai.stream import (
     AsyncStreamManagerWrapper,
     AsyncStreamWrapper,
+    AsyncToolStreamWrapper,
     SyncStreamManagerWrapper,
     SyncStreamWrapper,
+    SyncToolStreamWrapper,
     finalize_on_aclose,
     finalize_on_close,
 )
@@ -1225,5 +1227,118 @@ def test_async_manager_wrapper_fails_invocation_when_exit_raises_before_enter():
             await wrapper.__aexit__(None, None, None)
 
         assert invocation.failures == [manager_error]
+
+    asyncio.run(exercise())
+
+
+class _FakeToolInvocation:
+    def __init__(self, should_capture_content=True):
+        self.span = patch("opentelemetry.trace.Span").start()
+        self._context_token = object()
+        self.should_capture_content = should_capture_content
+        self.tool_result = None
+        self.stop_count = 0
+        self.failures = []
+
+    def stop(self):
+        self.stop_count += 1
+
+    def fail(self, error):
+        self.failures.append(error)
+
+
+def test_sync_tool_stream_wrapper_lifecycle():
+    with (
+        patch("opentelemetry.util.genai.stream.detach") as mock_detach,
+        patch(
+            "opentelemetry.util.genai.stream.attach", return_value="new-token"
+        ) as mock_attach,
+    ):
+        invocation = _FakeToolInvocation()
+        token = invocation._context_token
+        stream = _FakeSyncStream(chunks=["chunk1", "chunk2"])
+        wrapper = SyncToolStreamWrapper(stream, invocation)
+
+        mock_detach.assert_called_once_with(token)
+        assert invocation._context_token is None
+
+        assert next(wrapper) == "chunk1"
+        mock_attach.assert_called_once()
+        assert invocation._context_token == "new-token"
+
+        assert next(wrapper) == "chunk2"
+
+        with pytest.raises(StopIteration):
+            next(wrapper)
+
+        assert invocation.tool_result == "chunk1chunk2"
+        assert invocation.stop_count == 1
+
+
+def test_sync_tool_stream_wrapper_error():
+    with (
+        patch("opentelemetry.util.genai.stream.detach"),
+        patch("opentelemetry.util.genai.stream.attach"),
+    ):
+        invocation = _FakeToolInvocation()
+        error = ValueError("tool failed")
+        stream = _FakeSyncStream(error=error)
+        wrapper = SyncToolStreamWrapper(stream, invocation)
+
+        with pytest.raises(ValueError, match="tool failed"):
+            next(wrapper)
+
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+
+
+def test_async_tool_stream_wrapper_lifecycle():
+    async def exercise():
+        with (
+            patch("opentelemetry.util.genai.stream.detach") as mock_detach,
+            patch(
+                "opentelemetry.util.genai.stream.attach",
+                return_value="new-token",
+            ) as mock_attach,
+        ):
+            invocation = _FakeToolInvocation()
+            token = invocation._context_token
+            stream = _FakeAsyncStream(chunks=["chunk1", "chunk2"])
+            wrapper = AsyncToolStreamWrapper(stream, invocation)
+
+            mock_detach.assert_called_once_with(token)
+            assert invocation._context_token is None
+
+            assert await wrapper.__anext__() == "chunk1"
+            mock_attach.assert_called_once()
+            assert invocation._context_token == "new-token"
+
+            assert await wrapper.__anext__() == "chunk2"
+
+            with pytest.raises(StopAsyncIteration):
+                await wrapper.__anext__()
+
+            assert invocation.tool_result == "chunk1chunk2"
+            assert invocation.stop_count == 1
+
+    asyncio.run(exercise())
+
+
+def test_async_tool_stream_wrapper_error():
+    async def exercise():
+        with (
+            patch("opentelemetry.util.genai.stream.detach"),
+            patch("opentelemetry.util.genai.stream.attach"),
+        ):
+            invocation = _FakeToolInvocation()
+            error = ValueError("async tool failed")
+            stream = _FakeAsyncStream(error=error)
+            wrapper = AsyncToolStreamWrapper(stream, invocation)
+
+            with pytest.raises(ValueError, match="async tool failed"):
+                await wrapper.__anext__()
+
+            assert invocation.failures == [error]
+            assert invocation.stop_count == 0
 
     asyncio.run(exercise())
