@@ -1,0 +1,1 @@
+Record failed Bedrock invocations when cancellation raises a `BaseException`.

@@ -353,7 +353,7 @@ def test_streaming_run_records_no_chunk_metrics(
     list(agent.run("Test question", stream=True))
 
     metrics = metrics_by_name(metric_reader)
-    assert gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION in metrics
+    assert "gen_ai.invoke_agent.duration" in metrics
     assert (
         gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
         not in metrics
@@ -389,9 +389,9 @@ def test_agent_run_metrics(
     agent.run("Test question")
 
     metrics = metrics_by_name(metric_reader)
-    duration = metrics[gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION]
+    duration = metrics["gen_ai.invoke_agent.duration"]
     assert {
-        GenAI.GEN_AI_OPERATION_NAME: "invoke_agent",
+        GenAI.GEN_AI_AGENT_NAME: "CodeAgent",
         GenAI.GEN_AI_REQUEST_MODEL: "fake-model",
     } in data_point_attributes(duration)
     # A run reports no token counts of its own: each model call records its

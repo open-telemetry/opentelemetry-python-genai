@@ -56,6 +56,7 @@ import smolagents
 from smolagents import models
 from wrapt import wrap_function_wrapper
 
+from opentelemetry.instrumentation.genai.smolagents.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.completion_hook import load_completion_hook
@@ -137,6 +138,8 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             logger_provider=kwargs.get("logger_provider"),
             completion_hook=kwargs.get("completion_hook")
             or load_completion_hook(),
+            instrumentation_scope_name=__package__,
+            instrumentation_scope_version=__version__,
         )
 
         self._wrapped_generate_classes = []

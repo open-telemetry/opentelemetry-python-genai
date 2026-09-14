@@ -1,0 +1,1 @@
+Do not record `gen_ai.provider.name` on tool execution metric attributes.

@@ -482,3 +482,233 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
     async with wrapper as result:
         assert isinstance(result, AsyncMessagesStreamWrapper)
         assert result.stream is stream
+
+
+def test_stream_wrapper_accumulate_event_failure_logs_warning_and_disables(
+    monkeypatch, caplog
+):
+    import logging
+
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+
+    calls = []
+
+    def mock_accumulate(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("Unexpected argument in new SDK version")
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeSyncStream(events=["chunk1", "chunk2"])
+    wrapper = _make_stream_wrapper(stream)
+
+    with caplog.at_level(logging.WARNING):
+        list(wrapper)
+
+    assert len(calls) == 1
+    assert wrappers._accumulation_disabled is True
+    assert (
+        "Failed to accumulate streaming content; this Anthropic SDK version is not supported."
+        in caplog.text
+    )
+
+
+def test_stream_wrapper_passes_json_bufs_when_supported(monkeypatch):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+    monkeypatch.setattr(wrappers, "_accumulate_takes_json_bufs", True)
+
+    captured_kwargs = []
+
+    def mock_accumulate(**kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(
+            model="claude-test",
+            id="msg_1",
+            usage=None,
+            content=[],
+            stop_reason=None,
+        )
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeSyncStream(events=["chunk1"])
+    wrapper = _make_stream_wrapper(stream)
+
+    list(wrapper)
+
+    assert len(captured_kwargs) == 1
+    assert "json_bufs" in captured_kwargs[0]
+    assert captured_kwargs[0]["json_bufs"] is wrapper._self_json_bufs
+
+
+def test_stream_wrapper_does_not_pass_json_bufs_when_unsupported(monkeypatch):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+    monkeypatch.setattr(wrappers, "_accumulate_takes_json_bufs", False)
+
+    captured_kwargs = []
+
+    def mock_accumulate(**kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(
+            model="claude-test",
+            id="msg_1",
+            usage=None,
+            content=[],
+            stop_reason=None,
+        )
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeSyncStream(events=["chunk1"])
+    wrapper = _make_stream_wrapper(stream)
+
+    list(wrapper)
+
+    assert len(captured_kwargs) == 1
+    assert "json_bufs" not in captured_kwargs[0]
+
+
+@pytest.mark.asyncio
+async def test_async_stream_wrapper_accumulate_event_failure_logs_warning_and_disables(
+    monkeypatch, caplog
+):
+    import logging
+
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+
+    calls = []
+
+    def mock_accumulate(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("Unexpected argument in new SDK version")
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeAsyncStream(events=["chunk1", "chunk2"])
+    wrapper = _make_async_stream_wrapper(stream)
+
+    with caplog.at_level(logging.WARNING):
+        async for _ in wrapper:
+            pass
+
+    assert len(calls) == 1
+    assert wrappers._accumulation_disabled is True
+    assert (
+        "Failed to accumulate streaming content; this Anthropic SDK version is not supported."
+        in caplog.text
+    )
+
+
+def test_stream_wrapper_reraises_non_exception(monkeypatch):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+
+    def mock_accumulate(**kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeSyncStream(events=["chunk1"])
+    wrapper = _make_stream_wrapper(stream)
+
+    with pytest.raises(KeyboardInterrupt):
+        list(wrapper)
+
+    assert wrappers._accumulation_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_async_stream_wrapper_reraises_non_exception(monkeypatch):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+
+    def mock_accumulate(**kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeAsyncStream(events=["chunk1"])
+    wrapper = _make_async_stream_wrapper(stream)
+
+    with pytest.raises(KeyboardInterrupt):
+        async for _ in wrapper:
+            pass
+
+    assert wrappers._accumulation_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_async_stream_wrapper_passes_json_bufs_when_supported(
+    monkeypatch,
+):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+    monkeypatch.setattr(wrappers, "_accumulate_takes_json_bufs", True)
+
+    captured_kwargs = []
+
+    def mock_accumulate(**kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(
+            model="claude-test",
+            id="msg_1",
+            usage=None,
+            content=[],
+            stop_reason=None,
+        )
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeAsyncStream(events=["chunk1"])
+    wrapper = _make_async_stream_wrapper(stream)
+
+    async for _ in wrapper:
+        pass
+
+    assert len(captured_kwargs) == 1
+    assert "json_bufs" in captured_kwargs[0]
+    assert captured_kwargs[0]["json_bufs"] is wrapper._self_json_bufs
+
+
+@pytest.mark.asyncio
+async def test_async_stream_wrapper_does_not_pass_json_bufs_when_unsupported(
+    monkeypatch,
+):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+    monkeypatch.setattr(wrappers, "_accumulate_takes_json_bufs", False)
+
+    captured_kwargs = []
+
+    def mock_accumulate(**kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(
+            model="claude-test",
+            id="msg_1",
+            usage=None,
+            content=[],
+            stop_reason=None,
+        )
+
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    stream = _FakeAsyncStream(events=["chunk1"])
+    wrapper = _make_async_stream_wrapper(stream)
+
+    async for _ in wrapper:
+        pass
+
+    assert len(captured_kwargs) == 1
+    assert "json_bufs" not in captured_kwargs[0]

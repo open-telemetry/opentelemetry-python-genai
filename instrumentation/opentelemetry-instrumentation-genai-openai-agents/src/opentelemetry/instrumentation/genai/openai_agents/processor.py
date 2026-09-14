@@ -43,16 +43,14 @@ from agents.tracing.span_data import (
     FunctionSpanData,
 )
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    GenAIInvocation,
+    LocalAgentInvocation,
     ToolInvocation,
+    WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import Error
 from opentelemetry.util.types import AnyValue
@@ -85,9 +83,9 @@ class GenAITracingProcessor(TracingProcessor):
     def __init__(self, handler: TelemetryHandler, provider: str) -> None:
         self._handler = handler
         self._provider = provider
-        self._invocations: weakref.WeakKeyDictionary[Any, GenAIInvocation] = (
-            weakref.WeakKeyDictionary()
-        )
+        self._invocations: weakref.WeakKeyDictionary[
+            Any, WorkflowInvocation | LocalAgentInvocation | ToolInvocation
+        ] = weakref.WeakKeyDictionary()
 
     def on_trace_start(self, trace: Trace) -> None:
         # ``trace.name`` comes from ``RunConfig.workflow_name`` (default
@@ -116,13 +114,6 @@ class GenAITracingProcessor(TracingProcessor):
             invocation = self._handler.tool(
                 name=span_data.name,
                 tool_type="function",
-            )
-
-            # ToolInvocation does not include provider in metric attributes
-            # by default; set it so gen_ai.client.operation.duration carries
-            # the required gen_ai.provider.name attribute.
-            invocation.metric_attributes[GenAI.GEN_AI_PROVIDER_NAME] = (
-                self._provider
             )
             self._invocations[span] = invocation
             return

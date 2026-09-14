@@ -34,9 +34,8 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
-    GenAIInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
 )
 from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.types import OutputMessage, Role, TextPart
@@ -75,7 +74,8 @@ _RunStreamChunk: TypeAlias = (
 
 
 def _finish(
-    invocation: GenAIInvocation, error: BaseException | None = None
+    invocation: InferenceInvocation | LocalAgentInvocation,
+    error: BaseException | None = None,
 ) -> None:
     if error is not None:
         invocation.fail(error)
@@ -224,7 +224,7 @@ def _apply_request_parameters(
 
     invocation.temperature = _coerce_float(merged.get("temperature"))
     invocation.top_p = _coerce_float(merged.get("top_p"))
-    invocation.top_k = _coerce_float(merged.get("top_k"))
+    invocation.top_k = _coerce_int(merged.get("top_k"))
     invocation.frequency_penalty = _coerce_float(
         merged.get("frequency_penalty")
     )
@@ -422,7 +422,7 @@ def model_generate_stream(handler: TelemetryHandler) -> _Wrapper[Model]:
 
 
 def _record_run_answer(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     output: object,
     *,
@@ -454,7 +454,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
     def __init__(
         self,
         stream: Generator[_RunStreamChunk, None, None],
-        invocation: AgentInvocation,
+        invocation: LocalAgentInvocation,
         agent: MultiStepAgent,
         *,
         capture_content: bool,
@@ -522,7 +522,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
 
 
 def _record_agent(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     bound: dict[str, Any],
     *,
@@ -540,7 +540,7 @@ def _record_agent(
 
 
 def _record_agent_run(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     bound: dict[str, Any],
     result: object,

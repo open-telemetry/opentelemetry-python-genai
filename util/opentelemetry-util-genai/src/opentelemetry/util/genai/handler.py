@@ -11,10 +11,12 @@ Classes:
     - TelemetryHandler: Manages GenAI invocation lifecycles and emits telemetry.
 
 Functions:
-    - get_telemetry_handler: Returns a singleton `TelemetryHandler` instance.
 
 Usage:
-    handler = get_telemetry_handler()
+    handler = TelemetryHandler(
+        instrumentation_scope_name=__name__,
+        instrumentation_scope_version=__version__,
+    )
 
     # Factory method: construct and start in one call, then stop or fail.
     invocation = handler.inference("my-provider", request_model="my-model")
@@ -41,29 +43,30 @@ from opentelemetry._logs import (
     LoggerProvider,
     get_logger,
 )
-from opentelemetry.metrics import MeterProvider, get_meter
+from opentelemetry.metrics import Meter, MeterProvider, get_meter
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
-    SpanKind,
     TracerProvider,
     get_tracer,
 )
-from opentelemetry.util.genai._agent_invocation import AgentInvocation
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
     EmbeddingInvocation,
     FetchResponseInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
+    RemoteAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -84,21 +87,44 @@ class TelemetryHandler:
         meter_provider: MeterProvider | None = None,
         logger_provider: LoggerProvider | None = None,
         completion_hook: CompletionHook | None = None,
+        instrumentation_scope_name: str | None = None,
+        instrumentation_scope_version: str | None = None,
     ):
+        """Creates a new telemetry handler.
+
+        Args:
+            instrumentation_scope_name: the name of the instrumentation library
+                emitting the telemetry, reported as the instrumentation scope
+                name. Instrumentations must pass their dotted package path so
+                telemetry is attributable to them; it defaults to this module for
+                backwards compatibility.
+            instrumentation_scope_version: the version of the instrumentation
+                library, reported as the instrumentation scope version.
+        """
         schema_url = Schemas.V1_37_0.value
+        # The scope name and version must describe the same library, so a
+        # version passed without a name is dropped rather than pinned onto the
+        # util's own scope name.
+        if instrumentation_scope_name is None:
+            instrumentation_scope_name = __name__
+            instrumentation_scope_version = __version__
+        version = instrumentation_scope_version or ""
         self._tracer = get_tracer(
-            __name__,
-            __version__,
+            instrumentation_scope_name,
+            version,
             tracer_provider,
             schema_url=schema_url,
         )
-        meter = get_meter(
-            __name__, meter_provider=meter_provider, schema_url=schema_url
+        meter: Meter = get_meter(
+            instrumentation_scope_name,
+            version,
+            meter_provider=meter_provider,
+            schema_url=schema_url,
         )
-        self._metrics_recorder = InvocationMetricsRecorder(meter)
+        self._instruments = _Instruments(meter)
         self._logger = get_logger(
-            __name__,
-            __version__,
+            instrumentation_scope_name,
+            version,
             logger_provider,
             schema_url=schema_url,
         )
@@ -151,7 +177,7 @@ class TelemetryHandler:
         """
         return InferenceInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider,
@@ -170,7 +196,7 @@ class TelemetryHandler:
         """
         invocation._start_with_handler(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             content_capturing_mode=self._content_capturing_mode,
@@ -195,7 +221,7 @@ class TelemetryHandler:
         """
         return EmbeddingInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider,
@@ -224,7 +250,7 @@ class TelemetryHandler:
         """
         return RetrievalInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             data_source_id=data_source_id,
@@ -253,7 +279,7 @@ class TelemetryHandler:
         """
         return ToolInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
@@ -278,7 +304,7 @@ class TelemetryHandler:
         """
         return WorkflowInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
@@ -333,7 +359,7 @@ class TelemetryHandler:
         """
         return InferenceInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -363,7 +389,7 @@ class TelemetryHandler:
         """
         return EmbeddingInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -397,7 +423,7 @@ class TelemetryHandler:
         """
         return FetchResponseInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -435,7 +461,7 @@ class TelemetryHandler:
         """
         return ToolInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
@@ -462,12 +488,11 @@ class TelemetryHandler:
         Set remaining attributes (agent_name, etc.) on the returned invocation,
         then call invocation.stop() or invocation.fail().
         """
-        return AgentInvocation(
+        return LocalAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
             content_capturing_mode=self._content_capturing_mode,
@@ -492,13 +517,12 @@ class TelemetryHandler:
         Set remaining attributes (agent_name, etc.) on the returned invocation,
         then call invocation.stop() or invocation.fail().
         """
-        return AgentInvocation(
+        return RemoteAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
-            span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
             server_address=server_address,
@@ -511,7 +535,7 @@ class TelemetryHandler:
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+    ) -> LocalAgentInvocation:
         """Returns an agent invocation (INTERNAL span kind). Starts span when called.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
@@ -522,12 +546,11 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return AgentInvocation(
+        return LocalAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
-            span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
             content_capturing_mode=self._content_capturing_mode,
@@ -541,7 +564,9 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+        agent_id: str | None = None,
+        agent_version: str | None = None,
+    ) -> RemoteAgentInvocation:
         """Returns an agent invocation (CLIENT span kind). Starts span when called.
 
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
@@ -552,15 +577,16 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return AgentInvocation(
+        return RemoteAgentInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             provider=provider,
-            span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
+            agent_id=agent_id,
+            agent_version=agent_version,
             server_address=server_address,
             server_port=server_port,
             content_capturing_mode=self._content_capturing_mode,
@@ -580,7 +606,7 @@ class TelemetryHandler:
         """
         return WorkflowInvocation(
             self._tracer,
-            self._metrics_recorder,
+            self._instruments,
             self._logger,
             self._completion_hook,
             name,
@@ -596,6 +622,9 @@ def get_telemetry_handler(
 ) -> TelemetryHandler:
     """
     Returns a singleton TelemetryHandler instance.
+
+    .. deprecated::
+        Construct a :class:`TelemetryHandler` directly instead.
     """
     handler: TelemetryHandler | None = getattr(
         get_telemetry_handler, "_default_handler", None

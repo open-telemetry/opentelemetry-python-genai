@@ -27,7 +27,7 @@ def multiply(a: int, b: int) -> int:
 
 class ToolScenario(Scenario):
     expected_spans = {"execute_tool": 1}
-    expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_metrics = ("gen_ai.execute_tool.duration",)
     expected_violations = (
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",

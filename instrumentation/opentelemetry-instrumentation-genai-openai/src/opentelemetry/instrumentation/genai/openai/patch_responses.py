@@ -19,7 +19,6 @@ from .response_extractors import (
     get_fetch_response_creation_kwargs,
     get_inference_creation_kwargs,
     get_response_error,
-    is_streamed_raw_response,
     set_fetch_response_attributes,
     set_invocation_response_attributes,
 )
@@ -108,7 +107,7 @@ def responses_create(
             else:
                 invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -181,7 +180,7 @@ def async_responses_create(
             else:
                 invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -215,11 +214,6 @@ def _start_fetch_response_invocation(
 ) -> FetchResponseInvocation:
     invocation = handler.fetch_response(
         **get_fetch_response_creation_kwargs(response_id, instance),
-        request_stream=(
-            True
-            if is_streaming(kwargs) or is_streamed_raw_response(kwargs)
-            else None
-        ),
     )
     invocation.stream_cursor = _get_stream_cursor(kwargs)
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
@@ -286,7 +280,7 @@ def responses_retrieve(
             )
             invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -356,7 +350,7 @@ def async_responses_retrieve(
             )
             invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 

@@ -109,18 +109,16 @@ def test_invoke_model_anthropic_messages(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 100
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P] == 0.9
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40.0
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K] == 40
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K], int
+    )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 8
-    assert (
-        span.attributes[
-            GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        ]
-        == 2
-    )
+    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 2
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
         == 4
@@ -448,7 +446,8 @@ def test_extract_invoke_model_request_zero_values(tracer_provider) -> None:
     )
     assert invocation.temperature == 0.0
     assert invocation.top_p == 0.0
-    assert invocation.top_k == 0.0
+    assert invocation.top_k == 0
+    assert isinstance(invocation.top_k, int)
     assert invocation.max_tokens == 0
     assert invocation.seed == 0
 

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -18,6 +19,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace import SpanKind
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -475,13 +477,14 @@ def test_direct_invocation_instantiation_falls_back_to_env():
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     tracer = tracer_provider.get_tracer(__name__)
-    mock_recorder = MagicMock()
+    meter_provider = MeterProvider()
+    meter = meter_provider.get_meter(__name__)
     mock_logger = MagicMock()
     mock_hook = MagicMock(spec=CompletionHook)
 
     invocation = ToolInvocation(
         tracer=tracer,
-        metrics_recorder=mock_recorder,
+        instruments=_Instruments(meter),
         logger=mock_logger,
         completion_hook=mock_hook,
         name="direct_tool",

@@ -1,0 +1,1 @@
+Emit telemetry under the `opentelemetry.instrumentation.genai.dspy` instrumentation scope instead of `opentelemetry.util.genai.handler`

@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import inspect
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from copy import copy, deepcopy
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from wrapt import (
     BoundFunctionWrapper,
@@ -28,7 +28,8 @@ from opentelemetry.instrumentation.genai.dspy.utils import (
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
+    LocalAgentInvocation,
+    RetrievalInvocation,
     ToolInvocation,
 )
 from opentelemetry.util.genai.types import (
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
     from dspy.primitives.module import Module
     from dspy.primitives.prediction import Prediction
+    from dspy.retrievers.retrieve import Retrieve
 
 _REACT_MODULE = "dspy.predict.react"
 _REACT_CLASS = "ReAct"
@@ -164,7 +166,7 @@ def _wrap_function(
 
 
 def patch_dspy(handler: TelemetryHandler) -> None:
-    """Apply patches to DSPy Tool and ReAct classes."""
+    """Apply patches to DSPy Tool, ReAct, and Retrieve classes."""
     import dspy
 
     tool_module = dspy.Tool.__module__
@@ -178,6 +180,14 @@ def patch_dspy(handler: TelemetryHandler) -> None:
         tool_module,
         f"{tool_name}.acall",
         _tool_acall(handler),
+    )
+
+    retrieve_module = dspy.Retrieve.__module__
+    retrieve_name = dspy.Retrieve.__name__
+    _wrap_function(
+        retrieve_module,
+        f"{retrieve_name}.forward",
+        _retrieve_forward(handler),
     )
 
     _wrap_function(
@@ -215,6 +225,8 @@ def unpatch_dspy() -> None:
 
     unwrap(dspy.Tool, "__call__")
     unwrap(dspy.Tool, "acall")
+
+    unwrap(dspy.Retrieve, "forward")
 
     unwrap(dspy.predict.react.ReAct, "forward")
     unwrap(dspy.predict.react.ReAct, "aforward")
@@ -323,7 +335,7 @@ def _start_agent_invocation(
     instance: Module,
     kwargs: dict[str, Any],
     agent_name: str,
-) -> AgentInvocation:
+) -> LocalAgentInvocation:
     invocation = handler.invoke_local_agent(agent_name=agent_name)
     if handler.should_capture_content() and kwargs:
         content_str = extract_input_content(kwargs)
@@ -337,7 +349,7 @@ def _start_agent_invocation(
 
 
 def _set_agent_invocation_output(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     instance: Module,
     result: Prediction | None,
 ) -> None:
@@ -391,6 +403,114 @@ def _react_aforward(
             result = await wrapped(*args, **kwargs)
             if handler.should_capture_content():
                 _set_agent_invocation_output(invocation, instance, result)
+            return result
+
+    return traced_method
+
+
+def _extract_retrieval_query(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> str | None:
+    if "query" in kwargs and kwargs["query"] is not None:
+        return str(kwargs["query"])
+    if args and args[0] is not None:
+        return str(args[0])
+    return None
+
+
+def _extract_retrieval_k(
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> int | None:
+    k = kwargs.get("k")
+    if k is None and len(args) > 1:
+        k = args[1]
+    if k is None and hasattr(instance, "k"):
+        k = getattr(instance, "k", None)
+    if k is not None:
+        try:
+            return int(k)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _start_retrieval_invocation(
+    handler: TelemetryHandler,
+    instance: Retrieve,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> RetrievalInvocation:
+    rm: Any = getattr(instance, "rm", None)
+    if rm is None:
+        import dspy
+
+        rm = getattr(dspy.settings, "rm", None)
+
+    # DSPy retrieval models lack a uniform identifier schema, so inspect common index
+    # attributes across the Retrieve instance and configured RM.
+    data_source_id: str | None = (
+        getattr(instance, "data_source_id", None)
+        or getattr(instance, "index_name", None)
+        or (getattr(rm, "data_source_id", None) if rm is not None else None)
+        or (getattr(rm, "index_name", None) if rm is not None else None)
+        or (getattr(rm, "collection_name", None) if rm is not None else None)
+    )
+
+    invocation = handler.retrieval(
+        data_source_id=str(data_source_id)
+        if data_source_id is not None
+        else None,
+    )
+
+    invocation.query_text = _extract_retrieval_query(args, kwargs)
+    invocation.top_k = _extract_retrieval_k(instance, args, kwargs)
+    return invocation
+
+
+def _set_retrieval_invocation_documents(
+    handler: TelemetryHandler,
+    invocation: RetrievalInvocation,
+    result: object,
+) -> None:
+    if not handler.should_capture_content():
+        return
+
+    passages: Sequence[object] | None = None
+    if hasattr(result, "passages"):
+        attr_val = getattr(result, "passages")
+        if isinstance(attr_val, Sequence) and not isinstance(
+            attr_val, (str, bytes)
+        ):
+            passages = cast(Sequence[object], attr_val)
+    elif isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        passages = cast(Sequence[object], result)
+    elif isinstance(result, str):
+        passages = [result]
+
+    if passages is None:
+        return
+
+    invocation.documents = [{"content": str(psg)} for psg in passages]
+
+
+def _retrieve_forward(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Retrieve,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_retrieval_invocation(
+            handler, instance, args, kwargs
+        )
+        with invocation:
+            result = wrapped(*args, **kwargs)
+            _set_retrieval_invocation_documents(handler, invocation, result)
             return result
 
     return traced_method

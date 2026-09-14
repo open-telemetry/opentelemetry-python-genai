@@ -167,7 +167,7 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(message.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
-    invocation.cache_creation_input_tokens = tokens.cache_creation_input_tokens
+    invocation.cache_write_input_tokens = tokens.cache_creation_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
     if capture_content:

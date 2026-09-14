@@ -23,7 +23,7 @@ class AgentScenario(Scenario):
     # The model call goes to the OpenAI SDK, whose instrumentation is not
     # enabled here. Tool calls are not instrumented yet.
     expected_spans = {"invoke_agent": 1}
-    expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_metrics = ("gen_ai.invoke_agent.duration",)
 
     def run(
         self,

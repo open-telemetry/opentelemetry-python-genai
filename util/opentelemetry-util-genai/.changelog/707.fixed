@@ -1,0 +1,1 @@
+Change `InferenceInvocation.top_k` type from `float` to `int`.

@@ -22,7 +22,6 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import (
-    ExpectedViolation,
     Scenario,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
@@ -35,12 +34,6 @@ class InferenceStreamingScenario(Scenario):
         "gen_ai.client.token.usage",
         "gen_ai.client.operation.time_to_first_chunk",
         "gen_ai.client.operation.time_per_output_chunk",
-    )
-    expected_violations = (
-        ExpectedViolation(
-            advice_id="missing_attribute",
-            message_substring="gen_ai.usage.cache_creation.input_tokens",
-        ),
     )
 
     def validate(self, report: LiveCheckReport) -> None:
