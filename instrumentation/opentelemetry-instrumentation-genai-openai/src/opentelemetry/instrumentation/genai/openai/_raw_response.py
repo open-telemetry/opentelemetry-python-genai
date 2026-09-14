@@ -168,7 +168,7 @@ class RawResponseStreamProxy(ObjectProxy):
             result = finalize()
             if inspect.isawaitable(result):
                 await result
-        except Exception:  # pylint: disable=broad-exception-caught
+        except BaseException:  # pylint: disable=broad-exception-caught
             # See _finalize_once.
             _logger.debug(
                 "error finalizing an abandoned raw response", exc_info=True
