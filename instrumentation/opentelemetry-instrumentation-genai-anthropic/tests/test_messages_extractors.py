@@ -15,32 +15,27 @@ from anthropic.types import (
     WebSearchToolResultError,
 )
 
-
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
-    get_tool_definitions,
     get_input_messages,
+    get_tool_definitions,
     set_invocation_response_attributes,
 )
 from opentelemetry.instrumentation.genai.anthropic.utils import (
+    _convert_content_block_to_part,
     _convert_dict_block_to_part,
     convert_content_to_parts,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
     FilePart,
-    GenericPart,
-    TextPart,
-    UriPart,
-)
-from opentelemetry.instrumentation.genai.anthropic.utils import (
-    _convert_content_block_to_part,
-)
-from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
+    GenericPart,
     GenericToolDefinition,
     ServerToolCallPart,
     ServerToolCallResponsePart,
+    TextPart,
+    UriPart,
 )
 
 

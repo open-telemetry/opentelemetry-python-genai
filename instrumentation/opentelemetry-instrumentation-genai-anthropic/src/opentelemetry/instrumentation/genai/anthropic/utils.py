@@ -205,7 +205,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
     return []
 
 
-def _convert_document_block(block: Mapping[str, Any]) -> list[MessagePart]:
+def _convert_document_block(block: Mapping[str, object]) -> list[MessagePart]:
     return _extract_document_source(block.get("source"))
 
 
@@ -324,7 +324,7 @@ def convert_content_to_parts(
     parts: list[MessagePart] = []
     for item in content:
         if hasattr(item, "get"):
-            item_mapping = cast(Mapping[str, Any], item)
+            item_mapping = cast(Mapping[str, object], item)
             if item_mapping.get("type") == "document":
                 parts.extend(_convert_document_block(item_mapping))
                 continue
