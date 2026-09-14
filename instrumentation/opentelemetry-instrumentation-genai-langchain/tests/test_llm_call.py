@@ -848,6 +848,10 @@ def test_chat_openai_captures_choice_count(
     )
 
 
+@pytest.mark.vcr()
+@pytest.mark.cassette(
+    "test_chat_anthropic_captures_top_k_and_choice_count"
+)
 def test_chat_anthropic_captures_top_k_and_choice_count(
     span_exporter,
     log_exporter,
@@ -855,7 +859,6 @@ def test_chat_anthropic_captures_top_k_and_choice_count(
     meter_provider,
     logger_provider,
     monkeypatch,
-    vcr,
 ):
     model = ChatAnthropic(
         model="claude-sonnet-4-5",
@@ -883,12 +886,9 @@ def test_chat_anthropic_captures_top_k_and_choice_count(
         logger_provider=logger_provider,
         content_capture="SPAN_AND_EVENT",
     ):
-        with vcr.use_cassette(
-            "test_chat_anthropic_captures_top_k_and_choice_count.yaml"
-        ):
-            model.invoke(
-                [HumanMessage(content="Reply with one short word.")], n=3
-            )
+        model.invoke(
+            [HumanMessage(content="Reply with one short word.")], n=3
+        )
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
