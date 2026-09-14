@@ -267,9 +267,7 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
             # Chat Completions nests the descriptor under "file"; the
             # Responses API carries the same fields on the part itself.
             file_part = _document_to_part(
-                get_property_value(item, "file")
-                if part_type == "file"
-                else item
+                get_property_value(item, "file") or item
             )
             if file_part is not None:
                 parts.append(file_part)
@@ -320,6 +318,11 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             if tool_calls:
                 parts += extract_tool_calls_new(tool_calls)
             parts += _content_to_parts(content)
+            # A refused turn replayed as history carries content=None and
+            # the text in `refusal`, same as a fresh completion does.
+            refusal = get_property_value(message, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
 
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")

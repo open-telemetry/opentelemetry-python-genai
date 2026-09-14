@@ -336,6 +336,26 @@ def test_chat_content_parts_drop_malformed_image_and_keep_text():
     assert parts == [TextPart(content="Keep this")]
 
 
+def test_prepare_input_messages_captures_assistant_refusal():
+    # A refused turn replayed as chat history carries content=None, so the
+    # message used to be dropped for having no parts.
+    messages = [
+        {"role": "user", "content": "disallowed request"},
+        {
+            "role": "assistant",
+            "content": None,
+            "refusal": "I cannot help with that.",
+        },
+    ]
+
+    input_messages = _prepare_input_messages(messages)
+
+    assert len(input_messages) == 2
+    assert input_messages[1].parts == [
+        TextPart(content="I cannot help with that.")
+    ]
+
+
 def test_prepare_input_messages_drops_messages_without_parts():
     messages = _prepare_input_messages(
         [
