@@ -2435,6 +2435,7 @@ def test_sync_messages_stream_until_done_records_response(
     assert_span_attributes(
         spans[0],
         request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
         response_model=model,
         input_tokens=13,
         output_tokens=5,

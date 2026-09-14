@@ -2234,6 +2234,10 @@ async def test_async_messages_stream_until_done_records_response(
     assert len(spans) == 1
     span = spans[0]
     assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01N2EGWxw2zHUcjTjToMivN6"
+    )
+    assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
         == "claude-haiku-4-5-20251001"
     )
