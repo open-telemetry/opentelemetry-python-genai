@@ -808,25 +808,23 @@ def test_chat_model_preserves_input_and_output_message_names(
     assert gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT not in span.attributes
 
 
-def test_chat_model_captures_top_k_and_choice_count(
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassette was recorded with langchain-openai 1.x",
+)
+def test_chat_openai_captures_choice_count(
     span_exporter,
     log_exporter,
     tracer_provider,
     meter_provider,
     logger_provider,
+    vcr,
 ):
-    class _TestModel(FakeMessagesListChatModel):
-        model_name: str = "test-model"
-        top_k: int = 40
-        n: int = 3
-
-        @property
-        def _identifying_params(self):
-            return {
-                "model_name": self.model_name,
-                "top_k": self.top_k,
-                "n": self.n,
-            }
+    model = ChatOpenAI(
+        model="gpt-5.1",
+        api_key="test_openai_api_key",
+        n=3,
+    )
 
     with instrument(
         LangChainInstrumentor(),
@@ -835,8 +833,66 @@ def test_chat_model_captures_top_k_and_choice_count(
         logger_provider=logger_provider,
         content_capture="SPAN_AND_EVENT",
     ):
-        model = _TestModel(responses=[AIMessage(content="Hello there!")])
-        model.invoke([HumanMessage(content="Hi!")])
+        with vcr.use_cassette(
+            "test_chat_openai_captures_choice_count.yaml"
+        ):
+            model.invoke(
+                [HumanMessage(content="Reply with one short word.")]
+            )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT] == 3
+
+    (log,) = log_exporter.get_finished_logs()
+    assert (
+        log.log_record.attributes[
+            gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT
+        ]
+        == 3
+    )
+
+
+def test_chat_anthropic_captures_top_k_and_choice_count(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    monkeypatch,
+    vcr,
+):
+    model = ChatAnthropic(
+        model="claude-sonnet-4-5",
+        api_key="test_key",
+        max_tokens=32,
+        top_k=40,
+    )
+    create_message = model._client.messages.create
+
+    def create_message_with_choice_count(**kwargs):
+        choice_count = kwargs.pop("n")
+        kwargs["extra_body"] = {"n": choice_count}
+        return create_message(**kwargs)
+
+    monkeypatch.setattr(
+        model._client.messages,
+        "create",
+        create_message_with_choice_count,
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+    ):
+        with vcr.use_cassette(
+            "test_chat_anthropic_captures_top_k_and_choice_count.yaml"
+        ):
+            model.invoke(
+                [HumanMessage(content="Reply with one short word.")], n=3
+            )
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
