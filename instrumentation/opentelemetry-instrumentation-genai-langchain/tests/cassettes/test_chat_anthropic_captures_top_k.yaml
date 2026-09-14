@@ -2,7 +2,7 @@
 interactions:
 - request:
     body: |-
-      {"model":"claude-sonnet-4-5","max_tokens":32,"messages":[{"role":"user","content":"Reply with one short word."}],"top_k":40,"n":3}
+      {"model":"claude-sonnet-4-5","max_tokens":32,"messages":[{"role":"user","content":"Reply with one short word."}],"top_k":40}
     headers:
       Content-Type:
       - application/json

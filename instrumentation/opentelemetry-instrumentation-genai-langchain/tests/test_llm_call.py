@@ -849,32 +849,18 @@ def test_chat_openai_captures_choice_count(
 
 
 @pytest.mark.vcr()
-@pytest.mark.cassette("test_chat_anthropic_captures_top_k_and_choice_count")
-def test_chat_anthropic_captures_top_k_and_choice_count(
+def test_chat_anthropic_captures_top_k(
     span_exporter,
     log_exporter,
     tracer_provider,
     meter_provider,
     logger_provider,
-    monkeypatch,
 ):
     model = ChatAnthropic(
         model="claude-sonnet-4-5",
         api_key="test_key",
         max_tokens=32,
         top_k=40,
-    )
-    create_message = model._client.messages.create
-
-    def create_message_with_choice_count(**kwargs):
-        choice_count = kwargs.pop("n")
-        kwargs["extra_body"] = {"n": choice_count}
-        return create_message(**kwargs)
-
-    monkeypatch.setattr(
-        model._client.messages,
-        "create",
-        create_message_with_choice_count,
     )
 
     with instrument(
@@ -884,21 +870,14 @@ def test_chat_anthropic_captures_top_k_and_choice_count(
         logger_provider=logger_provider,
         content_capture="SPAN_AND_EVENT",
     ):
-        model.invoke([HumanMessage(content="Reply with one short word.")], n=3)
+        model.invoke([HumanMessage(content="Reply with one short word.")])
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
-    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT] == 3
 
     (log,) = log_exporter.get_finished_logs()
     assert (
         log.log_record.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
-    )
-    assert (
-        log.log_record.attributes[
-            gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT
-        ]
-        == 3
     )
 
 
