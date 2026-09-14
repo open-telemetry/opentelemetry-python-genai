@@ -833,12 +833,8 @@ def test_chat_openai_captures_choice_count(
         logger_provider=logger_provider,
         content_capture="SPAN_AND_EVENT",
     ):
-        with vcr.use_cassette(
-            "test_chat_openai_captures_choice_count.yaml"
-        ):
-            model.invoke(
-                [HumanMessage(content="Reply with one short word.")]
-            )
+        with vcr.use_cassette("test_chat_openai_captures_choice_count.yaml"):
+            model.invoke([HumanMessage(content="Reply with one short word.")])
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT] == 3
