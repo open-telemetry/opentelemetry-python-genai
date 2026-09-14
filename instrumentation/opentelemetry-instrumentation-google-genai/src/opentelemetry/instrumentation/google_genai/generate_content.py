@@ -538,7 +538,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
         invocation: InferenceInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
         self._self_finish_reasons: list[str] = []
@@ -576,7 +576,7 @@ class AsyncGenerateContentStreamWrapper(
         invocation: InferenceInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         # _self_ is a naming convention used by the wrapt library to differentiate
         # between attributes on the wrapped function and the original function.
         self._self_invocation = invocation

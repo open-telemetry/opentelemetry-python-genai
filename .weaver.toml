@@ -1,6 +1,12 @@
 #:schema https://raw.githubusercontent.com/open-telemetry/weaver/v0.26.1/schemas/weaver-config.json
 
-# OTel SDK resource attributes that don't belong to the genai registry — see
+[registry]
+v2 = true
+
+[template]
+acronyms = ["AI", "GenAI", "MCP", "OpenAI"]
+
+# OTel SDK resource attributes that don't belong to the genai registry - see
 # https://github.com/open-telemetry/weaver/issues/1456.
 [[live-check.finding_filters]]
 signal_type = "resource"

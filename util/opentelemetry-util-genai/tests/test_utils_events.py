@@ -222,8 +222,12 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         class TestError(RuntimeError):
             pass
 
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
         message = _create_input_message("error test")
-        invocation = self.telemetry_handler.inference(
+        invocation = handler.inference(
             "test-provider", request_model="error-model"
         )
         invocation.input_messages = [message]
@@ -320,7 +324,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
     )
     def test_emits_llm_event_by_default_for_event_only(self):
         """Test that event is emitted by default when content_capturing is EVENT_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="default-model"
         )
         invocation.input_messages = [_create_input_message("default test")]
@@ -374,3 +382,17 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             log_record.event_name, "gen_ai.client.inference.operation.details"
         )
         self.assertIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
+
+    def test_finish_does_not_read_env_on_hot_path(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.output_messages = [_create_output_message()]
+
+        with patch.object(os, "environ") as mock_environ:
+            invocation.stop()
+            mock_environ.get.assert_not_called()

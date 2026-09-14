@@ -206,7 +206,11 @@ def test_converse_tool_call_with_content(
     parts = output_msgs[0]["parts"]
     tool_calls = [p for p in parts if p.get("type") == "tool_call"]
     assert len(tool_calls) >= 1
-    assert tool_calls[0]["name"] == "get_current_weather"
+    tool_defs = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
+    )
+    assert len(tool_defs) == 1
+    assert tool_defs[0]["name"] == "get_current_weather"
 
 
 @pytest.mark.vcr
@@ -268,7 +272,9 @@ def test_converse_tool_call_no_content(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS in (span.attributes or {})
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in (
+        span.attributes or {}
+    )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in (span.attributes or {})
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in (
         span.attributes or {}

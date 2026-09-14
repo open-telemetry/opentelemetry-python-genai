@@ -137,7 +137,7 @@ def test_prepare_tool_definitions_deduplication() -> None:
 
 
 def test_agent_run_with_tools(
-    instrument_agno,
+    instrument_agno_content_capture,
     span_exporter,
 ) -> None:
     """Test that Agent.run emits gen_ai.tool.definitions when tools are present."""
@@ -186,7 +186,7 @@ def test_agent_run_with_tools(
 
 
 def test_agent_arun_with_tools(
-    instrument_agno,
+    instrument_agno_content_capture,
     span_exporter,
 ) -> None:
     """Test that Agent.arun emits gen_ai.tool.definitions when tools are present."""

@@ -18,7 +18,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.test.test_base import TestBase
-from opentelemetry.trace import INVALID_SPAN, SpanKind
+from opentelemetry.trace import SpanKind
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -27,6 +27,10 @@ from opentelemetry.util.genai.invocation import (
     AgentInvocation,
     LocalAgentInvocation,
     RemoteAgentInvocation,
+)
+from opentelemetry.util.genai.semconv.gen_ai._generated import (
+    InvokeAgentClientOperation,
+    InvokeAgentInternalOperation,
 )
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
@@ -54,6 +58,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         )
         assert isinstance(invocation, LocalAgentInvocation)
         assert isinstance(invocation, AgentInvocation)
+        assert isinstance(invocation, InvokeAgentInternalOperation)
         invocation.stop()
 
         spans = self.span_exporter.get_finished_spans()
@@ -87,10 +92,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-456"
-        assert (
-            GenAI.GEN_AI_CONVERSATION_ID
-            not in invocation._get_metric_attributes()
-        )
+        assert GenAI.GEN_AI_CONVERSATION_ID not in invocation.metric_attributes
 
     def test_no_conversation_id(self):
         invocation = self.handler.invoke_local_agent()
@@ -150,9 +152,9 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
             "length",
         )
 
-    def test_finish_reasons_empty_list_omitted(self):
+    def test_finish_reasons_none_omitted(self):
         invocation = self.handler.invoke_local_agent()
-        invocation.finish_reasons = []
+        invocation.finish_reasons = None
         invocation.stop()
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_RESPONSE_MODEL not in attrs
@@ -214,12 +216,12 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         assert isinstance(invocation, LocalAgentInvocation)
         assert isinstance(invocation, AgentInvocation)
         assert invocation._operation_name == "invoke_agent"
-        assert invocation.agent_name is None
+        assert invocation._agent_name is None
         assert invocation._request_model is None
         assert not invocation.input_messages
         assert not invocation.output_messages
         assert invocation.tool_definitions is None
-        assert invocation.span is not INVALID_SPAN
+        assert invocation.span is not None
         assert not invocation.attributes
         assert not hasattr(invocation, "agent_id")
         assert not hasattr(invocation, "agent_version")
@@ -374,16 +376,17 @@ class TestAgentInvocationContent(unittest.TestCase):
         assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS in attrs
 
     @patch(
-        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_tool_definitions_on_span(self, _mock_cap):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
         tool = FunctionToolDefinition(
             name="get_weather",
             description="Get the weather",
             parameters={"type": "object", "properties": {}},
         )
-        invocation = self.handler.invoke_local_agent()
+        invocation = handler.invoke_local_agent()
         invocation.tool_definitions = [tool]
         invocation.stop()
 
@@ -469,6 +472,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         invocation = self.handler.invoke_remote_agent("openai")
         assert isinstance(invocation, RemoteAgentInvocation)
         assert isinstance(invocation, AgentInvocation)
+        assert isinstance(invocation, InvokeAgentClientOperation)
         invocation.stop()
         assert (
             self.span_exporter.get_finished_spans()[0].kind == SpanKind.CLIENT
@@ -480,7 +484,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert isinstance(invocation, RemoteAgentInvocation)
         assert isinstance(invocation, AgentInvocation)
         assert invocation._operation_name == "invoke_agent"
-        assert invocation.agent_name is None
+        assert invocation._agent_name is None
         assert invocation._request_model is None
         assert invocation.agent_id is None
         assert invocation.agent_version is None
@@ -491,7 +495,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert not invocation.input_messages
         assert not invocation.output_messages
         assert invocation.tool_definitions is None
-        assert invocation.span is not INVALID_SPAN
+        assert invocation.span is not None
         assert not invocation.attributes
 
     def test_constructor_agent_id_and_version(self):

@@ -127,15 +127,29 @@ uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
 uv run tox -e typecheck
+
+# Regenerate semconv code
+uv run scripts/semconv/generate.py
+# ...or via tox (also updates instrumentation readmes)
+uv run tox -e generate
 ```
 
 Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, and the changed package's
-test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
+test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) - these mirror
 the CI gates.
 
 tox reuses cached envs and won't re-resolve dependencies on its own, so pass `--recreate` (`-r`)
-after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound — otherwise the
+after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound - otherwise the
 run silently uses the previously installed versions.
+
+## Semantic conventions and generated code
+
+Code under `util/opentelemetry-util-genai/src/opentelemetry/util/genai/semconv/` is generated from the OpenTelemetry GenAI semantic conventions using Weaver:
+
+- **Do not edit generated code directly.** Files containing `# Code generated ... DO NOT EDIT.` are overwritten on generation.
+- **Workflow automation:** A weekly workflow (`.github/workflows/update-semconv.yml`) tracks `open-telemetry/semantic-conventions-genai`, updates `SEMCONV_GENAI_REF` in `versions.env`, and opens a PR.
+- **Manual generation:** Run `uv run scripts/semconv/generate.py` or `uv run tox -e generate`. CI validates that generated code matches what is checked in.
+- **Configuring operations and signals:** To add new operations or change the signals (spans, metrics, events) associated with an operation, edit `scripts/semconv/templates/registry/python-genai/weaver.yaml`. Templates live in `scripts/semconv/templates/registry/python-genai/`.
 
 ## Guidelines
 

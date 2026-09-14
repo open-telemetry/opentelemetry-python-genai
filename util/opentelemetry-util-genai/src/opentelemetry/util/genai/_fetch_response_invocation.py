@@ -3,40 +3,28 @@
 
 from __future__ import annotations
 
-from typing import Final
-
 from opentelemetry._logs import Logger
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.semconv.attributes import server_attributes
-from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import (
-    Error,
-    GenAIInvocation,
-    get_content_attributes,
-)
+from opentelemetry.metrics import Meter
+from opentelemetry.trace import Tracer
+from opentelemetry.util.genai._attribute import _Attribute
+from opentelemetry.util.genai._invocation import GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.semconv.gen_ai import GenAiOperationName
+from opentelemetry.util.genai.semconv.gen_ai._generated import (
+    FetchResponseClientOperation,
+)
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     MessagePart,
-    OutputMessage,
     SystemInstructionPart,
-    ToolDefinition,
 )
-from opentelemetry.util.genai.utils import ContentCapturingMode
-from opentelemetry.util.types import AttributeValue
-
-# TODO: Migrate to gen_ai_attributes constants once available in the semconv
-# package. Added to the GenAI semantic conventions in
-# https://github.com/open-telemetry/semantic-conventions-genai/pull/353.
-_FETCH_RESPONSE_OPERATION_NAME: Final = "fetch_response"
-_GEN_AI_REQUEST_STREAM_CURSOR: Final = "gen_ai.request.stream_cursor"
-_GEN_AI_RESPONSE_STATUS: Final = "gen_ai.response.status"
+from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
+    get_content_capturing_mode,
+)
 
 
-class FetchResponseInvocation(GenAIInvocation):
+class FetchResponseInvocation(GenAIInvocation, FetchResponseClientOperation):
     """Represents a single fetch of a previously generated model response.
 
     Use handler.fetch_response() rather than constructing this directly.
@@ -55,8 +43,6 @@ class FetchResponseInvocation(GenAIInvocation):
     - error.type: Error type when the fetch itself failed (Conditionally Required)
     - gen_ai.request.stream_cursor: Set from ``stream_cursor`` when the fetch
       resumes a streamed response from a prior position (Conditionally Required)
-    - gen_ai.request.stream: Set to true when the fetched response is streamed
-      (Conditionally Required)
     - server.port: Set only when ``server_port`` is provided (Conditionally Required)
     - gen_ai.response.finish_reasons: Outcome of the original generation
       (Recommended)
@@ -76,123 +62,65 @@ class FetchResponseInvocation(GenAIInvocation):
     failed.
     """
 
+    _provider = _Attribute[str]("provider_name")
+    response_model_name = _Attribute[str | None]("response_model")
+    finish_reasons = _Attribute[list[str] | None]("response_finish_reasons")
+    stream_cursor = _Attribute[str | None]("request_stream_cursor")
+    system_instruction = _Attribute[
+        list[SystemInstructionPart] | list[MessagePart] | None
+    ]("system_instructions")
+
     def __init__(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
         *,
         response_id: str,
-        request_stream: bool | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
-        super().__init__(
+        operation_name = GenAiOperationName.FETCH_RESPONSE.value
+        mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
+        FetchResponseClientOperation.__init__(
+            self,
             tracer,
-            instruments,
+            meter,
             logger,
-            completion_hook,
-            operation_name=_FETCH_RESPONSE_OPERATION_NAME,
-            # The response identifier is high cardinality, so semconv keeps it
-            # out of the span name.
-            span_name=_FETCH_RESPONSE_OPERATION_NAME,
-            span_kind=SpanKind.CLIENT,
+            completion_hook=completion_hook,
             error_type_resolver=error_type_resolver,
-            content_capturing_mode=content_capturing_mode,
+            operation_name=operation_name,
+            provider_name=provider,
+            response_id=response_id,
+            server_address=server_address,
+            server_port=server_port,
+            content_capturing_mode=mode,
         )
-        self._provider: str = provider
-        self._response_id: str = response_id
-        self._request_stream = request_stream
-        self._server_address: str | None = server_address
-        self._server_port: int | None = server_port
-        self.response_model_name: str | None = None
-        self.response_status: str | None = None
-        self.finish_reasons: list[str] | None = None
-        self.stream_cursor: str | None = None
-        self.output_messages: list[OutputMessage] = []
-        self.system_instruction: (
-            list[SystemInstructionPart] | list[MessagePart]
-        ) = []
-        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
-        self.tool_definitions: list[ToolDefinition] | None = None
-        self._start(self._get_start_attributes())
+        GenAIInvocation.__init__(self)
+        self._stream_last_chunk_at: float | None = None
+        self.start()
 
-    @property
-    def response_id(self) -> str:
-        """The identifier of the response being fetched."""
-        return self._response_id
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        is_first_chunk = self._stream_last_chunk_at is None
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
+        )
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
 
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return attributes known at span creation time."""
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self._provider,
-            GenAI.GEN_AI_RESPONSE_ID: self._response_id,
-            **(
-                {GenAI.GEN_AI_REQUEST_STREAM: self._request_stream}
-                if self._request_stream is not None
-                else {}
-            ),
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
+        if is_first_chunk:
+            self.record_time_to_first_chunk(delta)
+            return
 
-    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        # response_id intentionally excluded — high cardinality.
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self._provider,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-        attrs.update(self.metric_attributes)
-        return attrs
-
-    def _get_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (_GEN_AI_REQUEST_STREAM_CURSOR, self.stream_cursor),
-            (
-                GenAI.GEN_AI_RESPONSE_FINISH_REASONS,
-                self.finish_reasons or None,
-            ),
-            (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
-            (_GEN_AI_RESPONSE_STATUS, self.response_status),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-        attributes = self._get_attributes()
-        attributes.update(
-            get_content_attributes(
-                # A fetched response does not carry the original request's
-                # input messages.
-                input_messages=(),
-                output_messages=self.output_messages,
-                system_instruction=self.system_instruction,
-                tool_definitions=self.tool_definitions,
-                for_span=True,
-                content_capturing_mode=self._content_capturing_mode,
-            )
-        )
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._record_client_metrics()
-        self._call_completion_hook(
-            outputs=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-        )
+        self.record_time_per_output_chunk(delta)

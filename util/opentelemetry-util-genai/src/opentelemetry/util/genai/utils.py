@@ -6,6 +6,7 @@ import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
+from dataclasses import asdict, is_dataclass
 from functools import partial
 from typing import Any
 
@@ -93,7 +94,9 @@ def is_experimental_mode() -> bool:
     return True
 
 
-def should_emit_event() -> bool:
+def should_emit_event(
+    content_capturing_mode: ContentCapturingMode | None = None,
+) -> bool:
     """Check if event emission is enabled.
 
     Returns True if event emission is enabled, False otherwise.
@@ -119,8 +122,13 @@ def should_emit_event() -> bool:
             envvar,
             OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
         )
+    mode = (
+        content_capturing_mode
+        if content_capturing_mode is not None
+        else get_content_capturing_mode()
+    )
     # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
-    return get_content_capturing_mode() in (
+    return mode in (
         ContentCapturingMode.EVENT_ONLY,
         ContentCapturingMode.SPAN_AND_EVENT,
     )
@@ -163,6 +171,8 @@ def fq_exception_type(exception: BaseException) -> str:
 
 class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
+        if is_dataclass(o) and not isinstance(o, type):
+            return asdict(o)
         if isinstance(o, bytes):
             return b64encode(o).decode()
         return super().default(o)

@@ -314,13 +314,15 @@ def fixture_enable_completion_hook(request):
 
 
 @pytest.fixture(name="internal_instrumentation_setup", autouse=True)
-def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
+def fixture_setup_instrumentation(
+    instrumentor, enable_completion_hook, monkeypatch
+):
     if enable_completion_hook == "enable_completion_hook":
-        os.environ.update(
-            {
-                OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH: "memory://",
-                "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "upload",
-            }
+        monkeypatch.setenv(
+            OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH, "memory://"
+        )
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK", "upload"
         )
     instrumentor.instrument()
     yield

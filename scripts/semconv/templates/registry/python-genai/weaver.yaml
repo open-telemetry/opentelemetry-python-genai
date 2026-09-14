@@ -1,0 +1,294 @@
+whitespace_control:
+  trim_blocks: true
+  lstrip_blocks: true
+  keep_trailing_newline: true
+
+text_maps:
+  python_types:
+    boolean: bool
+    double: float
+    int: int
+    string: str
+    string[]: Sequence[str]
+    int[]: Sequence[int]
+    double[]: Sequence[float]
+    boolean[]: Sequence[bool]
+    template[string]: str
+
+  structured_types:
+    gen_ai.input.messages: Sequence[InputMessage]
+    gen_ai.output.messages: Sequence[OutputMessage]
+    gen_ai.system_instructions: Sequence[SystemInstructionPart]
+    gen_ai.tool.definitions: Sequence[ToolDefinition]
+    gen_ai.prompt.variable: Mapping[str, object]
+
+params:
+  histogram_boundaries:
+    gen_ai.client.operation.duration: &client_operation_duration
+      [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92]
+    gen_ai.client.operation.time_per_output_chunk: *client_operation_duration
+    gen_ai.client.operation.time_to_first_chunk: *client_operation_duration
+    gen_ai.client.token.usage:
+      [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864]
+    gen_ai.execute_tool.duration: *client_operation_duration
+    gen_ai.invoke_agent.duration:
+      [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8, 25.6, 51.2, 102.4, 204.8, 409.6]
+    gen_ai.invoke_workflow.duration:
+      [1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 7200]
+
+  operations:
+    gen_ai.inference.client:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.request.model}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.client.operation.duration
+        generate:
+          - gen_ai.client.token.usage
+          - gen_ai.client.operation.time_to_first_chunk
+          - gen_ai.client.operation.time_per_output_chunk
+      events: [gen_ai.client.inference.operation.details]
+      completion_hook: true
+    gen_ai.embeddings.client:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.request.model}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.client.operation.duration
+        generate:
+          - gen_ai.client.token.usage
+    gen_ai.retrieval.client:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.data_source.id}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.client.operation.duration
+    gen_ai.fetch_response.client:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.client.operation.duration
+        generate:
+          - gen_ai.client.operation.time_to_first_chunk
+          - gen_ai.client.operation.time_per_output_chunk
+      completion_hook: true
+    gen_ai.invoke_agent.internal:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.agent.name}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.invoke_agent.duration
+        generate:
+          - gen_ai.invoke_agent.inference_calls
+          - gen_ai.invoke_agent.tool_calls
+      completion_hook: true
+    gen_ai.invoke_agent.client:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.agent.name}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.client.operation.duration
+        generate:
+          - gen_ai.client.token.usage
+      completion_hook: true
+    gen_ai.execute_tool.internal:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.tool.name}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.execute_tool.duration
+    gen_ai.invoke_workflow.internal:
+      span_name:
+        templates:
+          - "{gen_ai.operation.name} {gen_ai.workflow.name}"
+          - "{gen_ai.operation.name}"
+      metrics:
+        autoreport:
+          - gen_ai.invoke_workflow.duration
+      completion_hook: true
+
+  content_attributes:
+    - gen_ai.input.messages
+    - gen_ai.output.messages
+    - gen_ai.system_instructions
+    - gen_ai.tool.definitions
+    - gen_ai.prompt.variable
+    - gen_ai.retrieval.documents
+    - gen_ai.retrieval.query.text
+    - gen_ai.tool.call.arguments
+    - gen_ai.tool.call.result
+    - gen_ai.memory.query.text
+    - gen_ai.memory.records
+
+  completion_hook_params:
+    - param: inputs
+      attribute: gen_ai.input.messages
+      default: "[]"
+    - param: outputs
+      attribute: gen_ai.output.messages
+      default: "[]"
+    - param: system_instruction
+      attribute: gen_ai.system_instructions
+      default: "[]"
+      cast: "list[MessagePart]"
+    - param: tool_definitions
+      attribute: gen_ai.tool.definitions
+      default: "None"
+
+  omit_falsy_attributes:
+    - gen_ai.conversation.compacted
+    - gen_ai.input.messages
+    - gen_ai.output.messages
+    - gen_ai.system_instructions
+    - gen_ai.tool.definitions
+    - gen_ai.usage.audio.cache_read.input_tokens
+    - gen_ai.usage.audio.input_tokens
+    - gen_ai.usage.audio.output_tokens
+    - gen_ai.usage.cache_read.input_tokens
+    - gen_ai.usage.cache_write.input_tokens
+    - gen_ai.usage.image.cache_read.input_tokens
+    - gen_ai.usage.image.input_tokens
+    - gen_ai.usage.image.output_tokens
+    - gen_ai.usage.reasoning.output_tokens
+    - gen_ai.usage.text.cache_read.input_tokens
+    - gen_ai.usage.text.input_tokens
+    - gen_ai.usage.text.output_tokens
+
+templates:
+  - template: attributes.py.j2
+    filter: &attributes_filter >
+      . as $schema
+      | ([
+          semconv_spans({"v2": true})[],
+          semconv_metrics({"v2": true})[],
+          semconv_events({"v2": true})[]
+        ]
+        | map(.attributes // [])
+        | add // []
+        | map(select(.provenance.source?))) as $dependency_references
+      | ([
+          $dependency_references[] as $reference
+          | $schema.dependencies[$reference.provenance.source].registry.attributes[]
+          | select(.key == $reference.key)
+          | . + {root_namespace: (.key | split(".")[0])}
+        ]
+        + semconv_attributes({"v2": true})
+        | unique_by(.key)
+        | sort_by(.root_namespace, .key)
+        | semconv_group_attributes_by_root_namespace)
+    application_mode: each
+    file_name: "{{ ctx.root_namespace }}/attributes.py"
+  - template: __init__.py.j2
+    filter: *attributes_filter
+    application_mode: each
+    file_name: "{{ ctx.root_namespace }}/__init__.py"
+  - template: _generated.py.j2
+    filter: >
+      . as $schema
+      | semconv_spans({"v2": true}) as $spans
+      | semconv_metrics({"v2": true}) as $metrics
+      | semconv_events({"v2": true}) as $events
+      | $params.operations as $operations
+      | $operations
+      | to_entries
+      | map(. as $entry
+          | ($spans[] | select(.type == $entry.key)) as $span
+          | (if ($entry.value.metrics | type == "object") then
+               ($entry.value.metrics.autoreport // [])
+             else
+               ($entry.value.metrics // [])
+             end) as $autoreport_names
+          | (if ($entry.value.metrics | type == "object") then
+               ($entry.value.metrics.generate // [])
+             else
+               []
+             end) as $generate_names
+          | ($autoreport_names + $generate_names) as $metric_names
+          | ($entry.value.events // []) as $event_names
+          | [$metrics[] | select(.name as $m | $autoreport_names | index($m))] as $op_autoreport_metrics
+          | [$metrics[] | select(.name as $m | $generate_names | index($m))] as $op_generate_metrics
+          | [$metrics[] | select(.name as $m | $metric_names | index($m))] as $op_metrics
+          | [$events[] | select(.name as $e | $event_names | index($e))] as $op_events
+          | ($entry.value.span_name.templates // $entry.value.span_name // $span.name.templates // $entry.value.name.templates // []) as $raw_templates
+          | ($raw_templates | map({
+              pattern: .,
+              attributes: (split("{")[1:] | map(split("}")[0]))
+            })) as $templates
+          | ($templates | map(.attributes[]) | unique) as $template_attributes
+          | ($entry.key | split(".")[0]) as $root_ns
+          | ([
+              $span.attributes[],
+              ($op_events[].attributes // [])[]
+            ]
+            | unique_by(.key)
+            | map(
+                . + {
+                  field_name: (
+                    if (.key | startswith($root_ns + ".")) then
+                      (.key | ltrimstr($root_ns + ".") | gsub("[.-]"; "_"))
+                    else
+                      (.key | gsub("[.-]"; "_"))
+                    end
+                  )
+                }
+              )
+            | sort_by(.field_name)) as $all_attributes
+          | ($all_attributes | map(.key | split(".")[0]) | unique) as $namespaces
+          | (($params.completion_hook_params // []) | map(
+                . as $hp
+                | ([$all_attributes[] | select(.key == $hp.attribute)][0]) as $match
+                | {
+                    param: $hp.param,
+                    field_name: $match.field_name,
+                    default: $hp.default,
+                    cast: $hp.cast
+                  }
+              )) as $hook_args
+          | {
+              operation_id: $entry.key,
+              root_namespace: ($entry.key | split(".")[0]),
+              class_name: (
+                  ($entry.key | split(".")[1:] | map(
+                      split("_") | map(
+                          if . == "ai" then "AI"
+                          elif . == "mcp" then "MCP"
+                          else (.[0:1] | ascii_upcase) + .[1:]
+                          end
+                      ) | join("")
+                  ) | join("")) + "Operation"
+              ),
+              span: $span,
+              templates: $templates,
+              template_attributes: $template_attributes,
+              metrics: $op_metrics,
+              autoreport_metrics: $op_autoreport_metrics,
+              generate_metrics: $op_generate_metrics,
+              events: $op_events,
+              attributes: $all_attributes,
+              attribute_namespaces: $namespaces,
+              completion_hook: ($entry.value.completion_hook == true),
+              completion_hook_args: $hook_args
+            }
+        )
+      | group_by(.root_namespace)
+      | map({
+          root_namespace: .[0].root_namespace,
+          operations: .,
+          attribute_namespaces: ([.[].attribute_namespaces[]] | unique | sort)
+        })
+    application_mode: each
+    file_name: "{{ ctx.root_namespace }}/_generated.py"

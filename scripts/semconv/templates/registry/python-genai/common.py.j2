@@ -1,0 +1,122 @@
+{% macro header() -%}
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+# Code generated from OpenTelemetry GenAI semantic conventions. DO NOT EDIT.
+{%- endmacro %}
+
+{% macro pascal_name(value) -%}
+{%- for component in value | split_id -%}
+{%- for word in component.split("_") -%}
+{{- word | pascal_case | acronym -}}
+{%- endfor -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro attr_field_name(key, root_namespace) -%}
+{%- set attribute_namespace = key | regex_replace("\\..*$", "") -%}
+{%- if attribute_namespace == root_namespace -%}
+{{- key | regex_replace("^[^.]+\\.", "") | snake_case -}}
+{%- else -%}
+{{- key | snake_case -}}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro field_name(attribute, root_namespace) -%}
+{{ attr_field_name(attribute.key, root_namespace) }}
+{%- endmacro %}
+
+{% macro format_template(t, root_namespace) -%}
+{%- set ns = namespace(res=t.pattern) -%}
+{%- for attr in t.attributes -%}
+{%- set f = attr_field_name(attr, root_namespace) -%}
+{%- set ns.res = ns.res | replace("{" ~ attr ~ "}", "{" ~ f ~ "}") -%}
+{%- endfor -%}
+{{ ns.res }}
+{%- endmacro %}
+
+{% macro attribute_module_alias(namespace) -%}
+{{- pascal_name(namespace) -}}Attr
+{%- endmacro %}
+
+{% macro attribute_module(attribute, root_namespace) -%}
+{%- set attribute_namespace = attribute.key | regex_replace("\\..*$", "") -%}
+{%- if attribute_namespace == root_namespace -%}Attr
+{%- else -%}{{ attribute_module_alias(attribute_namespace) }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro constant(attribute, root_namespace) -%}
+{{ attribute_module(attribute, root_namespace) }}.{{ attribute.key | screaming_snake_case }}
+{%- endmacro %}
+
+{% macro enum_name(attribute) -%}
+{{- pascal_name(attribute.key) -}}
+{%- endmacro %}
+
+{% macro python_type(attribute, root_namespace) -%}
+{%- if attribute.type.members -%}
+{{ attribute_module(attribute, root_namespace) }}.{{ enum_name(attribute) }} | str
+{%- else -%}
+{{- attribute.key | map_text("structured_types", attribute.type | map_text("python_types", "AnyValue")) -}}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro metric_method_name(metric, root_namespace) -%}
+{{- metric.name | regex_replace("^" ~ root_namespace ~ "\\.", "") | snake_case -}}
+{%- endmacro %}
+
+{% macro record_method_name(metric, root_namespace) -%}
+record_{{ metric.name | regex_replace("^" ~ root_namespace ~ "\\.(client\\.(operation\\.)?|[a-z_]+\\.)", "") | snake_case }}
+{%- endmacro %}
+
+{% macro metric_value_type(metric) -%}
+{{- metric.annotations.code_generation.metric_value_type | map_text("python_types", "float" if metric.instrument == "histogram" else "int") if metric.annotations.code_generation.metric_value_type else ("float" if metric.instrument == "histogram" else "int") -}}
+{%- endmacro %}
+
+{% macro has_enums(attributes) -%}
+{%- for attribute in attributes -%}
+{%- if attribute.type.members -%}true{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro enum_symbols(attribute, quoted=false) -%}
+{%- if attribute.type.members -%}
+{%- set q = '"' if quoted else '' -%}
+{{ q }}{{ enum_name(attribute) }}{{ q }},
+{%- if attribute.key | pascal_case != enum_name(attribute) -%}
+{{ q }}{{ attribute.key | pascal_case }}{{ q }},
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro attribute_symbols(attribute, quoted=false) -%}
+{%- set q = '"' if quoted else '' -%}
+{{ q }}{{ attribute.key | screaming_snake_case }}{{ q }},
+{{ enum_symbols(attribute, quoted=quoted) }}
+{%- endmacro %}
+
+{% macro has_content_attributes(attributes, content_attributes) -%}
+{%- for attribute in attributes -%}
+{%- if attribute.key in content_attributes -%}true{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro has_attribute(attributes, key) -%}
+{%- for attr in attributes -%}
+{%- if attr.key == key -%}true{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro is_sampling_relevant(attributes, key) -%}
+{%- for attr in attributes -%}
+{%- if attr.key == key and attr.sampling_relevant -%}true{%- endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro op_field_access(op, attribute, root_namespace) -%}
+{%- if is_sampling_relevant(op.attributes, attribute.key) -%}
+self._{{ field_name(attribute, root_namespace) }}
+{%- else -%}
+self.{{ field_name(attribute, root_namespace) }}
+{%- endif -%}
+{%- endmacro %}

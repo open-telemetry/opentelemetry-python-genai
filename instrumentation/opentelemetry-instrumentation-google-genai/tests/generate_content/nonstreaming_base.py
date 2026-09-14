@@ -402,31 +402,13 @@ class NonStreamingTestCase(TestCase):
             == "<class 'tests.generate_content.nonstreaming_base.ExampleResponseSchema'>"
         )
 
-        self.assertNotIn(
+        for attribute in (
             gen_ai_attributes.GEN_AI_INPUT_MESSAGES,
-            event.attributes,
-        )
-        self.assertNotIn(
             gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES,
-            event.attributes,
-        )
-        self.assertNotIn(
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
-            event.attributes,
-        )
-        if _is_mcp_imported:
-            self.assertIn(
-                event.attributes[GEN_AI_TOOL_DEFINITIONS],
-                [
-                    self.base_tools_definition + mcp_var
-                    for mcp_var in self.mcp_tools_no_content
-                ],
-            )
-        else:
-            self.assertEqual(
-                event.attributes[GEN_AI_TOOL_DEFINITIONS],
-                self.base_tools_definition,
-            )
+            GEN_AI_TOOL_DEFINITIONS,
+        ):
+            self.assertNotIn(attribute, event.attributes)
 
     @patch.dict(
         "os.environ",
@@ -553,21 +535,9 @@ class NonStreamingTestCase(TestCase):
             gen_ai_attributes.GEN_AI_INPUT_MESSAGES,
             gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES,
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
+            GEN_AI_TOOL_DEFINITIONS,
         ):
             self.assertNotIn(attribute, span.attributes)
-        if _is_mcp_imported:
-            self.assertIn(
-                span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                [
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"Tool from session","parameters":null,"type":"function"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":null,"type":"function"}]',
-                    '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","description":"A standalone mcp tool","parameters":null,"type":"function"}]',
-                ],
-            )
-        else:
-            self.assertEqual(
-                span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"}]',
-            )
 
     @patch.dict(
         "os.environ",

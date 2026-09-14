@@ -3,73 +3,97 @@
 
 from __future__ import annotations
 
+import timeit
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final
 
-from opentelemetry._logs import Logger, LogRecord
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.semconv.attributes import server_attributes
-from opentelemetry.trace import INVALID_SPAN, Span, SpanKind, Tracer
-from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import (
-    Error,
-    GenAIInvocation,
-    get_content_attributes,
-)
+from opentelemetry._logs import Logger
+from opentelemetry.context import Context
+from opentelemetry.metrics import Meter
+from opentelemetry.trace import INVALID_SPAN, Span, Tracer
+from opentelemetry.util.genai._attribute import _Attribute
+from opentelemetry.util.genai._invocation import GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.semconv.gen_ai import (
+    GenAiOperationName,
+    GenAiTokenType,
+)
+from opentelemetry.util.genai.semconv.gen_ai._generated import (
+    InferenceClientOperation,
+)
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
     OutputMessage,
     SystemInstructionPart,
-    ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
+    get_content_capturing_mode,
     should_emit_event,
 )
 from opentelemetry.util.types import AttributeValue
 
-_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
-    "gen_ai.usage.cache_write.input_tokens"
-)
-_GEN_AI_USAGE_TEXT_INPUT_TOKENS: Final = "gen_ai.usage.text.input_tokens"
-_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: Final = "gen_ai.usage.image.input_tokens"
-_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: Final = "gen_ai.usage.audio.input_tokens"
-_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: Final = "gen_ai.usage.text.output_tokens"
-_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.image.output_tokens"
-_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: Final = "gen_ai.usage.audio.output_tokens"
-_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.text.cache_read.input_tokens"
-)
-_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.image.cache_read.input_tokens"
-)
-_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
-    "gen_ai.usage.audio.cache_read.input_tokens"
-)
-_GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
-_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
-    "gen_ai.request.previous_response.id"
-)
-_GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
-_GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
 
-
-class InferenceInvocation(GenAIInvocation):
+class InferenceInvocation(GenAIInvocation, InferenceClientOperation):
     """Represents a single LLM chat/completion call.
 
     Use handler.inference(provider) rather than constructing this directly.
     """
 
+    system_instruction = _Attribute[
+        list[SystemInstructionPart] | list[MessagePart] | None
+    ]("system_instructions")
+    """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
+    response_model_name = _Attribute[str | None]("response_model")
+    finish_reasons = _Attribute[list[str] | None]("response_finish_reasons")
+    input_tokens = _Attribute[int | None]("usage_input_tokens")
+    output_tokens = _Attribute[int | None]("usage_output_tokens")
+    thinking_tokens = _Attribute[int | None]("usage_reasoning_output_tokens")
+    temperature = _Attribute[float | None]("request_temperature")
+    top_p = _Attribute[float | None]("request_top_p")
+    top_k = _Attribute[int | None]("request_top_k")
+    frequency_penalty = _Attribute[float | None]("request_frequency_penalty")
+    presence_penalty = _Attribute[float | None]("request_presence_penalty")
+    max_tokens = _Attribute[int | None]("request_max_tokens")
+    stop_sequences = _Attribute[list[str] | None]("request_stop_sequences")
+    seed = _Attribute[int | None]("request_seed")
+    reasoning_level = _Attribute[str | None]("request_reasoning_level")
+    previous_response_id = _Attribute[str | None](
+        "request_previous_response_id"
+    )
+    cache_write_input_tokens = _Attribute[int | None](
+        "usage_cache_write_input_tokens"
+    )
+    cache_read_input_tokens = _Attribute[int | None](
+        "usage_cache_read_input_tokens"
+    )
+    text_input_tokens = _Attribute[int | None]("usage_text_input_tokens")
+    image_input_tokens = _Attribute[int | None]("usage_image_input_tokens")
+    audio_input_tokens = _Attribute[int | None]("usage_audio_input_tokens")
+    text_output_tokens = _Attribute[int | None]("usage_text_output_tokens")
+    image_output_tokens = _Attribute[int | None]("usage_image_output_tokens")
+    audio_output_tokens = _Attribute[int | None]("usage_audio_output_tokens")
+    text_cache_read_input_tokens = _Attribute[int | None](
+        "usage_text_cache_read_input_tokens"
+    )
+    image_cache_read_input_tokens = _Attribute[int | None](
+        "usage_image_cache_read_input_tokens"
+    )
+    audio_cache_read_input_tokens = _Attribute[int | None](
+        "usage_audio_cache_read_input_tokens"
+    )
+    prompt_variables = _Attribute[Mapping[str, object] | None](
+        "prompt_variable"
+    )
+
+    _request_stream = _Attribute[bool | None]("request_stream")
+
     def __init__(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -80,74 +104,36 @@ class InferenceInvocation(GenAIInvocation):
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        emit_event: bool | None = None,
     ) -> None:
-        operation_name = (
-            operation_name or GenAI.GenAiOperationNameValues.CHAT.value
-        )
+        operation_name = operation_name or GenAiOperationName.CHAT.value
         """Use handler.inference(provider) rather than calling this directly."""
-        super().__init__(
-            tracer,
-            instruments,
-            logger,
-            completion_hook,
-            operation_name=operation_name,
-            span_name=f"{operation_name} {request_model}"
-            if request_model
-            else operation_name,
-            span_kind=SpanKind.CLIENT,
-            error_type_resolver=error_type_resolver,
-            content_capturing_mode=content_capturing_mode,
+        mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
         )
-        self._provider: str = provider
-        self._request_model: str | None = request_model
-        self._server_address: str | None = server_address
-        self._server_port: int | None = server_port
-        self.conversation_id: str | None = None
-
-        self.input_messages: list[InputMessage] = []
-        self.output_messages: list[OutputMessage] = []
-        self.system_instruction: (
-            list[SystemInstructionPart] | list[MessagePart]
-        ) = []
-        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
-        self._response_model_name: str | None = None
-        self.response_id: str | None = None
-        self.finish_reasons: list[str] | None = None
-        self.input_tokens: int | None = None
-        self.output_tokens: int | None = None
-        self.thinking_tokens: int | None = None
-        self.temperature: float | None = None
-        self.top_p: float | None = None
-        self.frequency_penalty: float | None = None
-        self.presence_penalty: float | None = None
-        self.max_tokens: int | None = None
-        self.stop_sequences: list[str] | None = None
-        self.seed: int | None = None
-        self.cache_write_input_tokens: int | None = None
-        self.cache_read_input_tokens: int | None = None
-        self.text_input_tokens: int | None = None
-        self.image_input_tokens: int | None = None
-        self.audio_input_tokens: int | None = None
-        self.text_output_tokens: int | None = None
-        self.image_output_tokens: int | None = None
-        self.audio_output_tokens: int | None = None
-        self.text_cache_read_input_tokens: int | None = None
-        self.image_cache_read_input_tokens: int | None = None
-        self.audio_cache_read_input_tokens: int | None = None
-        self.reasoning_level: str | None = None
-        self.previous_response_id: str | None = None
-        self.conversation_compacted: bool | None = None
-        self.prompt_name: str | None = None
-        self.prompt_version: str | None = None
-        self.prompt_variables: Mapping[str, object] | None = None
-        self.tool_definitions: list[ToolDefinition] | None = None
-        self.top_k: int | None = None
-        self.request_choice_count: int | None = None
-        self.output_type: str | None = None
-        # Rebuilt once per streaming chunk, so cache it and invalidate via
-        # _invalidate_metric_attributes whenever an input changes.
-        self._cached_metric_attributes: dict[str, AttributeValue] | None = None
-        self._start(self._get_start_attributes())
+        should_emit = (
+            should_emit_event(mode) if emit_event is None else emit_event
+        )
+        InferenceClientOperation.__init__(
+            self,
+            tracer,
+            meter,
+            logger,
+            completion_hook=completion_hook,
+            error_type_resolver=error_type_resolver,
+            operation_name=operation_name,
+            provider_name=provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            content_capturing_mode=mode,
+            emit_event=should_emit,
+        )
+        GenAIInvocation.__init__(self)
+        self._stream_last_chunk_at: float | None = None
+        self.start()
 
     @property
     def cache_creation_input_tokens(self) -> int | None:
@@ -161,220 +147,44 @@ class InferenceInvocation(GenAIInvocation):
     def cache_creation_input_tokens(self, value: int | None) -> None:
         self.cache_write_input_tokens = value
 
-    @property
-    def response_model_name(self) -> str | None:
-        return self._response_model_name
+    def record_stream_chunk(self) -> None:
+        """Mark the request as streamed and record one output chunk arriving."""
+        if self._context_token is None:
+            return
+        self._request_stream = True
+        self._on_stream_chunk(timeit.default_timer())
 
-    @response_model_name.setter
-    def response_model_name(self, value: str | None) -> None:
-        if value != self._response_model_name:
-            self._response_model_name = value
-            self._invalidate_metric_attributes()
-
-    def _get_message_attributes(
-        self, *, for_span: bool
-    ) -> dict[str, AttributeValue]:
-        return get_content_attributes(
-            input_messages=self.input_messages,
-            output_messages=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-            prompt_variables=self.prompt_variables,
-            for_span=for_span,
-            content_capturing_mode=self._content_capturing_mode,
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        is_first_chunk = self._stream_last_chunk_at is None
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
         )
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
 
-    def _get_finish_reasons(self) -> list[str] | None:
-        if self.finish_reasons is not None:
-            return self.finish_reasons or None
-        if self.output_messages:
-            reasons = [
-                msg.finish_reason
-                for msg in self.output_messages
-                if msg.finish_reason
-            ]
-            return reasons or None
-        return None
+        if is_first_chunk:
+            if self.response_time_to_first_chunk is None:
+                self.response_time_to_first_chunk = delta
+            self.record_time_to_first_chunk(delta)
+            return
 
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
+        self.record_time_per_output_chunk(delta)
 
-    def _get_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {}
-        optional_attrs = (
-            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
-            (GenAI.GEN_AI_REQUEST_STREAM, self._request_stream),
-            (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
-            (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
-            (GenAI.GEN_AI_REQUEST_TOP_K, self.top_k),
-            (GenAI.GEN_AI_REQUEST_FREQUENCY_PENALTY, self.frequency_penalty),
-            (GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY, self.presence_penalty),
-            (GenAI.GEN_AI_REQUEST_MAX_TOKENS, self.max_tokens),
-            (GenAI.GEN_AI_REQUEST_STOP_SEQUENCES, self.stop_sequences),
-            (GenAI.GEN_AI_REQUEST_SEED, self.seed),
-            (GenAI.GEN_AI_RESPONSE_FINISH_REASONS, self._get_finish_reasons()),
-            (GenAI.GEN_AI_RESPONSE_MODEL, self.response_model_name),
-            (GenAI.GEN_AI_RESPONSE_ID, self.response_id),
-            (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
-            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
-            (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.request_choice_count),
-            (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
-            (
-                _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-                self.cache_write_input_tokens or None,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-                self.cache_read_input_tokens or None,
-            ),
-            (
-                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-                self.thinking_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_INPUT_TOKENS,
-                self.text_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_INPUT_TOKENS,
-                self.image_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_INPUT_TOKENS,
-                self.audio_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_OUTPUT_TOKENS,
-                self.text_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS,
-                self.image_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS,
-                self.audio_output_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS,
-                self.text_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS,
-                self.image_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS,
-                self.audio_cache_read_input_tokens or None,
-            ),
-            (
-                _GEN_AI_REQUEST_REASONING_LEVEL,
-                self.reasoning_level,
-            ),
-            (
-                _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID,
-                self.previous_response_id,
-            ),
-            (
-                _GEN_AI_CONVERSATION_COMPACTED,
-                True if self.conversation_compacted else None,
-            ),
-            (
-                GenAI.GEN_AI_PROMPT_NAME,
-                self.prompt_name,
-            ),
-            (
-                _GEN_AI_PROMPT_VERSION,
-                self.prompt_version,
-            ),
-            (
-                GenAI.GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
-                self._ttfc_seconds,
-            ),
-        )
-        attrs.update({k: v for k, v in optional_attrs if v is not None})
-        return attrs
-
-    def _invalidate_metric_attributes(self) -> None:
-        """Drop the cached metric attributes so the next read rebuilds them.
-
-        Call this from anywhere that changes an input to
-        ``_get_metric_attributes`` (response model, error type, ...).
-        """
-        self._cached_metric_attributes = None
-
-    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        # Cached because this is rebuilt once per streaming chunk. Any mutation
-        # of its inputs must call _invalidate_metric_attributes.
-        if self._cached_metric_attributes is None:
-            attrs = self._get_start_attributes()
-            if self._response_model_name is not None:
-                attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self._response_model_name
-            attrs.update(self.metric_attributes)
-            self._cached_metric_attributes = attrs
-        return self._cached_metric_attributes
-
-    def _apply_error_attributes(self, error: Error) -> None:
-        super()._apply_error_attributes(error)
-        # error.type was just added to metric_attributes.
-        self._invalidate_metric_attributes()
-
-    def _get_metric_token_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        if self.input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = self.input_tokens
-        if self.output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
-                self.output_tokens
+    def _on_finish(self, context: Context | None = None) -> None:
+        if self.usage_input_tokens is not None:
+            self.record_token_usage(
+                self.usage_input_tokens,
+                token_type=GenAiTokenType.INPUT,
+                context=context,
             )
-        return counts
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-        attributes = self._get_attributes()
-        attributes.update(self._get_message_attributes(for_span=True))
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._record_client_metrics()
-        log_record = self._maybe_create_event()
-        self._call_completion_hook(
-            inputs=self.input_messages,
-            outputs=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-            log_record=log_record,
-        )
-        if log_record is not None:
-            self._logger.emit(log_record)
-
-    def _maybe_create_event(self) -> LogRecord | None:
-        """Emit a gen_ai.client.inference.operation.details event.
-
-        For more details, see the semantic convention documentation:
-        https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-events.md#event-eventgen_aiclientinferenceoperationdetails
-        """
-        if not should_emit_event():
-            return None
-
-        attributes = self._get_start_attributes()
-        attributes.update(self._get_attributes())
-        attributes.update(self._get_message_attributes(for_span=False))
-        attributes.update(self.attributes)
-        return LogRecord(
-            event_name="gen_ai.client.inference.operation.details",
-            attributes=attributes,
-            context=self._span_context,
-        )
+        if self.usage_output_tokens is not None:
+            self.record_token_usage(
+                self.usage_output_tokens,
+                token_type=GenAiTokenType.OUTPUT,
+                context=context,
+            )
 
 
 @dataclass
@@ -419,16 +229,17 @@ class LLMInvocation:
     def _start_with_handler(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         *,
         content_capturing_mode: ContentCapturingMode | None = None,
+        emit_event: bool | None = None,
     ) -> None:
         """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
         inv = InferenceInvocation(
             tracer,
-            instruments,
+            meter,
             logger,
             completion_hook,
             self.provider or "",
@@ -436,6 +247,7 @@ class LLMInvocation:
             server_address=self.server_address,
             server_port=self.server_port,
             content_capturing_mode=content_capturing_mode,
+            emit_event=emit_event,
         )
         inv.input_messages = self.input_messages
         inv.output_messages = self.output_messages

@@ -4,27 +4,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any
 
 from opentelemetry._logs import Logger
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
+from opentelemetry.metrics import Meter
+from opentelemetry.trace import Tracer
+from opentelemetry.util.genai._attribute import _Attribute
+from opentelemetry.util.genai._invocation import GenAIInvocation
+from opentelemetry.util.genai.semconv.gen_ai import GenAiOperationName
+from opentelemetry.util.genai.semconv.gen_ai._generated import (
+    RetrievalClientOperation,
 )
-from opentelemetry.semconv.attributes import server_attributes
-from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
-from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
+    get_content_capturing_mode,
 )
-from opentelemetry.util.types import AttributeValue
-
-_GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
 
 
-class RetrievalInvocation(GenAIInvocation):
+class RetrievalInvocation(GenAIInvocation, RetrievalClientOperation):
     """Represents a single retrieval invocation (retrieval span).
 
     Use handler.retrieval() rather than constructing this directly.
@@ -44,12 +41,22 @@ class RetrievalInvocation(GenAIInvocation):
     - gen_ai.retrieval.query.text: Query text (Opt-In, may contain sensitive data)
     """
 
+    _data_source_id = _Attribute[str | None]("data_source_id")
+    _provider = _Attribute[str | None]("provider_name")
+    _request_model = _Attribute[str | None]("request_model")
+    _server_address = _Attribute[str | None]("server_address")
+    _server_port = _Attribute[int | None]("server_port")
+    top_k = _Attribute[int | None]("retrieval_top_k")
+    query_text = _Attribute[str | None]("retrieval_query_text")
+    documents = _Attribute[Sequence[Mapping[str, Any]] | None](
+        "retrieval_documents"
+    )
+
     def __init__(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -59,82 +66,24 @@ class RetrievalInvocation(GenAIInvocation):
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
-        _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
-        super().__init__(
+        _operation_name = GenAiOperationName.RETRIEVAL.value
+        mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
+        RetrievalClientOperation.__init__(
+            self,
             tracer,
-            instruments,
+            meter,
             logger,
-            completion_hook,
             operation_name=_operation_name,
-            span_name=f"{_operation_name} {data_source_id}"
-            if data_source_id
-            else _operation_name,
-            span_kind=SpanKind.CLIENT,
-            content_capturing_mode=content_capturing_mode,
+            data_source_id=data_source_id,
+            provider_name=provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            content_capturing_mode=mode,
         )
-        self._data_source_id: str | None = data_source_id
-        self._provider: str | None = provider
-        self._request_model: str | None = request_model
-        self._server_address: str | None = server_address
-        self._server_port: int | None = server_port
-        self.top_k: int | None = None
-        self.query_text: str | None = None
-        self.documents: Sequence[Mapping[str, Any]] | None = None
-        self._start(self._get_start_attributes())
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data_source_id),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-
-    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        # data_source_id intentionally excluded — high cardinality
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-        attrs.update(self.metric_attributes)
-        return attrs
-
-    def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
-        if (
-            not self.span.is_recording()
-            or not self._should_capture_content_on_span
-        ):
-            return {}
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT, self.query_text),
-            (
-                GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                gen_ai_json_dumps(self.documents)
-                if self.documents is not None
-                else None,
-            ),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-        attributes: dict[str, AttributeValue] = {}
-        if self.top_k is not None:
-            attributes[_GEN_AI_RETRIEVAL_TOP_K] = int(self.top_k)
-        attributes.update(self._get_content_attributes_for_span())
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._record_client_metrics()
+        GenAIInvocation.__init__(self)
+        self.start()

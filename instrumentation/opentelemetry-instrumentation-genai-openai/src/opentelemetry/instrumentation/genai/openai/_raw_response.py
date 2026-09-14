@@ -26,7 +26,12 @@ from wrapt import ObjectProxy
 from .utils import get_served_model
 
 if TYPE_CHECKING:
-    from opentelemetry.util.genai.types import GenAIInvocation
+    from opentelemetry.util.genai.invocation import (
+        FetchResponseInvocation,
+        InferenceInvocation,
+    )
+
+    _StreamingInvocation = InferenceInvocation | FetchResponseInvocation
 
 _logger = logging.getLogger(__name__)
 
@@ -169,7 +174,7 @@ class StreamWrapperFactory(Protocol):
     def __call__(
         self,
         stream: AnyStream,
-        invocation: GenAIInvocation,
+        invocation: _StreamingInvocation,
         capture_content: bool,
     ) -> object: ...
 
@@ -177,7 +182,7 @@ class StreamWrapperFactory(Protocol):
 def wrap_stream_result(
     wrapper_cls: StreamWrapperFactory,
     result: RawResponseLike | AnyStream,
-    invocation: GenAIInvocation,
+    invocation: _StreamingInvocation,
     capture_content: bool,
 ) -> object:
     """Wrap a streaming call's result, deferring ``parse()`` on raw responses.

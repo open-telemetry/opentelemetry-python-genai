@@ -3,6 +3,7 @@
 
 """Tests for Amazon Bedrock converse_stream API instrumentation."""
 
+import json
 from unittest import mock
 
 import pytest
@@ -180,6 +181,11 @@ def test_converse_stream_with_content_tool_call(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
+    tool_defs = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
+    )
+    assert len(tool_defs) == 1
+    assert tool_defs[0]["name"] == "get_current_weather"
 
 
 @pytest.mark.vcr
@@ -243,7 +249,9 @@ def test_converse_stream_no_content_tool_call(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS in (span.attributes or {})
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in (
+        span.attributes or {}
+    )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in (span.attributes or {})
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in (
         span.attributes or {}
