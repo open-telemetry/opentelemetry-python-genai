@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import openai
 from openai import NotGiven
+from openai.types import CompletionUsage
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -63,6 +64,33 @@ def get_property_value(obj, property_name):
         return obj.get(property_name, None)
 
     return getattr(obj, property_name, None)
+
+
+def set_chat_usage_details(
+    invocation: InferenceInvocation, usage: CompletionUsage
+) -> None:
+    prompt_details: object = get_property_value(usage, "prompt_tokens_details")
+    completion_details: object = get_property_value(
+        usage, "completion_tokens_details"
+    )
+    invocation.cache_write_input_tokens = get_property_value(
+        prompt_details, "cache_write_tokens"
+    )
+    invocation.text_input_tokens = get_property_value(
+        prompt_details, "text_tokens"
+    )
+    invocation.image_input_tokens = get_property_value(
+        prompt_details, "image_tokens"
+    )
+    invocation.audio_input_tokens = get_property_value(
+        prompt_details, "audio_tokens"
+    )
+    invocation.text_output_tokens = get_property_value(
+        completion_details, "text_tokens"
+    )
+    invocation.audio_output_tokens = get_property_value(
+        completion_details, "audio_tokens"
+    )
 
 
 def get_server_address_and_port(

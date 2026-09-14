@@ -25,7 +25,10 @@ from opentelemetry.util.genai.types import (
 )
 
 from .chat_buffers import ChoiceBuffer
-from .utils import get_property_value, map_finish_reason
+from .utils import (
+    get_property_value,
+    map_finish_reason,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -41,6 +44,12 @@ class _ChatStreamMixin:
     _self_prompt_tokens: int | None
     _self_completion_tokens: int | None
     _self_cached_prompt_tokens: int | None
+    _self_cache_write_prompt_tokens: int | None
+    _self_text_prompt_tokens: int | None
+    _self_image_prompt_tokens: int | None
+    _self_audio_prompt_tokens: int | None
+    _self_text_completion_tokens: int | None
+    _self_audio_completion_tokens: int | None
     _self_reasoning_tokens: int | None
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
@@ -106,8 +115,26 @@ class _ChatStreamMixin:
                 self._self_cached_prompt_tokens = get_property_value(
                     prompt_tokens_details, "cached_tokens"
                 )
+            self._self_cache_write_prompt_tokens = get_property_value(
+                prompt_tokens_details, "cache_write_tokens"
+            )
+            self._self_text_prompt_tokens = get_property_value(
+                prompt_tokens_details, "text_tokens"
+            )
+            self._self_image_prompt_tokens = get_property_value(
+                prompt_tokens_details, "image_tokens"
+            )
+            self._self_audio_prompt_tokens = get_property_value(
+                prompt_tokens_details, "audio_tokens"
+            )
             completion_tokens_details = getattr(
                 usage, "completion_tokens_details", None
+            )
+            self._self_text_completion_tokens = get_property_value(
+                completion_tokens_details, "text_tokens"
+            )
+            self._self_audio_completion_tokens = get_property_value(
+                completion_tokens_details, "audio_tokens"
             )
             if completion_tokens_details is not None:
                 self._self_reasoning_tokens = get_property_value(
@@ -177,6 +204,22 @@ class _ChatStreamMixin:
         self._self_invocation.cache_read_input_tokens = (
             self._self_cached_prompt_tokens
         )
+        self._self_invocation.cache_write_input_tokens = (
+            self._self_cache_write_prompt_tokens
+        )
+        self._self_invocation.text_input_tokens = self._self_text_prompt_tokens
+        self._self_invocation.image_input_tokens = (
+            self._self_image_prompt_tokens
+        )
+        self._self_invocation.audio_input_tokens = (
+            self._self_audio_prompt_tokens
+        )
+        self._self_invocation.text_output_tokens = (
+            self._self_text_completion_tokens
+        )
+        self._self_invocation.audio_output_tokens = (
+            self._self_audio_completion_tokens
+        )
         self._self_invocation.thinking_tokens = self._self_reasoning_tokens
         finish_reasons = [
             choice.finish_reason
@@ -219,6 +262,12 @@ class ChatStreamWrapper(
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
         self._self_cached_prompt_tokens = None
+        self._self_cache_write_prompt_tokens = None
+        self._self_text_prompt_tokens = None
+        self._self_image_prompt_tokens = None
+        self._self_audio_prompt_tokens = None
+        self._self_text_completion_tokens = None
+        self._self_audio_completion_tokens = None
         self._self_reasoning_tokens = None
 
 
@@ -241,6 +290,12 @@ class AsyncChatStreamWrapper(
         self._self_prompt_tokens = None
         self._self_completion_tokens = None
         self._self_cached_prompt_tokens = None
+        self._self_cache_write_prompt_tokens = None
+        self._self_text_prompt_tokens = None
+        self._self_image_prompt_tokens = None
+        self._self_audio_prompt_tokens = None
+        self._self_text_completion_tokens = None
+        self._self_audio_completion_tokens = None
         self._self_reasoning_tokens = None
 
 
