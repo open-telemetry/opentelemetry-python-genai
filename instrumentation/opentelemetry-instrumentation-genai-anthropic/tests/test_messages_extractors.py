@@ -269,6 +269,29 @@ def test_url_document_source_converts_to_uri_part():
     assert part.modality == "document"
 
 
+def test_url_document_source_preserves_media_type():
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {
+                    "type": "url",
+                    "url": "https://example.com/document.pdf",
+                    "media_type": "application/pdf",
+                },
+            }
+        ]
+    )
+
+    assert parts == [
+        UriPart(
+            mime_type="application/pdf",
+            modality="document",
+            uri="https://example.com/document.pdf",
+        )
+    ]
+
+
 def test_file_document_source_converts_to_file_part():
     parts = convert_content_to_parts(
         [
