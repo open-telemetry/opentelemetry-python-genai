@@ -222,6 +222,32 @@ def test_base64_document_source_converts_to_blob_part():
     assert part.modality == "document"
 
 
+def test_document_metadata_preserves_base64_source():
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "title": "Report",
+                "context": "Quarterly results",
+                "citations": {"enabled": True},
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "QUJD",
+                },
+            }
+        ]
+    )
+
+    assert parts == [
+        BlobPart(
+            mime_type="application/pdf",
+            modality="document",
+            content=b"ABC",
+        )
+    ]
+
+
 def test_url_document_source_converts_to_uri_part():
     parts = convert_content_to_parts(
         [
@@ -239,7 +265,7 @@ def test_url_document_source_converts_to_uri_part():
     part = parts[0]
     assert isinstance(part, UriPart)
     assert part.uri == "https://example.com/document.pdf"
-    assert part.mime_type == "application/pdf"
+    assert part.mime_type is None
     assert part.modality == "document"
 
 
@@ -308,9 +334,14 @@ def test_nested_content_document_source_preserves_part_order():
         ]
     )
 
-    assert len(parts) == 1
-    assert isinstance(parts[0], GenericPart)
-    assert parts[0].type == "document"
+    assert parts == [
+        TextPart(content="Nested text"),
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        ),
+    ]
 
 
 def test_iterator_document_source_is_preserved_without_consuming():
@@ -328,7 +359,7 @@ def test_iterator_document_source_is_preserved_without_consuming():
         ]
     )
 
-    assert parts == [GenericPart(type="document")]
+    assert parts == [GenericPart(type="blob")]
     assert list(content) == [
         {"type": "text", "text": "First"},
         {"type": "text", "text": "Second"},
@@ -364,7 +395,7 @@ def test_file_backed_base64_source_is_preserved_without_reading(
     )
 
     assert isinstance(part, GenericPart)
-    assert part.type == block_type
+    assert part.type == "blob"
     if initial_position is not None:
         assert data.tell() == initial_position
 

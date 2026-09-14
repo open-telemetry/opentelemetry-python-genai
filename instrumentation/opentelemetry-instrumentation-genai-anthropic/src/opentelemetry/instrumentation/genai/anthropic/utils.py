@@ -116,7 +116,7 @@ def _extract_base64_blob(source: object, modality: str) -> MessagePart | None:
     data = source_dict.get("data")
     if not isinstance(data, str):
         if isinstance(data, PathLike) or callable(getattr(data, "read", None)):
-            return GenericPart(type=modality)
+            return GenericPart(type="blob")
         return None
     decoded = decode_base64(data)
     if decoded is None:
@@ -167,9 +167,12 @@ def _extract_document_source(source: object) -> list[MessagePart]:
     if source_type == "url":
         url = source_dict.get("url")
         if isinstance(url, str) and url:
+            media_type = source_dict.get("media_type")
             return [
                 UriPart(
-                    mime_type="application/pdf",
+                    mime_type=media_type
+                    if isinstance(media_type, str)
+                    else None,
                     modality="document",
                     uri=url,
                 )
@@ -191,7 +194,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
         if isinstance(content, str):
             return [TextPart(content=content)]
         if isinstance(content, Iterator):
-            return [GenericPart(type="document")]
+            return [GenericPart(type="blob")]
         if isinstance(content, Iterable):
             return convert_content_to_parts(
                 cast("Iterable[ContentBlock | ContentBlockParam]", content)
@@ -202,25 +205,8 @@ def _extract_document_source(source: object) -> list[MessagePart]:
     return []
 
 
-def _convert_document_block(block: Mapping[str, Any]) -> MessagePart | None:
-    parts = _extract_document_source(block.get("source"))
-    metadata = {
-        key: block[key]
-        for key in ("title", "context", "citations")
-        if block.get(key) is not None
-    }
-    source = block.get("source")
-    source_mapping = (
-        cast(Mapping[str, object], source)
-        if isinstance(source, Mapping)
-        else None
-    )
-    is_nested = (
-        source_mapping is not None and source_mapping.get("type") == "content"
-    )
-    if metadata or (is_nested and parts):
-        return GenericPart(type="document")
-    return parts[0] if parts else None
+def _convert_document_block(block: Mapping[str, Any]) -> list[MessagePart]:
+    return _extract_document_source(block.get("source"))
 
 
 def _convert_dict_block_to_part(
@@ -287,7 +273,8 @@ def _convert_dict_block_to_part(
         return _extract_image_source(block.get("source"))
 
     if block_type == "document":
-        return _convert_document_block(block)
+        parts = _convert_document_block(block)
+        return parts[0] if parts else None
 
     if block_type in ("audio", "video", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))
@@ -336,6 +323,11 @@ def convert_content_to_parts(
         return [TextPart(content=content)]
     parts: list[MessagePart] = []
     for item in content:
+        if hasattr(item, "get"):
+            item_mapping = cast(Mapping[str, Any], item)
+            if item_mapping.get("type") == "document":
+                parts.extend(_convert_document_block(item_mapping))
+                continue
         part = _convert_content_block_to_part(item)
         if part is not None:
             parts.append(part)
