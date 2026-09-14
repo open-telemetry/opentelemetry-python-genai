@@ -1,0 +1,1 @@
+Record cancellation as a failure: the invocation context manager finalized any non-`Exception` `BaseException` (`asyncio.CancelledError`, `KeyboardInterrupt`, `SystemExit`, `GeneratorExit`) through the success path, so cancelled operations were exported with an unset span status and no `error.type`.

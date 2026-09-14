@@ -30,6 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
+    _message_name,
     _normalize_role,
     extract_token_details,
     is_stream_end_marker,
@@ -39,7 +40,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     prepare_tool_definitions,
     resolve_response_model_and_id,
     response_fields_from_generation,
-    split_system_and_input_messages,
+    to_input_messages,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -172,7 +173,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent.input_messages = make_input_message(inputs)
 
                     if metadata:
-                        agent.agent_id = metadata.get("agent_id")
                         agent.agent_description = metadata.get(
                             "agent_description"
                         )
@@ -283,6 +283,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 request_model = str(model)
                 break
 
+        if request_model is None and metadata:
+            if model := metadata.get("ls_model_name"):
+                request_model = str(model)
+
         # Skip telemetry for unsupported request models
         if request_model is None:
             return
@@ -326,15 +330,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if "ls_max_tokens" in metadata:
                 max_tokens = metadata.get("ls_max_tokens")
 
-        # Flatten ``list[list[BaseMessage]]`` (one inner list per generation
-        # request) before splitting into system / input.
+        # ``messages`` from on_chat_model_start is ``list[list[BaseMessage]]``
+        # (one inner list per generation request). Flatten and let
+        # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
+        # with proper roles, tool-call requests, tool results, and reasoning.
         flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
-        system_instruction: list[MessagePart] = []
         input_messages: list[InputMessage] = []
         if self._telemetry_handler.should_capture_content():
-            system_instruction, input_messages = (
-                split_system_and_input_messages(flattened)
-            )
+            input_messages = to_input_messages(flattened)
 
         llm_invocation = self._telemetry_handler.inference(
             provider,
@@ -342,8 +345,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
-        if system_instruction:
-            llm_invocation.system_instruction = system_instruction
         llm_invocation.top_p = top_p
         llm_invocation.frequency_penalty = frequency_penalty
         llm_invocation.presence_penalty = presence_penalty
@@ -470,6 +471,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             )
                         )
 
+                    name_str = _message_name(chat_generation.message)
+
                     if finish_reason in ("tool_calls", "tool_use"):
                         tool_calls: list[ToolCallRequestPart] = []
                         for tool_call in chat_generation.message.tool_calls:
@@ -484,6 +487,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], tool_calls),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     elif (
                         legacy_call := _legacy_function_call_request(
@@ -498,6 +502,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or Role.ASSISTANT.value,
                             parts=cast(list[MessagePart], [legacy_call]),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     else:
                         parts = [
@@ -514,6 +519,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             role=role,
                             parts=cast(list[MessagePart], parts),
                             finish_reason=finish_reason,
+                            name=name_str,
                         )
                     output_messages.append(output_message)
 
@@ -533,29 +539,60 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         ):
                             output_tokens = 0
 
-                        # Cache/reasoning break-downs (Anthropic, OpenAI
-                        # reasoning models, Bedrock). Audio tokens are dropped
-                        # (no GenAI semconv attribute).
+                        # Cache, reasoning, and modality token break-downs
                         token_details = extract_token_details(
                             cast(dict[str, Any], usage_metadata)
                         )
-                        cache_creation = token_details.get(
-                            "cache_creation_input_tokens"
-                        )
-                        if cache_creation is not None:
-                            llm_invocation.cache_creation_input_tokens = (
-                                cache_creation
+                        if (
+                            cache_write := token_details.get(
+                                "cache_write_input_tokens"
                             )
-                        cache_read = token_details.get(
-                            "cache_read_input_tokens"
-                        )
-                        if cache_read is not None:
+                        ) is not None:
+                            llm_invocation.cache_write_input_tokens = (
+                                cache_write
+                            )
+                        if (
+                            cache_read := token_details.get(
+                                "cache_read_input_tokens"
+                            )
+                        ) is not None:
                             llm_invocation.cache_read_input_tokens = cache_read
-                        reasoning_tokens = token_details.get(
-                            "reasoning_tokens"
-                        )
-                        if reasoning_tokens is not None:
+                        if (
+                            reasoning_tokens := token_details.get(
+                                "reasoning_tokens"
+                            )
+                        ) is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
+
+                        if (
+                            text_in := token_details.get("text_input_tokens")
+                        ) is not None:
+                            llm_invocation.text_input_tokens = text_in
+                        if (
+                            image_in := token_details.get("image_input_tokens")
+                        ) is not None:
+                            llm_invocation.image_input_tokens = image_in
+                        if (
+                            audio_in := token_details.get("audio_input_tokens")
+                        ) is not None:
+                            llm_invocation.audio_input_tokens = audio_in
+
+                        if (
+                            text_out := token_details.get("text_output_tokens")
+                        ) is not None:
+                            llm_invocation.text_output_tokens = text_out
+                        if (
+                            image_out := token_details.get(
+                                "image_output_tokens"
+                            )
+                        ) is not None:
+                            llm_invocation.image_output_tokens = image_out
+                        if (
+                            audio_out := token_details.get(
+                                "audio_output_tokens"
+                            )
+                        ) is not None:
+                            llm_invocation.audio_output_tokens = audio_out
 
                         llm_invocation.output_tokens = output_tokens
 

@@ -1,0 +1,1 @@
+Deprecate `OutputMessage.finish_reason`. Report finish reasons via `gen_ai.response.finish_reasons` instead.

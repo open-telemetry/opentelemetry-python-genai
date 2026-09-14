@@ -1,0 +1,1 @@
+Record `cache_write_input_tokens` and modality token breakdown attributes (`text`, `image`, `audio`) from LangChain usage metadata on `InferenceInvocation`.

@@ -1,0 +1,1 @@
+Keep one invoke_agent span open across an AgentWorkflow member's tool loop, parent execute_tool spans to the requesting agent, and keep a handing-off agent's span open until every tool call of that turn ends.

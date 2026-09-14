@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 
 import pytest
 import yaml
@@ -179,9 +178,11 @@ def fixture_client():
 
 
 @pytest.mark.vcr
-def test_sync_interactions_create(client, otel_mocker: OTelMocker):
-    os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
-        "SPAN_AND_EVENT"
+def test_sync_interactions_create(
+    client, otel_mocker: OTelMocker, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
 
     response = client.interactions.create(
@@ -202,9 +203,11 @@ def test_sync_interactions_create(client, otel_mocker: OTelMocker):
 
 @pytest.mark.vcr
 @pytest.mark.asyncio
-async def test_async_interactions_create(client, otel_mocker: OTelMocker):
-    os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
-        "SPAN_AND_EVENT"
+async def test_async_interactions_create(
+    client, otel_mocker: OTelMocker, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
 
     response = await client.aio.interactions.create(

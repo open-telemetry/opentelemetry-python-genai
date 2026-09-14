@@ -1,0 +1,1 @@
+Record `gen_ai.execute_tool.duration` on tool invocations and align `gen_ai.invoke_workflow.duration` attributes and bucket boundaries with semantic conventions.

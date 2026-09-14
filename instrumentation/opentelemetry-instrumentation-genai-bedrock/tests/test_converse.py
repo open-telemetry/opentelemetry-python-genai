@@ -27,6 +27,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import GenericPart, TextPart
 
 
 @pytest.mark.vcr
@@ -362,7 +363,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation,
     )
-    assert invocation.top_k == 40.0
+    assert invocation.top_k == 40
+    assert isinstance(invocation.top_k, int)
     assert invocation.seed == 123
 
     invocation2 = handler.inference(provider="aws.bedrock")
@@ -372,7 +374,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation2,
     )
-    assert invocation2.top_k == 250.0
+    assert invocation2.top_k == 250
+    assert isinstance(invocation2.top_k, int)
     assert invocation2.seed == 456
 
     invocation3 = handler.inference(provider="aws.bedrock")
@@ -382,7 +385,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation3,
     )
-    assert invocation3.top_k == 20.0
+    assert invocation3.top_k == 20
+    assert isinstance(invocation3.top_k, int)
 
     invocation4 = handler.inference(provider="aws.bedrock")
     extract_converse_request(
@@ -391,7 +395,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation4,
     )
-    assert invocation4.top_k == 0.0
+    assert invocation4.top_k == 0
+    assert isinstance(invocation4.top_k, int)
     assert invocation4.seed == 0
 
 
@@ -596,3 +601,47 @@ def test_extract_converse_request_prompt_variables_no_content(
         == "sgi5gkybzqak"
     )
     assert "gen_ai.prompt.variable.user_name" not in invocation.attributes
+
+
+def test_extract_converse_request_system_instruction(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    extract_converse_request(
+        {
+            "system": [
+                {"text": "Be concise"},
+                {"text": "Answer politely"},
+            ],
+        },
+        invocation,
+    )
+
+    assert invocation.system_instruction == [
+        TextPart(content="Be concise"),
+        TextPart(content="Answer politely"),
+    ]
+
+
+def test_extract_converse_request_system_instruction_generic(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    extract_converse_request(
+        {
+            "system": [
+                {"text": "Be concise"},
+                {"guardContent": {"guardrailIdentifier": "gr-123"}},
+                {"cachePoint": {"type": "default"}},
+            ],
+        },
+        invocation,
+    )
+
+    assert invocation.system_instruction == [
+        TextPart(content="Be concise"),
+        GenericPart(type="guardContent"),
+        GenericPart(type="cachePoint"),
+    ]

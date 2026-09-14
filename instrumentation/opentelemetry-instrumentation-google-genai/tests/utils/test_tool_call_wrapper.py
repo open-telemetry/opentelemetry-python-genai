@@ -21,11 +21,6 @@ class TestCase(unittest.TestCase):
     def setUp(self):
         self._otel = otel_mocker.OTelMocker()
         self._otel.install()
-        self._otel_wrapper = TelemetryHandler(
-            tracer_provider=get_tracer_provider(),
-            logger_provider=get_logger_provider(),
-            meter_provider=get_meter_provider(),
-        )
 
     @property
     def otel(self):
@@ -33,7 +28,11 @@ class TestCase(unittest.TestCase):
 
     @property
     def otel_wrapper(self):
-        return self._otel_wrapper
+        return TelemetryHandler(
+            tracer_provider=get_tracer_provider(),
+            logger_provider=get_logger_provider(),
+            meter_provider=get_meter_provider(),
+        )
 
     def wrap(self, tool_or_tools):
         return tool_call_wrapper.wrapped_tool(tool_or_tools, self.otel_wrapper)

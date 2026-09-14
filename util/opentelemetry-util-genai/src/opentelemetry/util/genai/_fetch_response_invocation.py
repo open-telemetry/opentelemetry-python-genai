@@ -11,19 +11,21 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 # TODO: Migrate to gen_ai_attributes constants once available in the semconv
@@ -77,7 +79,7 @@ class FetchResponseInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -87,11 +89,12 @@ class FetchResponseInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
         super().__init__(
             tracer,
-            metrics_recorder,
+            instruments,
             logger,
             completion_hook,
             operation_name=_FETCH_RESPONSE_OPERATION_NAME,
@@ -100,6 +103,7 @@ class FetchResponseInvocation(GenAIInvocation):
             span_name=_FETCH_RESPONSE_OPERATION_NAME,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            content_capturing_mode=content_capturing_mode,
         )
         self._provider: str = provider
         self._response_id: str = response_id
@@ -111,7 +115,10 @@ class FetchResponseInvocation(GenAIInvocation):
         self.finish_reasons: list[str] | None = None
         self.stream_cursor: str | None = None
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self.tool_definitions: list[ToolDefinition] | None = None
         self._start(self._get_start_attributes())
 
@@ -178,11 +185,12 @@ class FetchResponseInvocation(GenAIInvocation):
                 system_instruction=self.system_instruction,
                 tool_definitions=self.tool_definitions,
                 for_span=True,
+                content_capturing_mode=self._content_capturing_mode,
             )
         )
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()
         self._call_completion_hook(
             outputs=self.output_messages,
             system_instruction=self.system_instruction,

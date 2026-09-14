@@ -30,10 +30,6 @@ from opentelemetry.instrumentation.genai.anthropic import (
 from opentelemetry.instrumentation.genai.anthropic._raw_response import (
     RawResponseProxy,
 )
-from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
-    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-)
 from opentelemetry.instrumentation.genai.anthropic.wrappers import (
     AsyncMessagesStreamWrapper,
 )
@@ -882,8 +878,6 @@ async def test_async_messages_create_aggregates_cache_tokens(
     assert len(spans) == 1
     span = spans[0]
 
-    assert GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS in span.attributes
-    assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS in span.attributes
     assert span.attributes[
         GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
     ] == expected_input_tokens(response.usage)
@@ -893,11 +887,26 @@ async def test_async_messages_create_aggregates_cache_tokens(
     )
     cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
     cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
-    assert (
-        span.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]
-        == cache_creation
-    )
-    assert span.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == cache_read
+    if cache_creation:
+        assert (
+            span.attributes["gen_ai.usage.cache_write.input_tokens"]
+            == cache_creation
+        )
+    else:
+        assert "gen_ai.usage.cache_write.input_tokens" not in span.attributes
+    assert "gen_ai.usage.cache_creation.input_tokens" not in span.attributes
+    if cache_read:
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            ]
+            == cache_read
+        )
+    else:
+        assert (
+            GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            not in span.attributes
+        )
 
 
 @pytest.mark.asyncio
@@ -936,8 +945,6 @@ async def test_async_messages_create_streaming_aggregates_cache_tokens(
     assert len(spans) == 1
     span = spans[0]
 
-    assert GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS in span.attributes
-    assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS in span.attributes
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
         == input_tokens
@@ -946,11 +953,26 @@ async def test_async_messages_create_streaming_aggregates_cache_tokens(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
         == output_tokens
     )
-    assert (
-        span.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]
-        == cache_creation
-    )
-    assert span.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == cache_read
+    if cache_creation:
+        assert (
+            span.attributes["gen_ai.usage.cache_write.input_tokens"]
+            == cache_creation
+        )
+    else:
+        assert "gen_ai.usage.cache_write.input_tokens" not in span.attributes
+    assert "gen_ai.usage.cache_creation.input_tokens" not in span.attributes
+    if cache_read:
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            ]
+            == cache_read
+        )
+    else:
+        assert (
+            GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            not in span.attributes
+        )
 
 
 @pytest.mark.asyncio

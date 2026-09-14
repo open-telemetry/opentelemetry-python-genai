@@ -20,6 +20,7 @@ try:
     from google.genai._interactions.types.interaction_sse_event import (
         InteractionSSEEvent,
     )
+    from google.genai._interactions.types.step import Step
 
     _HAS_INTERACTIONS = True
 except ImportError:
@@ -37,6 +38,7 @@ except ImportError:
         from google.genai._gaos.types.interactions import (
             Interaction,
             InteractionSSEEvent,
+            Step,
             Usage,
         )
         from google.genai._gaos.types.interactions import (
@@ -69,6 +71,9 @@ except ImportError:
         class InteractionSSEEvent:
             pass
 
+        class Step:
+            pass
+
         class Stream:
             pass
 
@@ -86,8 +91,8 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    RemoteAgentInvocation,
 )
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
@@ -98,8 +103,11 @@ from opentelemetry.util.genai.types import (
     GenericPart,
     GenericToolDefinition,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -135,7 +143,7 @@ def _set_co_filename(wrapped: object) -> None:
 
 def _apply_interaction_response_attributes(
     response: Interaction,
-    invocation: InferenceInvocation | AgentInvocation,
+    invocation: InferenceInvocation | RemoteAgentInvocation,
     telemetry_handler: TelemetryHandler,
 ) -> None:
     if isinstance(invocation, InferenceInvocation):
@@ -147,9 +155,47 @@ def _apply_interaction_response_attributes(
 
     invocation.input_tokens = usage.total_input_tokens
     invocation.output_tokens = usage.total_output_tokens
+    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
     if isinstance(invocation, InferenceInvocation):
         invocation.thinking_tokens = usage.total_thought_tokens
-    invocation.cache_read_input_tokens = usage.total_cached_tokens
+
+        def _set_modality_tokens(
+            entries: Any,
+            text_attr: str,
+            image_attr: str,
+            audio_attr: str,
+        ) -> None:
+            for entry in entries or []:
+                modality = _get_field(entry, "modality")
+                tokens = _get_field(entry, "tokens")
+                if modality and tokens is not None:
+                    m = str(modality).lower()
+                    if m == "text":
+                        setattr(invocation, text_attr, tokens)
+                    elif m == "image":
+                        setattr(invocation, image_attr, tokens)
+                    elif m == "audio":
+                        setattr(invocation, audio_attr, tokens)
+
+        _set_modality_tokens(
+            _get_field(usage, "input_tokens_by_modality"),
+            "text_input_tokens",
+            "image_input_tokens",
+            "audio_input_tokens",
+        )
+        _set_modality_tokens(
+            _get_field(usage, "output_tokens_by_modality"),
+            "text_output_tokens",
+            "image_output_tokens",
+            "audio_output_tokens",
+        )
+        _set_modality_tokens(
+            _get_field(usage, "cached_tokens_by_modality"),
+            "text_cache_read_input_tokens",
+            "image_cache_read_input_tokens",
+            "audio_cache_read_input_tokens",
+        )
 
     if telemetry_handler.should_capture_content():
         invocation.output_messages = _interactions_response_to_messages(
@@ -161,6 +207,103 @@ def _get_field(obj: Any, name: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(name)
     return getattr(obj, name, None)
+
+
+_SERVER_TOOL_CALL_NAMES = {
+    "code_execution_call": "code_execution",
+    "file_search_call": "file_search",
+    "google_maps_call": "google_maps",
+    "google_search_call": "google_search",
+    "mcp_server_tool_call": "mcp",
+    "processing_call": "processing",
+    "retrieval_call": "retrieval",
+    "url_context_call": "url_context",
+}
+
+_SERVER_TOOL_RESPONSE_NAMES = {
+    "code_execution_result": "code_execution",
+    "file_search_result": "file_search",
+    "google_maps_result": "google_maps",
+    "google_search_result": "google_search",
+    "mcp_server_tool_result": "mcp",
+    "processing_result": "processing",
+    "retrieval_result": "retrieval",
+    "url_context_result": "url_context",
+}
+
+_TOOL_STEP_TYPES = {
+    "function_call",
+    "function_result",
+    *_SERVER_TOOL_CALL_NAMES,
+    *_SERVER_TOOL_RESPONSE_NAMES,
+}
+
+
+def _to_server_tool_part(
+    item: Step | dict[str, object],
+) -> MessagePart | None:
+    item_type = item.get("type") if isinstance(item, dict) else item.type
+    tool_name = _SERVER_TOOL_CALL_NAMES.get(item_type)
+    response_name = _SERVER_TOOL_RESPONSE_NAMES.get(item_type)
+    if tool_name is None and response_name is None:
+        return None
+
+    if isinstance(item, dict):
+        payload = dict(item)
+    else:
+        payload = item.model_dump(exclude_none=True, mode="json")
+
+    item_id = payload.pop("id", None)
+    call_id = payload.pop("call_id", None)
+    payload.pop("type", None)
+    name = payload.pop("name", None)
+    canonical_name = tool_name or response_name
+    if canonical_name is None:
+        return None
+    payload["type"] = canonical_name
+
+    if response_name is not None:
+        return ServerToolCallResponsePart(
+            id=call_id if isinstance(call_id, str) else None,
+            server_tool_call_response=payload,
+        )
+    return ServerToolCallPart(
+        id=item_id if isinstance(item_id, str) else None,
+        name=name if isinstance(name, str) else canonical_name,
+        server_tool_call=payload,
+    )
+
+
+def _interaction_item_to_part(
+    item: Step | dict[str, object],
+) -> MessagePart | None:
+    if isinstance(item, dict):
+        item_type = item.get("type")
+        item_id = item.get("id")
+        name = item.get("name")
+        arguments = item.get("arguments")
+        call_id = item.get("call_id")
+        result = item.get("result")
+    else:
+        item_type = item.type
+        item_id = item.id if item_type == "function_call" else None
+        name = item.name if item_type == "function_call" else None
+        arguments = item.arguments if item_type == "function_call" else None
+        call_id = item.call_id if item_type == "function_result" else None
+        result = item.result if item_type == "function_result" else None
+
+    if item_type == "function_call":
+        return ToolCallRequestPart(
+            id=item_id if isinstance(item_id, str) else None,
+            name=name if isinstance(name, str) else "",
+            arguments=arguments,
+        )
+    if item_type == "function_result":
+        return ToolCallResponsePart(
+            id=call_id if isinstance(call_id, str) else None,
+            response=result,
+        )
+    return _to_server_tool_part(item)
 
 
 # Logic for parsing Input is tricky:
@@ -184,24 +327,21 @@ def _interactions_input_to_messages(
     if not isinstance(input_data, Sequence):
         input_data = [input_data]
 
-    parts = []
+    parts: list[MessagePart] = []
     for item in input_data:
-        item_type = _get_field(item, "type")
-        if item_type == "function_call":
-            call_id = _get_field(item, "id")
-            name = _get_field(item, "name")
-            arguments = _get_field(item, "arguments")
-            part = ToolCallRequestPart(
-                id=call_id, name=name or "", arguments=arguments
-            )
-            parts.append(part)
-        elif item_type == "function_result":
-            call_id = _get_field(item, "call_id")
-            result = _get_field(item, "result")
-            part = ToolCallResponsePart(id=call_id, response=result)
-            parts.append(part)
-        elif isinstance(item, str):
+        if isinstance(item, str):
             parts.append(TextPart(content=item))
+            continue
+
+        item_type = _get_field(item, "type")
+        message_part = None
+        if isinstance(item, dict):
+            message_part = _interaction_item_to_part(item)
+        elif item_type in _TOOL_STEP_TYPES:
+            message_part = _interaction_item_to_part(cast(Step, item))
+
+        if message_part is not None:
+            parts.append(message_part)
         elif item_type == "text":
             part = TextPart(content=_get_field(item, "text") or "")
             parts.append(part)
@@ -213,7 +353,7 @@ def _interactions_input_to_messages(
             )
             parts.append(part)
         elif item_type is not None:
-            part = GenericPart(type=item_type, value=type(item).__name__)
+            part = GenericPart(type=item_type)
             parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]
@@ -245,11 +385,26 @@ def _get_interaction_output_text(interaction: Interaction) -> str:
 def _interactions_response_to_messages(
     interaction: Interaction,
 ) -> list[OutputMessage]:
-    output_text = _get_interaction_output_text(interaction)
+    parts: list[MessagePart] = []
+    for step in interaction.steps or []:
+        if part := _interaction_item_to_part(step):
+            parts.append(part)
+            continue
+        if step.type != "model_output":
+            continue
+        for item in step.content or []:
+            if item.type == "text" and isinstance(item.text, str):
+                text = item.text
+                parts.append(TextPart(content=text))
+
+    if not any(isinstance(part, TextPart) for part in parts):
+        parts.append(
+            TextPart(content=_get_interaction_output_text(interaction))
+        )
     return [
         OutputMessage(
             role=Role.ASSISTANT.value,
-            parts=[TextPart(content=output_text)],
+            parts=parts,
             finish_reason="stop",
         )
     ]
@@ -259,7 +414,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: Iterable[InteractionSSEEvent],
-        invocation: InferenceInvocation | AgentInvocation,
+        invocation: InferenceInvocation | RemoteAgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -291,7 +446,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
     def __init__(
         self,
         stream: AsyncIterable[InteractionSSEEvent],
-        invocation: InferenceInvocation | AgentInvocation,
+        invocation: InferenceInvocation | RemoteAgentInvocation,
         telemetry_handler: TelemetryHandler,
     ) -> None:
         super().__init__(stream)
@@ -376,7 +531,7 @@ def _start_interactions_invocation(
     telemetry_handler: TelemetryHandler,
     instance: InteractionsResource | AsyncInteractionsResource,
     kwargs: dict[str, Any],
-) -> InferenceInvocation | AgentInvocation:
+) -> InferenceInvocation | RemoteAgentInvocation:
     # Vertex AI does not support the interactions API yet, but eventually will.
     # SDK will raise an exception if model or agent is not passed or if input data is not passed.
     is_vertex, server_address = _get_client_info(instance)
@@ -386,7 +541,7 @@ def _start_interactions_invocation(
         else GenAIAttributes.GenAiSystemValues.GEMINI.value
     )
     if agent := kwargs.get("agent"):
-        invocation: InferenceInvocation | AgentInvocation = (
+        invocation: InferenceInvocation | RemoteAgentInvocation = (
             telemetry_handler.invoke_remote_agent(
                 provider=provider,
                 request_model=kwargs.get("model"),
@@ -452,7 +607,7 @@ def _create_instrumented_interactions_create(
             )
             invocation.stop()
             return response
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 
@@ -496,7 +651,7 @@ def _create_instrumented_async_interactions_create(
             )
             invocation.stop()
             return response
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 

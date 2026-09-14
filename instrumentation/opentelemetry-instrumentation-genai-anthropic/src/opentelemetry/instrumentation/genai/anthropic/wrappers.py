@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import inspect
+import logging
 from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
+    Any,
     Generic,
     Protocol,
     TypeVar,
@@ -27,6 +30,8 @@ from opentelemetry.util.genai.stream import (
 )
 
 from .messages_extractors import set_invocation_response_attributes
+
+_logger = logging.getLogger(__name__)
 
 try:
     from anthropic.lib.streaming._messages import (  # pylint: disable=no-name-in-module
@@ -57,6 +62,17 @@ if TYPE_CHECKING:
 
 ResponseFormatT = TypeVar("ResponseFormatT")
 accumulate_event = cast("Callable[..., Message] | None", _sdk_accumulate_event)
+
+_accumulate_takes_json_bufs = False
+if accumulate_event is not None:
+    try:
+        _accumulate_takes_json_bufs = (
+            "json_bufs" in inspect.signature(accumulate_event).parameters
+        )
+    except (ValueError, TypeError):
+        _accumulate_takes_json_bufs = False
+
+_accumulation_disabled = False
 
 
 class _StreamWrapperWithStream(Protocol):
@@ -96,6 +112,7 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     _self_message: Message | ParsedMessage[ResponseFormatT] | None
     _self_capture_content: bool
     _self_message_telemetry_finalized: bool
+    _self_json_bufs: dict[int, bytes]
 
     def _stop(self) -> None:
         if self._self_message_telemetry_finalized:
@@ -126,6 +143,7 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         | ParsedMessageStreamEvent[ResponseFormatT],
     ) -> None:
         """Accumulate a final message snapshot from a streaming chunk."""
+        global _accumulation_disabled
         stream = cast(_StreamWrapperWithStream, self).stream
         snapshot = cast(
             "ParsedMessage[ResponseFormatT] | None",
@@ -134,14 +152,31 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         if snapshot is not None:
             self._self_message = snapshot
             return
-        if accumulate_event is None:
+        if accumulate_event is None or _accumulation_disabled:
             return
-        self._self_message = accumulate_event(
-            event=cast("RawMessageStreamEvent", chunk),
-            current_snapshot=cast(
+
+        kwargs: dict[str, Any] = {
+            "event": cast("RawMessageStreamEvent", chunk),
+            "current_snapshot": cast(
                 "ParsedMessage[ResponseFormatT] | None", self._self_message
             ),
-        )
+        }
+        if _accumulate_takes_json_bufs:
+            kwargs["json_bufs"] = self._self_json_bufs
+
+        try:
+            self._self_message = accumulate_event(**kwargs)
+        except BaseException as exc:
+            _accumulation_disabled = True
+            if not isinstance(exc, Exception):
+                raise
+            _logger.warning(
+                "Failed to accumulate streaming content; this Anthropic SDK "
+                "version is not supported. Future content accumulation is "
+                "suppressed; please upgrade opentelemetry-instrumentation-genai-anthropic "
+                "or report an issue.",
+                exc_info=True,
+            )
 
 
 class MessagesStreamWrapper(
@@ -164,6 +199,7 @@ class MessagesStreamWrapper(
         self._self_message = None
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
+        self._self_json_bufs = {}
 
     @property
     def response(self) -> _http_lib.Response:
@@ -204,6 +240,7 @@ class AsyncMessagesStreamWrapper(
         self._self_message = None
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
+        self._self_json_bufs = {}
 
     @property
     def response(self) -> _http_lib.Response:

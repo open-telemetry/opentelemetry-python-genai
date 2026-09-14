@@ -11,7 +11,7 @@ import logging
 import posixpath
 import threading
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import (
     Future,
     ThreadPoolExecutor,
@@ -28,8 +28,14 @@ import fsspec
 from opentelemetry._logs import LogRecord
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import Span
-from opentelemetry.util.genai import types
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.types import (
+    InputMessage,
+    MessagePart,
+    OutputMessage,
+    TextPart,
+    ToolDefinition,
+)
 from opentelemetry.util.genai.utils import gen_ai_json_dump
 
 GEN_AI_INPUT_MESSAGES_REF: Final = (
@@ -59,10 +65,10 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class Completion:
-    inputs: list[types.InputMessage] | None
-    outputs: list[types.OutputMessage] | None
-    system_instruction: list[types.MessagePart] | None
-    tool_definitions: list[types.ToolDefinition] | None
+    inputs: list[InputMessage] | None
+    outputs: list[OutputMessage] | None
+    system_instruction: list[MessagePart] | None
+    tool_definitions: list[ToolDefinition] | None
 
 
 @dataclass
@@ -80,15 +86,15 @@ UploadData = dict[tuple[str, bool], Callable[[], JsonEncodeable]]
 
 
 def is_message_part_list_hashable(
-    message_parts: list[types.MessagePart] | None,
+    message_parts: Sequence[MessagePart] | None,
 ) -> bool:
     return bool(message_parts) and all(
-        isinstance(x, types.TextPart) for x in message_parts
+        isinstance(x, TextPart) for x in message_parts
     )
 
 
 def hash_tool_definitions(
-    tool_definitions: list[types.ToolDefinition] | None,
+    tool_definitions: list[ToolDefinition] | None,
 ) -> str | None:
     if not tool_definitions:
         return None
@@ -218,8 +224,8 @@ class UploadCompletionHook(CompletionHook):
 
     def _calculate_ref_path(
         self,
-        system_instruction: list[types.MessagePart],
-        tool_definitions: list[types.ToolDefinition] | None = None,
+        system_instruction: Sequence[MessagePart],
+        tool_definitions: list[ToolDefinition] | None = None,
     ) -> CompletionRefs:
         # TODO: experimental with using the trace_id and span_id, or fetching
         # gen_ai.response.id from the active span.
@@ -227,9 +233,11 @@ class UploadCompletionHook(CompletionHook):
         if is_message_part_list_hashable(system_instruction):
             # Get a hash of the text.
             system_instruction_hash = hashlib.sha256(
-                "\n".join(x.content for x in system_instruction).encode(  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue, reportUnknownArgumentType, reportCallIssue, reportArgumentType]
-                    "utf-8"
-                ),
+                "\n".join(
+                    x.content
+                    for x in system_instruction
+                    if isinstance(x, TextPart)
+                ).encode("utf-8"),
                 usedforsecurity=False,
             ).hexdigest()
 
@@ -298,10 +306,10 @@ class UploadCompletionHook(CompletionHook):
     def on_completion(
         self,
         *,
-        inputs: list[types.InputMessage],
-        outputs: list[types.OutputMessage],
-        system_instruction: list[types.MessagePart],
-        tool_definitions: list[types.ToolDefinition] | None = None,
+        inputs: list[InputMessage],
+        outputs: list[OutputMessage],
+        system_instruction: list[MessagePart],
+        tool_definitions: list[ToolDefinition] | None = None,
         span: Span | None = None,
         log_record: LogRecord | None = None,
         **kwargs: Any,
@@ -321,10 +329,10 @@ class UploadCompletionHook(CompletionHook):
         )
 
         def to_dict(
-            dataclass_list: list[types.InputMessage]
-            | list[types.OutputMessage]
-            | list[types.MessagePart]
-            | list[types.ToolDefinition],
+            dataclass_list: list[InputMessage]
+            | list[OutputMessage]
+            | list[MessagePart]
+            | list[ToolDefinition],
         ) -> JsonEncodeable:
             return [asdict(dc) for dc in dataclass_list]
 

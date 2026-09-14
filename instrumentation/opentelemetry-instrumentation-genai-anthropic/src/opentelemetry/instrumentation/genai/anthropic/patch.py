@@ -138,7 +138,7 @@ def messages_create(
             # this returns a response object that ``create``'s annotations do
             # not describe, so the checks below cannot be narrowed away.
             result: Any = wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 
@@ -194,7 +194,7 @@ def async_messages_create(
         try:
             # See ``messages_create`` on why this is Any.
             result: Any = await wrapped(*args, **kwargs)
-        except Exception as exc:
+        except BaseException as exc:
             invocation.fail(exc)
             raise
 

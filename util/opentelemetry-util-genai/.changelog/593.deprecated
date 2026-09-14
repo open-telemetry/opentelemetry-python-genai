@@ -1,0 +1,1 @@
+Deprecate `should_capture_content_on_spans()` and `ToolInvocation.should_capture_content_on_span` in favor of `GenAIInvocation.should_capture_content`.

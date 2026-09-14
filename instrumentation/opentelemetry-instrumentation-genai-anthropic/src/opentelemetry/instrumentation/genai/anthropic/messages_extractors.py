@@ -25,8 +25,9 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
     InputMessage,
-    MessagePart,
     OutputMessage,
+    SystemInstructionPart,
+    TextPart,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -62,12 +63,6 @@ class MessageRequestParams:
     stream: bool | None = None
     messages: Iterable[MessageParam] | None = None
     system: str | Iterable[TextBlockParam] | None = None
-
-
-GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = (
-    "gen_ai.usage.cache_creation.input_tokens"
-)
-GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 
 
 @dataclass
@@ -125,10 +120,16 @@ def get_input_messages(
 
 def get_system_instruction(
     system: str | Iterable[TextBlockParam] | None,
-) -> list[MessagePart]:
+) -> list[SystemInstructionPart]:
     if system is None:
         return []
-    return convert_content_to_parts(system)
+    if isinstance(system, str):
+        return [TextPart(content=system)] if system else []
+    return [
+        TextPart(content=block["text"])
+        for block in system
+        if block.get("text")
+    ]
 
 
 def get_output_messages_from_message(
@@ -166,14 +167,8 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(message.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
-    if tokens.cache_creation_input_tokens is not None:
-        invocation.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = (
-            tokens.cache_creation_input_tokens
-        )
-    if tokens.cache_read_input_tokens is not None:
-        invocation.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = (
-            tokens.cache_read_input_tokens
-        )
+    invocation.cache_write_input_tokens = tokens.cache_creation_input_tokens
+    invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
     if capture_content:
         invocation.output_messages = get_output_messages_from_message(message)

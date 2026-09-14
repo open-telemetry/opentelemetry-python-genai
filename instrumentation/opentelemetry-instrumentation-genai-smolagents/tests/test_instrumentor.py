@@ -10,17 +10,19 @@ from unittest.mock import patch
 
 import pytest
 import smolagents
+from smolagents import CodeAgent
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.smolagents import (
     SmolagentsInstrumentor,
     _model_classes_defining,
 )
+from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util._importlib_metadata import entry_points
 from opentelemetry.util.genai.completion_hook import CompletionHook
 
-from .test_utils import MESSAGES, transformers_model
+from .test_utils import MESSAGES, FakeCodeModel, transformers_model
 
 
 class RecordingHook(CompletionHook):
@@ -31,8 +33,22 @@ class RecordingHook(CompletionHook):
         self.calls.append(kwargs)
 
 
+class RaisingHook(CompletionHook):
+    def on_completion(self, **kwargs: Any) -> None:
+        raise RuntimeError("hook failed")
+
+
 def _generate_a_chat_span() -> None:
     transformers_model().generate(messages=MESSAGES)
+
+
+def _passthrough_wrapper(
+    wrapped: Any,
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    return wrapped(*args, **kwargs)
 
 
 def test_entrypoint_loads_instrumentor() -> None:
@@ -54,6 +70,7 @@ def test_instrument_uninstrument_restores_originals(
     original_generate = smolagents.TransformersModel.generate
     original_mlx_generate = smolagents.MLXModel.generate
     original_generate_stream = smolagents.TransformersModel.generate_stream
+    original_run = smolagents.MultiStepAgent.run
 
     instrumentor = SmolagentsInstrumentor()
     instrumentor.instrument(
@@ -68,6 +85,7 @@ def test_instrument_uninstrument_restores_originals(
         smolagents.TransformersModel.generate_stream
         is not original_generate_stream
     )
+    assert smolagents.MultiStepAgent.run is not original_run
 
     instrumentor.uninstrument()
 
@@ -77,6 +95,7 @@ def test_instrument_uninstrument_restores_originals(
         smolagents.TransformersModel.generate_stream
         is original_generate_stream
     )
+    assert smolagents.MultiStepAgent.run is original_run
 
 
 @pytest.mark.parametrize(
@@ -122,6 +141,7 @@ def test_uninstrument_through_a_new_constructor_call(
     # .uninstrument() form must restore everything even though the second
     # constructor call re-runs __init__ on the live instance.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
 
     SmolagentsInstrumentor().instrument(
         tracer_provider=tracer_provider,
@@ -131,6 +151,7 @@ def test_uninstrument_through_a_new_constructor_call(
     SmolagentsInstrumentor().uninstrument()
 
     assert smolagents.TransformersModel.generate is original_generate
+    assert smolagents.MultiStepAgent.run is original_run
 
 
 @pytest.mark.parametrize("method", ["generate", "generate_stream"])
@@ -163,6 +184,7 @@ def test_repeated_instrument_uninstrument(
     # BaseInstrumentor returns a per-class singleton, so the wrapped-class
     # bookkeeping has to survive being filled and drained more than once.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
 
     instrumentor = SmolagentsInstrumentor()
     for _ in range(2):
@@ -172,8 +194,10 @@ def test_repeated_instrument_uninstrument(
             meter_provider=meter_provider,
         )
         assert smolagents.TransformersModel.generate is not original_generate
+        assert smolagents.MultiStepAgent.run is not original_run
         instrumentor.uninstrument()
         assert smolagents.TransformersModel.generate is original_generate
+        assert smolagents.MultiStepAgent.run is original_run
 
 
 def test_uninstrument_without_instrument() -> None:
@@ -181,60 +205,78 @@ def test_uninstrument_without_instrument() -> None:
     # also be a no-op on unpatched attributes: the rollback in _instrument()
     # calls it after a partial patch.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
 
     SmolagentsInstrumentor().uninstrument()
     SmolagentsInstrumentor()._uninstrument()
 
     assert smolagents.TransformersModel.generate is original_generate
+    assert smolagents.MultiStepAgent.run is original_run
 
 
 def test_instrument_with_no_providers() -> None:
     # Without providers the handler falls back to the globals; instrumenting
     # must not require a caller to pass them.
     original_generate = smolagents.TransformersModel.generate
+    original_run = smolagents.MultiStepAgent.run
 
     instrumentor = SmolagentsInstrumentor()
     instrumentor.instrument()
     try:
         assert smolagents.TransformersModel.generate is not original_generate
+        assert smolagents.MultiStepAgent.run is not original_run
     finally:
         instrumentor.uninstrument()
 
     assert smolagents.TransformersModel.generate is original_generate
+    assert smolagents.MultiStepAgent.run is original_run
 
 
-def test_failed_instrument_rolls_back_partial_patches(
-    tracer_provider, logger_provider, meter_provider
-) -> None:
-    # A failure part-way through must leave no class patched, because
-    # uninstrument() cannot clean up after a failed _instrument().
-    model_classes = _model_classes_defining("generate")
-    assert len(model_classes) > 1, (
-        "the rollback needs more than one class to patch"
+def _originals() -> dict[tuple[type, str], Any]:
+    patched: dict[tuple[type, str], Any] = {
+        (model_cls, "generate"): model_cls.__dict__["generate"]
+        for model_cls in _model_classes_defining("generate")
+    }
+    patched.update(
+        {
+            (model_cls, "generate_stream"): model_cls.__dict__[
+                "generate_stream"
+            ]
+            for model_cls in _model_classes_defining("generate_stream")
+        }
     )
-    originals = {
-        model_cls: model_cls.__dict__["generate"]
-        for model_cls in model_classes
-    }
-    stream_classes = _model_classes_defining("generate_stream")
-    stream_originals = {
-        model_cls: model_cls.__dict__["generate_stream"]
-        for model_cls in stream_classes
-    }
+    patched[(smolagents.MultiStepAgent, "run")] = (
+        smolagents.MultiStepAgent.__dict__["run"]
+    )
+    return patched
+
+
+@pytest.mark.parametrize("fail_on_call", [2, None])
+def test_failed_instrument_rolls_back_partial_patches(
+    tracer_provider, logger_provider, meter_provider, fail_on_call: int | None
+) -> None:
+    # A failure part-way through must leave nothing patched because
+    # uninstrument() cannot clean up after a failed _instrument(). A value of 2
+    # fails after the first patch. None fails on MultiStepAgent.run, the last
+    # patch.
+    originals = _originals()
+    assert len(originals) > 1, "the rollback needs more than one patch"
 
     real_wrap = wrap_function_wrapper
     calls = 0
 
-    def fail_on_the_second_class(target: Any, name: str, wrapper: Any) -> None:
+    def failing_wrap(target: Any, name: str, wrapper: Any) -> None:
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == fail_on_call or (
+            fail_on_call is None and name == "MultiStepAgent.run"
+        ):
             raise RuntimeError("boom")
         real_wrap(target, name, wrapper)
 
     with patch(
         "opentelemetry.instrumentation.genai.smolagents.wrap_function_wrapper",
-        fail_on_the_second_class,
+        failing_wrap,
     ):
         with pytest.raises(RuntimeError, match="boom"):
             SmolagentsInstrumentor().instrument(
@@ -243,11 +285,89 @@ def test_failed_instrument_rolls_back_partial_patches(
                 meter_provider=meter_provider,
             )
 
-    assert calls == 2, "the first class was expected to be patched"
-    for model_cls, original in originals.items():
-        assert model_cls.__dict__["generate"] is original
-    for model_cls, original in stream_originals.items():
-        assert model_cls.__dict__["generate_stream"] is original
+    assert calls > 1, "at least one attribute was expected to be patched"
+    for (target, name), original in originals.items():
+        assert target.__dict__[name] is original, (
+            f"{target.__name__}.{name} was not restored"
+        )
+
+
+@pytest.mark.parametrize("fail_on_call", [2, None])
+def test_failed_instrument_preserves_third_party_wrappers(
+    tracer_provider, logger_provider, meter_provider, fail_on_call: int | None
+) -> None:
+    original_run = smolagents.MultiStepAgent.__dict__["run"]
+
+    wrap_function_wrapper(
+        smolagents.MultiStepAgent, "run", _passthrough_wrapper
+    )
+    third_party_run = smolagents.MultiStepAgent.__dict__["run"]
+
+    real_wrap = wrap_function_wrapper
+    calls = 0
+
+    def failing_wrap(target: Any, name: str, wrapper: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == fail_on_call or (
+            fail_on_call is None and name == "MultiStepAgent.run"
+        ):
+            raise RuntimeError("boom")
+        real_wrap(target, name, wrapper)
+
+    try:
+        with patch(
+            "opentelemetry.instrumentation.genai.smolagents.wrap_function_wrapper",
+            failing_wrap,
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                SmolagentsInstrumentor().instrument(
+                    tracer_provider=tracer_provider,
+                    logger_provider=logger_provider,
+                    meter_provider=meter_provider,
+                )
+
+        assert smolagents.MultiStepAgent.__dict__["run"] is third_party_run
+    finally:
+        unwrap(smolagents.MultiStepAgent, "run")
+
+    assert smolagents.MultiStepAgent.__dict__["run"] is original_run
+
+
+def test_uninstrument_keeps_third_party_wrappers_working(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    original_run = smolagents.MultiStepAgent.__dict__["run"]
+    calls: list[str] = []
+
+    def recording_wrapper(
+        wrapped: Any,
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        calls.append("third party")
+        return wrapped(*args, **kwargs)
+
+    wrap_function_wrapper(smolagents.MultiStepAgent, "run", recording_wrapper)
+
+    try:
+        instrumentor = SmolagentsInstrumentor()
+        instrumentor.instrument(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        )
+        instrumentor.uninstrument()
+
+        agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+        assert agent.run("Test question") == "Test result from CodeAgent"
+        assert calls == ["third party"]
+        assert span_exporter.get_finished_spans() == ()
+    finally:
+        unwrap(smolagents.MultiStepAgent, "run")
+
+    assert smolagents.MultiStepAgent.__dict__["run"] is original_run
 
 
 def test_a_user_subclass_inherits_the_patched_generate(
@@ -297,6 +417,43 @@ def test_explicit_completion_hook_takes_precedence(
 
     load_hook.assert_not_called()
     assert explicit_hook.calls, "explicit completion hook was not invoked"
+
+
+@pytest.mark.parametrize("agent_fails", [False, True])
+def test_completion_hook_failure_reaches_the_caller(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    lifecycle,
+    monkeypatch,
+    agent_fails: bool,
+) -> None:
+    # ``load_completion_hook`` wraps environment hooks so their errors do not
+    # reach the caller.
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+    if agent_fails:
+
+        def _fail(*args: Any, **kwargs: Any) -> Any:
+            raise ValueError("agent failed")
+
+        monkeypatch.setattr(agent, "_run_stream", _fail)
+
+    with instrument(
+        SmolagentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+        completion_hook=RaisingHook(),
+    ):
+        with pytest.raises(RuntimeError, match="hook failed") as caught:
+            agent.run("Test question")
+
+    if agent_fails:
+        assert isinstance(caught.value.__context__, ValueError)
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert lifecycle.leaked == []
 
 
 def test_env_completion_hook_used_when_no_explicit_hook(

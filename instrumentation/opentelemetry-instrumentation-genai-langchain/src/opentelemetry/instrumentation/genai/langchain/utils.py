@@ -101,6 +101,11 @@ def _normalize_role(message: BaseMessage) -> str | None:
     return None
 
 
+def _message_name(message: BaseMessage) -> str | None:
+    name = getattr(message, "name", None)
+    return str(name) if name is not None else None
+
+
 def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
     if not isinstance(data, str):
         return None
@@ -356,43 +361,10 @@ def to_input_messages(
             InputMessage(
                 role=_normalize_role(message) or Role.USER.value,
                 parts=parts,
+                name=_message_name(message),
             )
         )
     return result
-
-
-def split_system_and_input_messages(
-    messages: Iterable[Any],
-) -> tuple[list[MessagePart], list[InputMessage]]:
-    """Split ``messages`` into ``system_instruction`` parts and ``InputMessage`` s.
-
-    Called only when content capture is enabled
-    (``TelemetryHandler.should_capture_content()``).
-    """
-    materialized = list(messages)
-    try:
-        normalized: Iterable[BaseMessage] = convert_to_messages(materialized)
-    except Exception:  # pylint: disable=broad-except
-        normalized = [m for m in materialized if isinstance(m, BaseMessage)]
-
-    system_parts: list[MessagePart] = []
-    input_messages: list[InputMessage] = []
-
-    for message in normalized:
-        if isinstance(message, SystemMessage):
-            system_parts.extend(_content_to_parts(message.content))
-        else:
-            parts = _message_parts(message)
-            if not parts and not _has_content(message):
-                continue
-            input_messages.append(
-                InputMessage(
-                    role=_normalize_role(message) or Role.USER.value,
-                    parts=parts,
-                )
-            )
-
-    return system_parts, input_messages
 
 
 def to_output_messages(
@@ -422,6 +394,7 @@ def to_output_messages(
                 role=_normalize_role(message) or Role.ASSISTANT.value,
                 parts=parts,
                 finish_reason=finish_reason,
+                name=_message_name(message),
             )
         )
     return result
@@ -644,7 +617,7 @@ def resolve_response_model_and_id(
 
 
 def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
-    """Extract cache/reasoning token break-downs from LangChain usage metadata."""
+    """Extract cache, reasoning, and modality token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
     raw_input_details = usage_metadata.get("input_token_details")
@@ -660,16 +633,42 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
         else {}
     )
 
-    cache_creation = input_details.get("cache_creation")
-    if isinstance(cache_creation, int) and cache_creation:
-        token_details["cache_creation_input_tokens"] = cache_creation
+    def _get_positive_int(d: dict[str, Any], key: str) -> int | None:
+        val = d.get(key)
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+            return val
+        return None
 
-    cache_read = input_details.get("cache_read")
-    if isinstance(cache_read, int) and cache_read:
+    cache_write = _get_positive_int(input_details, "cache_write")
+    if cache_write is None:
+        cache_write = _get_positive_int(input_details, "cache_creation")
+    if cache_write is not None:
+        token_details["cache_write_input_tokens"] = cache_write
+
+    if (
+        cache_read := _get_positive_int(input_details, "cache_read")
+    ) is not None:
         token_details["cache_read_input_tokens"] = cache_read
 
-    reasoning = output_details.get("reasoning")
-    if isinstance(reasoning, int) and reasoning:
+    if (
+        reasoning := _get_positive_int(output_details, "reasoning")
+    ) is not None:
         token_details["reasoning_tokens"] = reasoning
+
+    # Input modality breakdowns
+    if (text_in := _get_positive_int(input_details, "text")) is not None:
+        token_details["text_input_tokens"] = text_in
+    if (image_in := _get_positive_int(input_details, "image")) is not None:
+        token_details["image_input_tokens"] = image_in
+    if (audio_in := _get_positive_int(input_details, "audio")) is not None:
+        token_details["audio_input_tokens"] = audio_in
+
+    # Output modality breakdowns
+    if (text_out := _get_positive_int(output_details, "text")) is not None:
+        token_details["text_output_tokens"] = text_out
+    if (image_out := _get_positive_int(output_details, "image")) is not None:
+        token_details["image_output_tokens"] = image_out
+    if (audio_out := _get_positive_int(output_details, "audio")) is not None:
+        token_details["audio_output_tokens"] = audio_out
 
     return token_details

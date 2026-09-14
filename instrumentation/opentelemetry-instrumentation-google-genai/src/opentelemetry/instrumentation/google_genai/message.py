@@ -10,10 +10,14 @@ from google.genai import types as genai_types
 from opentelemetry.util.genai.types import (
     BlobPart,
     FinishReason,
+    GenericPart,
     InputMessage,
     MessagePart,
     OutputMessage,
     Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
+    SystemInstructionPart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
@@ -56,11 +60,15 @@ def to_output_messages(
 def to_system_instructions(
     *,
     content: genai_types.Content,
-) -> list[MessagePart]:
-    parts = (
-        _to_part(part, idx) for idx, part in enumerate(content.parts or [])
-    )
-    return [part for part in parts if part is not None]
+) -> list[SystemInstructionPart]:
+    instructions: list[SystemInstructionPart] = []
+    for idx, part in enumerate(content.parts or []):
+        msg_part = _to_part(part, idx)
+        if isinstance(msg_part, TextPart):
+            instructions.append(msg_part)
+        elif msg_part is not None:
+            instructions.append(GenericPart(type=msg_part.type))
+    return instructions
 
 
 def _to_input_message(
@@ -114,6 +122,52 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
         return ToolCallResponsePart(
             id=response.id or tool_call_id(response.name),
             response=response.response,
+        )
+
+    if call := getattr(part, "tool_call", None):
+        name = call.tool_type.value.lower() if call.tool_type else "unknown"
+        return ServerToolCallPart(
+            id=call.id,
+            name=name,
+            server_tool_call={
+                "type": name,
+                "arguments": call.args,
+            },
+        )
+
+    if response := getattr(part, "tool_response", None):
+        name = (
+            response.tool_type.value.lower()
+            if response.tool_type
+            else "unknown"
+        )
+        return ServerToolCallResponsePart(
+            id=response.id,
+            server_tool_call_response={
+                "type": name,
+                "response": response.response,
+            },
+        )
+
+    if code := part.executable_code:
+        return ServerToolCallPart(
+            id=getattr(code, "id", None),
+            name="code_execution",
+            server_tool_call={
+                "type": "code_execution",
+                "code": code.code,
+                "language": code.language.value if code.language else None,
+            },
+        )
+
+    if result := part.code_execution_result:
+        return ServerToolCallResponsePart(
+            id=getattr(result, "id", None),
+            server_tool_call_response={
+                "type": "code_execution",
+                "outcome": result.outcome.value if result.outcome else None,
+                "output": result.output,
+            },
         )
 
     _logger.info("Unknown part dropped from telemetry %s", part)

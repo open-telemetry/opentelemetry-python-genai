@@ -35,7 +35,9 @@ jobs:
           persist-credentials: false
 
       - name: Fetch base branch
-        run: git fetch origin ${GITHUB_BASE_REF} --depth=1
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.base_ref || 'main' }}
+        run: git fetch origin "${BASE_REF}" --depth=1
 
       - name: Ensure no direct changes to CHANGELOG.md
         run: |

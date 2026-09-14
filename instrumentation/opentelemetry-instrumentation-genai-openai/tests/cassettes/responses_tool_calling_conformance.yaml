@@ -1,0 +1,271 @@
+interactions:
+- request:
+    body: '{"input":"What''s the weather in Seattle and San Francisco today?","model":"gpt-4o-mini","tool_choice":"auto","tools":[{"type":"function","name":"get_current_weather","description":"Get
+      the current weather in a given location","parameters":{"type":"object","properties":{"location":{"type":"string","description":"The
+      city and state, e.g. Boston, MA"}},"required":["location"],"additionalProperties":false},"strict":true}]}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '422'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.1.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: "{\n  \"id\": \"resp_06846aae2b482d8e006a9b1773c4ec87d08182937f685f261f\",\n
+        \ \"object\": \"response\",\n  \"created_at\": 1788548979,\n  \"status\":
+        \"completed\",\n  \"background\": false,\n  \"billing\": {\n    \"payer\":
+        \"developer\"\n  },\n  \"completed_at\": 1788548980,\n  \"error\": null,\n
+        \ \"frequency_penalty\": 0.0,\n  \"incomplete_details\": null,\n  \"instructions\":
+        null,\n  \"max_output_tokens\": null,\n  \"max_tool_calls\": null,\n  \"model\":
+        \"gpt-4o-mini-2024-07-18\",\n  \"moderation\": null,\n  \"output\": [\n    {\n
+        \     \"id\": \"fc_06846aae2b482d8e006a9b1774d88887d0a4a0aa6d48be3a85\",\n
+        \     \"type\": \"function_call\",\n      \"status\": \"completed\",\n      \"arguments\":
+        \"{\\\"location\\\":\\\"Seattle, WA\\\"}\",\n      \"call_id\": \"call_krAHY11uDHrSPJIjNZLF7RHU\",\n
+        \     \"name\": \"get_current_weather\"\n    },\n    {\n      \"id\": \"fc_06846aae2b482d8e006a9b1774d89887d0b2ce835bfe79cf10\",\n
+        \     \"type\": \"function_call\",\n      \"status\": \"completed\",\n      \"arguments\":
+        \"{\\\"location\\\":\\\"San Francisco, CA\\\"}\",\n      \"call_id\": \"call_fr3gmaw1ffbKMC3N64V6Iux4\",\n
+        \     \"name\": \"get_current_weather\"\n    }\n  ],\n  \"parallel_tool_calls\":
+        true,\n  \"presence_penalty\": 0.0,\n  \"previous_response_id\": null,\n  \"prompt_cache_key\":
+        null,\n  \"prompt_cache_retention\": \"in_memory\",\n  \"reasoning\": {\n
+        \   \"context\": null,\n    \"effort\": null,\n    \"summary\": null\n  },\n
+        \ \"safety_identifier\": null,\n  \"service_tier\": \"default\",\n  \"store\":
+        true,\n  \"temperature\": 1.0,\n  \"text\": {\n    \"format\": {\n      \"type\":
+        \"text\"\n    },\n    \"verbosity\": \"medium\"\n  },\n  \"tool_choice\":
+        \"auto\",\n  \"tool_usage\": {\n    \"image_gen\": {\n      \"input_tokens\":
+        0,\n      \"input_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\":
+        0\n      },\n      \"output_tokens\": 0,\n      \"output_tokens_details\":
+        {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"total_tokens\":
+        0\n    },\n    \"web_search\": {\n      \"num_requests\": 0\n    }\n  },\n
+        \ \"tools\": [\n    {\n      \"type\": \"function\",\n      \"description\":
+        \"Get the current weather in a given location\",\n      \"name\": \"get_current_weather\",\n
+        \     \"output_schema\": null,\n      \"parameters\": {\n        \"type\":
+        \"object\",\n        \"properties\": {\n          \"location\": {\n            \"type\":
+        \"string\",\n            \"description\": \"The city and state, e.g. Boston,
+        MA\"\n          }\n        },\n        \"required\": [\n          \"location\"\n
+        \       ],\n        \"additionalProperties\": false\n      },\n      \"strict\":
+        true\n    }\n  ],\n  \"top_logprobs\": 0,\n  \"top_p\": 1.0,\n  \"truncation\":
+        \"disabled\",\n  \"usage\": {\n    \"input_tokens\": 64,\n    \"input_tokens_details\":
+        {\n      \"cache_write_tokens\": 0,\n      \"cached_tokens\": 0\n    },\n
+        \   \"output_tokens\": 52,\n    \"output_tokens_details\": {\n      \"reasoning_tokens\":
+        0\n    },\n    \"total_tokens\": 116\n  },\n  \"user\": null,\n  \"metadata\":
+        {}\n}"
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a35f4a31bcc4e8d9-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '2730'
+      content-type:
+      - application/json
+      date:
+      - Fri, 04 Sep 2026 19:09:41 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1367'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '4000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '3999719'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_0f295adf1fe24861a253487412fce662
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"input":[{"arguments":"{\"location\":\"Seattle, WA\"}","call_id":"call_krAHY11uDHrSPJIjNZLF7RHU","name":"get_current_weather","type":"function_call","id":"fc_06846aae2b482d8e006a9b1774d88887d0a4a0aa6d48be3a85","status":"completed"},{"arguments":"{\"location\":\"San
+      Francisco, CA\"}","call_id":"call_fr3gmaw1ffbKMC3N64V6Iux4","name":"get_current_weather","type":"function_call","id":"fc_06846aae2b482d8e006a9b1774d89887d0b2ce835bfe79cf10","status":"completed"},{"type":"function_call_output","call_id":"call_krAHY11uDHrSPJIjNZLF7RHU","output":"{\"location\":\"Seattle,
+      WA\",\"temperature\":58,\"unit\":\"F\",\"conditions\":\"rain\"}"},{"type":"function_call_output","call_id":"call_fr3gmaw1ffbKMC3N64V6Iux4","output":"{\"location\":\"San
+      Francisco, CA\",\"temperature\":65,\"unit\":\"F\",\"conditions\":\"fog\"}"}],"model":"gpt-4o-mini","tool_choice":"auto","tools":[{"type":"function","name":"get_current_weather","description":"Get
+      the current weather in a given location","parameters":{"type":"object","properties":{"location":{"type":"string","description":"The
+      city and state, e.g. Boston, MA"}},"required":["location"],"additionalProperties":false},"strict":true}]}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '1172'
+      content-type:
+      - application/json
+      cookie:
+      - test_cookie
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.1.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 3.1.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: "{\n  \"id\": \"resp_06846aae2b482d8e006a9b1775645c87d08005ec0fb2110764\",\n
+        \ \"object\": \"response\",\n  \"created_at\": 1788548981,\n  \"status\":
+        \"completed\",\n  \"background\": false,\n  \"billing\": {\n    \"payer\":
+        \"developer\"\n  },\n  \"completed_at\": 1788548982,\n  \"error\": null,\n
+        \ \"frequency_penalty\": 0.0,\n  \"incomplete_details\": null,\n  \"instructions\":
+        null,\n  \"max_output_tokens\": null,\n  \"max_tool_calls\": null,\n  \"model\":
+        \"gpt-4o-mini-2024-07-18\",\n  \"moderation\": null,\n  \"output\": [\n    {\n
+        \     \"id\": \"msg_06846aae2b482d8e006a9b17764bf487d094fae46deb5a6af9\",\n
+        \     \"type\": \"message\",\n      \"status\": \"completed\",\n      \"content\":
+        [\n        {\n          \"type\": \"output_text\",\n          \"annotations\":
+        [],\n          \"logprobs\": [],\n          \"text\": \"Here\\u2019s the current
+        weather for both cities:\\n\\n### Seattle, WA\\n- **Temperature:** 58\\u00b0F\\n-
+        **Conditions:** Rain\\n\\n### San Francisco, CA\\n- **Temperature:** 65\\u00b0F\\n-
+        **Conditions:** Fog\\n\\nIf you need more information, let me know!\"\n        }\n
+        \     ],\n      \"role\": \"assistant\"\n    }\n  ],\n  \"parallel_tool_calls\":
+        true,\n  \"presence_penalty\": 0.0,\n  \"previous_response_id\": null,\n  \"prompt_cache_key\":
+        null,\n  \"prompt_cache_retention\": \"in_memory\",\n  \"reasoning\": {\n
+        \   \"context\": null,\n    \"effort\": null,\n    \"summary\": null\n  },\n
+        \ \"safety_identifier\": null,\n  \"service_tier\": \"default\",\n  \"store\":
+        true,\n  \"temperature\": 1.0,\n  \"text\": {\n    \"format\": {\n      \"type\":
+        \"text\"\n    },\n    \"verbosity\": \"medium\"\n  },\n  \"tool_choice\":
+        \"auto\",\n  \"tool_usage\": {\n    \"image_gen\": {\n      \"input_tokens\":
+        0,\n      \"input_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\":
+        0\n      },\n      \"output_tokens\": 0,\n      \"output_tokens_details\":
+        {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"total_tokens\":
+        0\n    },\n    \"web_search\": {\n      \"num_requests\": 0\n    }\n  },\n
+        \ \"tools\": [\n    {\n      \"type\": \"function\",\n      \"description\":
+        \"Get the current weather in a given location\",\n      \"name\": \"get_current_weather\",\n
+        \     \"output_schema\": null,\n      \"parameters\": {\n        \"type\":
+        \"object\",\n        \"properties\": {\n          \"location\": {\n            \"type\":
+        \"string\",\n            \"description\": \"The city and state, e.g. Boston,
+        MA\"\n          }\n        },\n        \"required\": [\n          \"location\"\n
+        \       ],\n        \"additionalProperties\": false\n      },\n      \"strict\":
+        true\n    }\n  ],\n  \"top_logprobs\": 0,\n  \"top_p\": 1.0,\n  \"truncation\":
+        \"disabled\",\n  \"usage\": {\n    \"input_tokens\": 138,\n    \"input_tokens_details\":
+        {\n      \"cache_write_tokens\": 0,\n      \"cached_tokens\": 0\n    },\n
+        \   \"output_tokens\": 60,\n    \"output_tokens_details\": {\n      \"reasoning_tokens\":
+        0\n    },\n    \"total_tokens\": 198\n  },\n  \"user\": null,\n  \"metadata\":
+        {}\n}"
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a35f4a3d1aeee8d9-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '2728'
+      content-type:
+      - application/json
+      date:
+      - Fri, 04 Sep 2026 19:09:42 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1425'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '4000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '3999645'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 5ms
+      x-request-id:
+      - req_d48a867f196949c19610ecded732d03f
+    status:
+      code: 200
+      message: OK
+version: 1
