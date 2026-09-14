@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from os import PathLike
 from typing import TYPE_CHECKING, cast
 
 from anthropic.types import (
@@ -24,6 +24,8 @@ from anthropic.types import (
 
 from opentelemetry.util.genai.types import (
     BlobPart,
+    FilePart,
+    GenericPart,
     MessagePart,
     ReasoningPart,
     ServerToolCallPart,
@@ -31,6 +33,7 @@ from opentelemetry.util.genai.types import (
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
+    UriPart,
 )
 
 _SERVER_TOOL_RESULT_TYPES = {
@@ -41,10 +44,9 @@ _SERVER_TOOL_RESULT_TYPES = {
     "text_editor_code_execution_tool_result": "text_editor_code_execution",
     "tool_search_tool_result": "tool_search",
 }
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from anthropic.types import (
         ContentBlock,
         ContentBlockParam,
@@ -102,31 +104,109 @@ def normalize_finish_reason(stop_reason: str | None) -> str | None:
     return normalized or stop_reason
 
 
-def _decode_base64(data: str) -> bytes | None:
-    try:
-        return base64.b64decode(data)
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None
+def _extract_base64_blob(source: object, modality: str) -> MessagePart | None:
+    """Convert an Anthropic base64 source to a GenAI message part.
 
-
-def _extract_base64_blob(source: object, modality: str) -> BlobPart | None:
-    """Extract a BlobPart from a base64-encoded source dict."""
+    String data becomes a ``BlobPart``; file-backed data is represented as a
+    ``GenericPart`` without being read.
+    """
     if not isinstance(source, dict):
         return None
-    # source is a TypedDict (e.g. Base64ImageSourceParam) narrowed to dict;
-    # pyright cannot infer value types from isinstance-narrowed dicts.
-    data: object = source.get("data")  # type: ignore[reportUnknownMemberType]
+    source_dict = cast(dict[str, object], source)
+    data = source_dict.get("data")
     if not isinstance(data, str):
+        if isinstance(data, PathLike) or callable(getattr(data, "read", None)):
+            return GenericPart(type="blob")
         return None
-    decoded = _decode_base64(data)
+    decoded = decode_base64(data)
     if decoded is None:
         return None
-    media_type: object = source.get("media_type")  # type: ignore[reportUnknownMemberType]
+    media_type = source_dict.get("media_type")
     return BlobPart(
         mime_type=media_type if isinstance(media_type, str) else None,
         modality=modality,
         content=decoded,
     )
+
+
+def _extract_image_source(source: object) -> MessagePart | None:
+    """Convert an Anthropic image source into a GenAI message part."""
+    if not isinstance(source, dict):
+        return None
+    source_dict = cast(dict[str, object], source)
+    source_type = source_dict.get("type")
+    if source_type == "base64":
+        return _extract_base64_blob(source_dict, "image")
+    if source_type == "url":
+        url = source_dict.get("url")
+        if isinstance(url, str) and url:
+            return image_from_url(url)
+    if source_type == "file":
+        return _extract_file_source(source_dict, "image")
+    return None
+
+
+def _extract_file_source(
+    source: Mapping[str, object], modality: str
+) -> FilePart | None:
+    file_id = source.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    return FilePart(mime_type=None, modality=modality, file_id=file_id)
+
+
+def _extract_document_source(source: object) -> list[MessagePart]:
+    """Convert an Anthropic document source into GenAI message parts."""
+    if not isinstance(source, dict):
+        return []
+    source_dict = cast(dict[str, object], source)
+    source_type = source_dict.get("type")
+    if source_type == "base64":
+        part = _extract_base64_blob(source_dict, "document")
+        return [part] if part is not None else []
+    if source_type == "url":
+        url = source_dict.get("url")
+        if isinstance(url, str) and url:
+            media_type = source_dict.get("media_type")
+            return [
+                UriPart(
+                    mime_type=media_type
+                    if isinstance(media_type, str)
+                    else None,
+                    modality="document",
+                    uri=url,
+                )
+            ]
+        return []
+    if source_type == "text":
+        data = source_dict.get("data")
+        if isinstance(data, str):
+            return [
+                BlobPart(
+                    mime_type="text/plain",
+                    modality="document",
+                    content=data.encode(),
+                )
+            ]
+        return []
+    if source_type == "content":
+        content = source_dict.get("content")
+        if isinstance(content, str):
+            return [TextPart(content=content)]
+        if isinstance(content, Iterator):
+            return [GenericPart(type="blob")]
+        if isinstance(content, Iterable):
+            return convert_content_to_parts(
+                cast("Iterable[ContentBlock | ContentBlockParam]", content)
+            )
+    if source_type == "file":
+        part = _extract_file_source(source_dict, "document")
+        return [part] if part is not None else []
+    return []
+
+
+def _convert_document_block(block: Mapping[str, object]) -> list[MessagePart]:
+    return _extract_document_source(block.get("source"))
 
 
 def _convert_dict_block_to_part(
@@ -189,7 +269,14 @@ def _convert_dict_block_to_part(
             content=str(thinking) if thinking is not None else ""
         )
 
-    if block_type in ("image", "audio", "video", "document", "file"):
+    if block_type == "image":
+        return _extract_image_source(block.get("source"))
+
+    if block_type == "document":
+        parts = _convert_document_block(block)
+        return parts[0] if parts else None
+
+    if block_type in ("audio", "video", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))
 
     return None
@@ -236,6 +323,11 @@ def convert_content_to_parts(
         return [TextPart(content=content)]
     parts: list[MessagePart] = []
     for item in content:
+        if hasattr(item, "get"):
+            item_mapping = cast(Mapping[str, object], item)
+            if item_mapping.get("type") == "document":
+                parts.extend(_convert_document_block(item_mapping))
+                continue
         part = _convert_content_block_to_part(item)
         if part is not None:
             parts.append(part)

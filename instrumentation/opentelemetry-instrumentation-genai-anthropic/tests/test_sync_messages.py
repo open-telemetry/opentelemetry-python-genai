@@ -53,6 +53,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
+from .conftest import (
+    assert_multimodal_input,
+    multimodal_input_message,
+)
+
 # Detect whether the installed anthropic SDK supports tools / thinking params.
 # Older SDK versions (e.g. 0.16.0) do not accept these keyword arguments.
 _create_params = set(inspect.signature(_Messages.create).parameters)
@@ -499,6 +504,83 @@ def test_sync_messages_create_captures_content(
     assert output_messages[0]["parts"][0]["type"] == "text"
 
 
+def test_sync_messages_create_captures_multimodal_content(
+    span_exporter,
+    anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_sync_messages_create_captures_multimodal_content.yaml"
+    ):
+        anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
+
+
+def test_sync_messages_create_preserves_generator_document_content(
+    instrument_with_content,
+):
+    received_content = None
+
+    def handle_request(request):
+        nonlocal received_content
+        body = json.loads(request.content)
+        received_content = body["messages"][0]["content"][0]["source"][
+            "content"
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_generator_content",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "Received."}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    def document_content():
+        yield {"type": "text", "text": "First"}
+        yield {"type": "text", "text": "Second"}
+
+    transport = httpx.MockTransport(handle_request)
+    with httpx.Client(transport=transport) as http_client:
+        client = Anthropic(http_client=http_client)
+        client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "content",
+                                "content": document_content(),
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+    assert received_content == [
+        {"type": "text", "text": "First"},
+        {"type": "text", "text": "Second"},
+    ]
+
+
 @pytest.mark.vcr()
 def test_sync_messages_create_with_all_params(
     span_exporter, anthropic_client, instrument_no_content
@@ -844,6 +926,29 @@ def test_sync_messages_stream_records_tool_definitions(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     _assert_weather_tool_definitions(spans[0])
+
+
+def test_sync_messages_create_streaming_captures_multimodal_content(
+    span_exporter,
+    anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_sync_messages_create_streaming_captures_multimodal_content.yaml"
+    ):
+        with anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+            stream=True,
+        ) as stream:
+            for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
 
 
 @pytest.mark.vcr()
