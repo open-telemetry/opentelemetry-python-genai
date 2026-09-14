@@ -87,14 +87,14 @@ class RawResponseStreamProxy(ObjectProxy):
         self,
         raw_response: RawResponseLike,
         wrap_stream: Callable[[AnyStream], object],
-        finalize: Callable[[], None],
+        finalize: Callable[[], Any],
     ) -> None:
         super().__init__(raw_response)
         self._self_wrap_stream = wrap_stream
-        # Swapped for the wrapper's ``close`` once there is one, so an
-        # abandoned stream finalizes with what it saw.
+        # Swapped for the wrapper's ``close`` once there is one.
         self._self_finalize: Callable[[], Any] | None = finalize
         self._self_parsed: object | None = None
+        self._self_parse_returns_awaitable = False
         self._install_close_fallback(raw_response)
 
     def _install_close_fallback(self, raw_response: RawResponseLike) -> None:
@@ -181,14 +181,14 @@ class RawResponseStreamProxy(ObjectProxy):
         # deliberate: one raw response backs one span, and re-parsing a stream
         # would consume it twice anyway.
         if self._self_parsed is not None:
-            # An awaitable parse() is awaited on every call, memo hits included.
-            if inspect.iscoroutinefunction(self.__wrapped__.parse):
+            if self._self_parse_returns_awaitable:
                 return self._parsed_as_awaitable()
             return self._self_parsed
         parsed = self.__wrapped__.parse(*args, **kwargs)
         if inspect.isawaitable(parsed):
             # Only ``AsyncAPIResponse`` (the async ``with_streaming_response``)
             # has a coroutine ``parse()``.
+            self._self_parse_returns_awaitable = True
             return self._parse_awaited(parsed)
         return self._wrap_parsed(parsed)
 

@@ -80,6 +80,20 @@ class _AsyncRawResponse(_RawResponse):
         return self._parse_result
 
 
+class _AwaitableParseRawResponse(_RawResponse):
+    """A plain ``parse()`` that nonetheless hands back an awaitable.
+
+    ``iscoroutinefunction`` says no while ``isawaitable`` says yes, so the two
+    parse paths have to agree on the value rather than on the signature.
+    """
+
+    def parse(self, *, to=None):
+        async def _resolve():
+            return self._parse_result
+
+        return _resolve()
+
+
 def _noop() -> None:
     pass
 
@@ -174,6 +188,27 @@ async def test_parse_stays_awaitable_once_memoized():
     second = proxy.parse()
     assert inspect.isawaitable(second)
     assert await second is first  # one wrapper / span, shared
+
+
+@pytest.mark.asyncio()
+async def test_memo_replays_the_shape_the_first_parse_returned():
+    # The memo hit has no value left to inspect, so it has to replay what the
+    # first parse actually returned. Deriving it from the wrapped method's
+    # signature instead would miss a plain parse() that returns an awaitable.
+    raw = _AwaitableParseRawResponse(_FakeAsyncStream())
+    assert not inspect.iscoroutinefunction(type(raw).parse)  # signature lies
+
+    proxy = RawResponseStreamProxy(
+        raw,
+        wrap_stream=_AsyncWrapper,
+        finalize=_noop,
+    )
+
+    first = await proxy.parse()
+
+    second = proxy.parse()
+    assert inspect.isawaitable(second)
+    assert await second is first
 
 
 @pytest.mark.asyncio()
