@@ -30,7 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
+    LocalAgentInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
@@ -94,22 +94,14 @@ def test_uninstrument_restores_pregel_when_prebuilt_is_missing(
 def _handler() -> tuple[OpenTelemetryLangChainCallbackHandler, mock.MagicMock]:
     telemetry = mock.MagicMock()
     workflow = mock.MagicMock(spec=WorkflowInvocation)
-    workflow.span = mock.MagicMock()
-    workflow.span.is_recording.return_value = False
     telemetry.workflow.return_value = workflow
 
     def make_agent(*args: Any, **kwargs: Any) -> mock.MagicMock:
-        invocation = mock.MagicMock(spec=AgentInvocation)
-        invocation.agent_name = kwargs.get("agent_name")
-        invocation.span = mock.MagicMock()
-        invocation.span.is_recording.return_value = False
-        return invocation
+        return mock.MagicMock(spec=LocalAgentInvocation)
 
     telemetry.invoke_local_agent.side_effect = make_agent
 
     tool_invocation = mock.MagicMock(spec=ToolInvocation)
-    tool_invocation.span = mock.MagicMock()
-    tool_invocation.span.is_recording.return_value = False
     telemetry.tool.return_value = tool_invocation
     return OpenTelemetryLangChainCallbackHandler(telemetry), telemetry
 
