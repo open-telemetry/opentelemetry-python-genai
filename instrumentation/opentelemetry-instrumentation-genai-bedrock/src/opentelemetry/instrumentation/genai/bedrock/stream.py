@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
-
-from botocore.eventstream import EventStream
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry.util.genai.invocation import InferenceInvocation
-from opentelemetry.util.genai.stream import SyncStreamWrapper
+from opentelemetry.util.genai.stream import (
+    AsyncStreamWrapper,
+    SyncStreamWrapper,
+)
 from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
@@ -25,8 +26,19 @@ from .extractors import (
     _is_list,
     _parse_body,
     _safe_int,
+    extract_invoke_model_response,
     map_finish_reason,
 )
+
+if TYPE_CHECKING:
+
+    class _ObjectProxy:
+        __wrapped__: Any
+
+        def __init__(self, wrapped: object) -> None: ...
+
+else:
+    from wrapt import ObjectProxy as _ObjectProxy
 
 
 def _build_stream_parts(
@@ -62,29 +74,38 @@ def _build_stream_parts(
     return parts
 
 
-class BedrockConverseStreamWrapper(SyncStreamWrapper[dict[str, Any]]):
-    """Wrapper for Bedrock converse_stream EventStream."""
+class _BedrockConverseStreamMixin:
+    _self_invocation: InferenceInvocation
+    _self_capture_content: bool
+    _self_role: str
+    _self_stop_reason: str | None
+    _self_input_tokens: int | None
+    _self_output_tokens: int | None
+    _self_cache_read_input_tokens: int | None
+    _self_cache_creation_input_tokens: int | None
+    _self_text_blocks: dict[int, str]
+    _self_reasoning_blocks: dict[int, str]
+    _self_tool_blocks: dict[int, dict[str, Any]]
+    _self_all_block_indices: list[int]
 
-    def __init__(
+    def _init_converse_stream(
         self,
-        stream: EventStream,
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
     ) -> None:
-        super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_capture_content = capture_content
         self._self_role = Role.ASSISTANT.value
-        self._self_stop_reason: str | None = None
-        self._self_input_tokens: int | None = None
-        self._self_output_tokens: int | None = None
-        self._self_cache_read_input_tokens: int | None = None
-        self._self_cache_creation_input_tokens: int | None = None
-        self._self_text_blocks: dict[int, str] = {}
-        self._self_reasoning_blocks: dict[int, str] = {}
-        self._self_tool_blocks: dict[int, dict[str, Any]] = {}
-        self._self_all_block_indices: list[int] = []
+        self._self_stop_reason = None
+        self._self_input_tokens = None
+        self._self_output_tokens = None
+        self._self_cache_read_input_tokens = None
+        self._self_cache_creation_input_tokens = None
+        self._self_text_blocks = {}
+        self._self_reasoning_blocks = {}
+        self._self_tool_blocks = {}
+        self._self_all_block_indices = []
 
     def _process_chunk(self, chunk: dict[str, Any]) -> None:
         if "messageStart" in chunk and "role" in chunk["messageStart"]:
@@ -189,30 +210,74 @@ class BedrockConverseStreamWrapper(SyncStreamWrapper[dict[str, Any]]):
         self._self_invocation.fail(error)
 
 
-class BedrockInvokeModelStreamWrapper(SyncStreamWrapper[dict[str, Any]]):
-    """Wrapper for Bedrock invoke_model_with_response_stream EventStream."""
+class BedrockConverseStreamWrapper(
+    _BedrockConverseStreamMixin,
+    SyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for Bedrock converse_stream EventStream."""
 
     def __init__(
         self,
-        stream: EventStream,
+        stream: Any,
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
     ) -> None:
         super().__init__(stream, invocation=invocation)
+        self._init_converse_stream(invocation, capture_content=capture_content)
+
+
+class AsyncBedrockConverseStreamWrapper(
+    _BedrockConverseStreamMixin,
+    AsyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for async Bedrock converse_stream EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_converse_stream(invocation, capture_content=capture_content)
+
+
+class _BedrockInvokeModelStreamMixin:
+    _self_invocation: InferenceInvocation
+    _self_capture_content: bool
+    _self_role: str
+    _self_stop_reason: str | None
+    _self_input_tokens: int | None
+    _self_output_tokens: int | None
+    _self_cache_read_input_tokens: int | None
+    _self_cache_creation_input_tokens: int | None
+    _self_accumulated_text: list[str]
+    _self_text_blocks: dict[int, str]
+    _self_reasoning_blocks: dict[int, str]
+    _self_tool_blocks: dict[int, dict[str, Any]]
+    _self_all_block_indices: list[int]
+
+    def _init_invoke_model_stream(
+        self,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
         self._self_invocation = invocation
         self._self_capture_content = capture_content
         self._self_role = "assistant"
-        self._self_stop_reason: str | None = None
-        self._self_input_tokens: int | None = None
-        self._self_output_tokens: int | None = None
-        self._self_cache_read_input_tokens: int | None = None
-        self._self_cache_creation_input_tokens: int | None = None
-        self._self_accumulated_text: list[str] = []
-        self._self_text_blocks: dict[int, str] = {}
-        self._self_reasoning_blocks: dict[int, str] = {}
-        self._self_tool_blocks: dict[int, dict[str, Any]] = {}
-        self._self_all_block_indices: list[int] = []
+        self._self_stop_reason = None
+        self._self_input_tokens = None
+        self._self_output_tokens = None
+        self._self_cache_read_input_tokens = None
+        self._self_cache_creation_input_tokens = None
+        self._self_accumulated_text = []
+        self._self_text_blocks = {}
+        self._self_reasoning_blocks = {}
+        self._self_tool_blocks = {}
+        self._self_all_block_indices = []
 
     def _process_chunk(self, chunk: dict[str, Any]) -> None:
         raw_bytes = (
@@ -427,3 +492,145 @@ class BedrockInvokeModelStreamWrapper(SyncStreamWrapper[dict[str, Any]]):
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)
+
+
+class BedrockInvokeModelStreamWrapper(
+    _BedrockInvokeModelStreamMixin,
+    SyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for Bedrock invoke_model_with_response_stream EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_invoke_model_stream(
+            invocation, capture_content=capture_content
+        )
+
+
+class AsyncBedrockInvokeModelStreamWrapper(
+    _BedrockInvokeModelStreamMixin,
+    AsyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for async Bedrock invoke_model_with_response_stream EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_invoke_model_stream(
+            invocation, capture_content=capture_content
+        )
+
+
+class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
+    """Wrapper for aiobotocore's AioStreamingBody that handles telemetry."""
+
+    _self_invocation: InferenceInvocation
+    _self_response: dict[str, Any]
+    _self_capture_content: bool
+    _self_chunks: list[bytes]
+    _self_finalized: bool
+
+    def __init__(
+        self,
+        body: Any,
+        invocation: InferenceInvocation,
+        response: dict[str, Any],
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(body)
+        self._self_invocation = invocation
+        self._self_response = response
+        self._self_capture_content = capture_content
+        self._self_chunks = []
+        self._self_finalized = False
+
+    def _finalize(self, full_bytes: bytes) -> None:
+        if self._self_finalized:
+            return
+        self._self_finalized = True
+        self._self_chunks.clear()
+        extract_invoke_model_response(
+            self._self_response,
+            full_bytes,
+            self._self_invocation,
+            capture_content=self._self_capture_content,
+        )
+        self._self_invocation.stop()
+
+    def _finalize_error(self, exc: BaseException) -> None:
+        if self._self_finalized:
+            return
+        self._self_finalized = True
+        self._self_chunks.clear()
+        self._self_invocation.fail(exc)
+
+    async def read(self, amt: int | None = None) -> bytes:
+        try:
+            chunk: bytes = await self.__wrapped__.read(amt)
+        except BaseException as exc:
+            self._finalize_error(exc)
+            raise
+
+        if amt is None:
+            self._self_chunks.append(chunk)
+            self._finalize(b"".join(self._self_chunks))
+        elif not chunk:
+            self._finalize(b"".join(self._self_chunks))
+        else:
+            self._self_chunks.append(chunk)
+
+        return chunk
+
+    async def aclose(self) -> None:
+        try:
+            if hasattr(self.__wrapped__, "aclose"):
+                await self.__wrapped__.aclose()
+            elif hasattr(self.__wrapped__, "close"):
+                self.__wrapped__.close()
+        finally:
+            if not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
+
+    def close(self) -> None:
+        try:
+            if hasattr(self.__wrapped__, "close"):
+                self.__wrapped__.close()
+        finally:
+            if not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        try:
+            if hasattr(self.__wrapped__, "__aexit__"):
+                await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
+            elif hasattr(self.__wrapped__, "aclose"):
+                await self.__wrapped__.aclose()
+            elif hasattr(self.__wrapped__, "close"):
+                self.__wrapped__.close()
+        finally:
+            if exc_val is not None:
+                self._finalize_error(exc_val)
+            elif not self._self_finalized:
+                self._finalize(b"".join(self._self_chunks))
+
+    def __del__(self) -> None:
+        if not getattr(self, "_self_finalized", True):
+            self._self_finalized = True
+            self._self_invocation.stop()
