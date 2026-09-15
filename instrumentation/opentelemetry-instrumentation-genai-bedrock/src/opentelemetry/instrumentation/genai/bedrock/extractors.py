@@ -824,7 +824,13 @@ def extract_invoke_model_response(
 
 
 def is_embedding_model(model_id: str | None) -> bool:
-    """Return True if the model ID corresponds to an embedding model."""
+    """Return True if the model ID corresponds to an embedding model.
+
+    Every Bedrock embedding model ID contains ``embed`` (``amazon.titan-embed-*``,
+    ``cohere.embed-*``, ``twelvelabs.*-embed-*``), and no text generation model does. The
+    match is deliberately broad so that new embedding models are not reported as chat
+    completions.
+    """
     if not model_id:
         return False
     return "embed" in model_id.lower()
@@ -904,8 +910,6 @@ def extract_embedding_response(
             meta = body["meta"]
             if _is_dict(meta.get("billed_units")):
                 token_count = meta["billed_units"].get("input_tokens")
-        elif token_count is None and _is_dict(body.get("billed_units")):
-            token_count = body["billed_units"].get("input_tokens")
         invocation.input_tokens = _safe_int(token_count)
 
     # 3. Dimension count from embeddings in body
