@@ -99,10 +99,6 @@ templates_path = ["_templates"]
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
-# crewai is not installed in the docs environment: it is heavy and imports
-# with side effects, and the instrumentor module only needs its class objects.
-autodoc_mock_imports = ["crewai"]
-
 autodoc_default_options = {
     "members": True,
     "undoc-members": True,

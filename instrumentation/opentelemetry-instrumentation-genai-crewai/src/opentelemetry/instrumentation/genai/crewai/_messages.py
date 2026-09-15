@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, TypeAlias, Union, cast
+from typing import Any, TypeAlias, cast
 
 from crewai.lite_agent_output import LiteAgentOutput
 from crewai.task import Task
@@ -37,11 +37,8 @@ from opentelemetry.util.types import AnyValue
 
 _logger = logging.getLogger(__name__)
 
-# ``Union`` rather than ``|``: the alias is evaluated at import time, and the
-# docs build imports this module with ``crewai`` mocked.
-CrewAITool: TypeAlias = Union[BaseTool, CrewStructuredTool]
+CrewAITool: TypeAlias = BaseTool | CrewStructuredTool
 """Either CrewAI tool representation: the authored tool or its ReAct adapter."""
-_CREWAI_TOOL_TYPES = (BaseTool, CrewStructuredTool)
 
 # CrewAI < 1.15 rewrites ``BaseTool.description`` at construction time into
 # the LLM-facing block "Tool Name: ...\nTool Arguments: ...\nTool
@@ -105,7 +102,7 @@ def crewai_tools(value: object) -> list[CrewAITool] | None:
     if not isinstance(value, Sequence) or isinstance(value, str):
         return None
     items = cast(Sequence[object], value)
-    return [item for item in items if isinstance(item, _CREWAI_TOOL_TYPES)]
+    return [item for item in items if isinstance(item, CrewAITool)]
 
 
 def agent_tool_definitions(
