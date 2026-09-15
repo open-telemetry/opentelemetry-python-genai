@@ -76,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-build.yml
+    uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
@@ -112,7 +112,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-finalize.yml
+    uses: $/.github/workflows/_release-finalize.yml
     with:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
