@@ -20,6 +20,7 @@ from opentelemetry.instrumentation.genai.crewai._messages import (
     tool_description,
     tool_result_to_result,
 )
+from opentelemetry.util.genai.types import GenericPart, TextPart
 
 from .test_operations import AddTool
 
@@ -69,11 +70,24 @@ def test_agent_message_conversion_handles_odd_inputs() -> None:
         messages_to_input_messages([{"role": "user", "content": None}]) == []
     )
     parts_message = messages_to_input_messages(
-        [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hi"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.test/a.png"},
+                    },
+                    {"type": "text", "text": 42},
+                ],
+            }
+        ]
     )
-    assert (
-        parts_message[0].parts[0].content == '[{"type": "text", "text": "Hi"}]'
-    )
+    assert parts_message[0].parts == [
+        TextPart(content="Hi"),
+        GenericPart(type="image_url"),
+    ]
     assert output_to_output_messages(None) == []
     assert output_to_output_messages("plain")[0].parts[0].content == "plain"
 

@@ -28,7 +28,9 @@ from pydantic import BaseModel
 
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
+    GenericPart,
     InputMessage,
+    MessagePart,
     OutputMessage,
     TextPart,
     ToolDefinition,
@@ -191,8 +193,9 @@ def messages_to_input_messages(
 
     Returns:
         A ``user`` message for a string, or one ``InputMessage`` per entry
-        that has content (the role defaults to ``user``); non-text content
-        parts are JSON-encoded.
+        that has content (the role defaults to ``user``). String content
+        becomes a single text part; a content-part list is mapped block by
+        block (see ``_content_parts``).
     """
     try:
         if isinstance(messages, str):
@@ -212,7 +215,7 @@ def messages_to_input_messages(
             converted.append(
                 InputMessage(
                     role=message["role"] or "user",
-                    parts=[TextPart(content=_content_to_text(content))],
+                    parts=_content_parts(content),
                     name=name,
                 )
             )
@@ -375,6 +378,35 @@ def tool_result_to_result(result: object) -> AnyValue | None:
     except Exception:
         _logger.debug("Failed to convert CrewAI tool result", exc_info=True)
         return None
+
+
+def _content_parts(content: str | list[dict[str, Any]]) -> list[MessagePart]:
+    """Map ``LLMMessage`` content to semantic-convention message parts.
+
+    Args:
+        content: A plain string, or the provider-style content-part list
+            CrewAI builds for multimodal input (``{"type": "text", ...}``,
+            ``{"type": "image_url", ...}``, ...).
+
+    Returns:
+        One ``TextPart`` for a string or for each ``text`` block; every other
+        block becomes a ``GenericPart`` carrying only its ``type``, so media
+        keeps its semantic shape without exposing provider payloads. Blocks
+        without a type, or ``text`` blocks whose text is not a string, are
+        skipped, as CrewAI itself skips them.
+    """
+    if isinstance(content, str):
+        return [TextPart(content=content)]
+    parts: list[MessagePart] = []
+    for block in content:
+        block_type: object = block.get("type")
+        if block_type == "text":
+            text: object = block.get("text")
+            if isinstance(text, str):
+                parts.append(TextPart(content=text))
+        elif isinstance(block_type, str) and block_type:
+            parts.append(GenericPart(type=block_type))
+    return parts
 
 
 def _content_to_text(value: object) -> str:
