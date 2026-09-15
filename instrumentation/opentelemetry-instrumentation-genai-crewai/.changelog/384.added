@@ -1,1 +1,1 @@
-Emit `invoke_agent` spans for `Agent.execute_task` / `Agent.kickoff` and `execute_tool` spans for `BaseTool.run` / `CrewStructuredTool.invoke`.
+Emit `invoke_agent` spans for `Agent.execute_task` / `Agent.kickoff` and `execute_tool` spans for `BaseTool.run` / `CrewStructuredTool.invoke`. CrewAI's built-in usage telemetry is suppressed while instrumented unless `instrument(disable_crewai_telemetry=False)` is passed.

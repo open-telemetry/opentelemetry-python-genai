@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
+from crewai import Task
+from crewai.lite_agent_output import LiteAgentOutput
+from crewai.tools import BaseTool
+from crewai.tools.structured_tool import CrewStructuredTool
 from pydantic import BaseModel
 
 from opentelemetry.instrumentation.genai.crewai._messages import (
     agent_tool_definitions,
+    crewai_tools,
     messages_to_input_messages,
     output_to_output_messages,
     structured_tool_input_to_arguments,
@@ -18,9 +21,19 @@ from opentelemetry.instrumentation.genai.crewai._messages import (
     tool_result_to_result,
 )
 
+from .test_operations import AddTool
+
+
+class MixedArgsTool(BaseTool):
+    name: str = "mixed"
+    description: str = "Mixed arguments"
+
+    def _run(self, first: int, /, second: int = 2, *, third: int = 3) -> int:
+        return first + second + third
+
 
 def test_agent_message_conversion() -> None:
-    task = SimpleNamespace(
+    task = Task(
         description="Research telemetry",
         expected_output="A concise summary",
     )
@@ -38,23 +51,41 @@ def test_agent_message_conversion() -> None:
         ]
     )
     assert [message.role for message in messages] == ["user", "assistant"]
+    assert messages[0].name is None
     assert messages[1].name == "helper"
 
-    output = output_to_output_messages(SimpleNamespace(raw="Finished"))
+    output = output_to_output_messages(
+        LiteAgentOutput(raw="Finished", agent_role="Researcher")
+    )
     assert output[0].role == "assistant"
     assert output[0].parts[0].content == "Finished"
 
 
+def test_agent_message_conversion_handles_odd_inputs() -> None:
+    assert messages_to_input_messages("Plain prompt")[0].parts[0].content == (
+        "Plain prompt"
+    )
+    assert (
+        messages_to_input_messages([{"role": "user", "content": None}]) == []
+    )
+    parts_message = messages_to_input_messages(
+        [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    )
+    assert (
+        parts_message[0].parts[0].content == '[{"type": "text", "text": "Hi"}]'
+    )
+    assert output_to_output_messages(None) == []
+    assert output_to_output_messages("plain")[0].parts[0].content == "plain"
+
+    class Structured(BaseModel):
+        answer: str
+
+    output = output_to_output_messages(Structured(answer="ok"))
+    assert output[0].parts[0].content == '{"answer": "ok"}'
+
+
 def test_tool_conversion_preserves_arguments() -> None:
-    class Tool:
-        name = "mixed"
-        description = "Mixed arguments"
-        args_schema = None
-
-        def _run(self, first: int, /, second: int = 2, *, third: int = 3):
-            return first + second + third
-
-    tool = Tool()
+    tool = MixedArgsTool()
     assert tool_args_to_arguments(tool, (1, 4), {"third": 6}) == {
         "first": 1,
         "second": 4,
@@ -66,6 +97,32 @@ def test_tool_conversion_preserves_arguments() -> None:
     assert definitions[0].description == "Mixed arguments"
 
 
+def test_tool_definitions_include_schema_parameters() -> None:
+    definitions = agent_tool_definitions([AddTool()])
+    assert definitions is not None
+    assert definitions[0].parameters is not None
+    assert set(definitions[0].parameters["properties"]) == {"left", "right"}
+    assert agent_tool_definitions(None) is None
+    assert agent_tool_definitions([]) == []
+
+
+def test_crewai_tools_narrowing() -> None:
+    tool = AddTool()
+    structured = tool.to_structured_tool()
+    assert crewai_tools(None) is None
+    assert crewai_tools("not tools") is None
+    assert crewai_tools([tool, "junk", structured]) == [tool, structured]
+    assert crewai_tools([]) == []
+
+
+def test_tool_arguments_fall_back_to_envelope() -> None:
+    # ``run(*args, **kwargs)`` that does not bind to ``_run`` keeps both.
+    assert tool_args_to_arguments(AddTool(), (1, 2, 3), {"key": "value"}) == {
+        "args": [1, 2, 3],
+        "kwargs": {"key": "value"},
+    }
+
+
 def test_structured_tool_conversion_excludes_config() -> None:
     def invoke(input, config=None, **kwargs):
         return input, config, kwargs
@@ -75,50 +132,6 @@ def test_structured_tool_conversion_excludes_config() -> None:
         ({"city": "Paris"},),
         {"config": {"callbacks": []}, "units": "metric"},
     ) == {"city": "Paris", "units": "metric"}
-
-
-def test_agent_message_conversion_handles_odd_inputs() -> None:
-    assert task_to_input_messages(None) == []
-    assert messages_to_input_messages(42) == []
-    assert messages_to_input_messages("Plain prompt")[0].parts[0].content == (
-        "Plain prompt"
-    )
-    assert messages_to_input_messages([{"role": "user"}]) == []
-    assert output_to_output_messages(None) == []
-
-    class Structured(BaseModel):
-        answer: str
-
-    output = output_to_output_messages(Structured(answer="ok"))
-    assert output[0].parts[0].content == '{"answer": "ok"}'
-
-
-def test_tool_definitions_include_schema_parameters() -> None:
-    class Args(BaseModel):
-        city: str
-
-    class Tool:
-        name = "weather"
-        description = "Look up weather"
-        args_schema = Args
-
-    definitions = agent_tool_definitions([Tool()])
-    assert definitions is not None
-    assert definitions[0].parameters is not None
-    assert set(definitions[0].parameters["properties"]) == {"city"}
-    assert agent_tool_definitions(None) is None
-    assert agent_tool_definitions([]) == []
-
-
-def test_tool_arguments_fall_back_to_envelope() -> None:
-    class Tool:
-        name = "opaque"
-        _run = None
-
-    assert tool_args_to_arguments(Tool(), (1,), {"key": "value"}) == {
-        "args": [1],
-        "kwargs": {"key": "value"},
-    }
 
 
 def test_structured_tool_conversion_parses_string_input() -> None:
@@ -151,9 +164,11 @@ def test_tool_description_strips_composite_prefix() -> None:
         'Tool Arguments: {"properties": {"left": {"type": "integer"}}}\n'
         "Tool Description: Add two integers"
     )
-    assert tool_description(SimpleNamespace(description=composite)) == (
-        "Add two integers"
+    structured = CrewStructuredTool(
+        name="add",
+        description=composite,
+        args_schema=AddTool().args_schema,
+        func=lambda **kwargs: None,
     )
-    assert tool_description(SimpleNamespace(description="Plain")) == "Plain"
-    assert tool_description(SimpleNamespace(description=None)) is None
-    assert tool_description(object()) is None
+    assert tool_description(structured) == "Add two integers"
+    assert tool_description(AddTool()) == "Add two integers"

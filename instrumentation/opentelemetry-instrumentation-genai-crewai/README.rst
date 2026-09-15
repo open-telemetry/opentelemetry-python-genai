@@ -62,6 +62,27 @@ hook. Set ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` together with
 
 The programmatic argument takes precedence over the environment variable.
 
+CrewAI's built-in telemetry
+---------------------------
+
+CrewAI ships anonymous usage telemetry that exports spans to
+``telemetry.crewai.com``. It is disabled while this instrumentation is active
+and restored on ``uninstrument()``. To keep it running alongside
+OpenTelemetry:
+
+::
+
+    CrewAIInstrumentor().instrument(disable_crewai_telemetry=False)
+
+CrewAI releases before 1.15 also install that telemetry's ``TracerProvider`` as
+the global provider when ``crewai`` is imported, which ``instrument()`` cannot
+undo. On those releases set ``CREWAI_DISABLE_TELEMETRY=true`` before importing
+CrewAI or this package (which imports it), otherwise a later
+``set_tracer_provider()`` call is ignored.
+
+CrewAI's opt-in cloud tracing (``CREWAI_TRACING_ENABLED`` or
+``Crew(tracing=True)``) is not affected by this setting.
+
 Current limitations
 -------------------
 
