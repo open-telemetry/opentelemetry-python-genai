@@ -7,6 +7,7 @@ import timeit
 from dataclasses import asdict
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -46,6 +47,7 @@ class WorkflowInvocation(GenAIInvocation):
         name: str | None,
         *,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
@@ -63,7 +65,7 @@ class WorkflowInvocation(GenAIInvocation):
         self.conversation_id: str | None = None
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self._start(self._get_start_attributes())
+        self._start(self._get_start_attributes(), context=context)
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         """Return sampling-relevant attributes available at span creation time."""
@@ -104,8 +106,9 @@ class WorkflowInvocation(GenAIInvocation):
 
     def _apply_finish(self, error: Error | None = None) -> None:
         attributes: dict[str, AttributeValue] = self._get_messages_for_span()
-        if self.conversation_id is not None:
-            attributes[GenAI.GEN_AI_CONVERSATION_ID] = self.conversation_id
+        conversation_id = self._resolve_conversation_id(self.conversation_id)
+        if conversation_id is not None:
+            attributes[GenAI.GEN_AI_CONVERSATION_ID] = conversation_id
         if error is not None:
             self._apply_error_attributes(error)
         attributes.update(self.attributes)

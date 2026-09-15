@@ -28,6 +28,9 @@ from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
 )
+from opentelemetry.util.genai.conversation_context import (
+    get_ambient_conversation_id,
+)
 from opentelemetry.util.genai.types import (
     Error,
     ErrorTypeResolver,
@@ -147,9 +150,16 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             attributes=attributes,
             context=context,
         )
-        self._span_context = set_span_in_context(self.span)
+        self._span_context = set_span_in_context(self.span, context)
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)
+
+    def _resolve_conversation_id(
+        self, conversation_id: str | None
+    ) -> str | None:
+        if conversation_id is not None:
+            return conversation_id
+        return get_ambient_conversation_id(self._span_context)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""

@@ -24,11 +24,17 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.conversation_context import (
+    get_ambient_conversation_id,
+)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import ToolInvocation
+from opentelemetry.util.genai.invocation import (
+    LocalAgentInvocation,
+    ToolInvocation,
+)
 
 
 class _Span:
@@ -45,9 +51,15 @@ class _Span:
 class _Trace:
     """Minimal stand-in for agents-library Trace."""
 
-    def __init__(self, trace_id: str, name: str) -> None:
+    def __init__(
+        self,
+        trace_id: str,
+        name: str,
+        group_id: str | None = None,
+    ) -> None:
         self.trace_id = trace_id
         self.name = name
+        self.group_id = group_id
 
 
 def _build_handler() -> MagicMock:
@@ -61,7 +73,9 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
     trace = _Trace("trace-1", "Agent workflow")
 
     processor.on_trace_start(trace)
-    handler.workflow.assert_called_once_with(name="Agent workflow")
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", context=None
+    )
     workflow_invocation = handler.workflow.return_value
     assert (
         workflow_invocation.attributes["gen_ai.workflow.name"]
@@ -70,6 +84,54 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
 
     processor.on_trace_end(trace)
     workflow_invocation.stop.assert_called_once_with()
+
+
+def test_trace_without_group_id_passes_no_context() -> None:
+    handler = _build_handler()
+    handler.workflow.return_value = MagicMock(attributes={})
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow")  # no group_id
+
+    processor.on_trace_start(trace)
+
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", context=None
+    )
+
+
+def test_trace_group_id_is_handed_to_workflow_as_context() -> None:
+    handler = _build_handler()
+    handler.workflow.return_value = MagicMock(attributes={})
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow", group_id="chat-thread-42")
+
+    processor.on_trace_start(trace)
+
+    _, kwargs = handler.workflow.call_args
+    # The invocation attaches this for its lifetime, so everything nested
+    # under it sees the conversation id.
+    assert get_ambient_conversation_id(kwargs["context"]) == "chat-thread-42"
+
+
+def test_processor_never_assigns_conversation_id_on_invocations() -> None:
+    # The processor only hands the conversation id over as a Context;
+    # util-genai invocations resolve gen_ai.conversation.id themselves.
+    handler = _build_handler()
+    workflow_inv = MagicMock(attributes={}, conversation_id=None)
+    agent_inv = MagicMock(spec=LocalAgentInvocation, conversation_id=None)
+    handler.workflow.return_value = workflow_inv
+    handler.invoke_local_agent.return_value = agent_inv
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow", group_id="chat-thread-42")
+
+    processor.on_trace_start(trace)
+    span = _Span(AgentSpanData(name="triage"))
+    processor.on_span_start(span)
+    processor.on_span_end(span)
+    processor.on_trace_end(trace)
+
+    assert workflow_inv.conversation_id is None
+    assert agent_inv.conversation_id is None
 
 
 def test_agent_span_creates_invoke_local_agent() -> None:

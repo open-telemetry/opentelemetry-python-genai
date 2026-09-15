@@ -117,7 +117,10 @@ class AgentInvocation(GenAIInvocation, ABC):
 
     def _get_request_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
-            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
+            (
+                GenAI.GEN_AI_CONVERSATION_ID,
+                self._resolve_conversation_id(self.conversation_id),
+            ),
             (GenAI.GEN_AI_DATA_SOURCE_ID, self.data_source_id),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),

@@ -600,6 +600,8 @@ class TelemetryHandler:
     def workflow(
         self,
         name: str | None = None,
+        *,
+        context: Context | None = None,
     ) -> WorkflowInvocation:
         """Returns a Workflow invocation. Starts a span when called.
 
@@ -616,6 +618,7 @@ class TelemetryHandler:
             self._completion_hook,
             name,
             content_capturing_mode=self._content_capturing_mode,
+            context=context,
         )
 
 
