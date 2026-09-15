@@ -290,7 +290,7 @@ def structured_tool_input_to_arguments(
         The ``input`` payload merged with any extra keyword arguments the
         adapter forwards to the tool. A JSON string input is parsed; the
         adapter's ``config`` and CrewAI's ``security_context`` fingerprint
-        are excluded. Unparseable input is kept as-is, wrapped in an
+        are excluded. Unparsable input is kept as-is, wrapped in an
         ``{"input": ..., "kwargs": {...}}`` envelope when extra keyword
         arguments are present. ``None`` if conversion fails.
     """
