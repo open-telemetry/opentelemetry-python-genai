@@ -207,11 +207,16 @@ def messages_to_input_messages(
             content = message["content"]
             if content is None:
                 continue
+            # Subscripting rather than ``.get``: the TypedDict's ``get``
+            # overloads reference an unresolved type and fail strict pyright.
+            name: str | None = None
+            if "name" in message:
+                name = message["name"]
             converted.append(
                 InputMessage(
                     role=message["role"] or "user",
                     parts=[TextPart(content=_content_to_text(content))],
-                    name=message["name"] if "name" in message else None,
+                    name=name,
                 )
             )
         return converted
