@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: true # zizmor: ignore[artipacked] the composite action pushes the patch branch
 
-      - uses: ./.github/actions/bump-package
+      - uses: $/.github/actions/bump-package
         with:
           package: ${{ inputs.package }}
           operation: bump-patch

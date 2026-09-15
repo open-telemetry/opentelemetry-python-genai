@@ -41,10 +41,10 @@ jobs:
           uvx --with tox-uv tox -l | python scripts/tox_matrix.py >> "$GITHUB_OUTPUT"
 
   misc:
-    uses: ./.github/workflows/misc.yml
+    uses: $/.github/workflows/misc.yml
   tests:
     needs: prepare
-    uses: ./.github/workflows/test.yml
+    uses: $/.github/workflows/test.yml
     with:
       matrix: ${{ needs.prepare.outputs.test_matrix }}
 
