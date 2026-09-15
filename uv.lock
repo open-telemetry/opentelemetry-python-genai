@@ -3835,7 +3835,7 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crewai", marker = "extra == 'instruments'", specifier = ">=1.10.1,<2" },
+    { name = "crewai", marker = "extra == 'instruments'", specifier = ">=1.11.0,<2" },
     { name = "opentelemetry-api", specifier = "~=1.43" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
