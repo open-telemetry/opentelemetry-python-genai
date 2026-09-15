@@ -1,0 +1,1 @@
+Capture the remaining OpenAI content parts: ``input_audio`` as an audio blob, ``file``/``input_file`` as a document reference or blob, and ``refusal`` as text; record a completion refusal in ``gen_ai.output.messages``.
