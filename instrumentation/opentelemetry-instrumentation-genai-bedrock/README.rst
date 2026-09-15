@@ -11,6 +11,7 @@ Supported Operations
 * Synchronous and asynchronous streaming chat via the ConverseStream API (``client.converse_stream``)
 * Synchronous and asynchronous model invocation via the InvokeModel API (``client.invoke_model``)
 * Synchronous and asynchronous streaming model invocation via the InvokeModelWithResponseStream API (``client.invoke_model_with_response_stream``)
+* Synchronous and asynchronous embeddings via the InvokeModel API (``client.invoke_model`` with embedding models such as Amazon Titan and Cohere)
 
 Installation
 ------------

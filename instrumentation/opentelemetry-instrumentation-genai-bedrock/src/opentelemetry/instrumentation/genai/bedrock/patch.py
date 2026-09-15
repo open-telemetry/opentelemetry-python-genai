@@ -24,9 +24,12 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from .extractors import (
     extract_converse_request,
     extract_converse_response,
+    extract_embedding_request,
+    extract_embedding_response,
     extract_invoke_model_request,
     extract_invoke_model_response,
     extract_server_address_and_port,
+    is_embedding_model,
 )
 from .stream import (
     AsyncBedrockConverseStreamWrapper,
@@ -162,6 +165,37 @@ def _handle_invoke_model(
     server_address, server_port = extract_server_address_and_port(endpoint_url)
     raw_model_id = api_params.get("modelId")
     model_id = str(raw_model_id) if raw_model_id else None
+
+    if not is_stream and is_embedding_model(model_id):
+        invocation = handler.embedding(
+            provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+            request_model=model_id,
+            server_address=server_address,
+            server_port=server_port,
+        )
+        extract_embedding_request(api_params, invocation)
+        try:
+            response: Any = wrapped(*args, **kwargs)
+        except BaseException as exc:
+            invocation.fail(exc)
+            raise
+
+        raw_bytes = b""
+        body_stream = response.get("body")
+        if hasattr(body_stream, "read"):
+            raw_bytes = body_stream.read()
+            response["body"] = StreamingBody(
+                io.BytesIO(raw_bytes), len(raw_bytes)
+            )
+
+        extract_embedding_response(
+            response,
+            raw_bytes,
+            invocation,
+        )
+        invocation.stop()
+        return response
+
     invocation = handler.inference(
         provider=GenAiProviderNameValues.AWS_BEDROCK.value,
         request_model=model_id,
@@ -222,6 +256,50 @@ async def _handle_async_invoke_model(
     server_address, server_port = extract_server_address_and_port(endpoint_url)
     raw_model_id = api_params.get("modelId")
     model_id = str(raw_model_id) if raw_model_id else None
+
+    if not is_stream and is_embedding_model(model_id):
+        invocation = handler.embedding(
+            provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+            request_model=model_id,
+            server_address=server_address,
+            server_port=server_port,
+        )
+        extract_embedding_request(api_params, invocation)
+        try:
+            response: Any = await wrapped(*args, **kwargs)
+        except BaseException as exc:
+            invocation.fail(exc)
+            raise
+
+        body_stream = response.get("body")
+        if body_stream is not None:
+            if hasattr(body_stream, "read") and (
+                inspect.iscoroutinefunction(body_stream.read)
+                or asyncio.iscoroutinefunction(body_stream.read)
+            ):
+                response["body"] = AsyncBedrockStreamingBodyWrapper(
+                    body_stream,
+                    invocation=invocation,
+                    response=response,
+                )
+                return response
+
+            raw_bytes = b""
+            if hasattr(body_stream, "read"):
+                raw_bytes = body_stream.read()
+                response["body"] = StreamingBody(
+                    io.BytesIO(raw_bytes), len(raw_bytes)
+                )
+
+            extract_embedding_response(
+                response,
+                raw_bytes,
+                invocation,
+            )
+
+        invocation.stop()
+        return response
+
     invocation = handler.inference(
         provider=GenAiProviderNameValues.AWS_BEDROCK.value,
         request_model=model_id,

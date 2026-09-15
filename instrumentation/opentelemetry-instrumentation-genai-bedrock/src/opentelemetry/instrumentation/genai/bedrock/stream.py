@@ -6,7 +6,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.invocation import (
+    EmbeddingInvocation,
+    InferenceInvocation,
+)
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
@@ -26,6 +29,7 @@ from .extractors import (
     _is_list,
     _parse_body,
     _safe_int,
+    extract_embedding_response,
     extract_invoke_model_response,
     map_finish_reason,
 )
@@ -535,7 +539,7 @@ class AsyncBedrockInvokeModelStreamWrapper(
 class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
     """Wrapper for aiobotocore's AioStreamingBody that handles telemetry."""
 
-    _self_invocation: InferenceInvocation
+    _self_invocation: InferenceInvocation | EmbeddingInvocation
     _self_response: dict[str, Any]
     _self_capture_content: bool
     _self_chunks: list[bytes]
@@ -544,7 +548,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
     def __init__(
         self,
         body: Any,
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | EmbeddingInvocation,
         response: dict[str, Any],
         *,
         capture_content: bool = True,
@@ -561,12 +565,19 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
             return
         self._self_finalized = True
         self._self_chunks.clear()
-        extract_invoke_model_response(
-            self._self_response,
-            full_bytes,
-            self._self_invocation,
-            capture_content=self._self_capture_content,
-        )
+        if isinstance(self._self_invocation, EmbeddingInvocation):
+            extract_embedding_response(
+                self._self_response,
+                full_bytes,
+                self._self_invocation,
+            )
+        else:
+            extract_invoke_model_response(
+                self._self_response,
+                full_bytes,
+                self._self_invocation,
+                capture_content=self._self_capture_content,
+            )
         self._self_invocation.stop()
 
     def _finalize_error(self, exc: BaseException) -> None:

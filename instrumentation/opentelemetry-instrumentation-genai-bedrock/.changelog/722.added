@@ -1,0 +1,1 @@
+Add support for Bedrock Embeddings (Amazon Titan, Cohere, etc.) in synchronous and asynchronous InvokeModel calls.
