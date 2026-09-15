@@ -13,6 +13,8 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     GenAIInvocation,
     InferenceInvocation,
+    RemoteAgentInvocation,
+    RetrievalInvocation,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
@@ -929,3 +931,114 @@ def extract_embedding_response(
                     if _is_list(first):
                         invocation.dimension_count = len(first)
                         break
+
+
+def extract_invoke_agent_request(
+    api_params: dict[str, Any],
+    invocation: RemoteAgentInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = api_params.get("sessionId")
+    if session_id:
+        invocation.conversation_id = str(session_id)
+
+    # InvokeAgent takes an alias, not a version, and the response doesn't report the
+    # version the alias resolved to. The alias is the closest available identifier of
+    # which agent revision served the request.
+    agent_alias_id = api_params.get("agentAliasId")
+    if agent_alias_id:
+        invocation.agent_version = str(agent_alias_id)
+
+    if capture_content:
+        input_text = api_params.get("inputText")
+        if input_text is not None:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=str(input_text))],
+                )
+            ]
+
+
+def extract_retrieve_request(
+    api_params: dict[str, Any],
+    invocation: RetrievalInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    retrieval_config = api_params.get("retrievalConfiguration")
+    if _is_dict(retrieval_config):
+        vector_search_config = retrieval_config.get(
+            "vectorSearchConfiguration"
+        )
+        if _is_dict(vector_search_config):
+            top_k = vector_search_config.get("numberOfResults")
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+
+    if capture_content:
+        retrieval_query = api_params.get("retrievalQuery")
+        if _is_dict(retrieval_query):
+            query_text = retrieval_query.get("text")
+            if query_text is not None:
+                invocation.query_text = str(query_text)
+
+
+def extract_retrieve_response(
+    response: dict[str, Any],
+    invocation: RetrievalInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    if not capture_content:
+        return
+
+    results = response.get("retrievalResults")
+    if not _is_list(results):
+        return
+
+    docs: list[dict[str, Any]] = []
+    for item in results:
+        if not _is_dict(item):
+            continue
+        doc: dict[str, Any] = {}
+
+        document_id = item.get("documentId")
+        if document_id is not None:
+            doc["id"] = str(document_id)
+
+        content = item.get("content")
+        if _is_dict(content):
+            text = content.get("text")
+            if text is not None:
+                doc["content"] = str(text)
+
+        score = _safe_float(item.get("score"))
+        if score is not None:
+            doc["score"] = score
+
+        metadata = item.get("metadata")
+        if _is_dict(metadata):
+            doc["metadata"] = metadata
+
+        # `location` is a union keyed by data source (s3Location, webLocation, …), each
+        # holding a single `uri`/`url` member. Scanning generically keeps new AWS data
+        # source types working; sqlLocation has no locator and is skipped.
+        location = item.get("location")
+        if "id" not in doc and _is_dict(location):
+            for key, value in location.items():
+                if key == "type" or not _is_dict(value):
+                    continue
+                locator = _first_not_none(
+                    value.get("uri"), value.get("url"), value.get("id")
+                )
+                if locator is not None:
+                    doc["id"] = str(locator)
+                    break
+
+        if doc:
+            docs.append(doc)
+
+    if docs:
+        invocation.documents = docs

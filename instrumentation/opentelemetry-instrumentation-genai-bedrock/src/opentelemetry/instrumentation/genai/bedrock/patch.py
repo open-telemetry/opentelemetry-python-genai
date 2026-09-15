@@ -20,21 +20,30 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import (
+    RemoteAgentInvocation,
+    RetrievalInvocation,
+)
 
 from .extractors import (
     extract_converse_request,
     extract_converse_response,
     extract_embedding_request,
     extract_embedding_response,
+    extract_invoke_agent_request,
     extract_invoke_model_request,
     extract_invoke_model_response,
+    extract_retrieve_request,
+    extract_retrieve_response,
     extract_server_address_and_port,
     is_embedding_model,
 )
 from .stream import (
+    AsyncBedrockAgentEventStreamWrapper,
     AsyncBedrockConverseStreamWrapper,
     AsyncBedrockInvokeModelStreamWrapper,
     AsyncBedrockStreamingBodyWrapper,
+    BedrockAgentEventStreamWrapper,
     BedrockConverseStreamWrapper,
     BedrockInvokeModelStreamWrapper,
 )
@@ -42,6 +51,7 @@ from .stream import (
 _logger = logging.getLogger(__name__)
 
 BEDROCK_RUNTIME = "bedrock-runtime"
+BEDROCK_AGENT_RUNTIME = "bedrock-agent-runtime"
 
 
 def _handle_converse(
@@ -357,6 +367,184 @@ async def _handle_async_invoke_model(
     return response
 
 
+def _server_address_and_port(
+    instance: BaseClient,
+) -> tuple[str | None, int | None]:
+    endpoint_url = getattr(
+        getattr(instance, "meta", None), "endpoint_url", None
+    )
+    return extract_server_address_and_port(endpoint_url)
+
+
+def _start_invoke_agent(
+    instance: BaseClient,
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> tuple[RemoteAgentInvocation, bool]:
+    server_address, server_port = _server_address_and_port(instance)
+    raw_agent_id = api_params.get("agentId")
+    agent_id = str(raw_agent_id) if raw_agent_id else None
+    raw_alias_id = api_params.get("agentAliasId")
+    agent_version = str(raw_alias_id) if raw_alias_id else None
+
+    invocation = handler.invoke_remote_agent(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        agent_id=agent_id,
+        agent_version=agent_version,
+        server_address=server_address,
+        server_port=server_port,
+    )
+    capture_content = handler.should_capture_content()
+    extract_invoke_agent_request(
+        api_params, invocation, capture_content=capture_content
+    )
+    return invocation, capture_content
+
+
+def _finish_invoke_agent(
+    response: Any,
+    invocation: RemoteAgentInvocation,
+    capture_content: bool,
+    wrapper_cls: type[
+        BedrockAgentEventStreamWrapper | AsyncBedrockAgentEventStreamWrapper
+    ],
+) -> Any:
+    if "completion" in response and response["completion"] is not None:
+        response["completion"] = wrapper_cls(
+            response["completion"],
+            invocation=invocation,
+            capture_content=capture_content,
+        )
+        return response
+
+    invocation.stop()
+    return response
+
+
+def _start_retrieve(
+    instance: BaseClient,
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> tuple[RetrievalInvocation, bool]:
+    server_address, server_port = _server_address_and_port(instance)
+    raw_kb_id = api_params.get("knowledgeBaseId")
+    data_source_id = str(raw_kb_id) if raw_kb_id else None
+
+    invocation = handler.retrieval(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        data_source_id=data_source_id,
+        server_address=server_address,
+        server_port=server_port,
+    )
+    capture_content = handler.should_capture_content()
+    extract_retrieve_request(
+        api_params, invocation, capture_content=capture_content
+    )
+    return invocation, capture_content
+
+
+def _finish_retrieve(
+    response: Any,
+    invocation: RetrievalInvocation,
+    capture_content: bool,
+) -> Any:
+    extract_retrieve_response(
+        response, invocation, capture_content=capture_content
+    )
+    invocation.stop()
+    return response
+
+
+def _handle_invoke_agent(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> Any:
+    invocation, capture_content = _start_invoke_agent(
+        instance, api_params, handler
+    )
+    try:
+        response: Any = wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_invoke_agent(
+        response,
+        invocation,
+        capture_content,
+        BedrockAgentEventStreamWrapper,
+    )
+
+
+async def _handle_async_invoke_agent(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> Any:
+    invocation, capture_content = _start_invoke_agent(
+        instance, api_params, handler
+    )
+    try:
+        response: Any = await wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_invoke_agent(
+        response,
+        invocation,
+        capture_content,
+        AsyncBedrockAgentEventStreamWrapper,
+    )
+
+
+def _handle_retrieve(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> Any:
+    invocation, capture_content = _start_retrieve(
+        instance, api_params, handler
+    )
+    try:
+        response: Any = wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_retrieve(response, invocation, capture_content)
+
+
+async def _handle_async_retrieve(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> Any:
+    invocation, capture_content = _start_retrieve(
+        instance, api_params, handler
+    )
+    try:
+        response: Any = await wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_retrieve(response, invocation, capture_content)
+
+
 def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
     def _wrapper(
         wrapped: Callable[..., Any],
@@ -367,7 +555,7 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
         service_name = getattr(
             getattr(instance, "_service_model", None), "service_name", None
         )
-        if service_name != BEDROCK_RUNTIME:
+        if service_name not in (BEDROCK_RUNTIME, BEDROCK_AGENT_RUNTIME):
             return wrapped(*args, **kwargs)
 
         operation_name = args[0] if args else kwargs.get("operation_name")
@@ -377,6 +565,27 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
             if isinstance(raw_params, dict)
             else {}
         )
+
+        if service_name == BEDROCK_AGENT_RUNTIME:
+            if operation_name == "InvokeAgent":
+                return _handle_invoke_agent(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                )
+            if operation_name == "Retrieve":
+                return _handle_retrieve(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                )
+            return wrapped(*args, **kwargs)
 
         if operation_name in ("Converse", "ConverseStream"):
             return _handle_converse(
@@ -417,7 +626,7 @@ def _make_aio_api_call_wrapper(
         service_name = getattr(
             getattr(instance, "_service_model", None), "service_name", None
         )
-        if service_name != BEDROCK_RUNTIME:
+        if service_name not in (BEDROCK_RUNTIME, BEDROCK_AGENT_RUNTIME):
             return await wrapped(*args, **kwargs)
 
         operation_name = args[0] if args else kwargs.get("operation_name")
@@ -427,6 +636,27 @@ def _make_aio_api_call_wrapper(
             if isinstance(raw_params, dict)
             else {}
         )
+
+        if service_name == BEDROCK_AGENT_RUNTIME:
+            if operation_name == "InvokeAgent":
+                return await _handle_async_invoke_agent(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                )
+            if operation_name == "Retrieve":
+                return await _handle_async_retrieve(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                )
+            return await wrapped(*args, **kwargs)
 
         if operation_name in ("Converse", "ConverseStream"):
             return await _handle_async_converse(
@@ -456,7 +686,7 @@ def _make_aio_api_call_wrapper(
 
 
 def patch_bedrock(handler: TelemetryHandler) -> None:
-    """Patch botocore and aiobotocore BaseClient to instrument Bedrock runtime operations."""
+    """Patch botocore and aiobotocore BaseClient to instrument Bedrock runtime and agent runtime operations."""
     wrap_function_wrapper(
         "botocore.client",
         "BaseClient._make_api_call",
