@@ -405,6 +405,10 @@ def _content_parts(content: str | list[dict[str, Any]]) -> list[MessagePart]:
             if isinstance(text, str):
                 parts.append(TextPart(content=text))
         elif isinstance(block_type, str) and block_type:
+            # Media blocks (``image_url``, ``input_audio``, ``file``, ...)
+            # only come from the optional ``crewai-files`` extra and are
+            # provider-shaped, so they are not yet mapped to ``UriPart`` /
+            # ``BlobPart`` / ``FilePart``; only their type is recorded.
             parts.append(GenericPart(type=block_type))
     return parts
 
