@@ -14,10 +14,30 @@ from unittest.mock import Mock
 
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.crewai import CrewAIInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import SERVICE_NAME
 from opentelemetry.sdk.trace import TracerProvider
+
+
+def test_conftest_disables_crewai_telemetry_before_import() -> None:
+    """The env must be set before ``crewai`` is first imported.
+
+    Older CrewAI releases otherwise build their telemetry provider at import
+    and install it as the global ``TracerProvider``.
+    """
+    from crewai.telemetry.constants import CREWAI_TELEMETRY_SERVICE_NAME
+    from crewai.telemetry.telemetry import Telemetry
+
+    assert Telemetry().ready is False
+    provider = trace.get_tracer_provider()
+    if isinstance(provider, TracerProvider):
+        assert (
+            provider.resource.attributes.get(SERVICE_NAME)
+            != CREWAI_TELEMETRY_SERVICE_NAME
+        )
 
 
 def _run_choke_point() -> tuple[object, bool]:
