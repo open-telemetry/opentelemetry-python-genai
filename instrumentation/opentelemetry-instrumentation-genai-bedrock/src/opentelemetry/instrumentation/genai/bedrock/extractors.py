@@ -943,6 +943,9 @@ def extract_invoke_agent_request(
     if session_id:
         invocation.conversation_id = str(session_id)
 
+    # InvokeAgent takes an alias, not a version, and the response doesn't report the
+    # version the alias resolved to. The alias is the closest available identifier of
+    # which agent revision served the request.
     agent_alias_id = api_params.get("agentAliasId")
     if agent_alias_id:
         invocation.agent_version = str(agent_alias_id)
@@ -1000,47 +1003,39 @@ def extract_retrieve_response(
         if not _is_dict(item):
             continue
         doc: dict[str, Any] = {}
+
+        document_id = item.get("documentId")
+        if document_id is not None:
+            doc["id"] = str(document_id)
+
         content = item.get("content")
-        if _is_dict(content) and "text" in content:
-            doc["content"] = str(content["text"])
-        elif isinstance(content, str):
-            doc["content"] = content
+        if _is_dict(content):
+            text = content.get("text")
+            if text is not None:
+                doc["content"] = str(text)
 
-        if "score" in item:
-            try:
-                doc["score"] = float(item["score"])
-            except (ValueError, TypeError):
-                pass
+        score = _safe_float(item.get("score"))
+        if score is not None:
+            doc["score"] = score
 
-        if "metadata" in item and _is_dict(item["metadata"]):
-            doc["metadata"] = item["metadata"]
+        metadata = item.get("metadata")
+        if _is_dict(metadata):
+            doc["metadata"] = metadata
 
+        # `location` is a union keyed by data source (s3Location, webLocation, …), each
+        # holding a single `uri`/`url` member. Scanning generically keeps new AWS data
+        # source types working; sqlLocation has no locator and is skipped.
         location = item.get("location")
-        if _is_dict(location):
-            loc_type = location.get("type")
-            for loc_key in (
-                "s3Location",
-                "webLocation",
-                "confluenceLocation",
-                "salesforceLocation",
-                "sharePointLocation",
-                "kendraDocumentLocation",
-                "customDocumentLocation",
-                "sqlLocation",
-            ):
-                loc_val = location.get(loc_key)
-                if _is_dict(loc_val):
-                    if "uri" in loc_val:
-                        doc["id"] = str(loc_val["uri"])
-                        break
-                    if "url" in loc_val:
-                        doc["id"] = str(loc_val["url"])
-                        break
-                    if "id" in loc_val:
-                        doc["id"] = str(loc_val["id"])
-                        break
-            if "id" not in doc and loc_type:
-                doc["id"] = str(loc_type)
+        if "id" not in doc and _is_dict(location):
+            for key, value in location.items():
+                if key == "type" or not _is_dict(value):
+                    continue
+                locator = _first_not_none(
+                    value.get("uri"), value.get("url"), value.get("id")
+                )
+                if locator is not None:
+                    doc["id"] = str(locator)
+                    break
 
         if doc:
             docs.append(doc)

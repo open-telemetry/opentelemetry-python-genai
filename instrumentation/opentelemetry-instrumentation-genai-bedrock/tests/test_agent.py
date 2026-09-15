@@ -14,13 +14,16 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from opentelemetry.instrumentation.genai.bedrock.extractors import (
+    extract_retrieve_response,
+)
 from opentelemetry.instrumentation.genai.bedrock.patch import (
-    _handle_async_invoke_agent,
-    _handle_async_retrieve,
     _make_aio_api_call_wrapper,
 )
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.semconv.attributes import (
@@ -351,7 +354,9 @@ def test_retrieve_sync_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_DATA_SOURCE_ID)
         == "kb-12345678"
     )
-    assert span.attributes.get("gen_ai.retrieval.top_k") == 2
+    top_k = span.attributes.get("gen_ai.retrieval.top_k")
+    assert isinstance(top_k, int)
+    assert top_k == 2
     assert (
         span.attributes.get(ServerAttributes.SERVER_ADDRESS)
         == "bedrock-agent-runtime.us-east-1.amazonaws.com"
@@ -366,13 +371,83 @@ def test_retrieve_sync_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
     )
     assert len(docs) == 2
-    assert docs[0]["content"] == "Document 1 content"
     assert docs[0]["id"] == "s3://my-bucket/doc1.txt"
+    assert docs[0]["content"] == "Document 1 content"
+    assert isinstance(docs[0]["score"], float)
     assert docs[0]["score"] == 0.95
     assert docs[0]["metadata"] == {"author": "Alice"}
-    assert docs[1]["content"] == "Document 2 content"
     assert docs[1]["id"] == "https://example.com/doc2"
+    assert docs[1]["content"] == "Document 2 content"
     assert docs[1]["score"] == 0.85
+
+
+def test_extract_retrieve_response_document_ids(
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+) -> None:
+    """Document id resolution across response shapes.
+
+    Driven through the extractor rather than a stubbed client: ``documentId``
+    and newer location types are absent from the oldest supported botocore
+    service model, so ``Stubber`` would reject them.
+    """
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.retrieval(
+        provider=GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value,
+        data_source_id="kb-12345678",
+    )
+
+    extract_retrieve_response(
+        {
+            "retrievalResults": [
+                {
+                    "content": {"text": "Document 1 content"},
+                    "documentId": "doc-1",
+                    "location": {
+                        "type": "S3",
+                        "s3Location": {"uri": "s3://my-bucket/doc1.txt"},
+                    },
+                },
+                {
+                    "content": {"text": "Document 2 content"},
+                    "location": {
+                        "type": "GOOGLE_DRIVE",
+                        "googleDriveLocation": {
+                            "url": "https://drive.google.com/doc2"
+                        },
+                    },
+                },
+                {
+                    "content": {"text": "Document 3 content"},
+                    "location": {
+                        "type": "SQL",
+                        "sqlLocation": {"query": "SELECT 1"},
+                    },
+                },
+            ]
+        },
+        invocation,
+        capture_content=True,
+    )
+    invocation.stop()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    docs = json.loads(
+        spans[0].attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
+    )
+    assert len(docs) == 3
+    # documentId wins over the location locator.
+    assert docs[0]["id"] == "doc-1"
+    # No documentId: fall back to the location locator.
+    assert docs[1]["id"] == "https://drive.google.com/doc2"
+    # sqlLocation carries a query, not a locator, so no id can be derived.
+    assert "id" not in docs[2]
+    assert docs[2]["content"] == "Document 3 content"
 
 
 def test_retrieve_sync_no_content(
@@ -407,9 +482,7 @@ def test_retrieve_sync_no_content(
     assert len(spans) == 1
     span = spans[0]
 
-    assert (
-        GenAIAttributes.GEN_AI_RETRIEVAL_QUERY_TEXT not in span.attributes
-    )
+    assert GenAIAttributes.GEN_AI_RETRIEVAL_QUERY_TEXT not in span.attributes
     assert GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS not in span.attributes
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_DATA_SOURCE_ID)
