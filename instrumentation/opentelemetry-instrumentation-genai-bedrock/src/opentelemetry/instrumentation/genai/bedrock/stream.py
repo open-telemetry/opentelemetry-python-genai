@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     InferenceInvocation,
+    RemoteAgentInvocation,
 )
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
@@ -684,3 +685,80 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         if not getattr(self, "_self_finalized", True):
             self._self_finalized = True
             self._self_invocation.stop()
+
+
+class _BedrockAgentEventStreamMixin:
+    _self_invocation: RemoteAgentInvocation
+    _self_capture_content: bool
+    _self_accumulated_text: list[str]
+
+    def _init_agent_stream(
+        self,
+        invocation: RemoteAgentInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        self._self_invocation = invocation
+        self._self_capture_content = capture_content
+        self._self_accumulated_text = []
+
+    def _process_chunk(self, chunk: dict[str, Any]) -> None:
+        if not _is_dict(chunk):
+            return
+        chunk_obj = chunk.get("chunk")
+        if _is_dict(chunk_obj):
+            raw_bytes = chunk_obj.get("bytes")
+            if isinstance(raw_bytes, (bytes, bytearray)):
+                self._self_accumulated_text.append(
+                    bytes(raw_bytes).decode("utf-8", errors="replace")
+                )
+            elif isinstance(raw_bytes, str):
+                self._self_accumulated_text.append(raw_bytes)
+
+    def _on_stream_end(self) -> None:
+        if self._self_capture_content and self._self_accumulated_text:
+            content = "".join(self._self_accumulated_text)
+            self._self_invocation.output_messages = [
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[TextPart(content=content)],
+                )
+            ]
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
+
+
+class BedrockAgentEventStreamWrapper(
+    _BedrockAgentEventStreamMixin,
+    SyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for Bedrock invoke_agent EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: RemoteAgentInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_agent_stream(invocation, capture_content=capture_content)
+
+
+class AsyncBedrockAgentEventStreamWrapper(
+    _BedrockAgentEventStreamMixin,
+    AsyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for async Bedrock invoke_agent EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: RemoteAgentInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_agent_stream(invocation, capture_content=capture_content)

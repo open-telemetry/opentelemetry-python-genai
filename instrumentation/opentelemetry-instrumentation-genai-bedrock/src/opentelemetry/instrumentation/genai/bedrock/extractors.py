@@ -13,6 +13,8 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     GenAIInvocation,
     InferenceInvocation,
+    RemoteAgentInvocation,
+    RetrievalInvocation,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
@@ -929,3 +931,119 @@ def extract_embedding_response(
                     if _is_list(first):
                         invocation.dimension_count = len(first)
                         break
+
+
+def extract_invoke_agent_request(
+    api_params: dict[str, Any],
+    invocation: RemoteAgentInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = api_params.get("sessionId")
+    if session_id:
+        invocation.conversation_id = str(session_id)
+
+    agent_alias_id = api_params.get("agentAliasId")
+    if agent_alias_id:
+        invocation.agent_version = str(agent_alias_id)
+
+    if capture_content:
+        input_text = api_params.get("inputText")
+        if input_text is not None:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=str(input_text))],
+                )
+            ]
+
+
+def extract_retrieve_request(
+    api_params: dict[str, Any],
+    invocation: RetrievalInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    retrieval_config = api_params.get("retrievalConfiguration")
+    if _is_dict(retrieval_config):
+        vector_search_config = retrieval_config.get(
+            "vectorSearchConfiguration"
+        )
+        if _is_dict(vector_search_config):
+            top_k = vector_search_config.get("numberOfResults")
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+
+    if capture_content:
+        retrieval_query = api_params.get("retrievalQuery")
+        if _is_dict(retrieval_query):
+            query_text = retrieval_query.get("text")
+            if query_text is not None:
+                invocation.query_text = str(query_text)
+
+
+def extract_retrieve_response(
+    response: dict[str, Any],
+    invocation: RetrievalInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    if not capture_content:
+        return
+
+    results = response.get("retrievalResults")
+    if not _is_list(results):
+        return
+
+    docs: list[dict[str, Any]] = []
+    for item in results:
+        if not _is_dict(item):
+            continue
+        doc: dict[str, Any] = {}
+        content = item.get("content")
+        if _is_dict(content) and "text" in content:
+            doc["content"] = str(content["text"])
+        elif isinstance(content, str):
+            doc["content"] = content
+
+        if "score" in item:
+            try:
+                doc["score"] = float(item["score"])
+            except (ValueError, TypeError):
+                pass
+
+        if "metadata" in item and _is_dict(item["metadata"]):
+            doc["metadata"] = item["metadata"]
+
+        location = item.get("location")
+        if _is_dict(location):
+            loc_type = location.get("type")
+            for loc_key in (
+                "s3Location",
+                "webLocation",
+                "confluenceLocation",
+                "salesforceLocation",
+                "sharePointLocation",
+                "kendraDocumentLocation",
+                "customDocumentLocation",
+                "sqlLocation",
+            ):
+                loc_val = location.get(loc_key)
+                if _is_dict(loc_val):
+                    if "uri" in loc_val:
+                        doc["id"] = str(loc_val["uri"])
+                        break
+                    if "url" in loc_val:
+                        doc["id"] = str(loc_val["url"])
+                        break
+                    if "id" in loc_val:
+                        doc["id"] = str(loc_val["id"])
+                        break
+            if "id" not in doc and loc_type:
+                doc["id"] = str(loc_type)
+
+        if doc:
+            docs.append(doc)
+
+    if docs:
+        invocation.documents = docs
