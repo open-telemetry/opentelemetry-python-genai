@@ -45,8 +45,9 @@ Configuration
 -------------
 
 Message content capture can be configured by setting the environment variable
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``. Supported values are
-``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, and ``SPAN_AND_EVENT``.
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to ``SPAN_ONLY`` or
+``SPAN_AND_EVENT``. Agent and tool invocations record content as span
+attributes only and emit no event logs, so ``EVENT_ONLY`` captures nothing.
 
 Captured content can be forwarded to external storage with a completion hook.
 Set ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` (with
@@ -106,7 +107,7 @@ class CrewAIInstrumentor(BaseInstrumentor):
     Patches ``Agent.execute_task``, ``Agent.kickoff``, ``BaseTool.run`` and
     ``CrewStructuredTool.invoke`` so that agent invocations and tool
     executions are reported through ``opentelemetry-util-genai`` as
-    ``invoke_agent`` and ``execute_tool`` spans, logs and metrics.
+    ``invoke_agent`` and ``execute_tool`` spans and duration metrics.
 
     The constructor takes no arguments; behavior is configured through the
     keyword arguments of ``instrument()``:

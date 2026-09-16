@@ -44,13 +44,17 @@ example:
 Configuration
 -------------
 
-By default, prompts and completions are not captured. To capture message content, set the
-environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of
-``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT``:
+By default, prompts and completions are not captured. To capture message
+content, set the environment variable
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to ``SPAN_ONLY`` or
+``SPAN_AND_EVENT``:
 
 ::
 
-    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
+    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
+
+Agent and tool invocations record content as span attributes only; they emit
+no event logs, so ``EVENT_ONLY`` captures nothing for this instrumentation.
 
 Captured content can also be forwarded to external storage with a completion
 hook. Set ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` together with
@@ -86,9 +90,11 @@ CrewAI's opt-in cloud tracing (``CREWAI_TRACING_ENABLED`` or
 Current limitations
 -------------------
 
-Crew and Flow ``invoke_workflow`` spans, async agent APIs, Flow-internal
-``Agent.kickoff`` calls made while an event loop is running, tool call IDs,
-memory retrieval, and Flow node
-spans are not yet instrumented. Recursive ``Agent.execute_task`` retries emit
-one nested ``invoke_agent`` span per method invocation; retries initiated by a
-task guardrail outside that method emit sibling spans.
+Crew and Flow ``invoke_workflow`` spans, the async ``Agent.kickoff_async`` and
+``Agent.aexecute_task`` APIs, tool call IDs, memory retrieval, and Flow node
+spans are not yet instrumented. (``Agent.kickoff`` called while an event loop
+is running returns a coroutine; that coroutine is instrumented when awaited.)
+
+Recursive ``Agent.execute_task`` retries emit one nested ``invoke_agent`` span
+per method invocation; retries initiated by a task guardrail outside that
+method emit sibling spans.
