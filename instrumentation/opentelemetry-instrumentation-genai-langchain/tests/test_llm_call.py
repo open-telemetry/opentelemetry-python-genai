@@ -804,6 +804,82 @@ def test_chat_model_preserves_input_and_output_message_names(
     assert output_messages[0]["name"] == "assistant_bob"
     assert output_messages[0]["role"] == "assistant"
 
+    assert gen_ai_attributes.GEN_AI_REQUEST_TOP_K not in span.attributes
+    assert gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT not in span.attributes
+
+
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassette was recorded with langchain-openai 1.x",
+)
+def test_chat_openai_captures_choice_count(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    vcr,
+):
+    model = ChatOpenAI(
+        model="gpt-5.1",
+        api_key="test_openai_api_key",
+        n=3,
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+    ):
+        with vcr.use_cassette("test_chat_openai_captures_choice_count.yaml"):
+            model.invoke([HumanMessage(content="Reply with one short word.")])
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT] == 3
+
+    (log,) = log_exporter.get_finished_logs()
+    assert (
+        log.log_record.attributes[
+            gen_ai_attributes.GEN_AI_REQUEST_CHOICE_COUNT
+        ]
+        == 3
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_captures_top_k(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    model = ChatAnthropic(
+        model="claude-sonnet-4-5",
+        api_key="test_key",
+        max_tokens=32,
+        top_k=40,
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+    ):
+        model.invoke([HumanMessage(content="Reply with one short word.")])
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
+
+    (log,) = log_exporter.get_finished_logs()
+    assert (
+        log.log_record.attributes[gen_ai_attributes.GEN_AI_REQUEST_TOP_K] == 40
+    )
+
 
 def test_chat_model_uses_ls_model_name_from_metadata(
     span_exporter,
