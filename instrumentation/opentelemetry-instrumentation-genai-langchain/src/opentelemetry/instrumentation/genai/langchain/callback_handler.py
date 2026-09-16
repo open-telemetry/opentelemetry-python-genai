@@ -183,7 +183,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any] | None,
+        serialized: dict[str, Any],
         inputs: dict[str, Any],
         *,
         run_id: UUID,
