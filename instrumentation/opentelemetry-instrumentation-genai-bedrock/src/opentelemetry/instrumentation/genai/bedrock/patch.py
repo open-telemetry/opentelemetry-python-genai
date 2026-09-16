@@ -380,31 +380,34 @@ def _start_invoke_agent(
     instance: BaseClient,
     api_params: dict[str, Any],
     handler: TelemetryHandler,
-) -> tuple[RemoteAgentInvocation, bool]:
+) -> RemoteAgentInvocation:
     server_address, server_port = _server_address_and_port(instance)
-    raw_agent_id = api_params.get("agentId")
-    agent_id = str(raw_agent_id) if raw_agent_id else None
-    raw_alias_id = api_params.get("agentAliasId")
-    agent_version = str(raw_alias_id) if raw_alias_id else None
 
     invocation = handler.invoke_remote_agent(
         provider=GenAiProviderNameValues.AWS_BEDROCK.value,
-        agent_id=agent_id,
-        agent_version=agent_version,
         server_address=server_address,
         server_port=server_port,
     )
-    capture_content = handler.should_capture_content()
+    raw_agent_id = api_params.get("agentId")
+    if raw_agent_id:
+        invocation.agent_id = str(raw_agent_id)
+    # InvokeAgent addresses an agent by alias rather than by version, and an alias
+    # resolves to a version server-side.
+    raw_alias_id = api_params.get("agentAliasId")
+    if raw_alias_id:
+        invocation.agent_version = str(raw_alias_id)
+
     extract_invoke_agent_request(
-        api_params, invocation, capture_content=capture_content
+        api_params,
+        invocation,
+        capture_content=invocation.should_capture_content,
     )
-    return invocation, capture_content
+    return invocation
 
 
 def _finish_invoke_agent(
     response: Any,
     invocation: RemoteAgentInvocation,
-    capture_content: bool,
     wrapper_cls: type[
         BedrockAgentEventStreamWrapper | AsyncBedrockAgentEventStreamWrapper
     ],
@@ -413,7 +416,7 @@ def _finish_invoke_agent(
         response["completion"] = wrapper_cls(
             response["completion"],
             invocation=invocation,
-            capture_content=capture_content,
+            capture_content=invocation.should_capture_content,
         )
         return response
 
@@ -425,7 +428,7 @@ def _start_retrieve(
     instance: BaseClient,
     api_params: dict[str, Any],
     handler: TelemetryHandler,
-) -> tuple[RetrievalInvocation, bool]:
+) -> RetrievalInvocation:
     server_address, server_port = _server_address_and_port(instance)
     raw_kb_id = api_params.get("knowledgeBaseId")
     data_source_id = str(raw_kb_id) if raw_kb_id else None
@@ -436,20 +439,22 @@ def _start_retrieve(
         server_address=server_address,
         server_port=server_port,
     )
-    capture_content = handler.should_capture_content()
     extract_retrieve_request(
-        api_params, invocation, capture_content=capture_content
+        api_params,
+        invocation,
+        capture_content=invocation.should_capture_content,
     )
-    return invocation, capture_content
+    return invocation
 
 
 def _finish_retrieve(
     response: Any,
     invocation: RetrievalInvocation,
-    capture_content: bool,
 ) -> Any:
     extract_retrieve_response(
-        response, invocation, capture_content=capture_content
+        response,
+        invocation,
+        capture_content=invocation.should_capture_content,
     )
     invocation.stop()
     return response
@@ -463,9 +468,7 @@ def _handle_invoke_agent(
     api_params: dict[str, Any],
     handler: TelemetryHandler,
 ) -> Any:
-    invocation, capture_content = _start_invoke_agent(
-        instance, api_params, handler
-    )
+    invocation = _start_invoke_agent(instance, api_params, handler)
     try:
         response: Any = wrapped(*args, **kwargs)
     except BaseException as exc:
@@ -473,10 +476,7 @@ def _handle_invoke_agent(
         raise
 
     return _finish_invoke_agent(
-        response,
-        invocation,
-        capture_content,
-        BedrockAgentEventStreamWrapper,
+        response, invocation, BedrockAgentEventStreamWrapper
     )
 
 
@@ -488,9 +488,7 @@ async def _handle_async_invoke_agent(
     api_params: dict[str, Any],
     handler: TelemetryHandler,
 ) -> Any:
-    invocation, capture_content = _start_invoke_agent(
-        instance, api_params, handler
-    )
+    invocation = _start_invoke_agent(instance, api_params, handler)
     try:
         response: Any = await wrapped(*args, **kwargs)
     except BaseException as exc:
@@ -498,10 +496,7 @@ async def _handle_async_invoke_agent(
         raise
 
     return _finish_invoke_agent(
-        response,
-        invocation,
-        capture_content,
-        AsyncBedrockAgentEventStreamWrapper,
+        response, invocation, AsyncBedrockAgentEventStreamWrapper
     )
 
 
@@ -513,16 +508,14 @@ def _handle_retrieve(
     api_params: dict[str, Any],
     handler: TelemetryHandler,
 ) -> Any:
-    invocation, capture_content = _start_retrieve(
-        instance, api_params, handler
-    )
+    invocation = _start_retrieve(instance, api_params, handler)
     try:
         response: Any = wrapped(*args, **kwargs)
     except BaseException as exc:
         invocation.fail(exc)
         raise
 
-    return _finish_retrieve(response, invocation, capture_content)
+    return _finish_retrieve(response, invocation)
 
 
 async def _handle_async_retrieve(
@@ -533,16 +526,14 @@ async def _handle_async_retrieve(
     api_params: dict[str, Any],
     handler: TelemetryHandler,
 ) -> Any:
-    invocation, capture_content = _start_retrieve(
-        instance, api_params, handler
-    )
+    invocation = _start_retrieve(instance, api_params, handler)
     try:
         response: Any = await wrapped(*args, **kwargs)
     except BaseException as exc:
         invocation.fail(exc)
         raise
 
-    return _finish_retrieve(response, invocation, capture_content)
+    return _finish_retrieve(response, invocation)
 
 
 def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:

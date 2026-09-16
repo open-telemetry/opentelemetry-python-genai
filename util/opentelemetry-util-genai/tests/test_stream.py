@@ -4,6 +4,7 @@
 # pylint: disable=abstract-class-instantiated
 
 import asyncio
+import gc
 import inspect
 import timeit
 from unittest.mock import patch
@@ -223,6 +224,51 @@ def test_sync_stream_wrapper_stop_iteration_does_not_double_finalize():
     assert not wrapper._self_failures
 
 
+def test_sync_stream_wrapper_finalizes_abandoned_stream():
+    stop_counts = []
+
+    class _RecordingWrapper(_TestSyncStreamWrapper):
+        def _on_stream_end(self):
+            super()._on_stream_end()
+            stop_counts.append(self._self_stop_count)
+
+    wrapper = _RecordingWrapper(_FakeSyncStream(chunks=["a", "b"]))
+    # A caller raising inside a bare ``for`` body reaches neither __exit__ nor
+    # close(), so only __del__ is left to end the span.
+    with pytest.raises(RuntimeError):
+        for _ in wrapper:
+            raise RuntimeError("caller error")
+
+    del wrapper
+    gc.collect()
+
+    assert stop_counts == [1]
+
+
+def test_sync_stream_wrapper_abandon_does_not_refinalize_drained_stream():
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(chunks=["a"]))
+    assert list(wrapper) == ["a"]
+    assert wrapper._self_stop_count == 1
+
+    wrapper._finalize_abandoned()
+
+    assert wrapper._self_stop_count == 1
+    assert not wrapper._self_failures
+
+
+def test_sync_stream_wrapper_abandon_does_not_override_failure():
+    error = ValueError("stream broke")
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(error=error))
+
+    with pytest.raises(ValueError):
+        next(wrapper)
+
+    wrapper._finalize_abandoned()
+
+    assert wrapper._self_failures == [error]
+    assert wrapper._self_stop_count == 0
+
+
 class _FakeAsyncStream:
     def __init__(self, chunks=None, error=None, close_error=None):
         self._chunks = list(chunks or [])
@@ -433,6 +479,45 @@ def test_async_stream_wrapper_stop_iteration_does_not_double_finalize():
 
         assert wrapper._self_stop_count == 1
         assert not wrapper._self_failures
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_finalizes_abandoned_stream():
+    stop_counts = []
+
+    class _RecordingWrapper(_TestAsyncStreamWrapper):
+        def _on_stream_end(self):
+            super()._on_stream_end()
+            stop_counts.append(self._self_stop_count)
+
+    async def exercise():
+        wrapper = _RecordingWrapper(_FakeAsyncStream(chunks=["a", "b"]))
+        # Neither __aexit__ nor close() runs when the caller raises inside a
+        # bare ``async for`` body, leaving __del__ to end the span.
+        with pytest.raises(RuntimeError):
+            async for _ in wrapper:
+                raise RuntimeError("caller error")
+
+    asyncio.run(exercise())
+    gc.collect()
+
+    assert stop_counts == [1]
+
+
+def test_async_stream_wrapper_abandon_does_not_override_failure():
+    error = ValueError("stream broke")
+
+    async def exercise():
+        wrapper = _TestAsyncStreamWrapper(_FakeAsyncStream(error=error))
+
+        with pytest.raises(ValueError):
+            await anext(wrapper)
+
+        wrapper._finalize_abandoned()
+
+        assert wrapper._self_failures == [error]
+        assert wrapper._self_stop_count == 0
 
     asyncio.run(exercise())
 

@@ -80,6 +80,27 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
         self._self_finalized = True
         self._on_stream_error(error)
 
+    def _finalize_abandoned(self) -> None:
+        """Finalize a stream that was never drained, closed, or exited.
+
+        Reached from ``__del__``. A caller that breaks out of iteration -- or
+        raises inside the loop body -- without a ``with`` block or ``close()``
+        hands the wrapper no other opportunity to end the span, so it would
+        otherwise leak. The caller's own exception is not recorded: it never
+        reaches the wrapper, and it is not the stream's failure.
+        """
+        # __del__ can run during interpreter shutdown or on an object whose
+        # __init__ raised, so nothing here may assume state exists.
+        if getattr(self, "_self_finalized", True):
+            return
+        try:
+            self._finalize_success()
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "GenAI stream finalization error for abandoned stream",
+                exc_info=True,
+            )
+
     @abstractmethod
     def _process_chunk(self, chunk: ChunkT) -> None:
         """Process one stream chunk for telemetry."""
@@ -91,6 +112,9 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     @abstractmethod
     def _on_stream_error(self, error: BaseException) -> None:
         """Finalize the stream with failure."""
+
+    def __del__(self) -> None:
+        self._finalize_abandoned()
 
 
 class SyncStreamWrapper(

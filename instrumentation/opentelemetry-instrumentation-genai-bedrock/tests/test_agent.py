@@ -6,19 +6,17 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
 
+import aiobotocore.session
 import boto3
 import pytest
+import pytest_asyncio
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_retrieve_response,
-)
-from opentelemetry.instrumentation.genai.bedrock.patch import (
-    _make_aio_api_call_wrapper,
 )
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -36,6 +34,15 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 @pytest.fixture
 def agent_client():
     return boto3.client("bedrock-agent-runtime", region_name="us-east-1")
+
+
+@pytest_asyncio.fixture
+async def async_agent_client():
+    session = aiobotocore.session.get_session()
+    async with session.create_client(
+        "bedrock-agent-runtime", region_name="us-east-1"
+    ) as client:
+        yield client
 
 
 class _MockAsyncEventStream:
@@ -69,15 +76,6 @@ class _FailingAsyncEventStream:
             return item
         except StopIteration:
             raise StopAsyncIteration
-
-
-def _async_agent_client() -> Any:
-    return SimpleNamespace(
-        meta=SimpleNamespace(
-            endpoint_url="https://bedrock-agent-runtime.us-east-1.amazonaws.com"
-        ),
-        _service_model=SimpleNamespace(service_name="bedrock-agent-runtime"),
-    )
 
 
 # --- Sync invoke_agent tests ---
@@ -285,6 +283,50 @@ def test_invoke_agent_sync_stream_error(
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ConnectionError"
+
+
+def test_invoke_agent_sync_caller_error_during_stream(
+    agent_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "session-123",
+            "completion": [
+                {"chunk": {"bytes": b"part 1"}},
+                {"chunk": {"bytes": b"part 2"}},
+            ],
+        },
+        expected_params={
+            "agentId": "agent-12345",
+            "agentAliasId": "alias-12345",
+            "sessionId": "session-123",
+            "inputText": "Hi",
+        },
+    )
+
+    with stubber:
+        response = agent_client.invoke_agent(
+            agentId="agent-12345",
+            agentAliasId="alias-12345",
+            sessionId="session-123",
+            inputText="Hi",
+        )
+        with pytest.raises(RuntimeError):
+            with response["completion"] as stream:
+                for _ in stream:
+                    raise RuntimeError("caller error")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
 
 
 # --- Sync retrieve tests ---
@@ -528,41 +570,40 @@ def test_retrieve_sync_error(
 
 @pytest.mark.asyncio
 async def test_async_invoke_agent_with_content(
-    tracer_provider,
+    async_agent_client,
+    instrument_with_content,
     span_exporter,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    client = _async_agent_client()
-
-    events = [
-        {"chunk": {"bytes": b"Async "}},
-        {"chunk": {"bytes": b"agent response"}},
-    ]
-
-    async def mock_make_api_call(operation_name, api_params):
-        return {
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_agent",
+        service_response={
             "contentType": "application/json",
             "sessionId": "async-session-123",
-            "completion": _MockAsyncEventStream(events),
-        }
-
-    api_params = {
-        "agentId": "async-agent-1",
-        "agentAliasId": "async-alias-1",
-        "sessionId": "async-session-123",
-        "inputText": "Hello async agent",
-    }
-
-    response = await _make_aio_api_call_wrapper(handler)(
-        mock_make_api_call, client, ("InvokeAgent", api_params), {}
+            "completion": _MockAsyncEventStream(
+                [
+                    {"chunk": {"bytes": b"Async "}},
+                    {"chunk": {"bytes": b"agent response"}},
+                ]
+            ),
+        },
+        expected_params={
+            "agentId": "async-agent-1",
+            "agentAliasId": "async-alias-1",
+            "sessionId": "async-session-123",
+            "inputText": "Hello async agent",
+        },
     )
-    collected = []
-    async for chunk in response["completion"]:
-        collected.append(chunk)
+
+    with stubber:
+        response = await async_agent_client.invoke_agent(
+            agentId="async-agent-1",
+            agentAliasId="async-alias-1",
+            sessionId="async-session-123",
+            inputText="Hello async agent",
+        )
+        collected = [chunk async for chunk in response["completion"]]
 
     assert len(collected) == 2
 
@@ -585,6 +626,10 @@ async def test_async_invoke_agent_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
         == "async-session-123"
     )
+    assert (
+        span.attributes.get(ServerAttributes.SERVER_ADDRESS)
+        == "bedrock-agent-runtime.us-east-1.amazonaws.com"
+    )
 
     input_msgs = json.loads(
         span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
@@ -598,38 +643,119 @@ async def test_async_invoke_agent_with_content(
 
 
 @pytest.mark.asyncio
-async def test_async_invoke_agent_stream_error(
-    tracer_provider,
+async def test_async_invoke_agent_no_content(
+    async_agent_client,
+    instrument_no_content,
     span_exporter,
 ) -> None:
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    client = _async_agent_client()
-
-    events = [
-        {"chunk": {"bytes": b"Async part 1"}},
-        {"fail": True},
-    ]
-
-    async def mock_make_api_call(operation_name, api_params):
-        return {
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_agent",
+        service_response={
             "contentType": "application/json",
             "sessionId": "async-session-123",
-            "completion": _FailingAsyncEventStream(events),
-        }
-
-    api_params = {
-        "agentId": "async-agent-1",
-        "agentAliasId": "async-alias-1",
-        "sessionId": "async-session-123",
-        "inputText": "Hello async agent",
-    }
-
-    response = await _make_aio_api_call_wrapper(handler)(
-        mock_make_api_call, client, ("InvokeAgent", api_params), {}
+            "completion": _MockAsyncEventStream(
+                [{"chunk": {"bytes": b"Async agent response"}}]
+            ),
+        },
+        expected_params={
+            "agentId": "async-agent-1",
+            "agentAliasId": "async-alias-1",
+            "sessionId": "async-session-123",
+            "inputText": "Hello async agent",
+        },
     )
-    with pytest.raises(ConnectionError):
+
+    with stubber:
+        response = await async_agent_client.invoke_agent(
+            agentId="async-agent-1",
+            agentAliasId="async-alias-1",
+            sessionId="async-session-123",
+            inputText="Hello async agent",
+        )
         async for _ in response["completion"]:
             pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_ID) == "async-agent-1"
+    )
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_agent_error(
+    async_agent_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber.add_client_error(
+        "invoke_agent",
+        service_error_code="ResourceNotFoundException",
+        service_message="Agent not found",
+        http_status_code=404,
+    )
+
+    with stubber:
+        with pytest.raises(ClientError):
+            await async_agent_client.invoke_agent(
+                agentId="async-agent-1",
+                agentAliasId="async-alias-1",
+                sessionId="async-session-123",
+                inputText="Hello async agent",
+            )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) in (
+        "ResourceNotFoundException",
+        "botocore.errorfactory.ResourceNotFoundException",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_agent_stream_error(
+    async_agent_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "async-session-123",
+            "completion": _FailingAsyncEventStream(
+                [{"chunk": {"bytes": b"Async part 1"}}, {"fail": True}]
+            ),
+        },
+        expected_params={
+            "agentId": "async-agent-1",
+            "agentAliasId": "async-alias-1",
+            "sessionId": "async-session-123",
+            "inputText": "Hello async agent",
+        },
+    )
+
+    with stubber:
+        response = await async_agent_client.invoke_agent(
+            agentId="async-agent-1",
+            agentAliasId="async-alias-1",
+            sessionId="async-session-123",
+            inputText="Hello async agent",
+        )
+        with pytest.raises(ConnectionError):
+            async for _ in response["completion"]:
+                pass
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -639,19 +765,62 @@ async def test_async_invoke_agent_stream_error(
 
 
 @pytest.mark.asyncio
-async def test_async_retrieve_with_content(
-    tracer_provider,
+async def test_async_invoke_agent_caller_error_during_stream(
+    async_agent_client,
+    instrument_with_content,
     span_exporter,
-    monkeypatch,
 ) -> None:
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "async-session-123",
+            "completion": _MockAsyncEventStream(
+                [
+                    {"chunk": {"bytes": b"part 1"}},
+                    {"chunk": {"bytes": b"part 2"}},
+                ]
+            ),
+        },
+        expected_params={
+            "agentId": "async-agent-1",
+            "agentAliasId": "async-alias-1",
+            "sessionId": "async-session-123",
+            "inputText": "Hello async agent",
+        },
     )
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    client = _async_agent_client()
 
-    async def mock_make_api_call(operation_name, api_params):
-        return {
+    with stubber:
+        response = await async_agent_client.invoke_agent(
+            agentId="async-agent-1",
+            agentAliasId="async-alias-1",
+            sessionId="async-session-123",
+            inputText="Hello async agent",
+        )
+        with pytest.raises(RuntimeError):
+            async with response["completion"] as stream:
+                async for _ in stream:
+                    raise RuntimeError("caller error")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_with_content(
+    async_agent_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber.add_response(
+        "retrieve",
+        service_response={
             "retrievalResults": [
                 {
                     "content": {"text": "Async doc content"},
@@ -662,19 +831,25 @@ async def test_async_retrieve_with_content(
                     },
                 }
             ]
-        }
-
-    api_params = {
-        "knowledgeBaseId": "async-kb-12345",
-        "retrievalQuery": {"text": "Async retrieval query"},
-        "retrievalConfiguration": {
-            "vectorSearchConfiguration": {"numberOfResults": 1},
         },
-    }
-
-    response = await _make_aio_api_call_wrapper(handler)(
-        mock_make_api_call, client, ("Retrieve", api_params), {}
+        expected_params={
+            "knowledgeBaseId": "async-kb-12345",
+            "retrievalQuery": {"text": "Async retrieval query"},
+            "retrievalConfiguration": {
+                "vectorSearchConfiguration": {"numberOfResults": 1},
+            },
+        },
     )
+
+    with stubber:
+        response = await async_agent_client.retrieve(
+            knowledgeBaseId="async-kb-12345",
+            retrievalQuery={"text": "Async retrieval query"},
+            retrievalConfiguration={
+                "vectorSearchConfiguration": {"numberOfResults": 1},
+            },
+        )
+
     assert len(response["retrievalResults"]) == 1
 
     spans = span_exporter.get_finished_spans()
@@ -705,27 +880,30 @@ async def test_async_retrieve_with_content(
 
 @pytest.mark.asyncio
 async def test_async_retrieve_error(
-    tracer_provider,
+    async_agent_client,
+    instrument_with_content,
     span_exporter,
 ) -> None:
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    client = _async_agent_client()
+    stubber = Stubber(async_agent_client)
+    stubber.add_client_error(
+        "retrieve",
+        service_error_code="ValidationException",
+        service_message="Invalid KB ID",
+        http_status_code=400,
+    )
 
-    async def mock_make_api_call(operation_name, api_params):
-        raise ValueError("Invalid KB ID")
-
-    api_params = {
-        "knowledgeBaseId": "invalid-kb-12345",
-        "retrievalQuery": {"text": "Query"},
-    }
-
-    with pytest.raises(ValueError):
-        await _make_aio_api_call_wrapper(handler)(
-            mock_make_api_call, client, ("Retrieve", api_params), {}
-        )
+    with stubber:
+        with pytest.raises(ClientError):
+            await async_agent_client.retrieve(
+                knowledgeBaseId="invalid-kb-12345",
+                retrievalQuery={"text": "Query"},
+            )
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ValueError"
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) in (
+        "ValidationException",
+        "botocore.errorfactory.ValidationException",
+    )
