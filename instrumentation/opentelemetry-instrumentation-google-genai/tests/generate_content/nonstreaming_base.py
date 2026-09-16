@@ -126,41 +126,7 @@ class NonStreamingTestCase(TestCase):
                 "type": "google_maps",
             },
         )
-        # Without content capture only the properties the semconv schema marks
-        # as required are recorded.
-        self.base_tools_definition_required_only = (
-            {
-                "name": "_mock_callable_tool",
-                "type": "function",
-            },
-            {
-                "name": "mock_tool",
-                "type": "function",
-            },
-            {
-                "name": "google_maps",
-                "type": "google_maps",
-            },
-        )
         if _is_mcp_imported:
-            self.mcp_tools_required_only = (
-                (
-                    {
-                        "name": "mcp_tool",
-                        "type": "function",
-                    },
-                ),
-                (
-                    {
-                        "name": "mcp_tool",
-                        "type": "function",
-                    },
-                    {
-                        "name": "mcp_tool",
-                        "type": "function",
-                    },
-                ),
-            )
             self.mcp_tools_with_content = (
                 (
                     {
@@ -510,19 +476,7 @@ class NonStreamingTestCase(TestCase):
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
             event.attributes,
         )
-        if _is_mcp_imported:
-            self.assertIn(
-                event.attributes[GEN_AI_TOOL_DEFINITIONS],
-                [
-                    self.base_tools_definition_required_only + mcp_var
-                    for mcp_var in self.mcp_tools_required_only
-                ],
-            )
-        else:
-            self.assertEqual(
-                event.attributes[GEN_AI_TOOL_DEFINITIONS],
-                self.base_tools_definition_required_only,
-            )
+        self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, event.attributes)
 
     @patch.dict(
         "os.environ",
@@ -651,19 +605,7 @@ class NonStreamingTestCase(TestCase):
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
         ):
             self.assertNotIn(attribute, span.attributes)
-        if _is_mcp_imported:
-            self.assertIn(
-                span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                [
-                    '[{"name":"_mock_callable_tool","type":"function"},{"name":"mock_tool","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","type":"function"},{"name":"mcp_tool","type":"function"}]',
-                    '[{"name":"_mock_callable_tool","type":"function"},{"name":"mock_tool","type":"function"},{"name":"google_maps","type":"google_maps"},{"name":"mcp_tool","type":"function"}]',
-                ],
-            )
-        else:
-            self.assertEqual(
-                span.attributes[GEN_AI_TOOL_DEFINITIONS],
-                '[{"name":"_mock_callable_tool","type":"function"},{"name":"mock_tool","type":"function"},{"name":"google_maps","type":"google_maps"}]',
-            )
+        self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, span.attributes)
 
     @patch.dict(
         "os.environ",

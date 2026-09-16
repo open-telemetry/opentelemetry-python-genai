@@ -50,7 +50,6 @@ from .test_utils import (
     REASONING_PROMPT,
     REFUSAL_PROMPT,
     REFUSAL_TEXT,
-    EXPECTED_TOOL_DEFINITIONS_NO_CONTENT,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
@@ -1047,10 +1046,7 @@ def chat_completion_tool_call(
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
         if not expect_content:
-            assert_messages_attribute(
-                spans[0].attributes["gen_ai.tool.definitions"],
-                EXPECTED_TOOL_DEFINITIONS_NO_CONTENT,
-            )
+            assert "gen_ai.tool.definitions" not in spans[0].attributes
             assert "gen_ai.tool.definitions" not in spans[1].attributes
         else:
             # first call

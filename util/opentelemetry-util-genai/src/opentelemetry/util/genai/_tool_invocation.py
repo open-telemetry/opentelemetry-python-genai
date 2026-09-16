@@ -115,7 +115,7 @@ class ToolInvocation(GenAIInvocation):
         optional_attrs = (
             (GenAI.GEN_AI_TOOL_NAME, self._name),
             (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
-            (GenAI.GEN_AI_TOOL_DESCRIPTION, self._tool_description),
+            (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
         )
         return {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,

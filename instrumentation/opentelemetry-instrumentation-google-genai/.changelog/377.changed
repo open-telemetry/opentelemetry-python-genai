@@ -1,1 +1,1 @@
-Tool definitions omit non-required properties when content capture is disabled
+Tool definitions are not emitted when content capture is disabled

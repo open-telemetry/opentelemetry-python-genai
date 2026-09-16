@@ -137,7 +137,7 @@ def test_prepare_tool_definitions_deduplication() -> None:
 
 
 def test_agent_run_with_tools(
-    instrument_agno_with_content,
+    instrument_agno_content_capture,
     span_exporter,
 ) -> None:
     """Test that Agent.run emits gen_ai.tool.definitions when tools are present."""
@@ -186,7 +186,7 @@ def test_agent_run_with_tools(
 
 
 def test_agent_arun_with_tools(
-    instrument_agno_with_content,
+    instrument_agno_content_capture,
     span_exporter,
 ) -> None:
     """Test that Agent.arun emits gen_ai.tool.definitions when tools are present."""
@@ -258,13 +258,11 @@ def test_agent_run_without_tools(
     assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
-def test_agent_run_tool_definitions_omit_optional_properties_without_content_capture(
+def test_agent_run_omits_tool_definitions_without_content_capture(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Tool definitions carry the (sensitive) description and parameters and
-    must not be emitted on the span when span content capture is disabled
-    (NO_CONTENT or EVENT_ONLY)."""
+    """Tool definitions are opt-in and omitted without content capture."""
 
     def sample_tool(location: str) -> str:
         """Get weather for location."""
@@ -288,8 +286,4 @@ def test_agent_run_tool_definitions_omit_optional_properties_without_content_cap
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_agent test-tools-no-capture-agent"
-
-    tool_defs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
-    )
-    assert tool_defs == [{"name": "sample_tool", "type": "function"}]
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes

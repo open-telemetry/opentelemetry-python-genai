@@ -851,17 +851,12 @@ def test_chat_openai_responses_api_input_image_llm_call(
     assert _REAL_PNG_B64 in input_message
 
 
-def test_chat_openai_legacy_function_call_no_content_tool_definitions_required_only(
+def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
     span_exporter,
     start_instrumentation,
     chat_openai_legacy_functions,
-    monkeypatch,
     vcr,
 ):
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "NO_CONTENT"
-    )
-
     functions = [
         {
             "name": "get_current_weather",
@@ -899,16 +894,9 @@ def test_chat_openai_legacy_function_call_no_content_tool_definitions_required_o
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-
-    tool_definitions = span.attributes.get(
-        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
+    assert (
+        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
     )
-    # Tool definitions carry sensitive description / parameters and must not
-    # be emitted on the span when content capture is disabled.
-    assert tool_definitions is not None
-    assert '"name":"get_current_weather"' in tool_definitions
-    assert '"description"' not in tool_definitions
-    assert '"location"' not in tool_definitions
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py

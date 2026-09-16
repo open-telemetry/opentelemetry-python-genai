@@ -1193,10 +1193,7 @@ def test_apply_request_attributes_captures_tool_definitions(loaded_module):
 def test_set_fetch_response_attributes_captures_tool_definitions(
     loaded_module,
 ):
-    """Tool definitions are captured regardless of content capture.
-
-    util-genai keeps only the semconv-required fields when capture is off.
-    """
+    """Fetched definitions are extracted; util-genai gates their emission."""
     response = _make_response(
         status="completed",
         tools=[
