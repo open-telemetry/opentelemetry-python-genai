@@ -494,12 +494,10 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert invocation.span is not INVALID_SPAN
         assert not invocation.attributes
 
-    def test_constructor_agent_id_and_version(self):
-        invocation = self.handler.invoke_remote_agent(
-            "openai",
-            agent_id="agent-999",
-            agent_version="2.0.0",
-        )
+    def test_agent_id_and_version(self):
+        invocation = self.handler.invoke_remote_agent("openai")
+        invocation.agent_id = "agent-999"
+        invocation.agent_version = "2.0.0"
         invocation.stop()
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_AGENT_ID] == "agent-999"
