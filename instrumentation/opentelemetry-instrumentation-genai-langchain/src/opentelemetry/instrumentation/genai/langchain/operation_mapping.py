@@ -240,7 +240,7 @@ def _should_ignore_chain(
 
 
 def classify_chain_run(
-    serialized: dict[str, Any],
+    serialized: dict[str, Any] | None,
     metadata: dict[str, Any] | None,
     kwargs: dict[str, Any],
     parent_run_id: UUID | None = None,
