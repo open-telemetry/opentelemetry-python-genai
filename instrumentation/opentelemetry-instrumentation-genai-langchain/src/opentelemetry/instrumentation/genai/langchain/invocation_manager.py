@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -14,6 +15,8 @@ class _InvocationState:
     invocation: GenAIInvocation | None
     children: list[UUID] = field(default_factory=lambda: list())
     parent_run_id: UUID | None = None
+    prompt_name: str | None = None
+    prompt_variables: Mapping[str, object] | None = None
     ended: bool = False
 
 
@@ -47,6 +50,29 @@ class _InvocationManager:
     def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.parent_run_id if invocation_state else None
+
+    def set_prompt_context(
+        self,
+        run_id: UUID,
+        name: str | None,
+        variables: Mapping[str, object],
+    ) -> None:
+        invocation_state = self._invocations.get(run_id)
+        if invocation_state is None:
+            return
+        invocation_state.prompt_name = name
+        invocation_state.prompt_variables = dict(variables)
+
+    def get_prompt_context(
+        self, run_id: UUID
+    ) -> tuple[str | None, Mapping[str, object]] | None:
+        invocation_state = self._invocations.get(run_id)
+        if (
+            invocation_state is None
+            or invocation_state.prompt_variables is None
+        ):
+            return None
+        return invocation_state.prompt_name, invocation_state.prompt_variables
 
     def delete_invocation_state(self, run_id: UUID) -> None:
         invocation_state = self._invocations.get(run_id)

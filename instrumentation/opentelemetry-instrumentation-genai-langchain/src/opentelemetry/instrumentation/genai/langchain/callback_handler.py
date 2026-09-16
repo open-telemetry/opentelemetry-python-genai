@@ -69,6 +69,7 @@ CONVERSATION_ID_METADATA_KEYS = (
     "session_id",
     "conversation_id",
 )
+_PROMPT_TEMPLATE_TYPES = {"PromptTemplate", "ChatPromptTemplate"}
 
 
 def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
@@ -296,6 +297,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 run_id, parent_run_id, None
             )
 
+        template_type = serialized.get("name") if serialized is not None else None
+        if template_type in _PROMPT_TEMPLATE_TYPES:
+            self._invocation_manager.set_prompt_context(
+                parent_run_id or run_id,
+                name=(metadata or {}).get("prompt_name") or template_type,
+                variables=inputs,
+            )
+
     def on_chain_end(
         self,
         outputs: dict[str, Any],
@@ -439,6 +448,15 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
+        if parent_run_id is not None:
+            prompt_context = self._invocation_manager.get_prompt_context(
+                parent_run_id
+            )
+            if prompt_context is not None:
+                (
+                    llm_invocation.prompt_name,
+                    llm_invocation.prompt_variables,
+                ) = prompt_context
         llm_invocation.top_p = top_p
         llm_invocation.top_k = top_k
         llm_invocation.request_choice_count = request_choice_count
