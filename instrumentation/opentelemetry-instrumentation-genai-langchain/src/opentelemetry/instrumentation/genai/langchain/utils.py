@@ -616,7 +616,7 @@ def resolve_response_model_and_id(
     return response_model, response_id
 
 
-def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
+def extract_token_details(usage_metadata: Mapping[str, Any]) -> dict[str, int]:
     """Extract cache, reasoning, and modality token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
@@ -672,3 +672,29 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
         token_details["audio_output_tokens"] = audio_out
 
     return token_details
+
+
+def extract_usage_tokens(
+    usage_metadata: Mapping[str, Any],
+) -> tuple[
+    int | None,
+    int | None,
+]:
+    """Extract input and output token counts from LangChain usage mappings."""
+
+    input_tokens = _first_int_value(
+        usage_metadata.get("input_tokens"),
+        usage_metadata.get("prompt_tokens"),
+    )
+    output_tokens = _first_int_value(
+        usage_metadata.get("output_tokens"),
+        usage_metadata.get("completion_tokens"),
+    )
+    return input_tokens, output_tokens
+
+
+def _first_int_value(*values: Any) -> int | None:
+    for value in values:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
