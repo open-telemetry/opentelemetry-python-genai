@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
@@ -100,6 +100,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_name: str = span_name
         self._span_kind: SpanKind = span_kind
         self._context_token: ContextToken | None = None
+        self._finished: bool = False
         self._monotonic_start_s: float
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
@@ -151,6 +152,35 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)
 
+    def suspend(self) -> None:
+        """Restore the context that was current before this invocation started.
+
+        Call this when handing control back to the caller while the invocation
+        is still running -- returning a stream the caller has not drained yet,
+        for example -- so unrelated caller work is not parented under this
+        invocation's span. Idempotent, and pairs with ``activate``.
+        """
+        token, self._context_token = self._context_token, None
+        if token is not None:
+            detach(token)
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        """Make this invocation's span the current span inside the block.
+
+        Restores the previous context on exit. A no-op when the span is
+        already current, so a nested block leaves the outermost one to restore
+        it, and a no-op once the invocation has finished.
+        """
+        if self._finished or self._context_token is not None:
+            yield
+            return
+        self._context_token = attach(self._span_context)
+        try:
+            yield
+        finally:
+            self.suspend()
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
         return self.metric_attributes
@@ -161,7 +191,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def record_stream_chunk(self) -> None:
         """Mark the request as streamed and record one output chunk arriving."""
-        if self._context_token is None:
+        if self._finished:
             return
         self._request_stream = True
         self._on_stream_chunk(timeit.default_timer())
@@ -259,18 +289,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def _finish(self, error: Error | None = None) -> None:
         """Apply finish telemetry and end the span. Finishes at most once."""
-        if self._context_token is None:
+        if self._finished:
             return
-        # Clear up front so a nested or repeated finish is a no-op even if
+        # Set up front so a nested or repeated finish is a no-op even if
         # _apply_finish raises.
-        context_token, self._context_token = self._context_token, None
+        self._finished = True
         try:
             self._apply_finish(error)
         finally:
-            try:
-                detach(context_token)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            self.suspend()
             self.span.end()
 
     def stop(self) -> None:
