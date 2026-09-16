@@ -152,7 +152,7 @@ class RawResponseStreamProxy(ObjectProxy):
             return
         try:
             finalize()
-        except BaseException:  # pylint: disable=broad-exception-caught
+        except Exception:  # pylint: disable=broad-exception-caught
             # The caller already walked away; nobody is left to raise at.
             _logger.debug(
                 "error finalizing an abandoned raw response", exc_info=True
@@ -168,7 +168,7 @@ class RawResponseStreamProxy(ObjectProxy):
             result = finalize()
             if inspect.isawaitable(result):
                 await result
-        except BaseException:  # pylint: disable=broad-exception-caught
+        except Exception:  # pylint: disable=broad-exception-caught
             # See _finalize_once.
             _logger.debug(
                 "error finalizing an abandoned raw response", exc_info=True
