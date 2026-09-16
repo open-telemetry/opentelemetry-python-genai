@@ -39,6 +39,8 @@
 
 llama-index-core~=0.14.24
 llama-index-llms-openai
+# 2.24.0 uses workflow instances as WeakKeyDictionary keys, but agents are unhashable.
+llama-index-workflows!=2.24.0
 wrapt==2.4.1
 -e instrumentation/opentelemetry-instrumentation-genai-openai
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
