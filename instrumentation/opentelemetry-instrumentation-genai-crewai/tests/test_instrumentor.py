@@ -118,7 +118,10 @@ def test_keep_crewai_telemetry_leaves_it_unpatched(
 ) -> None:
     from crewai.telemetry.telemetry import Telemetry
 
-    original = inspect.getattr_static(Telemetry, "_safe_telemetry_operation")
+    originals = {
+        (cls, method): inspect.getattr_static(cls, method)
+        for cls, method in _patched_methods()
+    }
     instrumentor = CrewAIInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,
@@ -127,18 +130,16 @@ def test_keep_crewai_telemetry_leaves_it_unpatched(
         disable_crewai_telemetry=False,
     )
     try:
-        assert (
-            inspect.getattr_static(Telemetry, "_safe_telemetry_operation")
-            is original
-        )
-        for cls, method in _patched_methods()[:-1]:
-            assert inspect.getattr_static(cls, method) is not original
+        for cls, method in _patched_methods():
+            patched = inspect.getattr_static(cls, method)
+            if cls is Telemetry:
+                assert patched is originals[(cls, method)]
+            else:
+                assert patched is not originals[(cls, method)]
     finally:
         instrumentor.uninstrument()
-    assert (
-        inspect.getattr_static(Telemetry, "_safe_telemetry_operation")
-        is original
-    )
+    for cls, method in _patched_methods():
+        assert inspect.getattr_static(cls, method) is originals[(cls, method)]
 
 
 def test_missing_telemetry_choke_point_warns_and_still_instruments(

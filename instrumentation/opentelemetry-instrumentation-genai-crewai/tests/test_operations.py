@@ -95,6 +95,20 @@ def test_tool_error_is_reraised_and_recorded(
     assert span.attributes["error.type"] == "LookupError"
 
 
+def test_structured_tool_error_is_reraised_and_recorded(
+    instrument_crewai,
+    span_exporter,
+) -> None:
+    with pytest.raises(LookupError, match="tool failed"):
+        FailingTool().to_structured_tool().invoke({})
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "execute_tool fail"
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes["error.type"] == "LookupError"
+
+
 @pytest.mark.parametrize("structured", [False, True])
 def test_tool_instrumentation_suppression(
     instrument_crewai,
