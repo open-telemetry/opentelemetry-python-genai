@@ -14,9 +14,11 @@ logged at debug level instead of surfacing to the application.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
+import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, cast
 
 from crewai.agent.core import Agent
@@ -31,6 +33,7 @@ from opentelemetry.context import (
     get_value,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import LocalAgentInvocation
 
 from ._messages import (
     CrewAITool,
@@ -96,6 +99,66 @@ def _request_model(agent: Agent) -> str | None:
     return None
 
 
+@contextlib.contextmanager
+def _agent_invocation(
+    handler: TelemetryHandler,
+    agent: Agent,
+    collect_input: Callable[[LocalAgentInvocation], None],
+) -> Iterator[LocalAgentInvocation]:
+    """Open an ``invoke_agent`` invocation for a CrewAI agent.
+
+    The invocation is named after the agent's ``role`` and carries its
+    ``goal`` as description and its LLM model as request model. While the
+    body runs, ``_current_agent_name`` names this agent so tool spans can be
+    attributed to it. The invocation is finalized by the handler's context
+    manager on exit, as success or with the raised exception.
+
+    Args:
+        handler: Telemetry handler used to create the invocation.
+        agent: The agent being invoked.
+        collect_input: Sets call-specific attributes (tool definitions,
+            input messages) on the invocation; failures are logged, not
+            raised.
+
+    Yields:
+        The open invocation, for recording the output.
+    """
+    agent_name = agent.role
+    with handler.invoke_local_agent(
+        agent_name=agent_name, request_model=_request_model(agent)
+    ) as invocation:
+
+        def collect() -> None:
+            invocation.agent_description = agent.goal or None
+            collect_input(invocation)
+
+        _set_metadata_safely(collect)
+        token = _current_agent_name.set(agent_name)
+        try:
+            yield invocation
+        finally:
+            _current_agent_name.reset(token)
+
+
+def _record_agent_output(
+    invocation: LocalAgentInvocation, result: object
+) -> None:
+    """Record an agent's return value as the invocation output.
+
+    Args:
+        invocation: The open agent invocation.
+        result: The value returned by the wrapped CrewAI method.
+    """
+    if invocation.should_capture_content:
+        _set_metadata_safely(
+            lambda: setattr(
+                invocation,
+                "output_messages",
+                output_to_output_messages(result),
+            )
+        )
+
+
 def agent_execute_task(handler: TelemetryHandler) -> Callable[..., Any]:
     """Build the wrapper for ``Agent.execute_task(task, context, tools)``.
 
@@ -127,46 +190,24 @@ def agent_execute_task(handler: TelemetryHandler) -> Callable[..., Any]:
         if _suppressed():
             return wrapped(*args, **kwargs)
 
-        agent_name = instance.role
-        with handler.invoke_local_agent(
-            agent_name=agent_name,
-            request_model=_request_model(instance),
-        ) as invocation:
-
-            def collect_input() -> None:
-                bound = bind_call_arguments(wrapped, args, kwargs)
-                tools: list[CrewAITool] | None = crewai_tools(
-                    bound.get("tools")
+        def collect_input(invocation: LocalAgentInvocation) -> None:
+            bound = bind_call_arguments(wrapped, args, kwargs)
+            tools: list[CrewAITool] | None = crewai_tools(bound.get("tools"))
+            if tools is None:
+                tools = crewai_tools(instance.tools)
+            invocation.tool_definitions = agent_tool_definitions(tools)
+            task: object = bound.get("task")
+            context: object = bound.get("context")
+            if invocation.should_capture_content and isinstance(task, Task):
+                invocation.input_messages = task_to_input_messages(
+                    task,
+                    context=context if isinstance(context, str) else None,
                 )
-                if tools is None:
-                    tools = crewai_tools(instance.tools)
-                invocation.agent_description = instance.goal or None
-                invocation.tool_definitions = agent_tool_definitions(tools)
-                task: object = bound.get("task")
-                context: object = bound.get("context")
-                if invocation.should_capture_content and isinstance(
-                    task, Task
-                ):
-                    invocation.input_messages = task_to_input_messages(
-                        task,
-                        context=context if isinstance(context, str) else None,
-                    )
 
-            _set_metadata_safely(collect_input)
-            token = _current_agent_name.set(agent_name)
-            try:
-                result = wrapped(*args, **kwargs)
-                if invocation.should_capture_content:
-                    _set_metadata_safely(
-                        lambda: setattr(
-                            invocation,
-                            "output_messages",
-                            output_to_output_messages(result),
-                        )
-                    )
-                return result
-            finally:
-                _current_agent_name.reset(token)
+        with _agent_invocation(handler, instance, collect_input) as invocation:
+            result = wrapped(*args, **kwargs)
+            _record_agent_output(invocation, result)
+            return result
 
     return wrapper
 
@@ -180,9 +221,10 @@ def agent_kickoff(handler: TelemetryHandler) -> Callable[..., Any]:
     of role/content messages) becomes the input and ``LiteAgentOutput.raw``
     the output.
 
-    When an event loop is already running, CrewAI returns a coroutine from
-    ``kickoff`` instead of executing; the call is passed through without a
-    span rather than closing one before the work has happened.
+    When an event loop is already running (for example inside a ``Flow``),
+    CrewAI returns a coroutine from ``kickoff`` instead of executing. The
+    coroutine is wrapped so the invocation opens when it is awaited and
+    closes when it completes, rather than around the un-started coroutine.
 
     Args:
         handler: Telemetry handler used to create the invocation.
@@ -200,47 +242,44 @@ def agent_kickoff(handler: TelemetryHandler) -> Callable[..., Any]:
     ) -> Any:
         if _suppressed():
             return wrapped(*args, **kwargs)
+
+        def collect_input(invocation: LocalAgentInvocation) -> None:
+            invocation.tool_definitions = agent_tool_definitions(
+                crewai_tools(instance.tools)
+            )
+            if invocation.should_capture_content:
+                bound = bind_call_arguments(wrapped, args, kwargs)
+                messages: object = bound.get("messages")
+                if isinstance(messages, (str, list)):
+                    invocation.input_messages = messages_to_input_messages(
+                        cast("str | list[LLMMessage]", messages)
+                    )
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            pass
-        else:
-            return wrapped(*args, **kwargs)
-
-        agent_name = instance.role
-        with handler.invoke_local_agent(
-            agent_name=agent_name,
-            request_model=_request_model(instance),
-        ) as invocation:
-
-            def collect_input() -> None:
-                invocation.agent_description = instance.goal or None
-                invocation.tool_definitions = agent_tool_definitions(
-                    crewai_tools(instance.tools)
-                )
-                if invocation.should_capture_content:
-                    bound = bind_call_arguments(wrapped, args, kwargs)
-                    messages: object = bound.get("messages")
-                    if isinstance(messages, (str, list)):
-                        invocation.input_messages = messages_to_input_messages(
-                            cast("str | list[LLMMessage]", messages)
-                        )
-
-            _set_metadata_safely(collect_input)
-            token = _current_agent_name.set(agent_name)
-            try:
+            with _agent_invocation(
+                handler, instance, collect_input
+            ) as invocation:
                 result = wrapped(*args, **kwargs)
-                if invocation.should_capture_content:
-                    _set_metadata_safely(
-                        lambda: setattr(
-                            invocation,
-                            "output_messages",
-                            output_to_output_messages(result),
-                        )
-                    )
+                _record_agent_output(invocation, result)
                 return result
-            finally:
-                _current_agent_name.reset(token)
+
+        # Calling kickoff here only builds the kickoff_async coroutine; the
+        # agent runs when the caller awaits it.
+        awaitable = wrapped(*args, **kwargs)
+        if not inspect.isawaitable(awaitable):
+            return awaitable
+
+        async def traced() -> object:
+            with _agent_invocation(
+                handler, instance, collect_input
+            ) as invocation:
+                result: object = await awaitable
+                _record_agent_output(invocation, result)
+                return result
+
+        return traced()
 
     return wrapper
 

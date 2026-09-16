@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from typing import Any
 from unittest.mock import patch
@@ -374,18 +375,75 @@ def test_metadata_failure_does_not_affect_call(
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in agent_span.attributes
 
 
-def test_kickoff_in_running_loop_is_not_instrumented(
+def test_kickoff_error_is_reraised_and_recorded(
     instrument_crewai,
     span_exporter,
 ) -> None:
+    agent = _agent(FailingLLM([]))
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        agent.kickoff("Say hello")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "invoke_agent Researcher"
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes["error.type"] == "RuntimeError"
+    assert _current_agent_name.get() is None
+
+
+def test_kickoff_in_running_loop_is_instrumented_when_awaited(
+    instrument_crewai_with_content,
+    span_exporter,
+    tracer_provider: TracerProvider,
+) -> None:
     agent = _agent(ScriptedLLM(["Hello from async kickoff"]))
+    tracer = tracer_provider.get_tracer("app")
 
     async def run() -> None:
-        result = await agent.kickoff("Say hello")
-        assert result.raw == "Hello from async kickoff"
+        with tracer.start_as_current_span("flow step"):
+            awaitable = agent.kickoff("Say hello")
+            # CrewAI hands back a coroutine here; nothing runs until awaited.
+            assert inspect.iscoroutine(awaitable)
+            assert span_exporter.get_finished_spans() == ()
+            result = await awaitable
+            assert result.raw == "Hello from async kickoff"
+            assert _current_agent_name.get() is None
 
     asyncio.run(run())
-    assert span_exporter.get_finished_spans() == ()
+
+    spans = span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == [
+        "invoke_agent Researcher",
+        "flow step",
+    ]
+    agent_span, app_span = spans
+    _assert_child_of(agent_span, app_span)
+    assert (
+        json.loads(
+            agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+        )[0]["parts"][0]["content"]
+        == "Hello from async kickoff"
+    )
+
+
+def test_kickoff_in_running_loop_error_is_reraised_and_recorded(
+    instrument_crewai,
+    span_exporter,
+) -> None:
+    agent = _agent(FailingLLM([]))
+
+    async def run() -> None:
+        with pytest.raises(RuntimeError, match="model failed"):
+            await agent.kickoff("Say hello")
+
+    asyncio.run(run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes["error.type"] == "RuntimeError"
+    assert _current_agent_name.get() is None
 
 
 def test_agent_instrumentation_suppression(
