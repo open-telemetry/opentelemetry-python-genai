@@ -305,14 +305,36 @@ def test_file_document_source_converts_to_file_part():
     assert part.modality == "document"
 
 
-def test_plain_text_document_source_converts_to_blob_part():
+def test_text_document_source_preserves_media_type():
     parts = convert_content_to_parts(
         [
             {
                 "type": "document",
                 "source": {
                     "type": "text",
-                    "media_type": "text/plain",
+                    "media_type": "text/markdown",
+                    "data": "Document text",
+                },
+            }
+        ]
+    )
+
+    assert len(parts) == 1
+    part = parts[0]
+    assert isinstance(part, BlobPart)
+    assert part.content == b"Document text"
+    assert part.mime_type == "text/markdown"
+    assert part.modality == "document"
+
+
+def test_text_document_source_defaults_non_string_media_type():
+    parts = convert_content_to_parts(
+        [
+            {
+                "type": "document",
+                "source": {
+                    "type": "text",
+                    "media_type": 123,
                     "data": "Document text",
                 },
             }

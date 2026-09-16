@@ -181,9 +181,12 @@ def _extract_document_source(source: object) -> list[MessagePart]:
     if source_type == "text":
         data = source_dict.get("data")
         if isinstance(data, str):
+            media_type = source_dict.get("media_type")
             return [
                 BlobPart(
-                    mime_type="text/plain",
+                    mime_type=media_type
+                    if isinstance(media_type, str)
+                    else "text/plain",
                     modality="document",
                     content=data.encode(),
                 )
@@ -323,7 +326,7 @@ def convert_content_to_parts(
         return [TextPart(content=content)]
     parts: list[MessagePart] = []
     for item in content:
-        if hasattr(item, "get"):
+        if isinstance(item, Mapping):
             item_mapping = cast(Mapping[str, object], item)
             if item_mapping.get("type") == "document":
                 parts.extend(_convert_document_block(item_mapping))
