@@ -192,6 +192,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        serialized = serialized or {}
         parent_agent, ancestor_agent_names = self._find_agent_context(
             parent_run_id
         )
@@ -297,9 +298,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 run_id, parent_run_id, None
             )
 
-        template_type = (
-            serialized.get("name") if serialized is not None else None
-        )
+        template_type = serialized.get("name")
         if template_type in _PROMPT_TEMPLATE_TYPES:
             self._invocation_manager.set_prompt_context(
                 parent_run_id or run_id,
