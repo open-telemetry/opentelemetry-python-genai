@@ -83,6 +83,10 @@ _REAL_PNG_B64 = (
 _ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
 
 
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
 @pytest.mark.vcr()
 def test_chat_openai_prompt_template(
     span_exporter, tracer_provider, meter_provider, logger_provider, vcr
@@ -122,6 +126,10 @@ def test_chat_openai_prompt_template(
     )
 
 
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
 @pytest.mark.vcr()
 def test_chat_openai_chat_prompt_template(
     span_exporter, tracer_provider, meter_provider, logger_provider, vcr
