@@ -457,9 +457,7 @@ def test_sync_chat_completions_tools_default_no_content_capture(
         assert len(spans) == 1
         span = spans[0]
 
-        assert (
-            GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
-        )
+        assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
         # Input messages should not be captured when content capture is off
         assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
 

@@ -739,9 +739,7 @@ def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert (
-        gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
-    )
+    assert gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
