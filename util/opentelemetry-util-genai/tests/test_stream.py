@@ -236,6 +236,21 @@ def test_sync_stream_wrapper_stop_iteration_does_not_double_finalize():
     assert not wrapper._self_failures
 
 
+def test_sync_stream_wrapper_close_handles_stream_without_close_method():
+    class NoCloseStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return "a"
+
+    stream = NoCloseStream()
+    wrapper = _TestSyncStreamWrapper(stream)
+    wrapper.close()
+    assert wrapper._self_stop_count == 1
+    assert not wrapper._self_failures
+
+
 class _FakeAsyncStream:
     def __init__(self, chunks=None, error=None, close_error=None):
         self._chunks = list(chunks or [])
@@ -1444,3 +1459,28 @@ def test_sync_tool_stream_wrapper_restores_context_when_abandoned_via_close():
     assert get_current_span() is caller_span
     assert invocation._context_token is None
     assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_sync_tool_stream_wrapper_close_with_generic_iterator_without_close():
+    invocation, span_exporter = _started_tool_invocation()
+    wrapper = SyncToolStreamWrapper(iter(["a", "b"]), invocation)
+    assert next(wrapper) == "a"
+    wrapper.close()
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_sync_tool_stream_wrapper_propagates_invocation_to_base():
+    invocation, _ = _started_tool_invocation()
+    wrapper = SyncToolStreamWrapper(iter(["a", "b"]), invocation)
+    assert wrapper._self_invocation is invocation
+    assert invocation._request_stream is True
+
+
+def test_async_tool_stream_wrapper_propagates_invocation_to_base():
+    async def fake_async_iter():
+        yield "a"
+
+    invocation, _ = _started_tool_invocation()
+    wrapper = AsyncToolStreamWrapper(fake_async_iter(), invocation)
+    assert wrapper._self_invocation is invocation
+    assert invocation._request_stream is True

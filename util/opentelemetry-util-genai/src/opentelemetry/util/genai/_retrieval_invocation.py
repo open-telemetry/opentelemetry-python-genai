@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict, is_dataclass
 from typing import Any, Final
 
 from opentelemetry._logs import Logger
@@ -15,6 +16,7 @@ from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     gen_ai_json_dumps,
@@ -79,7 +81,9 @@ class RetrievalInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.top_k: int | None = None
         self.query_text: str | None = None
-        self.documents: Sequence[Mapping[str, Any]] | None = None
+        self.documents: (
+            Sequence[RetrievalDocument | Mapping[str, Any]] | None
+        ) = None
         self._start(self._get_start_attributes())
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
@@ -117,14 +121,26 @@ class RetrievalInvocation(GenAIInvocation):
             or not self._should_capture_content_on_span
         ):
             return {}
+        docs_payload: str | None = None
+        if self.documents is not None:
+            serialized_docs: list[Any] = []
+            for doc in self.documents:
+                if is_dataclass(doc) and not isinstance(doc, type):
+                    serialized_docs.append(
+                        {k: v for k, v in asdict(doc).items() if v is not None}
+                    )
+                elif isinstance(doc, Mapping):
+                    serialized_docs.append(dict(doc))
+                else:
+                    serialized_docs.append(doc)
+            try:
+                docs_payload = gen_ai_json_dumps(serialized_docs)
+            except Exception:
+                docs_payload = None
+
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
             (GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT, self.query_text),
-            (
-                GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                gen_ai_json_dumps(self.documents)
-                if self.documents is not None
-                else None,
-            ),
+            (GenAI.GEN_AI_RETRIEVAL_DOCUMENTS, docs_payload),
         )
         return {k: v for k, v in optional_attrs if v is not None}
 

@@ -15,23 +15,30 @@ if TYPE_CHECKING:
 
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
+    RetrievalDocument,
     ToolDefinition,
 )
 
 
-def format_retrieval_document(doc: Document) -> dict[str, Any]:
-    """Format an Agno Document into a retrieval document dict."""
-    doc_dict: dict[str, Any] = {"content": doc.content}
-    if doc.id is not None:
-        doc_dict["id"] = str(doc.id)
+def format_retrieval_document(doc: Document) -> RetrievalDocument:
+    """Format an Agno Document into a RetrievalDocument model."""
+    score: float | None = None
     if doc.reranking_score is not None:
         try:
-            doc_dict["score"] = float(doc.reranking_score)
+            score = float(doc.reranking_score)
         except (ValueError, TypeError):
             pass
+
+    metadata: dict[str, Any] | None = None
     if doc.meta_data:
-        doc_dict["metadata"] = doc.meta_data
-    return doc_dict
+        metadata = dict(doc.meta_data)
+
+    return RetrievalDocument(
+        content=doc.content,
+        id=str(doc.id) if doc.id is not None else None,
+        score=score,
+        metadata=metadata,
+    )
 
 
 @runtime_checkable
@@ -141,11 +148,46 @@ def _extract_desc(tool: Any) -> str | None:
 
 
 def prepare_tool_definitions(
-    tools: Iterable[Any] | None,
+    tools: Iterable[Any] | str | None,
 ) -> list[ToolDefinition] | None:
     """Extract tool definitions from Agno Agent tools."""
     if not tools:
         return None
+
+    raw_tools: list[Any]
+    if isinstance(tools, str):
+        try:
+            parsed_str_val: Any = json.loads(tools)
+            if isinstance(parsed_str_val, list):
+                raw_tools = cast(list[Any], parsed_str_val)
+            elif isinstance(parsed_str_val, dict):
+                raw_tools = [cast(dict[str, Any], parsed_str_val)]
+            else:
+                return None
+        except Exception:
+            return None
+    elif (
+        isinstance(tools, (list, tuple))
+        and tools
+        and all(isinstance(c, str) and len(c) == 1 for c in tools)
+    ):
+        try:
+            parsed_coerced: Any = json.loads("".join(tools))
+            if isinstance(parsed_coerced, list):
+                raw_tools = cast(list[Any], parsed_coerced)
+            elif isinstance(parsed_coerced, dict):
+                raw_tools = [cast(dict[str, Any], parsed_coerced)]
+            else:
+                return None
+        except Exception:
+            return None
+    elif isinstance(tools, dict):
+        raw_tools = [cast(dict[str, Any], tools)]
+    else:
+        try:
+            raw_tools = list(tools)
+        except TypeError:
+            return None
 
     seen_names: set[str] = set()
     definitions: list[ToolDefinition] = []
@@ -162,7 +204,41 @@ def prepare_tool_definitions(
             )
         )
 
-    for tool in tools:
+    for tool_item in raw_tools:
+        tool: Any = tool_item
+        if isinstance(tool, str):
+            try:
+                parsed_tool: Any = json.loads(tool)
+                if isinstance(parsed_tool, dict):
+                    tool = cast(dict[str, Any], parsed_tool)
+                elif isinstance(parsed_tool, list):
+                    sub_defs = prepare_tool_definitions(
+                        cast(list[Any], parsed_tool)
+                    )
+                    if sub_defs:
+                        for defn in sub_defs:
+                            _add_def(
+                                str(_get_property_value(defn, "name") or ""),
+                                _get_property_value(defn, "description"),
+                                _get_property_value(defn, "parameters"),
+                            )
+                    continue
+                else:
+                    continue
+            except Exception:
+                continue
+
+        # Skip tool execution records (which have tool_call_id)
+        if isinstance(tool, dict) and "tool_call_id" in cast(
+            dict[str, Any], tool
+        ):
+            continue
+        if (
+            not isinstance(tool, dict)
+            and getattr(cast(object, tool), "tool_call_id", None) is not None
+        ):
+            continue
+
         if isinstance(tool, dict):
             if (
                 "type" in tool

@@ -165,7 +165,12 @@ class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
         if isinstance(o, bytes):
             return b64encode(o).decode()
-        return super().default(o)
+        if hasattr(o, "isoformat"):
+            return o.isoformat()
+        try:
+            return super().default(o)
+        except TypeError:
+            return str(o)
 
 
 gen_ai_json_dump = partial(

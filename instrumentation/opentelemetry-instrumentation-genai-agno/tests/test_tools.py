@@ -138,6 +138,84 @@ def test_prepare_tool_definitions_deduplication() -> None:
     assert result[0].name == "sample_tool"
 
 
+def test_prepare_tool_definitions_json_string() -> None:
+    json_tools = json.dumps(
+        [
+            {
+                "name": "calc",
+                "description": "Calculate math",
+                "parameters": {"type": "object"},
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup entity",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ]
+    )
+    result = prepare_tool_definitions(json_tools)
+    assert result is not None
+    assert len(result) == 2
+    assert result[0].name == "calc"
+    assert result[0].description == "Calculate math"
+    assert result[1].name == "lookup"
+    assert result[1].description == "Lookup entity"
+
+
+def test_prepare_tool_definitions_json_string_single_dict() -> None:
+    json_tool = json.dumps(
+        {
+            "name": "single_tool",
+            "description": "Single tool description",
+        }
+    )
+    result = prepare_tool_definitions(json_tool)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "single_tool"
+    assert result[0].description == "Single tool description"
+
+
+def test_prepare_tool_definitions_single_dict() -> None:
+    dict_tool = {
+        "name": "direct_dict_tool",
+        "description": "Direct dict description",
+    }
+    result = prepare_tool_definitions(dict_tool)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "direct_dict_tool"
+
+
+def test_prepare_tool_definitions_list_with_json_strings() -> None:
+    tools = [
+        json.dumps({"name": "stringified_tool", "description": "desc"}),
+    ]
+    result = prepare_tool_definitions(tools)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "stringified_tool"
+
+
+def test_prepare_tool_definitions_skips_tool_execution_records() -> None:
+    records = [
+        {"tool_call_id": "call_1", "tool_name": "calc", "result": "42"},
+        {"name": "actual_tool", "description": "An actual tool"},
+    ]
+    result = prepare_tool_definitions(records)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].name == "actual_tool"
+
+
+def test_prepare_tool_definitions_invalid_json() -> None:
+    assert prepare_tool_definitions("not a valid json") is None
+    assert prepare_tool_definitions(123) is None  # type: ignore[arg-type]
+
+
 def test_agent_run_with_tools(
     instrument_agno,
     span_exporter,

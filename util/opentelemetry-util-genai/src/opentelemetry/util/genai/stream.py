@@ -172,7 +172,9 @@ class SyncStreamWrapper(
 
     def close(self) -> None:
         try:
-            self._self_stream.close()
+            close_method = getattr(self._self_stream, "close", None)
+            if callable(close_method):
+                close_method()
         except BaseException as error:
             self._finalize_failure(error)
             raise
@@ -378,7 +380,7 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
         stream: _SyncStream[ChunkT],
         invocation: ToolInvocation,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_tool_invocation = invocation
         invocation.suspend()
         self._self_chunks: list[Any] = []
@@ -436,7 +438,7 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
         stream: _AsyncStream[ChunkT],
         invocation: ToolInvocation,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation=invocation)
         self._self_tool_invocation = invocation
         invocation.suspend()
         self._self_chunks: list[Any] = []
