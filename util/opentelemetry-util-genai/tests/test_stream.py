@@ -245,6 +245,27 @@ def test_sync_stream_wrapper_finalizes_abandoned_stream():
     assert stop_counts == [1]
 
 
+def test_sync_stream_wrapper_finalizes_stream_abandoned_by_break():
+    processed = []
+
+    class _RecordingWrapper(_TestSyncStreamWrapper):
+        def _on_stream_end(self):
+            super()._on_stream_end()
+            processed.append(list(self._self_processed))
+
+    def consume_first_chunk():
+        wrapper = _RecordingWrapper(_FakeSyncStream(chunks=["a", "b", "c"]))
+        for _ in wrapper:
+            break
+
+    consume_first_chunk()
+    gc.collect()
+
+    # Breaking leaves the remaining chunks unread, so the span is finalized
+    # with only what the caller actually consumed.
+    assert processed == [["a"]]
+
+
 def test_sync_stream_wrapper_abandon_does_not_refinalize_drained_stream():
     wrapper = _TestSyncStreamWrapper(_FakeSyncStream(chunks=["a"]))
     assert list(wrapper) == ["a"]
@@ -503,6 +524,27 @@ def test_async_stream_wrapper_finalizes_abandoned_stream():
     gc.collect()
 
     assert stop_counts == [1]
+
+
+def test_async_stream_wrapper_finalizes_stream_abandoned_by_break():
+    processed = []
+
+    class _RecordingWrapper(_TestAsyncStreamWrapper):
+        def _on_stream_end(self):
+            super()._on_stream_end()
+            processed.append(list(self._self_processed))
+
+    async def consume_first_chunk():
+        wrapper = _RecordingWrapper(_FakeAsyncStream(chunks=["a", "b", "c"]))
+        async for _ in wrapper:
+            break
+
+    asyncio.run(consume_first_chunk())
+    gc.collect()
+
+    # Breaking leaves the remaining chunks unread, so the span is finalized
+    # with only what the caller actually consumed.
+    assert processed == [["a"]]
 
 
 def test_async_stream_wrapper_abandon_does_not_override_failure():

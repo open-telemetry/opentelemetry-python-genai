@@ -42,9 +42,7 @@ class RetrieveScenario(Scenario):
                 )
                 client.retrieve(
                     knowledgeBaseId="KB1234567890",
-                    retrievalQuery={
-                        "text": "What is the capital of France?"
-                    },
+                    retrievalQuery={"text": "What is the capital of France?"},
                     retrievalConfiguration={
                         "vectorSearchConfiguration": {"numberOfResults": 2}
                     },
