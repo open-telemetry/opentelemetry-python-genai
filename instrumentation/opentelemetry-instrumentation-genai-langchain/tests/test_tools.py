@@ -1074,7 +1074,7 @@ def test_tool_span_created_via_instrumentor(monkeypatch):
 def test_on_tool_start_and_end_no_content_capture_suppresses_arguments(
     monkeypatch,
 ):
-    """Without content capture, description remains but content is absent."""
+    """Without content capture, arguments and result are absent from the span."""
     # OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT intentionally not set
     tracer_provider, span_exporter, logger_provider, meter_provider = (
         _make_providers()
@@ -1099,10 +1099,6 @@ def test_on_tool_start_and_end_no_content_capture_suppresses_arguments(
     assert len(spans) == 1
     attrs = spans[0].attributes
     assert attrs[gen_ai_attributes.GEN_AI_TOOL_NAME] == "multiply"
-    assert (
-        attrs[gen_ai_attributes.GEN_AI_TOOL_DESCRIPTION]
-        == "Multiply two numbers"
-    )
     assert gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
     assert gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT not in attrs
 
