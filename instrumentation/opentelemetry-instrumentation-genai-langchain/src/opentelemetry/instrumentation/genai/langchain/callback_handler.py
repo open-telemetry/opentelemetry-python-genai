@@ -299,9 +299,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             )
 
         serialized_name = (
-            value
-            if isinstance(value := serialized.get("name"), str)
-            else None
+            value if isinstance(value := serialized.get("name"), str) else None
         )
         serialized_id = (
             value[-1]
@@ -314,8 +312,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if serialized_id in _PROMPT_TEMPLATE_TYPES:
             template_type = serialized_id
         elif (
-            serialized_id is None
-            and serialized_name in _PROMPT_TEMPLATE_TYPES
+            serialized_id is None and serialized_name in _PROMPT_TEMPLATE_TYPES
         ):
             template_type = serialized_name
         if template_type is not None:
