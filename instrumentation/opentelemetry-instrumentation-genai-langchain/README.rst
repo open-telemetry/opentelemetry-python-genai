@@ -18,6 +18,8 @@ application:
 * **Tool spans** for tool calls made during a run.
 * **Retrieval spans** for retriever invocations, capturing the query and retrieved
   documents (including id, content, and relevance scores when available).
+* **Lifecycle events** for LangGraph durable executions that pause, checkpoint,
+  and resume, correlated with the workflow span.
 
 The spans nest to reflect the graph, so a single graph invocation produces a
 workflow span with the agent, tool, and model calls it triggered as children.
@@ -118,6 +120,21 @@ When available, relevance and similarity scores are captured in each document ob
 
 If a document has no score, or if the score is non-numeric or non-finite (``NaN``, ``Infinity``),
 the ``score`` key is omitted to ensure RFC 8259 JSON compliance.
+
+LangGraph durable executions
+----------------------------
+
+When a LangGraph graph pauses on ``interrupt()``, the instrumentation emits a
+``gen_ai.agent.paused`` event carrying the interrupt id LangGraph minted and the
+checkpoint it paused at. Resuming the graph with ``Command(resume=...)`` emits
+``gen_ai.agent.resumed`` naming that same checkpoint. If the graph was compiled
+with a checkpointer, every checkpoint the saver persists emits a
+``gen_ai.agent.checkpointed`` event; LangGraph writes one checkpoint per
+superstep, so these are per-step records.
+
+No interrupt payload or graph state is recorded: the events carry only ids
+LangGraph itself produced. These event and attribute names are candidate
+semantic conventions and may change.
 
 Configuration
 -------------
