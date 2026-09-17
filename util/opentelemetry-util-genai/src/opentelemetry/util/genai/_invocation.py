@@ -30,6 +30,7 @@ from opentelemetry.util.genai.completion_hook import (
 )
 from opentelemetry.util.genai.conversation_context import (
     get_ambient_conversation_id,
+    with_conversation_id,
 )
 from opentelemetry.util.genai.types import (
     Error,
@@ -103,6 +104,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_name: str = span_name
         self._span_kind: SpanKind = span_kind
         self._context_token: ContextToken | None = None
+        self.conversation_id: str | None = None
         self._monotonic_start_s: float
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
@@ -137,13 +139,25 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self,
         attributes: dict[str, AttributeValue] | None = None,
         context: Context | None = None,
+        *,
+        conversation_id: str | None = None,
     ) -> None:
         """Start the invocation span and attach it to the current context.
 
         Args:
             attributes: Initial span attributes available for sampling decisions.
             context: An optional OpenTelemetry Context to parent the span.
+            conversation_id: Overrides the conversation id inherited from
+                ``context``. Either way the resolved value is put back on the
+                attached context, so nested invocations inherit it in turn.
         """
+        self.conversation_id = conversation_id or get_ambient_conversation_id(
+            context
+        )
+        if self.conversation_id:
+            context = with_conversation_id(
+                self.conversation_id, context=context
+            )
         self.span = self._tracer.start_span(
             name=self._span_name,
             kind=self._span_kind,
@@ -153,13 +167,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_context = set_span_in_context(self.span, context)
         self._monotonic_start_s = timeit.default_timer()
         self._context_token = attach(self._span_context)
-
-    def _resolve_conversation_id(
-        self, conversation_id: str | None
-    ) -> str | None:
-        if conversation_id is not None:
-            return conversation_id
-        return get_ambient_conversation_id(self._span_context)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""

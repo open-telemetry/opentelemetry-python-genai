@@ -1,1 +1,1 @@
-An invocation started with an explicit ``context`` now uses it as the base of its own context, not only to parent the span, so values the caller put on it stay visible to nested invocations.
+An invocation started with an explicit ``context`` now uses it as the base of its own context, not only to parent the span, so entries the caller put on it stay visible to nested invocations.

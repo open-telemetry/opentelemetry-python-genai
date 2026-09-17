@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -78,7 +79,6 @@ class AgentInvocation(GenAIInvocation, ABC):
         self._agent_name: str | None = agent_name
         self.agent_description: str | None = None
 
-        self.conversation_id: str | None = None
         self.data_source_id: str | None = None
         self.output_type: str | None = None
 
@@ -117,10 +117,7 @@ class AgentInvocation(GenAIInvocation, ABC):
 
     def _get_request_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
-            (
-                GenAI.GEN_AI_CONVERSATION_ID,
-                self._resolve_conversation_id(self.conversation_id),
-            ),
+            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
             (GenAI.GEN_AI_DATA_SOURCE_ID, self.data_source_id),
             (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
             (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
@@ -200,6 +197,8 @@ class LocalAgentInvocation(AgentInvocation):
         request_model: str | None = None,
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         super().__init__(
             tracer,
@@ -211,7 +210,11 @@ class LocalAgentInvocation(AgentInvocation):
             agent_name=agent_name,
             content_capturing_mode=content_capturing_mode,
         )
-        self._start(self._get_start_attributes())
+        self._start(
+            self._get_start_attributes(),
+            context=context,
+            conversation_id=conversation_id,
+        )
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
@@ -268,6 +271,8 @@ class RemoteAgentInvocation(AgentInvocation):
         agent_id: str | None = None,
         agent_version: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         super().__init__(
             tracer,
@@ -289,7 +294,11 @@ class RemoteAgentInvocation(AgentInvocation):
         self._cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
 
-        self._start(self._get_start_attributes())
+        self._start(
+            self._get_start_attributes(),
+            context=context,
+            conversation_id=conversation_id,
+        )
 
     @property
     def cache_write_input_tokens(self) -> int | None:

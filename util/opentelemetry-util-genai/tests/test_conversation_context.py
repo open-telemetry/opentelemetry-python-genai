@@ -78,8 +78,8 @@ class TestAmbientFallback(unittest.TestCase):
         try:
             with self.handler.inference(
                 provider="openai", request_model="gpt-4o-mini"
-            ):
-                pass
+            ) as inference:
+                assert inference.conversation_id == "thread-1"
         finally:
             detach(token)
 
@@ -90,9 +90,11 @@ class TestAmbientFallback(unittest.TestCase):
         token = attach(with_conversation_id("thread-ambient"))
         try:
             with self.handler.inference(
-                provider="openai", request_model="gpt-4o-mini"
+                provider="openai",
+                request_model="gpt-4o-mini",
+                conversation_id="thread-explicit",
             ) as inference:
-                inference.conversation_id = "thread-explicit"
+                assert inference.conversation_id == "thread-explicit"
         finally:
             detach(token)
 
@@ -100,6 +102,19 @@ class TestAmbientFallback(unittest.TestCase):
         assert (
             chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID]
             == "thread-explicit"
+        )
+
+    def test_conversation_id_set_after_construction_still_lands_on_span(self):
+        # The openai instrumentation reads the Responses `conversation`
+        # request parameter after the invocation exists.
+        with self.handler.inference(
+            provider="openai", request_model="gpt-4o-mini"
+        ) as inference:
+            inference.conversation_id = "thread-late"
+
+        chat_span = self._finished_span_by_name("chat gpt-4o-mini")
+        assert (
+            chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-late"
         )
 
     def test_no_ambient_and_no_explicit_omits_attribute(self):
@@ -146,8 +161,10 @@ class TestAmbientFallback(unittest.TestCase):
     def test_local_agent_explicit_wins_over_ambient(self):
         token = attach(with_conversation_id("thread-ambient"))
         try:
-            with self.handler.invoke_local_agent(agent_name="triage") as agent:
-                agent.conversation_id = "thread-explicit"
+            with self.handler.invoke_local_agent(
+                agent_name="triage", conversation_id="thread-explicit"
+            ):
+                pass
         finally:
             detach(token)
 
@@ -155,6 +172,23 @@ class TestAmbientFallback(unittest.TestCase):
         assert (
             span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-explicit"
         )
+
+    def test_agent_rooted_trace_propagates_to_nested_inference(self):
+        # No workflow: the agent is the outermost invocation and therefore
+        # the injection point.
+        with self.handler.invoke_local_agent(
+            agent_name="triage", conversation_id="thread-1"
+        ):
+            with self.handler.inference(
+                provider="openai", request_model="gpt-4o-mini"
+            ):
+                pass
+
+        for name in ("invoke_agent triage", "chat gpt-4o-mini"):
+            span = self._finished_span_by_name(name)
+            assert (
+                span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
+            ), name
 
     def test_remote_agent_inherits_ambient_conversation_id(self):
         token = attach(with_conversation_id("thread-1"))
@@ -185,8 +219,10 @@ class TestAmbientFallback(unittest.TestCase):
     def test_workflow_explicit_wins_over_ambient(self):
         token = attach(with_conversation_id("thread-ambient"))
         try:
-            with self.handler.workflow(name="wf") as workflow:
-                workflow.conversation_id = "thread-explicit"
+            with self.handler.workflow(
+                name="wf", conversation_id="thread-explicit"
+            ):
+                pass
         finally:
             detach(token)
 
@@ -196,18 +232,14 @@ class TestAmbientFallback(unittest.TestCase):
         )
 
     def test_full_nesting_shares_one_conversation_id(self):
-        # The end-to-end shape the openai-agents processor produces: one
-        # attach at the top, every nested span picks it up.
-        token = attach(with_conversation_id("thread-1"))
-        try:
-            with self.handler.workflow(name="wf"):
-                with self.handler.invoke_local_agent(agent_name="triage"):
-                    with self.handler.inference(
-                        provider="openai", request_model="gpt-4o-mini"
-                    ):
-                        pass
-        finally:
-            detach(token)
+        # The shape the openai-agents processor produces: the id is given to
+        # the outermost invocation only, and every nested span picks it up.
+        with self.handler.workflow(name="wf", conversation_id="thread-1"):
+            with self.handler.invoke_local_agent(agent_name="triage"):
+                with self.handler.inference(
+                    provider="openai", request_model="gpt-4o-mini"
+                ):
+                    pass
 
         spans = self.span_exporter.get_finished_spans()
         assert {s.name for s in spans} == {
@@ -228,6 +260,7 @@ class TestAmbientFallback(unittest.TestCase):
             inference = self.handler.inference(
                 provider="openai", request_model="gpt-4o-mini"
             )
+            assert inference.conversation_id == "thread-1"
             inference.stop()
             metric_attrs = inference._get_metric_attributes()
         finally:

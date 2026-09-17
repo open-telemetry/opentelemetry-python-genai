@@ -1,1 +1,1 @@
-Add a ``conversation_context`` module carrying ``gen_ai.conversation.id`` on the OTel Context, which inference, agent and workflow invocations fall back to, and a ``context`` argument to ``TelemetryHandler.workflow()``.
+Add ``conversation_id`` and ``context`` arguments to the inference, agent and workflow factories on ``TelemetryHandler``; nested invocations inherit the conversation id.
