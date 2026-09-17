@@ -1,0 +1,1 @@
+Keep the ``gen_ai.conversation.id`` inherited from an enclosing agent framework when a Responses request carries no ``conversation`` parameter

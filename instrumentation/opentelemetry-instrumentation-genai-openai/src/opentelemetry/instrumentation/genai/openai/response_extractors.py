@@ -662,7 +662,8 @@ def apply_request_attributes(
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
-    invocation.conversation_id = params.conversation_id
+    if params.conversation_id is not None:
+        invocation.conversation_id = params.conversation_id
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens
