@@ -1,0 +1,1 @@
+Finalize stream telemetry when stream iteration, close, or manager entry/exit is cancelled.

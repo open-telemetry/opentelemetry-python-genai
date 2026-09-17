@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import AgentInvocation
+from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
@@ -269,7 +269,7 @@ def create_agent_invocation(
     handler: TelemetryHandler,
     agent_instance: Any,
     messages: QwenMessage | list[QwenMessage] | None,
-) -> AgentInvocation:
+) -> LocalAgentInvocation:
     """Create and start an AgentInvocation for Agent.run()."""
     llm_instance = getattr(agent_instance, "llm", None)
     agent_name = (

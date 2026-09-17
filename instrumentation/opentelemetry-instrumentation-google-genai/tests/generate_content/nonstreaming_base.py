@@ -9,7 +9,10 @@ from google.genai import errors as genai_errors
 from google.genai.types import (
     FunctionDeclarationDict,
     GenerateContentConfig,
+    GenerateContentResponseUsageMetadata,
     GoogleMaps,
+    MediaModality,
+    ModalityTokenCount,
     ToolDict,
 )
 from pydantic import BaseModel, Field
@@ -336,6 +339,89 @@ class NonStreamingTestCase(TestCase):
         self.assertEqual(
             span.attributes["gen_ai.usage.reasoning.output_tokens"], 17
         )
+
+    def test_generated_span_counts_modality_tokens(self):
+        usage_metadata = GenerateContentResponseUsageMetadata(
+            prompt_tokens_details=[
+                ModalityTokenCount(
+                    modality=MediaModality.TEXT, token_count=11
+                ),
+                ModalityTokenCount(
+                    modality=MediaModality.AUDIO, token_count=22
+                ),
+            ],
+            candidates_tokens_details=[
+                ModalityTokenCount(
+                    modality=MediaModality.AUDIO, token_count=33
+                ),
+                ModalityTokenCount(
+                    modality=MediaModality.IMAGE, token_count=44
+                ),
+            ],
+            cache_tokens_details=[
+                ModalityTokenCount(
+                    modality=MediaModality.TEXT, token_count=55
+                ),
+                ModalityTokenCount(
+                    modality=MediaModality.IMAGE, token_count=66
+                ),
+            ],
+        )
+        self.configure_valid_response(usage_metadata=usage_metadata)
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        for attribute, value in (
+            ("gen_ai.usage.text.input_tokens", 11),
+            ("gen_ai.usage.audio.input_tokens", 22),
+            ("gen_ai.usage.audio.output_tokens", 33),
+            ("gen_ai.usage.image.output_tokens", 44),
+            ("gen_ai.usage.text.cache_read.input_tokens", 55),
+            ("gen_ai.usage.image.cache_read.input_tokens", 66),
+        ):
+            self.assertIsInstance(span.attributes[attribute], int)
+            self.assertEqual(span.attributes[attribute], value)
+        for attribute in (
+            "gen_ai.usage.image.input_tokens",
+            "gen_ai.usage.text.output_tokens",
+            "gen_ai.usage.audio.cache_read.input_tokens",
+        ):
+            self.assertNotIn(attribute, span.attributes)
+
+    def test_generated_span_skips_unmapped_modality_tokens(self):
+        usage_metadata = GenerateContentResponseUsageMetadata(
+            prompt_tokens_details=[
+                ModalityTokenCount(
+                    modality=MediaModality.VIDEO, token_count=7
+                ),
+                ModalityTokenCount(modality=MediaModality.TEXT),
+            ],
+        )
+        self.configure_valid_response(usage_metadata=usage_metadata)
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        for attribute in (
+            "gen_ai.usage.text.input_tokens",
+            "gen_ai.usage.image.input_tokens",
+            "gen_ai.usage.audio.input_tokens",
+        ):
+            self.assertNotIn(attribute, span.attributes)
+
+    def test_generated_span_omits_modality_tokens_when_absent(self):
+        self.configure_valid_response(input_tokens=1, output_tokens=2)
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        for attribute in (
+            "gen_ai.usage.text.input_tokens",
+            "gen_ai.usage.image.input_tokens",
+            "gen_ai.usage.audio.input_tokens",
+            "gen_ai.usage.text.output_tokens",
+            "gen_ai.usage.image.output_tokens",
+            "gen_ai.usage.audio.output_tokens",
+            "gen_ai.usage.text.cache_read.input_tokens",
+            "gen_ai.usage.image.cache_read.input_tokens",
+            "gen_ai.usage.audio.cache_read.input_tokens",
+        ):
+            self.assertNotIn(attribute, span.attributes)
 
     def test_generated_span_records_response_model(self):
         self.configure_valid_response(model_version="gemini-2.0-flash-001")

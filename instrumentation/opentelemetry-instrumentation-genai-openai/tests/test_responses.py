@@ -59,10 +59,12 @@ try:
     _create_params = set(inspect.signature(_Responses.create).parameters)
     _has_tools_param = "tools" in _create_params
     _has_reasoning_param = "reasoning" in _create_params
+    _has_conversation_param = "conversation" in _create_params
 except ImportError:
     HAS_RESPONSES_API = False
     _has_tools_param = False
     _has_reasoning_param = False
+    _has_conversation_param = False
 
 
 pytestmark = pytest.mark.skipif(
@@ -77,6 +79,7 @@ EXPECTED_SYSTEM_INSTRUCTIONS = [
     }
 ]
 INVALID_MODEL = "this-model-does-not-exist"
+CONVERSATION_ID = "conv_0a1b2c3d4e5f60718293a4b5c6d7e8f9"
 REASONING_MODEL = "gpt-5.4"
 REASONING_PROMPT = """
 Write a bash script that takes a matrix represented as a string with
@@ -118,6 +121,17 @@ def _assert_response_content(span, response, log_exporter):
         format_simple_expected_output_message(response.output_text),
     )
     assert len(log_exporter.get_finished_logs()) == 0
+
+
+def _assert_conversation_id(span):
+    """Assert the conversation id landed, or is absent when the SDK lacks the param."""
+    if _has_conversation_param:
+        assert (
+            span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
+            == CONVERSATION_ID
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_CONVERSATION_ID not in span.attributes
 
 
 def _assert_request_attrs(
@@ -403,7 +417,6 @@ def test_responses_retrieve_streaming(
         response_model=response.model,
         response_status="completed",
         finish_reasons=("stop",),
-        request_stream=True,
         stream_cursor=str(RETRIEVE_STREAM_CURSOR),
         response_service_tier=response.service_tier,
     )
@@ -462,7 +475,7 @@ def test_responses_retrieve_with_streaming_response_stays_lazy(
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
         == RETRIEVE_RESPONSE_ID
     )
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_STREAM] is True
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in span.attributes
     assert response.id == RETRIEVE_RESPONSE_ID
 
 
@@ -558,6 +571,9 @@ def test_responses_create_with_all_params(
 ):
     _skip_if_not_latest()
 
+    conversation_kwargs = (
+        {"conversation": CONVERSATION_ID} if _has_conversation_param else {}
+    )
     response = openai_client.responses.create(
         model=DEFAULT_MODEL,
         instructions=SYSTEM_INSTRUCTIONS,
@@ -567,6 +583,7 @@ def test_responses_create_with_all_params(
         top_p=0.9,
         service_tier="default",
         text={"format": {"type": "text"}},
+        **conversation_kwargs,
     )
 
     (span,) = span_exporter.get_finished_spans()
@@ -588,6 +605,27 @@ def test_responses_create_with_all_params(
         max_tokens=50,
         output_type="text",
     )
+    _assert_conversation_id(span)
+
+
+@pytest.mark.cassette("test_responses_stream_until_done[content_mode0]")
+@pytest.mark.vcr()
+def test_responses_stream_records_conversation_id(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with openai_client.responses.stream(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=USER_ONLY_PROMPT[0]["content"],
+        service_tier="default",
+        conversation=CONVERSATION_ID,
+    ) as stream:
+        stream.get_final_response()
+
+    (span,) = span_exporter.get_finished_spans()
+    _assert_conversation_id(span)
 
 
 @pytest.mark.vcr()

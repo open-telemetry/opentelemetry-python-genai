@@ -176,6 +176,7 @@ def test_sync_chat_completions_basic(
             model="gpt-4o",
             temperature=0.7,
             top_p=0.9,
+            top_k=40,
             max_tokens=150,
             seed=42,
         )
@@ -207,6 +208,10 @@ def test_sync_chat_completions_basic(
             == 0.7
         )
         assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.9
+        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 40
+        assert isinstance(
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K), int
+        )
         assert (
             span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS)
             == 150
@@ -598,6 +603,7 @@ def test_chat_completions_top_p_zero_and_max_tokens_zero(
             messages=[{"role": "user", "content": "Hi"}],
             model="gpt-4o",
             top_p=0.0,
+            top_k=0,
             max_tokens=0,
         )
 
@@ -605,6 +611,10 @@ def test_chat_completions_top_p_zero_and_max_tokens_zero(
         assert len(spans) == 1
         span = spans[0]
         assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_P) == 0.0
+        assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 0
+        assert isinstance(
+            span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K), int
+        )
         assert (
             span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 0
         )

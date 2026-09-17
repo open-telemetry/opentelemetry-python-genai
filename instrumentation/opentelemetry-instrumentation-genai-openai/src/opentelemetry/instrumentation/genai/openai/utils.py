@@ -22,9 +22,12 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FinishReason,
     FunctionToolDefinition,
     InputMessage,
+    MessagePart,
     OutputMessage,
     Role,
     TextPart,
@@ -32,6 +35,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponsePart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -56,7 +60,7 @@ def get_served_model(headers: Mapping[str, str] | None) -> str | None:
 
 
 def get_property_value(obj, property_name):
-    if isinstance(obj, dict):
+    if isinstance(obj, Mapping):
         return obj.get(property_name, None)
 
     return getattr(obj, property_name, None)
@@ -186,11 +190,118 @@ def get_value(v: Any):
     return None
 
 
-def _is_text_part(content: Any) -> bool:
-    return isinstance(content, str) or (
-        isinstance(content, Iterable)
-        and all(isinstance(part, str) for part in content)
+# OpenAI accepts "wav" and "mp3" for input_audio. "audio/mp3" is not a
+# registered media type - the payload is MPEG audio.
+_AUDIO_MIME_TYPES = {"wav": "audio/wav", "mp3": "audio/mpeg"}
+
+
+def _audio_to_part(input_audio: Any) -> MessagePart | None:
+    """Build a blob part for an ``input_audio`` descriptor."""
+    if input_audio is None:
+        return None
+    data = get_property_value(input_audio, "data")
+    if not isinstance(data, str):
+        return None
+    decoded = decode_base64(data)
+    if decoded is None:
+        # Malformed payload: recording garbage bytes would be worse than
+        # dropping the part.
+        return None
+    audio_format = get_property_value(input_audio, "format")
+    return BlobPart(
+        mime_type=_AUDIO_MIME_TYPES.get(audio_format)
+        if isinstance(audio_format, str)
+        else None,
+        modality="audio",
+        content=decoded,
     )
+
+
+def _document_to_part(file_obj: Any) -> MessagePart | None:
+    """Build a part for a file descriptor: a reference when the file is
+    hosted by OpenAI (``file_id``), a blob when it is uploaded inline
+    (``file_data``, a data: URL)."""
+    if file_obj is None:
+        return None
+    file_id = get_property_value(file_obj, "file_id")
+    if isinstance(file_id, str) and file_id:
+        return FilePart(mime_type=None, modality="document", file_id=file_id)
+    file_data = get_property_value(file_obj, "file_data")
+    if isinstance(file_data, str) and file_data.startswith("data:"):
+        # Same data: URL shape as an inline image, so the mime type comes
+        # from the URL header.
+        return image_from_url(file_data, modality="document")
+    return None
+
+
+def _content_to_parts(content: Any) -> list[MessagePart]:
+    if isinstance(content, str):
+        return [TextPart(content=content)]
+    if not isinstance(content, Iterable) or isinstance(content, Mapping):
+        return []
+
+    parts: list[MessagePart] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(TextPart(content=item))
+            continue
+
+        part_type = get_property_value(item, "type")
+        text = get_property_value(item, "text")
+        if part_type in ("text", "input_text", "output_text") or (
+            part_type is None and isinstance(text, str)
+        ):
+            if isinstance(text, str):
+                parts.append(TextPart(content=text))
+            continue
+
+        if part_type == "input_audio":
+            audio_part = _audio_to_part(
+                get_property_value(item, "input_audio")
+            )
+            if audio_part is not None:
+                parts.append(audio_part)
+            continue
+
+        if part_type in ("file", "input_file"):
+            # Chat Completions nests the descriptor under "file"; the
+            # Responses API carries the same fields on the part itself.
+            file_part = _document_to_part(
+                get_property_value(item, "file") or item
+            )
+            if file_part is not None:
+                parts.append(file_part)
+            continue
+
+        if part_type == "refusal":
+            # The refusal string is the message's user-visible text.
+            refusal = get_property_value(item, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
+            continue
+
+        if part_type not in ("image_url", "input_image"):
+            continue
+
+        image_url = get_property_value(item, "image_url")
+        if not isinstance(image_url, str):
+            image_url = get_property_value(image_url, "url")
+        if isinstance(image_url, str) and image_url:
+            image_part = image_from_url(image_url)
+            if image_part is not None:
+                parts.append(image_part)
+            continue
+
+        file_id = get_property_value(item, "file_id")
+        if part_type == "input_image" and isinstance(file_id, str) and file_id:
+            parts.append(
+                FilePart(
+                    mime_type=None,
+                    modality="image",
+                    file_id=file_id,
+                )
+            )
+    return parts
 
 
 def _prepare_input_messages(messages) -> list[InputMessage]:
@@ -198,32 +309,39 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
     for message in messages:
         role = get_property_value(message, "role")
         name = get_property_value(message, "name")
-        chat_message = InputMessage(
-            role=str(role),
-            parts=[],
-            name=str(name) if name is not None else None,
-        )
-        chat_messages.append(chat_message)
+        parts: list[MessagePart] = []
 
         content = get_property_value(message, "content")
 
         if role == Role.ASSISTANT.value:
             tool_calls = get_property_value(message, "tool_calls")
             if tool_calls:
-                chat_message.parts += extract_tool_calls_new(tool_calls)
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+                parts += extract_tool_calls_new(tool_calls)
+            parts += _content_to_parts(content)
+            # A refused turn replayed as history carries content=None and
+            # the text in `refusal`, same as a fresh completion does.
+            refusal = get_property_value(message, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
 
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
-            chat_message.parts.append(
+            parts.append(
                 ToolCallResponsePart(id=tool_call_id, response=content)
             )
 
         else:
             # system, developer, user, fallback
-            if _is_text_part(content):
-                chat_message.parts.append(TextPart(content=str(content)))
+            parts += _content_to_parts(content)
+
+        if parts:
+            chat_messages.append(
+                InputMessage(
+                    role=str(role),
+                    parts=parts,
+                    name=str(name) if name is not None else None,
+                )
+            )
     return chat_messages
 
 
@@ -288,8 +406,12 @@ def _prepare_output_messages(choices) -> list[OutputMessage]:
             if tool_calls:
                 parts += extract_tool_calls_new(tool_calls)
             content = get_property_value(choice.message, "content")
-            if _is_text_part(content):
-                parts.append(TextPart(content=str(content)))
+            parts += _content_to_parts(content)
+            # A refused completion carries content=None and puts the text
+            # in its own `refusal` field.
+            refusal = get_property_value(choice.message, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
 
             message = OutputMessage(
                 finish_reason=map_finish_reason(choice.finish_reason),

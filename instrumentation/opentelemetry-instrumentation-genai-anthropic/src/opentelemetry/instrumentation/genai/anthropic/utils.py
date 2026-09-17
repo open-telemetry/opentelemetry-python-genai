@@ -9,7 +9,7 @@ import base64
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from anthropic.types import (
     InputJSONDelta,
@@ -20,17 +20,27 @@ from anthropic.types import (
     ThinkingBlock,
     ThinkingDelta,
     ToolUseBlock,
-    WebSearchToolResultBlock,
 )
 
 from opentelemetry.util.genai.types import (
     BlobPart,
     MessagePart,
     ReasoningPart,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
 )
+
+_SERVER_TOOL_RESULT_TYPES = {
+    "web_search_tool_result": "web_search",
+    "web_fetch_tool_result": "web_fetch",
+    "code_execution_tool_result": "code_execution",
+    "bash_code_execution_tool_result": "bash_code_execution",
+    "text_editor_code_execution_tool_result": "text_editor_code_execution",
+    "tool_search_tool_result": "tool_search",
+}
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -120,7 +130,7 @@ def _extract_base64_blob(source: object, modality: str) -> BlobPart | None:
 
 
 def _convert_dict_block_to_part(
-    block: Mapping[str, Any],
+    block: Mapping[str, object],
 ) -> MessagePart | None:
     """Convert a request-param content block (TypedDict/dict) to a MessagePart."""
     block_type = block.get("type")
@@ -137,10 +147,40 @@ def _convert_dict_block_to_part(
             id=str(block.get("id", "")),
         )
 
+    if block_type == "server_tool_use":
+        name = str(block.get("name", ""))
+        server_tool_call = {
+            key: value
+            for key, value in block.items()
+            if key not in ("id", "name", "type")
+        }
+        server_tool_call["type"] = name
+        block_id = block.get("id")
+        return ServerToolCallPart(
+            name=name,
+            server_tool_call=server_tool_call,
+            id=str(block_id) if block_id is not None else None,
+        )
+
     if block_type == "tool_result":
         return ToolCallResponsePart(
             response=block.get("content"),
             id=str(block.get("tool_use_id", "")),
+        )
+
+    if isinstance(block_type, str) and (
+        server_tool_name := _SERVER_TOOL_RESULT_TYPES.get(block_type)
+    ):
+        server_tool_call_response = {
+            key: value
+            for key, value in block.items()
+            if key not in ("tool_use_id", "type")
+        }
+        server_tool_call_response["type"] = server_tool_name
+        tool_use_id = block.get("tool_use_id")
+        return ServerToolCallResponsePart(
+            server_tool_call_response=server_tool_call_response,
+            id=str(tool_use_id) if tool_use_id is not None else None,
         )
 
     if block_type in ("thinking", "redacted_thinking"):
@@ -159,13 +199,19 @@ def _convert_content_block_to_part(
     block: ContentBlock | ContentBlockParam,
 ) -> MessagePart | None:
     """Convert an Anthropic content block to a MessagePart."""
+    if isinstance(block, Mapping):
+        return _convert_dict_block_to_part(cast(Mapping[str, object], block))
+
     if isinstance(block, TextBlock):
         return TextPart(content=block.text)
 
-    if isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
+    if isinstance(block, ToolUseBlock):
         return ToolCallRequestPart(
             arguments=block.input, name=block.name, id=block.id
         )
+
+    if isinstance(block, ServerToolUseBlock):
+        return _convert_dict_block_to_part(block.model_dump(exclude_none=True))
 
     if isinstance(block, (ThinkingBlock, RedactedThinkingBlock)):
         content = (
@@ -173,15 +219,12 @@ def _convert_content_block_to_part(
         )
         return ReasoningPart(content=content)
 
-    if isinstance(block, WebSearchToolResultBlock):
-        return ToolCallResponsePart(
-            response=block.model_dump().get("content"),
-            id=block.tool_use_id,
+    if block.type in _SERVER_TOOL_RESULT_TYPES:
+        return _convert_dict_block_to_part(
+            cast(Mapping[str, object], block.model_dump(exclude_none=True))
         )
 
-    if not hasattr(block, "get"):
-        return None
-    return _convert_dict_block_to_part(cast(Mapping[str, Any], block))
+    return None
 
 
 def convert_content_to_parts(

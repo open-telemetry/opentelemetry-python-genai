@@ -40,8 +40,6 @@ from opentelemetry.instrumentation.genai.anthropic._raw_response import (
     RawResponseProxy,
 )
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
-    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
-    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
     get_server_address_and_port,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -163,6 +161,79 @@ def _load_span_messages(span, attribute):
     parsed = json.loads(value)
     assert isinstance(parsed, list)
     return parsed
+
+
+_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get weather by city",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+_STREAM_SSE_BODY = b"".join(
+    f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+    for name, payload in (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_generator",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "ok"},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 2},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+)
+
+
+def _assert_weather_tool_definitions(span):
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather by city",
+            "parameters": _WEATHER_TOOL["input_schema"],
+        }
+    ]
 
 
 def _skip_if_cassette_missing_and_no_real_key(request):
@@ -748,6 +819,34 @@ def test_sync_messages_create_streaming_captures_content(
 
 
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_records_tool_definitions(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """``stream`` builds its invocation lazily -- it must still see ``tools``.
+
+    Replays the plain ``test_sync_messages_stream`` cassette: tool definitions
+    come from the request, so the recorded response does not matter.
+    """
+    with anthropic_client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.vcr()
 def test_sync_messages_stream(  # pylint: disable=too-many-locals
     request, span_exporter, anthropic_client, instrument_no_content
 ):
@@ -1080,17 +1179,7 @@ def test_sync_messages_create_captures_tool_use_content(
         model=model,
         max_tokens=256,
         messages=messages,
-        tools=[
-            {
-                "name": "get_weather",
-                "description": "Get weather by city",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ],
+        tools=[_WEATHER_TOOL],
         tool_choice={"type": "tool", "name": "get_weather"},
     )
 
@@ -1106,6 +1195,114 @@ def test_sync_messages_create_captures_tool_use_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    _assert_weather_tool_definitions(span)
+
+
+def test_sync_messages_create_tools_generator_reaches_the_sdk(
+    span_exporter, instrument_with_content
+):
+    """A one-shot ``tools`` iterator must still reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=(tool for tool in [_WEATHER_TOOL]),
+    )
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+def test_sync_messages_stream_tools_generator_is_recorded(
+    span_exporter, instrument_with_content
+):
+    """``stream`` serializes the request before the invocation exists.
+
+    The generator has to be frozen in the wrapper, not while the invocation is
+    built, or the SDK drains it first and the span records no tools.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_SSE_BODY,
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=(tool for tool in [_WEATHER_TOOL]),
+    ) as stream:
+        stream.until_done()
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_captures_tool_use_content")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_create_omits_tool_definitions_without_content(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """Tool definitions are content: they stay off when capture is off."""
+    anthropic_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+        tool_choice={"type": "tool", "name": "get_weather"},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
 @pytest.mark.vcr()
@@ -1219,8 +1416,6 @@ def test_sync_messages_create_aggregates_cache_tokens(
     assert len(spans) == 1
     span = spans[0]
 
-    assert GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS in span.attributes
-    assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS in span.attributes
     assert span.attributes[
         GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
     ] == expected_input_tokens(response.usage)
@@ -1230,11 +1425,26 @@ def test_sync_messages_create_aggregates_cache_tokens(
     )
     cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
     cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
-    assert (
-        span.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]
-        == cache_creation
-    )
-    assert span.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == cache_read
+    if cache_creation:
+        assert (
+            span.attributes["gen_ai.usage.cache_write.input_tokens"]
+            == cache_creation
+        )
+    else:
+        assert "gen_ai.usage.cache_write.input_tokens" not in span.attributes
+    assert "gen_ai.usage.cache_creation.input_tokens" not in span.attributes
+    if cache_read:
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            ]
+            == cache_read
+        )
+    else:
+        assert (
+            GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            not in span.attributes
+        )
 
 
 @pytest.mark.vcr()
@@ -1273,8 +1483,6 @@ def test_sync_messages_create_streaming_aggregates_cache_tokens(
     assert len(spans) == 1
     span = spans[0]
 
-    assert GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS in span.attributes
-    assert GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS in span.attributes
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
         == input_tokens
@@ -1283,11 +1491,26 @@ def test_sync_messages_create_streaming_aggregates_cache_tokens(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
         == output_tokens
     )
-    assert (
-        span.attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]
-        == cache_creation
-    )
-    assert span.attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == cache_read
+    if cache_creation:
+        assert (
+            span.attributes["gen_ai.usage.cache_write.input_tokens"]
+            == cache_creation
+        )
+    else:
+        assert "gen_ai.usage.cache_write.input_tokens" not in span.attributes
+    assert "gen_ai.usage.cache_creation.input_tokens" not in span.attributes
+    if cache_read:
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            ]
+            == cache_read
+        )
+    else:
+        assert (
+            GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+            not in span.attributes
+        )
 
 
 @pytest.mark.vcr()
@@ -2286,3 +2509,158 @@ def test_sync_messages_raw_response_parse_after_exit(
     assert spans[0].attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
 
     assert raw_response.parse().model == model
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_text_stream_records_response(
+    span_exporter, anthropic_client, instrument_with_content
+):
+    """``stream.text_stream`` records the response the same as event iteration."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        text = "".join(stream.text_stream)
+
+    assert text == "Hello!"
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert_span_attributes(
+        span,
+        request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+    assert isinstance(span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID], str)
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+    )
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS], int
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello!"}
+    ]
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_get_final_message_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``get_final_message()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        message = stream.get_final_message()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id=message.id,
+        response_model=message.model,
+        input_tokens=expected_input_tokens(message.usage),
+        output_tokens=message.usage.output_tokens,
+        finish_reasons=[normalize_stop_reason(message.stop_reason)],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_get_final_text_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``get_final_text()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        text = stream.get_final_text()
+
+    assert text == "Hello!"
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_until_done_records_response(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """``until_done()`` drains the SDK's iterator and still records."""
+    model = "claude-sonnet-4-20250514"
+
+    with anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        stream.until_done()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_span_attributes(
+        spans[0],
+        request_model=model,
+        response_id="msg_01FpWuSsvRgJp3eYbdHBinNp",
+        response_model=model,
+        input_tokens=13,
+        output_tokens=5,
+        finish_reasons=["stop"],
+    )
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_text_stream_user_exception(
+    span_exporter, anthropic_client, instrument_no_content
+):
+    """A caller error while reading ``text_stream`` propagates and is recorded."""
+    model = "claude-sonnet-4-20250514"
+
+    with pytest.raises(ValueError, match="caller failed"):
+        with anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+        ) as stream:
+            for _ in stream.text_stream:
+                raise ValueError("caller failed")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"

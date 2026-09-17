@@ -1,0 +1,1 @@
+Capture OpenAI multimodal image content (`image_url` and Responses API `input_image`) as `BlobPart`, `UriPart`, or `FilePart` message parts.

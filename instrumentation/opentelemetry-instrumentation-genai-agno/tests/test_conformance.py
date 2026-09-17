@@ -22,6 +22,7 @@ from opentelemetry.test_util_genai.conformance import (
 
 from .conformance.agent import AgentScenario
 from .conformance.workflow import WorkflowScenario
+from .conformance.workflow_streaming import WorkflowStreamingScenario
 
 
 @pytest.mark.parametrize(
@@ -29,6 +30,7 @@ from .conformance.workflow import WorkflowScenario
     [
         pytest.param(AgentScenario()),
         pytest.param(WorkflowScenario()),
+        pytest.param(WorkflowStreamingScenario()),
     ],
     ids=lambda s: type(s).__name__,
 )

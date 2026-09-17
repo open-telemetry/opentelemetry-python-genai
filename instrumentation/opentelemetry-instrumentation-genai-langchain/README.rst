@@ -16,6 +16,8 @@ application:
 * **Agent spans** for agent invocations nested inside a workflow, including the
   agent name, id, description, and conversation/session id when available.
 * **Tool spans** for tool calls made during a run.
+* **Retrieval spans** for retriever invocations, capturing the query and retrieved
+  documents (including id, content, and relevance scores when available).
 * **Lifecycle events** for LangGraph durable executions that pause, checkpoint,
   and resume, correlated with the workflow span.
 
@@ -97,6 +99,27 @@ calls nested underneath.
             "research": "",
         }
     )
+
+Retrieval Spans and Document Scores
+-----------------------------------
+
+When invoking LangChain retrievers (e.g., vectorstores, knowledge bases, or contextual compression retrievers),
+retrieval spans are recorded with the query and retrieved document metadata.
+
+When message content capture is enabled (``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY``
+or ``SPAN_AND_EVENT``), the retrieved documents are serialized into the
+``gen_ai.retrieval.documents`` span attribute as a JSON array of objects with ``id`` and ``content``.
+
+When available, relevance and similarity scores are captured in each document object under ``score``:
+
+* **Direct retrieval scores**: extracted from ``metadata["score"]`` (populated by retrievers such as
+  ``AmazonKnowledgeBasesRetriever``, ``TavilySearchAPIRetriever``, and vectorstore score-threshold searches).
+* **Reranking scores**: extracted from ``metadata["relevance_score"]`` (populated when retrievers are wrapped
+  with rerankers via ``ContextualCompressionRetriever``, such as ``CohereRerank``).
+* **Duck-typed / custom documents**: extracted from a top-level ``score`` attribute or mapping key.
+
+If a document has no score, or if the score is non-numeric or non-finite (``NaN``, ``Infinity``),
+the ``score`` key is omitted to ensure RFC 8259 JSON compliance.
 
 LangGraph durable executions
 ----------------------------

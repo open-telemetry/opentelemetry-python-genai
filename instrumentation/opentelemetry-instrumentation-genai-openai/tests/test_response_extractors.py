@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 from unittest import mock
 
+import openai
 import pytest
 from openai import NOT_GIVEN
 
@@ -13,9 +14,15 @@ from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     GenericToolDefinition,
     LLMInvocation,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
+    TextPart,
+    UriPart,
 )
 
 try:
@@ -100,23 +107,141 @@ def test_extract_input_messages_supports_string_and_mixed_message_content(
             SimpleNamespace(
                 role="assistant",
                 content=[
-                    {"text": "Second"},
+                    {"type": "input_text", "text": "Second"},
                     SimpleNamespace(text="Third"),
-                    {"type": "input_image", "image_url": "ignored"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                    },
                 ],
             ),
             {"role": None, "content": "ignored"},
+            {
+                "role": "user",
+                "content": [{"type": "input_audio", "audio_url": "ignored"}],
+            },
         ]
     )
 
     assert [
         (msg.role, [part.content for part in msg.parts]) for msg in from_string
     ] == [("user", ["Hello"])]
-    assert [
-        (msg.role, [part.content for part in msg.parts]) for msg in from_list
-    ] == [
-        ("user", ["First"]),
-        ("assistant", ["Second", "Third"]),
+    assert [(msg.role, msg.parts) for msg in from_list] == [
+        ("user", [TextPart(content="First")]),
+        (
+            "assistant",
+            [
+                TextPart(content="Second"),
+                TextPart(content="Third"),
+                UriPart(
+                    mime_type=None,
+                    modality="image",
+                    uri="https://example.com/image.png",
+                ),
+            ],
+        ),
+    ]
+
+
+def test_extract_input_messages_keeps_assistant_output_text(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "role": "assistant",
+                "name": "example_assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hello!",
+                        "annotations": [],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        ("user", [TextPart(content="Hi")]),
+        ("assistant", [TextPart(content="Hello!")]),
+    ]
+    assert messages[1].name == "example_assistant"
+
+
+def test_extract_input_messages_supports_sdk_response_output(loaded_module):
+    response = _make_response(
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "First response",
+                        "annotations": [],
+                    },
+                    {
+                        "type": "output_text",
+                        "text": "Second response",
+                        "annotations": [],
+                    },
+                ],
+            }
+        ]
+    )
+
+    messages = loaded_module.get_input_messages(response.output)
+
+    assert [(msg.role, msg.parts) for msg in messages] == [
+        (
+            "assistant",
+            [
+                TextPart(content="First response"),
+                TextPart(content="Second response"),
+            ],
+        )
+    ]
+
+
+def test_extract_input_messages_supports_image_data_url_and_file_id(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,aGVsbG8=",
+                    },
+                    {"type": "input_image", "file_id": "file-123"},
+                ],
+            }
+        ]
+    )
+
+    assert messages[0].parts == [
+        UriPart(
+            mime_type=None,
+            modality="image",
+            uri="https://example.com/image.png",
+        ),
+        BlobPart(
+            mime_type="image/png",
+            modality="image",
+            content=b"hello",
+        ),
+        FilePart(mime_type=None, modality="image", file_id="file-123"),
     ]
 
 
@@ -210,6 +335,229 @@ def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
     assert messages[2].parts[0].arguments == {"city": "SF"}
     assert messages[3].parts[0].type == "reasoning"
     assert messages[3].parts[0].content == "Thought step"
+
+
+@pytest.mark.parametrize(
+    ("item", "expected_name", "expected_payload"),
+    [
+        (
+            {
+                "id": "fs_1",
+                "type": "file_search_call",
+                "status": "completed",
+                "queries": ["OpenTelemetry"],
+                "results": [],
+            },
+            "file_search",
+            {
+                "type": "file_search",
+                "status": "completed",
+                "queries": ["OpenTelemetry"],
+                "results": [],
+            },
+        ),
+        (
+            {
+                "id": "ws_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {"type": "search", "query": "OpenTelemetry"},
+            },
+            "web_search",
+            {
+                "type": "web_search",
+                "status": "completed",
+                "action": {"type": "search", "query": "OpenTelemetry"},
+            },
+        ),
+        (
+            {
+                "id": "ci_1",
+                "type": "code_interpreter_call",
+                "status": "completed",
+                "code": "print(1)",
+                "container_id": "container_1",
+                "outputs": [{"type": "logs", "logs": "1"}],
+            },
+            "code_interpreter",
+            {
+                "type": "code_interpreter",
+                "status": "completed",
+                "code": "print(1)",
+                "container_id": "container_1",
+                "outputs": [{"type": "logs", "logs": "1"}],
+            },
+        ),
+        (
+            {
+                "id": "mcp_1",
+                "type": "mcp_call",
+                "status": "completed",
+                "name": "get_weather",
+                "server_label": "weather",
+                "arguments": '{"city":"Seattle"}',
+                "output": "rain",
+            },
+            "get_weather",
+            {
+                "type": "mcp",
+                "status": "completed",
+                "server_label": "weather",
+                "arguments": '{"city":"Seattle"}',
+                "output": "rain",
+            },
+        ),
+        (
+            {
+                "id": "ig_1",
+                "type": "image_generation_call",
+                "status": "completed",
+                "result": "image-data",
+            },
+            "image_generation",
+            {
+                "type": "image_generation",
+                "status": "completed",
+                "result": "image-data",
+            },
+        ),
+        (
+            {
+                "id": "mcp_list_1",
+                "type": "mcp_list_tools",
+                "server_label": "weather",
+                "tools": [],
+            },
+            "mcp_list_tools",
+            {
+                "type": "mcp_list_tools",
+                "server_label": "weather",
+                "tools": [],
+            },
+        ),
+        (
+            {
+                "id": "ts_item_1",
+                "type": "tool_search_call",
+                "call_id": "ts_call_1",
+                "execution": "server",
+                "status": "completed",
+                "arguments": {"query": "weather"},
+            },
+            "tool_search",
+            {
+                "type": "tool_search",
+                "execution": "server",
+                "status": "completed",
+                "arguments": {"query": "weather"},
+            },
+        ),
+    ],
+)
+def test_extract_output_messages_maps_server_tools(
+    loaded_module, item, expected_name, expected_payload
+):
+    response = _make_response(output=[item])
+
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    assert len(messages) == 1
+    assert messages[0].finish_reason == "stop"
+    assert len(messages[0].parts) == 1
+    part = messages[0].parts[0]
+    assert isinstance(part, ServerToolCallPart)
+    assert part.id == item.get("call_id", item["id"])
+    assert part.name == expected_name
+    assert part.server_tool_call == expected_payload
+
+
+def test_extract_output_messages_maps_server_tool_search_result(loaded_module):
+    item = {
+        "id": "ts_2",
+        "type": "tool_search_output",
+        "call_id": "ts_1",
+        "execution": "server",
+        "status": "completed",
+        "tools": [],
+    }
+    response = _make_response(output=[item])
+
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    part = messages[0].parts[0]
+    assert isinstance(part, ServerToolCallResponsePart)
+    assert part.id == "ts_1"
+    assert part.server_tool_call_response == {
+        "execution": "server",
+        "status": "completed",
+        "tools": [],
+        "type": "tool_search",
+    }
+
+
+def test_extract_output_messages_does_not_classify_client_tool_search(
+    loaded_module,
+):
+    item = {
+        "id": "ts_1",
+        "type": "tool_search_call",
+        "call_id": "call_1",
+        "execution": "client",
+        "status": "completed",
+        "arguments": {},
+    }
+    response = _make_response(output=[item])
+
+    assert loaded_module.get_output_messages_from_response(response) == []
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_finish_reason"),
+    [
+        ("in_progress", None),
+        ("failed", "error"),
+        ("incomplete", "incomplete"),
+    ],
+)
+def test_extract_output_messages_uses_server_tool_status(
+    loaded_module, status, expected_finish_reason
+):
+    response = _make_response(
+        output=[
+            {
+                "id": "fs_1",
+                "type": "file_search_call",
+                "status": status,
+                "queries": ["OpenTelemetry"],
+                "results": [],
+            }
+        ]
+    )
+
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    if expected_finish_reason is None:
+        assert messages == []
+    else:
+        assert messages[0].finish_reason == expected_finish_reason
+
+
+def test_extract_output_messages_maps_failed_mcp_list_tools(loaded_module):
+    response = _make_response(
+        output=[
+            {
+                "id": "mcp_list_1",
+                "type": "mcp_list_tools",
+                "server_label": "weather",
+                "tools": [],
+                "error": "unavailable",
+            }
+        ]
+    )
+
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    assert messages[0].finish_reason == "error"
 
 
 def test_extract_finish_reasons_maps_terminal_message_and_tool_items(
@@ -337,6 +685,64 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
     assert loaded_module.extract_params(text="plain").output_type is None
 
 
+def test_extract_conversation_id_handles_supported_shapes(loaded_module):
+    assert (
+        loaded_module.extract_params(conversation="conv_abc").conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation={"id": "conv_abc"}
+        ).conversation_id
+        == "conv_abc"
+    )
+    assert (
+        loaded_module.extract_params(
+            conversation=SimpleNamespace(id="conv_abc")
+        ).conversation_id
+        == "conv_abc"
+    )
+
+
+# Sentinels a caller can pass explicitly instead of a conversation. A current
+# SDK defaults `conversation` to `omit`, which the oldest supported one lacks.
+_UNSET_SENTINELS = [openai.NOT_GIVEN]
+if hasattr(openai, "omit"):
+    _UNSET_SENTINELS.append(openai.omit)
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        None,
+        *_UNSET_SENTINELS,
+        "",
+        {},
+        {"id": ""},
+        {"id": 42},
+        42,
+        SimpleNamespace(),
+    ],
+)
+def test_extract_conversation_id_ignores_unusable_values(
+    loaded_module, conversation
+):
+    assert (
+        loaded_module.extract_params(conversation=conversation).conversation_id
+        is None
+    )
+
+
+def test_apply_request_attributes_sets_conversation_id(loaded_module):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    loaded_module.apply_request_attributes(
+        invocation,
+        loaded_module.extract_params(conversation="conv_abc"),
+        False,
+    )
+    assert invocation.conversation_id == "conv_abc"
+
+
 def test_extractors_handle_missing_genai_types_import(loaded_module):
     with (
         mock.patch.object(loaded_module, "TextPart", None),
@@ -391,10 +797,35 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
     assert invocation.input_tokens == 11
     assert invocation.output_tokens == 7
     assert invocation.cache_read_input_tokens == 3
-    assert invocation.cache_creation_input_tokens == 5
+    assert invocation.cache_write_input_tokens == 0
     assert invocation.attributes == {
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER: "scale",
     }
+
+
+def test_set_invocation_response_attributes_falls_back_to_cache_creation(
+    loaded_module,
+):
+    invocation = LLMInvocation(request_model="gpt-4o-mini")
+    usage = loaded_module.ResponseUsage.model_construct(
+        input_tokens=11,
+        output_tokens=7,
+        input_tokens_details=SimpleNamespace(cache_creation_input_tokens=5),
+        output_tokens_details=None,
+    )
+    result = loaded_module.Response.model_construct(
+        id="resp_123",
+        model="gpt-4.1",
+        usage=usage,
+        output=[],
+        service_tier=None,
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, result, capture_content=False
+    )
+
+    assert invocation.cache_write_input_tokens == 5
 
 
 def test_set_invocation_response_attributes_prefers_raw_served_model_header(

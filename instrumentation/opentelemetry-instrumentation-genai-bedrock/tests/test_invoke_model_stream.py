@@ -461,12 +461,7 @@ def test_stream_wrapper_anthropic_with_cache_tokens(
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
         == 30
     )
-    assert (
-        span.attributes[
-            GenAIAttributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS
-        ]
-        == 10
-    )
+    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 10
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )

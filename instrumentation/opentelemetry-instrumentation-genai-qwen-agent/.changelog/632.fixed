@@ -1,0 +1,1 @@
+Emit telemetry under the `opentelemetry.instrumentation.genai.qwen_agent` instrumentation scope instead of `opentelemetry.util.genai.handler`

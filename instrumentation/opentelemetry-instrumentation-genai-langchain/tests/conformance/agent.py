@@ -44,6 +44,8 @@ class AgentScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
+        "gen_ai.invoke_agent.duration",
+        "gen_ai.execute_tool.duration",
     )
     # langchain can't populate server.address on chat spans.
     # invoke_agent provider is unknown at span creation; ls_provider is only

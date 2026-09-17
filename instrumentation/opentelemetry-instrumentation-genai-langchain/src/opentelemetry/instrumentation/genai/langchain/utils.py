@@ -29,6 +29,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    ModalityTokens,
     OutputMessage,
     ReasoningPart,
     Role,
@@ -617,7 +618,7 @@ def resolve_response_model_and_id(
 
 
 def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
-    """Extract cache/reasoning token break-downs from LangChain usage metadata."""
+    """Extract cache and reasoning token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
     raw_input_details = usage_metadata.get("input_token_details")
@@ -633,16 +634,41 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
         else {}
     )
 
-    cache_creation = input_details.get("cache_creation")
-    if isinstance(cache_creation, int) and cache_creation:
-        token_details["cache_creation_input_tokens"] = cache_creation
+    def _get_positive_int(d: dict[str, Any], key: str) -> int | None:
+        val = d.get(key)
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+            return val
+        return None
 
-    cache_read = input_details.get("cache_read")
-    if isinstance(cache_read, int) and cache_read:
+    cache_write = _get_positive_int(input_details, "cache_write")
+    if cache_write is None:
+        cache_write = _get_positive_int(input_details, "cache_creation")
+    if cache_write is not None:
+        token_details["cache_write_input_tokens"] = cache_write
+
+    if (
+        cache_read := _get_positive_int(input_details, "cache_read")
+    ) is not None:
         token_details["cache_read_input_tokens"] = cache_read
 
-    reasoning = output_details.get("reasoning")
-    if isinstance(reasoning, int) and reasoning:
+    if (
+        reasoning := _get_positive_int(output_details, "reasoning")
+    ) is not None:
         token_details["reasoning_tokens"] = reasoning
 
     return token_details
+
+
+def modality_tokens(
+    usage_metadata: Mapping[str, Any], key: str
+) -> ModalityTokens | None:
+    """Read one of LangChain's ``*_token_details`` maps as modality pairs.
+
+    Returns ``None`` when the key is absent or not a mapping, so the caller
+    leaves any previously recorded breakdown alone. Non-modality keys such as
+    ``cache_read`` and ``reasoning`` are dropped downstream.
+    """
+    details = usage_metadata.get(key)
+    if not isinstance(details, Mapping):
+        return None
+    return list(cast("Mapping[str, int | None]", details).items())

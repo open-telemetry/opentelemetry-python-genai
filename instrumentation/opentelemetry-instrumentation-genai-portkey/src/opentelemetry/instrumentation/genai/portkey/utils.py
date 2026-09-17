@@ -250,7 +250,7 @@ def _apply_request_parameters(
     elif (p := get_value(kwargs.get("p"))) is not None:
         invocation.top_p = float(p)
     if (top_k := get_value(kwargs.get("top_k"))) is not None:
-        invocation.top_k = float(top_k)
+        invocation.top_k = int(top_k)
     if (max_tokens := get_value(kwargs.get("max_tokens"))) is not None:
         invocation.max_tokens = int(max_tokens)
     elif (

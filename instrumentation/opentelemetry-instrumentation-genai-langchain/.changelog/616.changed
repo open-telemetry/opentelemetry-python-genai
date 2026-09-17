@@ -1,0 +1,1 @@
+Record metrics `gen_ai.invoke_agent.duration` and `gen_ai.execute_tool.duration` instead of `gen_ai.client.operation.duration`, and stop setting span attribute `gen_ai.agent.id` on internal agent spans.

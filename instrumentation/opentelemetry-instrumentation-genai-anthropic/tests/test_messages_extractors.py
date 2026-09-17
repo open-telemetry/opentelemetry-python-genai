@@ -3,8 +3,29 @@
 
 """Tests for Anthropic message parameter extraction."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from anthropic.types import (
+    ServerToolUseBlock,
+    WebSearchToolResultBlock,
+    WebSearchToolResultError,
+)
+
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
+    get_tool_definitions,
+    set_invocation_response_attributes,
+)
+from opentelemetry.instrumentation.genai.anthropic.utils import (
+    _convert_content_block_to_part,
+)
+from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    GenericToolDefinition,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
 )
 
 
@@ -47,3 +68,214 @@ def test_extract_params_ignores_non_mapping_extra_body():
     assert params.temperature is None
     assert params.top_p is None
     assert params.top_k is None
+
+
+def test_set_invocation_response_attributes_records_cache_tokens():
+    invocation = MagicMock()
+    message = SimpleNamespace(
+        id="msg_123",
+        model="claude-3-7-sonnet-20250219",
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=20,
+            cache_creation_input_tokens=15,
+            cache_read_input_tokens=5,
+        ),
+    )
+    set_invocation_response_attributes(
+        invocation, message, capture_content=False
+    )
+    assert invocation.input_tokens == 30
+    assert invocation.output_tokens == 20
+    assert invocation.cache_write_input_tokens == 15
+    assert invocation.cache_read_input_tokens == 5
+
+
+def test_convert_server_tool_use_block():
+    part = _convert_content_block_to_part(
+        ServerToolUseBlock(
+            id="srvtoolu_123",
+            input={"query": "OpenTelemetry"},
+            name="web_search",
+            type="server_tool_use",
+        )
+    )
+
+    assert isinstance(part, ServerToolCallPart)
+    assert part.id == "srvtoolu_123"
+    assert part.name == "web_search"
+    assert part.server_tool_call == {
+        "input": {"query": "OpenTelemetry"},
+        "type": "web_search",
+    }
+
+
+def test_convert_server_tool_result_block():
+    part = _convert_content_block_to_part(
+        WebSearchToolResultBlock(
+            content=WebSearchToolResultError(
+                error_code="unavailable",
+                type="web_search_tool_result_error",
+            ),
+            tool_use_id="srvtoolu_123",
+            type="web_search_tool_result",
+        )
+    )
+
+    assert isinstance(part, ServerToolCallResponsePart)
+    assert part.id == "srvtoolu_123"
+    assert part.server_tool_call_response == {
+        "content": {
+            "error_code": "unavailable",
+            "type": "web_search_tool_result_error",
+        },
+        "type": "web_search",
+    }
+
+
+def test_convert_server_tool_dicts():
+    call = _convert_content_block_to_part(
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_123",
+            "name": "web_fetch",
+            "input": {"url": "https://opentelemetry.io"},
+        }
+    )
+    response = _convert_content_block_to_part(
+        {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_123",
+            "content": {
+                "type": "web_fetch_result",
+                "url": "https://opentelemetry.io",
+            },
+        }
+    )
+
+    assert isinstance(call, ServerToolCallPart)
+    assert call.server_tool_call == {
+        "input": {"url": "https://opentelemetry.io"},
+        "type": "web_fetch",
+    }
+    assert isinstance(response, ServerToolCallResponsePart)
+    assert response.server_tool_call_response == {
+        "content": {
+            "type": "web_fetch_result",
+            "url": "https://opentelemetry.io",
+        },
+        "type": "web_fetch",
+    }
+
+
+def test_extract_params_keeps_tools():
+    tools = [{"name": "get_weather", "input_schema": {"type": "object"}}]
+
+    params = extract_params(tools=tools)
+
+    assert params.tools is tools
+
+
+def test_get_tool_definitions_maps_custom_tool_to_function():
+    schema = {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    }
+
+    definitions = get_tool_definitions(
+        [
+            {
+                "name": "get_weather",
+                "description": "Get weather by city",
+                "input_schema": schema,
+            }
+        ]
+    )
+
+    assert definitions == [
+        FunctionToolDefinition(
+            name="get_weather",
+            description="Get weather by city",
+            parameters=schema,
+        )
+    ]
+    assert definitions[0].type == "function"
+
+
+def test_get_tool_definitions_maps_explicit_custom_type_to_function():
+    definitions = get_tool_definitions([{"type": "custom", "name": "noop"}])
+
+    assert definitions == [
+        FunctionToolDefinition(name="noop", description=None, parameters=None)
+    ]
+
+
+def test_get_tool_definitions_maps_server_tool_to_generic():
+    definitions = get_tool_definitions(
+        [
+            {
+                "name": "web_search",
+                "type": "web_search_20250305",
+                "max_uses": 3,
+            }
+        ]
+    )
+
+    assert definitions == [
+        GenericToolDefinition(name="web_search", type="web_search_20250305")
+    ]
+
+
+def test_get_tool_definitions_falls_back_to_type_for_unnamed_toolset():
+    definitions = get_tool_definitions(
+        [{"type": "computer_toolset_20260801", "configs": []}]
+    )
+
+    assert definitions == [
+        GenericToolDefinition(
+            name="computer_toolset_20260801",
+            type="computer_toolset_20260801",
+        )
+    ]
+
+
+def test_get_tool_definitions_reads_tool_objects():
+    class _Tool:
+        name = "get_weather"
+        description = "Get weather by city"
+        input_schema = {"type": "object"}
+
+    definitions = get_tool_definitions([_Tool()])
+
+    assert definitions == [
+        FunctionToolDefinition(
+            name="get_weather",
+            description="Get weather by city",
+            parameters={"type": "object"},
+        )
+    ]
+
+
+def test_get_tool_definitions_mixes_custom_and_server_tools():
+    definitions = get_tool_definitions(
+        [
+            {"name": "get_weather", "input_schema": {"type": "object"}},
+            {"name": "bash", "type": "bash_20250124"},
+        ]
+    )
+
+    assert definitions == [
+        FunctionToolDefinition(
+            name="get_weather",
+            description=None,
+            parameters={"type": "object"},
+        ),
+        GenericToolDefinition(name="bash", type="bash_20250124"),
+    ]
+
+
+@pytest.mark.parametrize("tools", [None, []])
+def test_get_tool_definitions_without_tools(tools):
+    assert get_tool_definitions(tools) is None

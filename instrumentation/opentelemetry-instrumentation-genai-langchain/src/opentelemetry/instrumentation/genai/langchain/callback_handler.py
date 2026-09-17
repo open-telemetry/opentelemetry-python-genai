@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import UUID
@@ -46,6 +47,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     is_stream_end_marker,
     make_input_message,
     make_last_output_message,
+    modality_tokens,
     normalize_provider,
     prepare_tool_definitions,
     resolve_response_model_and_id,
@@ -88,6 +90,94 @@ def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
         if conversation_id:
             return str(conversation_id)
     return None
+
+
+def _extract_document_score(doc: Any) -> float | int | None:
+    """Extract relevance score polymorphically from a Document or Mapping.
+
+    Retrieval scores are grounded in standard LangChain retrievers:
+    - Direct knowledge base and vector retrievers (e.g. AmazonKnowledgeBasesRetriever,
+      TavilySearchAPIRetriever) attach confidence/similarity scores to
+      ``doc.metadata["score"]``.
+    - Contextual compression retrievers wrapping rerankers (e.g. CohereRerank via
+      ContextualCompressionRetriever) populate ``doc.metadata["relevance_score"]``.
+    - Custom or duck-typed documents may provide a top-level ``score`` (or
+      ``relevance_score``) attribute or key.
+
+    Non-finite floats (NaN, +/-Inf) and boolean values are filtered out to ensure
+    valid RFC 8259 JSON serialization in gen_ai.retrieval.documents.
+    """
+    score: Any = None
+    if isinstance(doc, Mapping):
+        doc_map = cast(Mapping[str, Any], doc)
+        score = doc_map.get("score")
+        if score is None:
+            score = doc_map.get("relevance_score")
+        if score is None:
+            metadata = doc_map.get("metadata")
+            if isinstance(metadata, Mapping):
+                meta_map = cast(Mapping[str, Any], metadata)
+                score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
+            elif metadata is not None:
+                score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
+    else:
+        score = getattr(doc, "score", None)
+        if score is None:
+            score = getattr(doc, "relevance_score", None)
+        if score is None:
+            metadata = getattr(doc, "metadata", None)
+            if isinstance(metadata, Mapping):
+                meta_map = cast(Mapping[str, Any], metadata)
+                score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
+            elif metadata is not None:
+                score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
+
+    if (
+        score is not None
+        and not isinstance(score, bool)
+        and isinstance(score, (int, float))
+    ):
+        if isinstance(score, float) and not math.isfinite(score):
+            return None
+        return score
+
+    return None
+
+
+def _document_to_dict(doc: Any) -> dict[str, Any]:
+    """Convert a Document, duck-typed document object, or Mapping to a dict.
+
+    Extracts content (checking page_content first, then content), id,
+    and conditionally score if present and numeric.
+    """
+    if isinstance(doc, Mapping):
+        doc_map = cast(Mapping[str, Any], doc)
+        content = doc_map.get("page_content")
+        if content is None:
+            content = doc_map.get("content")
+        doc_id = doc_map.get("id")
+    else:
+        content = getattr(doc, "page_content", None)
+        if content is None:
+            content = getattr(doc, "content", None)
+        doc_id = getattr(doc, "id", None)
+
+    doc_dict: dict[str, Any] = {
+        "content": content,
+        "id": doc_id,
+    }
+    score = _extract_document_score(doc)
+    if score is not None:
+        doc_dict["score"] = score
+    return doc_dict
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -184,7 +274,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent.input_messages = make_input_message(inputs)
 
                     if metadata:
-                        agent.agent_id = metadata.get("agent_id")
                         agent.agent_description = metadata.get(
                             "agent_description"
                         )
@@ -297,6 +386,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 request_model = str(model)
                 break
 
+        if request_model is None and metadata:
+            if model := metadata.get("ls_model_name"):
+                request_model = str(model)
+
         # Skip telemetry for unsupported request models
         if request_model is None:
             return
@@ -304,6 +397,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         request_model = request_model.removeprefix("models/")
 
         # Initialize variables with default values to avoid "possibly unbound" errors
+        request_choice_count = None
+        top_k = None
         top_p = None
         frequency_penalty = None
         presence_penalty = None
@@ -313,6 +408,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         max_tokens = None
 
         if params is not None:
+            request_choice_count = params.get("n")
+            top_k = params.get("top_k")
             top_p = params.get("top_p")
             frequency_penalty = params.get("frequency_penalty")
             presence_penalty = params.get("presence_penalty")
@@ -356,6 +453,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
+        llm_invocation.top_k = top_k
+        llm_invocation.request_choice_count = request_choice_count
         llm_invocation.frequency_penalty = frequency_penalty
         llm_invocation.presence_penalty = presence_penalty
         llm_invocation.stop_sequences = stop_sequences
@@ -549,29 +648,41 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         ):
                             output_tokens = 0
 
-                        # Cache/reasoning break-downs (Anthropic, OpenAI
-                        # reasoning models, Bedrock). Audio tokens are dropped
-                        # (no GenAI semconv attribute).
+                        # Cache, reasoning, and modality token break-downs
                         token_details = extract_token_details(
                             cast(dict[str, Any], usage_metadata)
                         )
-                        cache_creation = token_details.get(
-                            "cache_creation_input_tokens"
-                        )
-                        if cache_creation is not None:
-                            llm_invocation.cache_creation_input_tokens = (
-                                cache_creation
+                        if (
+                            cache_write := token_details.get(
+                                "cache_write_input_tokens"
                             )
-                        cache_read = token_details.get(
-                            "cache_read_input_tokens"
-                        )
-                        if cache_read is not None:
+                        ) is not None:
+                            llm_invocation.cache_write_input_tokens = (
+                                cache_write
+                            )
+                        if (
+                            cache_read := token_details.get(
+                                "cache_read_input_tokens"
+                            )
+                        ) is not None:
                             llm_invocation.cache_read_input_tokens = cache_read
-                        reasoning_tokens = token_details.get(
-                            "reasoning_tokens"
-                        )
-                        if reasoning_tokens is not None:
+                        if (
+                            reasoning_tokens := token_details.get(
+                                "reasoning_tokens"
+                            )
+                        ) is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
+
+                        llm_invocation.set_input_tokens(
+                            modality_tokens(
+                                usage_metadata, "input_token_details"
+                            )
+                        )
+                        llm_invocation.set_output_tokens(
+                            modality_tokens(
+                                usage_metadata, "output_token_details"
+                            )
+                        )
 
                         llm_invocation.output_tokens = output_tokens
 
@@ -728,11 +839,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         if self._telemetry_handler.should_capture_content():
             invocation.documents = [
-                {
-                    "content": doc.page_content,
-                    "id": doc.id,
-                }
-                for doc in documents
+                _document_to_dict(doc) for doc in documents
             ]
         invocation.stop()
         if not invocation.span.is_recording():

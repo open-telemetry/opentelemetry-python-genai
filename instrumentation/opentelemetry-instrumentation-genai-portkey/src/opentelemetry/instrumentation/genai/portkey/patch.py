@@ -111,7 +111,7 @@ def _sync_completions_create(
             set_response_properties(invocation, result, capture_content)
             invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
@@ -144,7 +144,7 @@ def _async_completions_create(
             set_response_properties(invocation, result, capture_content)
             invocation.stop()
             return result
-        except Exception as error:
+        except BaseException as error:
             invocation.fail(error)
             raise
 
