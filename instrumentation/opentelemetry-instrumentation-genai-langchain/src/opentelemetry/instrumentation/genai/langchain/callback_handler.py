@@ -298,11 +298,32 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 run_id, parent_run_id, None
             )
 
-        template_type = serialized.get("name")
-        if template_type in _PROMPT_TEMPLATE_TYPES:
+        serialized_name = (
+            value
+            if isinstance(value := serialized.get("name"), str)
+            else None
+        )
+        serialized_id = (
+            value[-1]
+            if isinstance(value := serialized.get("id"), list)
+            and value
+            and isinstance(value[-1], str)
+            else None
+        )
+        template_type = None
+        if serialized_id in _PROMPT_TEMPLATE_TYPES:
+            template_type = serialized_id
+        elif (
+            serialized_id is None
+            and serialized_name in _PROMPT_TEMPLATE_TYPES
+        ):
+            template_type = serialized_name
+        if template_type is not None:
             self._invocation_manager.set_prompt_context(
                 parent_run_id or run_id,
-                name=(metadata or {}).get("prompt_name") or template_type,
+                name=(metadata or {}).get("prompt_name")
+                or serialized_name
+                or template_type,
                 variables=inputs,
             )
 
