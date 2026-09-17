@@ -1,0 +1,1 @@
+Add `InferenceInvocation.set_input_tokens`, `set_output_tokens` and `set_cache_read_input_tokens` for recording per-modality token breakdowns, and add `text` to `Modality`.

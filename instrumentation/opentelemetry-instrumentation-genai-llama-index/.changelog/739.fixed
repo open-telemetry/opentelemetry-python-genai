@@ -1,0 +1,1 @@
+Exclude broken llama-index-workflows 2.24.0 and declare companion library bounds.
