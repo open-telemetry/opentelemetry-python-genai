@@ -29,6 +29,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    ModalityTokens,
     OutputMessage,
     ReasoningPart,
     Role,
@@ -617,7 +618,7 @@ def resolve_response_model_and_id(
 
 
 def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
-    """Extract cache, reasoning, and modality token break-downs from LangChain usage metadata."""
+    """Extract cache and reasoning token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
     raw_input_details = usage_metadata.get("input_token_details")
@@ -655,20 +656,19 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
     ) is not None:
         token_details["reasoning_tokens"] = reasoning
 
-    # Input modality breakdowns
-    if (text_in := _get_positive_int(input_details, "text")) is not None:
-        token_details["text_input_tokens"] = text_in
-    if (image_in := _get_positive_int(input_details, "image")) is not None:
-        token_details["image_input_tokens"] = image_in
-    if (audio_in := _get_positive_int(input_details, "audio")) is not None:
-        token_details["audio_input_tokens"] = audio_in
-
-    # Output modality breakdowns
-    if (text_out := _get_positive_int(output_details, "text")) is not None:
-        token_details["text_output_tokens"] = text_out
-    if (image_out := _get_positive_int(output_details, "image")) is not None:
-        token_details["image_output_tokens"] = image_out
-    if (audio_out := _get_positive_int(output_details, "audio")) is not None:
-        token_details["audio_output_tokens"] = audio_out
-
     return token_details
+
+
+def modality_tokens(
+    usage_metadata: Mapping[str, Any], key: str
+) -> ModalityTokens | None:
+    """Read one of LangChain's ``*_token_details`` maps as modality pairs.
+
+    Returns ``None`` when the key is absent or not a mapping, so the caller
+    leaves any previously recorded breakdown alone. Non-modality keys such as
+    ``cache_read`` and ``reasoning`` are dropped downstream.
+    """
+    details = usage_metadata.get(key)
+    if not isinstance(details, Mapping):
+        return None
+    return list(cast("Mapping[str, int | None]", details).items())
