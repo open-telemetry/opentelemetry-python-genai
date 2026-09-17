@@ -26,25 +26,25 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 
 class TestConversationContextPrimitives(unittest.TestCase):
     def test_get_returns_none_when_nothing_attached(self):
-        assert get_ambient_conversation_id() is None
+        self.assertIsNone(get_ambient_conversation_id())
 
     def test_with_conversation_id_publishes_value(self):
         token = attach(with_conversation_id("thread-1"))
         try:
-            assert get_ambient_conversation_id() == "thread-1"
+            self.assertEqual(get_ambient_conversation_id(), "thread-1")
         finally:
             detach(token)
-        assert get_ambient_conversation_id() is None
+        self.assertIsNone(get_ambient_conversation_id())
 
     def test_nested_scope_overrides_and_restores(self):
         outer = attach(with_conversation_id("thread-outer"))
         try:
             inner = attach(with_conversation_id("thread-inner"))
             try:
-                assert get_ambient_conversation_id() == "thread-inner"
+                self.assertEqual(get_ambient_conversation_id(), "thread-inner")
             finally:
                 detach(inner)
-            assert get_ambient_conversation_id() == "thread-outer"
+            self.assertEqual(get_ambient_conversation_id(), "thread-outer")
         finally:
             detach(outer)
 
@@ -67,9 +67,11 @@ class TestAmbientFallback(unittest.TestCase):
             for s in self.span_exporter.get_finished_spans()
             if s.name == name
         ]
-        assert len(spans) == 1, (
+        self.assertEqual(
+            len(spans),
+            1,
             f"expected exactly one {name!r} span, "
-            f"got {[s.name for s in self.span_exporter.get_finished_spans()]}"
+            f"got {[s.name for s in self.span_exporter.get_finished_spans()]}",
         )
         return spans[0]
 
@@ -79,12 +81,14 @@ class TestAmbientFallback(unittest.TestCase):
             with self.handler.inference(
                 provider="openai", request_model="gpt-4o-mini"
             ) as inference:
-                assert inference.conversation_id == "thread-1"
+                self.assertEqual(inference.conversation_id, "thread-1")
         finally:
             detach(token)
 
         chat_span = self._finished_span_by_name("chat gpt-4o-mini")
-        assert chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
+        self.assertEqual(
+            chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-1"
+        )
 
     def test_explicit_conversation_id_wins_over_ambient(self):
         token = attach(with_conversation_id("thread-ambient"))
@@ -94,14 +98,14 @@ class TestAmbientFallback(unittest.TestCase):
                 request_model="gpt-4o-mini",
                 conversation_id="thread-explicit",
             ) as inference:
-                assert inference.conversation_id == "thread-explicit"
+                self.assertEqual(inference.conversation_id, "thread-explicit")
         finally:
             detach(token)
 
         chat_span = self._finished_span_by_name("chat gpt-4o-mini")
-        assert (
-            chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID]
-            == "thread-explicit"
+        self.assertEqual(
+            chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID],
+            "thread-explicit",
         )
 
     def test_conversation_id_set_after_construction_still_lands_on_span(self):
@@ -113,8 +117,8 @@ class TestAmbientFallback(unittest.TestCase):
             inference.conversation_id = "thread-late"
 
         chat_span = self._finished_span_by_name("chat gpt-4o-mini")
-        assert (
-            chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-late"
+        self.assertEqual(
+            chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-late"
         )
 
     def test_no_ambient_and_no_explicit_omits_attribute(self):
@@ -123,7 +127,7 @@ class TestAmbientFallback(unittest.TestCase):
         ):
             pass
         chat_span = self._finished_span_by_name("chat gpt-4o-mini")
-        assert GenAI.GEN_AI_CONVERSATION_ID not in chat_span.attributes
+        self.assertNotIn(GenAI.GEN_AI_CONVERSATION_ID, chat_span.attributes)
 
     def test_sibling_scopes_do_not_leak(self):
         for cid in ("thread-1", "thread-2"):
@@ -141,11 +145,11 @@ class TestAmbientFallback(unittest.TestCase):
             for s in self.span_exporter.get_finished_spans()
             if s.name == "chat gpt-4o-mini"
         ]
-        assert len(spans) == 2
-        assert {s.attributes[GenAI.GEN_AI_CONVERSATION_ID] for s in spans} == {
-            "thread-1",
-            "thread-2",
-        }
+        self.assertEqual(len(spans), 2)
+        self.assertEqual(
+            {s.attributes[GenAI.GEN_AI_CONVERSATION_ID] for s in spans},
+            {"thread-1", "thread-2"},
+        )
 
     def test_local_agent_inherits_ambient_conversation_id(self):
         token = attach(with_conversation_id("thread-1"))
@@ -156,7 +160,9 @@ class TestAmbientFallback(unittest.TestCase):
             detach(token)
 
         span = self._finished_span_by_name("invoke_agent triage")
-        assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
+        self.assertEqual(
+            span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-1"
+        )
 
     def test_local_agent_explicit_wins_over_ambient(self):
         token = attach(with_conversation_id("thread-ambient"))
@@ -169,8 +175,8 @@ class TestAmbientFallback(unittest.TestCase):
             detach(token)
 
         span = self._finished_span_by_name("invoke_agent triage")
-        assert (
-            span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-explicit"
+        self.assertEqual(
+            span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-explicit"
         )
 
     def test_agent_rooted_trace_propagates_to_nested_inference(self):
@@ -186,9 +192,9 @@ class TestAmbientFallback(unittest.TestCase):
 
         for name in ("invoke_agent triage", "chat gpt-4o-mini"):
             span = self._finished_span_by_name(name)
-            assert (
-                span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
-            ), name
+            self.assertEqual(
+                span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-1", name
+            )
 
     def test_remote_agent_inherits_ambient_conversation_id(self):
         token = attach(with_conversation_id("thread-1"))
@@ -201,7 +207,9 @@ class TestAmbientFallback(unittest.TestCase):
             detach(token)
 
         span = self._finished_span_by_name("invoke_agent triage")
-        assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
+        self.assertEqual(
+            span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-1"
+        )
 
     def test_workflow_inherits_ambient_conversation_id(self):
         # Covers an agents-library workflow nested inside an outer framework
@@ -214,7 +222,9 @@ class TestAmbientFallback(unittest.TestCase):
             detach(token)
 
         span = self._finished_span_by_name("invoke_workflow wf")
-        assert span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
+        self.assertEqual(
+            span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-1"
+        )
 
     def test_workflow_explicit_wins_over_ambient(self):
         token = attach(with_conversation_id("thread-ambient"))
@@ -227,8 +237,8 @@ class TestAmbientFallback(unittest.TestCase):
             detach(token)
 
         span = self._finished_span_by_name("invoke_workflow wf")
-        assert (
-            span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-explicit"
+        self.assertEqual(
+            span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-explicit"
         )
 
     def test_full_nesting_shares_one_conversation_id(self):
@@ -242,15 +252,20 @@ class TestAmbientFallback(unittest.TestCase):
                     pass
 
         spans = self.span_exporter.get_finished_spans()
-        assert {s.name for s in spans} == {
-            "invoke_workflow wf",
-            "invoke_agent triage",
-            "chat gpt-4o-mini",
-        }
+        self.assertEqual(
+            {s.name for s in spans},
+            {
+                "invoke_workflow wf",
+                "invoke_agent triage",
+                "chat gpt-4o-mini",
+            },
+        )
         for span in spans:
-            assert (
-                span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "thread-1"
-            ), f"{span.name} missing the ambient conversation id"
+            self.assertEqual(
+                span.attributes[GenAI.GEN_AI_CONVERSATION_ID],
+                "thread-1",
+                f"{span.name} missing the ambient conversation id",
+            )
 
     def test_conversation_id_stays_off_metrics(self):
         # gen_ai.conversation.id is high cardinality; metric attributes are
@@ -260,10 +275,10 @@ class TestAmbientFallback(unittest.TestCase):
             inference = self.handler.inference(
                 provider="openai", request_model="gpt-4o-mini"
             )
-            assert inference.conversation_id == "thread-1"
+            self.assertEqual(inference.conversation_id, "thread-1")
             inference.stop()
             metric_attrs = inference._get_metric_attributes()
         finally:
             detach(token)
 
-        assert GenAI.GEN_AI_CONVERSATION_ID not in metric_attrs
+        self.assertNotIn(GenAI.GEN_AI_CONVERSATION_ID, metric_attrs)
