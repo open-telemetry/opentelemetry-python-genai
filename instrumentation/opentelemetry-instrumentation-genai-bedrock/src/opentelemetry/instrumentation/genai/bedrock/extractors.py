@@ -1047,16 +1047,6 @@ def extract_retrieve_and_generate_request(
                 aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID
             ] = str(kb_id)
 
-        retrieval_config = kb_config.get("retrievalConfiguration")
-        if _is_dict(retrieval_config):
-            vector_search_config = retrieval_config.get(
-                "vectorSearchConfiguration"
-            )
-            if _is_dict(vector_search_config):
-                num_results = vector_search_config.get("numberOfResults")
-                if num_results is not None:
-                    invocation.top_k = _safe_int(num_results)
-
         if _is_dict(kb_config.get("generationConfiguration")):
             gen_config = kb_config["generationConfiguration"]
 
@@ -1099,13 +1089,12 @@ def extract_retrieve_and_generate_request(
 
         add_fields = gen_config.get("additionalModelRequestFields")
         if _is_dict(add_fields):
-            if invocation.top_k is None:
-                invocation.top_k = _safe_int(
-                    _first_not_none(
-                        add_fields.get("topK"), add_fields.get("top_k")
-                    )
-                )
-            if invocation.seed is None:
+            top_k = _first_not_none(
+                add_fields.get("topK"), add_fields.get("top_k")
+            )
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+            if invocation.seed is None and "seed" in add_fields:
                 invocation.seed = _safe_int(add_fields.get("seed"))
 
 

@@ -949,7 +949,10 @@ def test_retrieve_and_generate_sync_with_content(
                                 "stopSequences": ["STOP"],
                             }
                         },
-                        "additionalModelRequestFields": {"seed": 42},
+                        "additionalModelRequestFields": {
+                            "seed": 42,
+                            "topK": 250,
+                        },
                     },
                 },
             },
@@ -981,7 +984,10 @@ def test_retrieve_and_generate_sync_with_content(
                                 "stopSequences": ["STOP"],
                             }
                         },
-                        "additionalModelRequestFields": {"seed": 42},
+                        "additionalModelRequestFields": {
+                            "seed": 42,
+                            "topK": 250,
+                        },
                     },
                 },
             },
@@ -1017,7 +1023,7 @@ def test_retrieve_and_generate_sync_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
         == "session-rag-1"
     )
-    assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 3
+    assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 250
     assert (
         span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE) == 0.5
     )
@@ -1102,6 +1108,102 @@ def test_retrieve_and_generate_sync_no_content(
         span.attributes.get(aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID)
         == "kb-123"
     )
+
+
+def test_retrieve_and_generate_vector_search_does_not_set_top_k(
+    agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber.add_response(
+        "retrieve_and_generate",
+        service_response={
+            "output": {"text": "Answer"},
+            "sessionId": "session-rag-no-topk",
+        },
+        expected_params={
+            "input": {"text": "Query"},
+            "retrieveAndGenerateConfiguration": {
+                "type": "KNOWLEDGE_BASE",
+                "knowledgeBaseConfiguration": {
+                    "knowledgeBaseId": "kb-123",
+                    "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+                    "retrievalConfiguration": {
+                        "vectorSearchConfiguration": {"numberOfResults": 5}
+                    },
+                },
+            },
+        },
+    )
+
+    with stubber:
+        agent_client.retrieve_and_generate(
+            input={"text": "Query"},
+            retrieveAndGenerateConfiguration={
+                "type": "KNOWLEDGE_BASE",
+                "knowledgeBaseConfiguration": {
+                    "knowledgeBaseId": "kb-123",
+                    "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+                    "retrievalConfiguration": {
+                        "vectorSearchConfiguration": {"numberOfResults": 5}
+                    },
+                },
+            },
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_REQUEST_TOP_K not in span.attributes
+
+
+def test_retrieve_and_generate_additional_fields_snake_case_top_k(
+    agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber.add_response(
+        "retrieve_and_generate",
+        service_response={
+            "output": {"text": "Answer"},
+            "sessionId": "session-rag-topk-snake",
+        },
+        expected_params={
+            "input": {"text": "Query"},
+            "retrieveAndGenerateConfiguration": {
+                "type": "KNOWLEDGE_BASE",
+                "knowledgeBaseConfiguration": {
+                    "knowledgeBaseId": "kb-123",
+                    "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+                    "generationConfiguration": {
+                        "additionalModelRequestFields": {"top_k": 40},
+                    },
+                },
+            },
+        },
+    )
+
+    with stubber:
+        agent_client.retrieve_and_generate(
+            input={"text": "Query"},
+            retrieveAndGenerateConfiguration={
+                "type": "KNOWLEDGE_BASE",
+                "knowledgeBaseConfiguration": {
+                    "knowledgeBaseId": "kb-123",
+                    "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+                    "generationConfiguration": {
+                        "additionalModelRequestFields": {"top_k": 40},
+                    },
+                },
+            },
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_TOP_K) == 40
 
 
 def test_retrieve_and_generate_sync_guardrail_intervened(
