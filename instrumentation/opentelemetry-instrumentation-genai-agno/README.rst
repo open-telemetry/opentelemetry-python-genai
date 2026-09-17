@@ -35,6 +35,7 @@ The instrumentation automatically traces:
 * ``Workflow.run``, ``Workflow.arun`` (including background executions), ``Workflow.continue_run``, and ``Workflow.acontinue_run``
 * ``FunctionCall.execute`` and ``FunctionCall.aexecute``
 * ``Knowledge.search``, ``Knowledge.asearch``, ``Knowledge.retrieve``, and ``Knowledge.aretrieve``
+* ``Embedder.get_embedding``, ``Embedder.get_embedding_and_usage``, ``Embedder.async_get_embedding``, and ``Embedder.async_get_embedding_and_usage``
 
 Configuration
 -------------

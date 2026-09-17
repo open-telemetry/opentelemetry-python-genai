@@ -91,6 +91,44 @@ _KNOWLEDGE_CLASS = "Knowledge"
 _ACTIVE_FOREGROUND_WORKFLOWS: contextvars.ContextVar[frozenset[int]] = (
     contextvars.ContextVar("_ACTIVE_FOREGROUND_WORKFLOWS", default=frozenset())
 )
+_SUPPRESS_EMBEDDING: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_SUPPRESS_EMBEDDING", default=False
+)
+_patched_embedder_classes: set[type[Any]] = set()
+
+
+_KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
+    ("agno.knowledge.embedder.base", "Embedder"),
+    ("agno.knowledge.embedder.openai", "OpenAIEmbedder"),
+    ("agno.knowledge.embedder.azure_openai", "AzureOpenAIEmbedder"),
+    ("agno.knowledge.embedder.aws_bedrock", "AwsBedrockEmbedder"),
+    ("agno.knowledge.embedder.google", "GoogleEmbedder"),
+    ("agno.knowledge.embedder.ollama", "OllamaEmbedder"),
+    ("agno.knowledge.embedder.mistral", "MistralEmbedder"),
+    ("agno.knowledge.embedder.cohere", "CohereEmbedder"),
+    ("agno.knowledge.embedder.fireworks", "FireworksEmbedder"),
+    ("agno.knowledge.embedder.jina", "JinaEmbedder"),
+    ("agno.knowledge.embedder.together", "TogetherEmbedder"),
+    ("agno.knowledge.embedder.voyageai", "VoyageAIEmbedder"),
+    ("agno.knowledge.embedder.fastembed", "FastEmbedEmbedder"),
+    (
+        "agno.knowledge.embedder.sentence_transformer",
+        "SentenceTransformerEmbedder",
+    ),
+    ("agno.knowledge.embedder.huggingface", "HuggingfaceCustomEmbedder"),
+    ("agno.knowledge.embedder.langdb", "LangDBEmbedder"),
+    ("agno.knowledge.embedder.nebius", "NebiusEmbedder"),
+    ("agno.knowledge.embedder.openai_like", "OpenAILikeEmbedder"),
+    ("agno.knowledge.embedder.vllm", "VLLMEmbedder"),
+)
+_EMBEDDER_METHODS: frozenset[str] = frozenset(
+    {
+        "get_embedding",
+        "get_embedding_and_usage",
+        "async_get_embedding",
+        "async_get_embedding_and_usage",
+    }
+)
 
 # wrapt has no unregister API for post-import hooks; monotonic generations
 # invalidate deferred hooks registered during prior instrumentation cycles.
@@ -253,6 +291,39 @@ def patch_agent(handler: TelemetryHandler) -> None:
         current_generation,
     )
 
+    embedder_wrappers = _embedder_method_wrappers(handler)
+    for mod_name, cls_name in _KNOWN_EMBEDDERS:
+        for method_name, wrapper_fn in embedder_wrappers:
+            _safe_wrap_function(
+                mod_name,
+                f"{cls_name}.{method_name}",
+                wrapper_fn,
+                current_generation,
+            )
+
+    try:
+        from agno.knowledge.embedder.base import Embedder
+
+        # Wrap all existing custom embedder classes
+        def _wrap_subclasses(base_cls: type[Any]) -> None:
+            for sub in base_cls.__subclasses__():
+                _wrap_embedder_class(sub, handler)
+                _wrap_subclasses(sub)
+
+        _wrap_subclasses(Embedder)
+
+        # Wrap new embedder classes created during runtime
+        def _traced_init_subclass(cls: type[Embedder], **kwargs: Any) -> None:
+            super(Embedder, cls).__init_subclass__(**kwargs)
+            if _is_instrumented:
+                _wrap_embedder_class(cls, handler)
+
+        setattr(
+            Embedder, "__init_subclass__", classmethod(_traced_init_subclass)
+        )
+    except Exception:
+        pass
+
 
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
@@ -265,6 +336,27 @@ def unpatch_agent() -> None:
             unwrap(target, attr)
         except (AttributeError, ValueError):
             pass
+
+    try:
+        from agno.knowledge.embedder.base import Embedder
+
+        if "__init_subclass__" in Embedder.__dict__:
+            delattr(Embedder, "__init_subclass__")
+    except Exception:
+        pass
+
+    for cls in list(_patched_embedder_classes):
+        for attr in _EMBEDDER_METHODS:
+            _safe_unwrap(cls, attr)
+    _patched_embedder_classes.clear()
+
+    for mod_name, cls_name in _KNOWN_EMBEDDERS:
+        if mod_name in sys.modules:
+            mod = sys.modules[mod_name]
+            cls = getattr(mod, cls_name, None)
+            if cls is not None:
+                for attr in _EMBEDDER_METHODS:
+                    _safe_unwrap(cls, attr)
 
     if _AGNO_MODULE in sys.modules:
         try:
@@ -314,6 +406,276 @@ def unpatch_agent() -> None:
                 _safe_unwrap(agno.knowledge.knowledge.Knowledge, attr)
         except ImportError:
             pass
+
+
+def _extract_embedder_provider(embedder: Any) -> str:
+    if hasattr(embedder, "provider") and embedder.provider:
+        return str(embedder.provider).lower()
+    module = getattr(embedder, "__module__", "")
+    if "agno.knowledge.embedder." in module:
+        sub = module.split("agno.knowledge.embedder.")[-1].split(".")[0]
+        if sub == "azure_openai":
+            return "azure.ai.openai"
+        if sub == "aws_bedrock":
+            return "aws.bedrock"
+        return sub.lower()
+    cls_name = embedder.__class__.__name__
+    cls_name = cls_name.removesuffix("Embedder")
+    return cls_name.lower() or "agno"
+
+
+def _extract_embedder_model(embedder: Any) -> str | None:
+    model = (
+        getattr(embedder, "id", None)
+        or getattr(embedder, "model", None)
+        or getattr(embedder, "name", None)
+    )
+    return str(model) if model is not None else None
+
+
+def _extract_embedder_input_tokens(usage: dict[str, Any]) -> int | None:
+    for key in ("prompt_tokens", "input_tokens", "total_tokens"):
+        val = usage.get(key)
+        if val is not None:
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def _embedder_get_embedding(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Sequence[float]],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Sequence[float]:
+        if _SUPPRESS_EMBEDDING.get():
+            return wrapped(*args, **kwargs)
+
+        token = _SUPPRESS_EMBEDDING.set(True)
+        provider = _extract_embedder_provider(instance)
+        request_model = _extract_embedder_model(instance)
+        invocation = handler.embedding(
+            provider=provider,
+            request_model=request_model,
+        )
+        if request_model:
+            invocation.response_model_name = request_model
+        set_invocation_user_id(invocation, instance, args, kwargs)
+        if hasattr(instance, "encoding_format") and instance.encoding_format:
+            invocation.encoding_formats = [str(instance.encoding_format)]
+
+        try:
+            result = wrapped(*args, **kwargs)
+            if result:
+                invocation.dimension_count = len(result)
+            elif hasattr(instance, "dimensions") and instance.dimensions:
+                try:
+                    invocation.dimension_count = int(instance.dimensions)
+                except (ValueError, TypeError):
+                    pass
+            invocation.stop()
+            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        finally:
+            _SUPPRESS_EMBEDDING.reset(token)
+
+    return traced_method
+
+
+def _embedder_get_embedding_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., tuple[Sequence[float], dict[str, Any] | None]],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Sequence[float], dict[str, Any] | None]:
+        if _SUPPRESS_EMBEDDING.get():
+            return wrapped(*args, **kwargs)
+
+        token = _SUPPRESS_EMBEDDING.set(True)
+        provider = _extract_embedder_provider(instance)
+        request_model = _extract_embedder_model(instance)
+        invocation = handler.embedding(
+            provider=provider,
+            request_model=request_model,
+        )
+        if request_model:
+            invocation.response_model_name = request_model
+        set_invocation_user_id(invocation, instance, args, kwargs)
+        if hasattr(instance, "encoding_format") and instance.encoding_format:
+            invocation.encoding_formats = [str(instance.encoding_format)]
+
+        try:
+            result = wrapped(*args, **kwargs)
+            embedding, usage = result
+            if embedding:
+                invocation.dimension_count = len(embedding)
+            elif hasattr(instance, "dimensions") and instance.dimensions:
+                try:
+                    invocation.dimension_count = int(instance.dimensions)
+                except (ValueError, TypeError):
+                    pass
+
+            if isinstance(usage, dict):
+                input_tokens = _extract_embedder_input_tokens(usage)
+                if input_tokens is not None:
+                    invocation.input_tokens = input_tokens
+                if model := usage.get("model"):
+                    invocation.response_model_name = str(model)
+
+            invocation.stop()
+            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        finally:
+            _SUPPRESS_EMBEDDING.reset(token)
+
+    return traced_method
+
+
+def _embedder_async_get_embedding(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Sequence[float]]],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Sequence[float]:
+        if _SUPPRESS_EMBEDDING.get():
+            return await wrapped(*args, **kwargs)
+
+        token = _SUPPRESS_EMBEDDING.set(True)
+        provider = _extract_embedder_provider(instance)
+        request_model = _extract_embedder_model(instance)
+        invocation = handler.embedding(
+            provider=provider,
+            request_model=request_model,
+        )
+        if request_model:
+            invocation.response_model_name = request_model
+        set_invocation_user_id(invocation, instance, args, kwargs)
+        if hasattr(instance, "encoding_format") and instance.encoding_format:
+            invocation.encoding_formats = [str(instance.encoding_format)]
+
+        try:
+            result = await wrapped(*args, **kwargs)
+            if result:
+                invocation.dimension_count = len(result)
+            elif hasattr(instance, "dimensions") and instance.dimensions:
+                try:
+                    invocation.dimension_count = int(instance.dimensions)
+                except (ValueError, TypeError):
+                    pass
+            invocation.stop()
+            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        finally:
+            _SUPPRESS_EMBEDDING.reset(token)
+
+    return cast(Callable[..., Any], traced_method)
+
+
+def _embedder_async_get_embedding_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[
+            ..., Awaitable[tuple[Sequence[float], dict[str, Any] | None]]
+        ],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Sequence[float], dict[str, Any] | None]:
+        if _SUPPRESS_EMBEDDING.get():
+            return await wrapped(*args, **kwargs)
+
+        token = _SUPPRESS_EMBEDDING.set(True)
+        provider = _extract_embedder_provider(instance)
+        request_model = _extract_embedder_model(instance)
+        invocation = handler.embedding(
+            provider=provider,
+            request_model=request_model,
+        )
+        if request_model:
+            invocation.response_model_name = request_model
+        set_invocation_user_id(invocation, instance, args, kwargs)
+        if hasattr(instance, "encoding_format") and instance.encoding_format:
+            invocation.encoding_formats = [str(instance.encoding_format)]
+
+        try:
+            result = await wrapped(*args, **kwargs)
+            embedding, usage = result
+            if embedding:
+                invocation.dimension_count = len(embedding)
+            elif hasattr(instance, "dimensions") and instance.dimensions:
+                try:
+                    invocation.dimension_count = int(instance.dimensions)
+                except (ValueError, TypeError):
+                    pass
+
+            if isinstance(usage, dict):
+                input_tokens = _extract_embedder_input_tokens(usage)
+                if input_tokens is not None:
+                    invocation.input_tokens = input_tokens
+                if model := usage.get("model"):
+                    invocation.response_model_name = str(model)
+
+            invocation.stop()
+            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        finally:
+            _SUPPRESS_EMBEDDING.reset(token)
+
+    return cast(Callable[..., Any], traced_method)
+
+
+def _embedder_method_wrappers(
+    handler: TelemetryHandler,
+) -> tuple[tuple[str, Callable[..., Any]], ...]:
+    return (
+        ("get_embedding", _embedder_get_embedding(handler)),
+        (
+            "get_embedding_and_usage",
+            _embedder_get_embedding_and_usage(handler),
+        ),
+        ("async_get_embedding", _embedder_async_get_embedding(handler)),
+        (
+            "async_get_embedding_and_usage",
+            _embedder_async_get_embedding_and_usage(handler),
+        ),
+    )
+
+
+def _wrap_embedder_class(
+    cls: type[Any],
+    handler: TelemetryHandler,
+) -> None:
+    for method_name, wrapper_fn in _embedder_method_wrappers(handler):
+        if hasattr(cls, method_name):
+            target = getattr(cls, method_name)
+            if not hasattr(target, "__wrapped__"):
+                try:
+                    wrap_function_wrapper(
+                        cast(Any, cls), method_name, wrapper_fn
+                    )
+                    _patched_embedder_classes.add(cls)
+                except Exception:
+                    pass
 
 
 def _extract_input_content(input_val: Any) -> str:
