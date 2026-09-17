@@ -956,6 +956,16 @@ def extract_invoke_agent_request(
             ]
 
 
+def _extract_functions(ag: dict[str, Any]) -> list[dict[str, Any]]:
+    schema = ag.get("functionSchema")
+    if not _is_dict(schema):
+        return []
+    functions = schema.get("functions")
+    if not _is_list(functions):
+        return []
+    return [f for f in functions if _is_dict(f)]
+
+
 def extract_invoke_inline_agent_request(
     api_params: dict[str, Any],
     invocation: RemoteAgentInvocation,
@@ -990,23 +1000,17 @@ def extract_invoke_inline_agent_request(
         for ag in action_groups:
             if not _is_dict(ag):
                 continue
-            func_schema = ag.get("functionSchema")
-            if _is_dict(func_schema):
-                functions = func_schema.get("functions")
-                if _is_list(functions):
-                    for func in functions:
-                        if not _is_dict(func):
-                            continue
-                        name = func.get("name", "")
-                        desc = func.get("description")
-                        params = func.get("parameters")
-                        tool_defs.append(
-                            FunctionToolDefinition(
-                                name=name,
-                                description=desc,
-                                parameters=params if _is_dict(params) else {},
-                            )
-                        )
+            for func in _extract_functions(ag):
+                name = str(func.get("name", ""))
+                desc = func.get("description")
+                params = func.get("parameters")
+                tool_defs.append(
+                    FunctionToolDefinition(
+                        name=name,
+                        description=str(desc) if desc is not None else None,
+                        parameters=params if _is_dict(params) else {},
+                    )
+                )
             sig = ag.get("parentActionGroupSignature")
             if sig:
                 tool_defs.append(
