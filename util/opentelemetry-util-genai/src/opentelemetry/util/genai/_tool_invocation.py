@@ -78,6 +78,15 @@ class ToolInvocation(GenAIInvocation):
             ``invocation.tool_description`` on the returned invocation instead.
         """
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_OPERATION_NAME, _operation_name),
+                (GenAI.GEN_AI_TOOL_NAME, name),
+                (GenAI.GEN_AI_TOOL_TYPE, tool_type),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -86,6 +95,8 @@ class ToolInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            start_attributes=start_attributes,
+            context=context,
             content_capturing_mode=content_capturing_mode,
         )
         self._name: str = name
@@ -99,7 +110,6 @@ class ToolInvocation(GenAIInvocation):
         self.tool_description: str | None = tool_description
         self._tool_type: str | None = tool_type
         self._agent_name: str | None = agent_name
-        self._start(self._get_start_attributes(), context=context)
 
     @property
     def should_capture_content_on_span(self) -> bool:
@@ -109,17 +119,6 @@ class ToolInvocation(GenAIInvocation):
             Use :attr:`should_capture_content` instead.
         """
         return self._should_capture_content_on_span
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        optional_attrs = (
-            (GenAI.GEN_AI_TOOL_NAME, self._name),
-            (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {

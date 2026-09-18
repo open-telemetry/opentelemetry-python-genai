@@ -57,6 +57,7 @@ class AgentInvocation(GenAIInvocation, ABC):
         completion_hook: CompletionHook,
         *,
         span_kind: SpanKind,
+        start_attributes: dict[str, AttributeValue],
         request_model: str | None = None,
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
@@ -72,6 +73,7 @@ class AgentInvocation(GenAIInvocation, ABC):
             if agent_name
             else _operation_name,
             span_kind=span_kind,
+            start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
         )
         self._request_model: str | None = request_model
@@ -198,6 +200,18 @@ class LocalAgentInvocation(AgentInvocation):
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (
+                    GenAI.GEN_AI_OPERATION_NAME,
+                    GenAI.GenAiOperationNameValues.INVOKE_AGENT.value,
+                ),
+                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
+                (GenAI.GEN_AI_AGENT_NAME, agent_name),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -206,19 +220,9 @@ class LocalAgentInvocation(AgentInvocation):
             span_kind=SpanKind.INTERNAL,
             request_model=request_model,
             agent_name=agent_name,
+            start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
         )
-        self._start(self._get_start_attributes())
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
@@ -266,6 +270,21 @@ class RemoteAgentInvocation(AgentInvocation):
         agent_version: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (
+                    GenAI.GEN_AI_OPERATION_NAME,
+                    GenAI.GenAiOperationNameValues.INVOKE_AGENT.value,
+                ),
+                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
+                (GenAI.GEN_AI_AGENT_NAME, agent_name),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -274,6 +293,7 @@ class RemoteAgentInvocation(AgentInvocation):
             span_kind=SpanKind.CLIENT,
             request_model=request_model,
             agent_name=agent_name,
+            start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
         )
         self._provider: str = provider
@@ -285,8 +305,6 @@ class RemoteAgentInvocation(AgentInvocation):
         self.previous_response_id: str | None = None
         self._cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
-
-        self._start(self._get_start_attributes())
 
     @property
     def cache_write_input_tokens(self) -> int | None:
@@ -309,19 +327,6 @@ class RemoteAgentInvocation(AgentInvocation):
     @cache_creation_input_tokens.setter
     def cache_creation_input_tokens(self, value: int | None) -> None:
         self._cache_write_input_tokens = value
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_agent_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (

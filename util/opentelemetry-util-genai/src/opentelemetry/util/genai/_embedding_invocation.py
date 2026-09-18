@@ -37,6 +37,17 @@ class EmbeddingInvocation(GenAIInvocation):
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_OPERATION_NAME, _operation_name),
+                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -47,6 +58,7 @@ class EmbeddingInvocation(GenAIInvocation):
             if request_model
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
         )
         # e.g., azure.ai.openai, openai, aws.bedrock
@@ -60,20 +72,6 @@ class EmbeddingInvocation(GenAIInvocation):
         self.input_tokens: int | None = None
         self.dimension_count: int | None = None
         self.response_model_name: str | None = None
-        self._start(self._get_start_attributes())
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
