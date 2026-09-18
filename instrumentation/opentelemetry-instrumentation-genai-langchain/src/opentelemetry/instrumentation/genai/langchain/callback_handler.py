@@ -176,15 +176,15 @@ def _prompt_variables(
 ) -> dict[str, Any]:
     raw_prompt_config = serialized.get("kwargs")
     if not isinstance(raw_prompt_config, Mapping):
-        return dict(inputs)
+        return {}
     prompt_config = cast(Mapping[str, Any], raw_prompt_config)
 
     raw_input_variables = prompt_config.get("input_variables")
     if not isinstance(raw_input_variables, list):
-        return dict(inputs)
+        return {}
     untyped_input_variables = cast(list[Any], raw_input_variables)
     if not all(isinstance(key, str) for key in untyped_input_variables):
-        return dict(inputs)
+        return {}
     input_variables = cast(list[str], untyped_input_variables)
 
     partial_variables = prompt_config.get("partial_variables")

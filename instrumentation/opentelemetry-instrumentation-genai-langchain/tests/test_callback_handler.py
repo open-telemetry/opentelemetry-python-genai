@@ -507,7 +507,13 @@ class TestOnChatModelStartPromptContext:
             parent_run_id, None, None
         )
         handler.on_chain_start(
-            serialized={"name": "PromptTemplate"},
+            serialized={
+                "name": "PromptTemplate",
+                "kwargs": {
+                    "input_variables": ["name"],
+                    "partial_variables": {},
+                },
+            },
             inputs={"name": "Ada"},
             run_id=_run_id(),
             parent_run_id=parent_run_id,
@@ -708,7 +714,7 @@ class TestOnChainStartUnclassified:
 
         assert handler._invocation_manager.get_prompt_context(
             parent_run_id
-        ) == (template_type, {"name": "Ada"})
+        ) == (template_type, {})
 
     def test_non_prompt_id_takes_precedence_over_prompt_name(self):
         handler, _, _, _ = _make_handler()
