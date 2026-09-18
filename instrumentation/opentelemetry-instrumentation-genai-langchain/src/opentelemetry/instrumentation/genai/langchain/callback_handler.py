@@ -200,8 +200,7 @@ def _prompt_variables(
         partial_names.add(name)
         if (
             isinstance(value, Mapping)
-            and cast(Mapping[str, Any], value).get("type")
-            == "not_implemented"
+            and cast(Mapping[str, Any], value).get("type") == "not_implemented"
         ):
             continue
         variables[name] = value
