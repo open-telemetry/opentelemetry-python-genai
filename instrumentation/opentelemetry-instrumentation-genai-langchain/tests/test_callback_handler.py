@@ -499,7 +499,60 @@ class TestOnChatModelStartConversationId:
         assert telemetry.inference.return_value.conversation_id is None
 
 
+class TestOnChatModelStartPromptContext:
+    def test_prompt_context_from_parent(self):
+        handler, telemetry, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "name": "PromptTemplate",
+                "kwargs": {
+                    "input_variables": ["name"],
+                    "partial_variables": {},
+                },
+            },
+            inputs={"name": "Ada"},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+            metadata={"prompt_name": "greeting"},
+        )
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello, Ada")]],
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+
+
 class TestOnChainStartUnclassified:
+    def test_none_serialized_uses_name_from_kwargs(self):
+        handler, telemetry, workflow_invocation, _ = _make_handler()
+        run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized=None,
+            inputs={"name": "Ada"},
+            run_id=run_id,
+            name="RunnableSequence",
+        )
+
+        telemetry.workflow.assert_called_once_with(name="RunnableSequence")
+        telemetry.invoke_local_agent.assert_not_called()
+        assert (
+            handler._invocation_manager.get_invocation(run_id)
+            is workflow_invocation
+        )
+
     def test_unclassified_chain_registers_none_and_no_span(self):
         handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
@@ -521,6 +574,190 @@ class TestOnChainStartUnclassified:
         telemetry.invoke_local_agent.assert_not_called()
         assert run_id in handler._invocation_manager._invocations
         assert handler._invocation_manager.get_invocation(run_id) is None
+
+    @pytest.mark.parametrize(
+        "template_type", ["PromptTemplate", "ChatPromptTemplate"]
+    )
+    def test_prompt_template_stores_context_on_parent(
+        self, template_type: str
+    ):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={
+                "id": [
+                    "langchain",
+                    "prompts",
+                    template_type,
+                ],
+                "name": "weather",
+                "kwargs": {
+                    "input_variables": ["name", "style"],
+                    "partial_variables": {},
+                },
+            },
+            inputs={"name": "Ada", "style": "formal"},
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+        )
+
+        context = handler._invocation_manager.get_prompt_context(parent_run_id)
+        assert context is not None
+        assert context == (
+            "weather",
+            {"name": "Ada", "style": "formal"},
+        )
+
+    @pytest.mark.parametrize(
+        "template_type", ["PromptTemplate", "ChatPromptTemplate"]
+    )
+    def test_prompt_template_stores_only_effective_variables(
+        self, template_type: str
+    ):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", template_type],
+                "kwargs": {
+                    "input_variables": ["question"],
+                    "partial_variables": {
+                        "style": "brief",
+                        "timestamp": {
+                            "lc": 1,
+                            "type": "not_implemented",
+                            "id": ["test", "current_timestamp"],
+                        },
+                    },
+                },
+            },
+            inputs={"question": "Weather?", "unused": "private state"},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+        )
+
+        assert handler._invocation_manager.get_prompt_context(
+            parent_run_id
+        ) == (template_type, {"question": "Weather?", "style": "brief"})
+
+    def test_prompt_input_overrides_static_partial(self):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "kwargs": {
+                    "input_variables": ["question"],
+                    "partial_variables": {"city": "Seattle"},
+                },
+            },
+            inputs={"question": "Weather?", "city": "Paris"},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+        )
+
+        assert handler._invocation_manager.get_prompt_context(
+            parent_run_id
+        ) == ("PromptTemplate", {"question": "Weather?", "city": "Paris"})
+
+    def test_prompt_template_metadata_name_takes_precedence(self):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "weather",
+            },
+            inputs={},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+            metadata={"prompt_name": "greeting"},
+        )
+
+        context = handler._invocation_manager.get_prompt_context(parent_run_id)
+        assert context is not None
+        assert context[0] == "greeting"
+
+    @pytest.mark.parametrize(
+        "template_type", ["PromptTemplate", "ChatPromptTemplate"]
+    )
+    def test_prompt_template_legacy_name_fallback(self, template_type: str):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={"name": template_type},
+            inputs={"name": "Ada"},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+        )
+
+        assert handler._invocation_manager.get_prompt_context(
+            parent_run_id
+        ) == (template_type, {})
+
+    def test_non_prompt_id_takes_precedence_over_prompt_name(self):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "schema", "RunnableSequence"],
+                "name": "PromptTemplate",
+            },
+            inputs={"name": "Ada"},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+        )
+
+        assert (
+            handler._invocation_manager.get_prompt_context(parent_run_id)
+            is None
+        )
+
+    def test_non_prompt_chain_does_not_store_prompt_context(self):
+        handler, _, _, _ = _make_handler()
+        parent_run_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            parent_run_id, None, None
+        )
+
+        handler.on_chain_start(
+            serialized={
+                "name": "SomeInternalChain",
+            },
+            inputs={"name": "Ada"},
+            run_id=_run_id(),
+            parent_run_id=parent_run_id,
+        )
+
+        assert (
+            handler._invocation_manager.get_prompt_context(parent_run_id)
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------

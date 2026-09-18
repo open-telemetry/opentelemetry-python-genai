@@ -20,6 +20,7 @@ from langchain_core.messages import (
     SystemMessageChunk,
 )
 from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from openai import AuthenticationError
@@ -80,6 +81,140 @@ _REAL_PNG_B64 = (
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
 _ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
+
+
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
+@pytest.mark.vcr()
+def test_chat_openai_prompt_template(
+    span_exporter, tracer_provider, meter_provider, logger_provider, vcr
+):
+    model = ChatOpenAI(model="gpt-4.1", max_tokens=100)
+    prompt = PromptTemplate.from_template(
+        "Answer this weather question briefly: {question}"
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with vcr.use_cassette("test_chat_openai_prompt_template.yaml"):
+            response = (prompt | model).invoke(
+                {"question": "What's the weather like in Seattle?"},
+                config={"metadata": {"prompt_name": "weather_prompt"}},
+            )
+
+    assert response.content
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_prompt"
+    )
+    assert (
+        chat_span.attributes["gen_ai.prompt.variable.question"]
+        == "What's the weather like in Seattle?"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_template_propagates_prompt_context(
+    span_exporter, tracer_provider, meter_provider, logger_provider
+):
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="It is raining.")]
+    )
+    prompt = PromptTemplate.from_template(
+        "Answer this weather question briefly: {question}",
+        name="weather_prompt",
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        response = await (prompt | model).ainvoke(
+            {"question": "What's the weather like in Seattle?"},
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+
+    assert response.content == "It is raining."
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_prompt"
+    )
+    assert (
+        chat_span.attributes["gen_ai.prompt.variable.question"]
+        == "What's the weather like in Seattle?"
+    )
+
+
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
+@pytest.mark.vcr()
+def test_chat_openai_chat_prompt_template(
+    span_exporter, tracer_provider, meter_provider, logger_provider, vcr
+):
+    model = ChatOpenAI(model="gpt-4.1", max_tokens=100)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "Answer weather questions in a {style} style."),
+            ("human", "{question}"),
+        ]
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with vcr.use_cassette("test_chat_openai_chat_prompt_template.yaml"):
+            response = (prompt | model).invoke(
+                {
+                    "question": "What's the weather like in Seattle?",
+                    "style": "concise",
+                },
+                config={"metadata": {"prompt_name": "weather_chat_prompt"}},
+            )
+
+    assert response.content
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_chat_prompt"
+    )
+    assert (
+        chat_span.attributes["gen_ai.prompt.variable.question"]
+        == "What's the weather like in Seattle?"
+    )
+    assert chat_span.attributes["gen_ai.prompt.variable.style"] == "concise"
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py

@@ -228,6 +228,42 @@ def test_get_parent_run_id_returns_registered_parent(invocation_manager):
     assert invocation_manager.get_parent_run_id(parent_id) is None
 
 
+def test_prompt_context_can_be_stored_and_retrieved(invocation_manager):
+    run_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(
+        run_id=run_id,
+        parent_run_id=None,
+        invocation=None,
+    )
+    variables = {"name": "Ada", "style": "formal"}
+
+    invocation_manager.set_prompt_context(
+        run_id,
+        name="greeting",
+        variables=variables,
+    )
+    variables["name"] = "Grace"
+
+    context = invocation_manager.get_prompt_context(run_id)
+    assert context is not None
+    assert context == (
+        "greeting",
+        {"name": "Ada", "style": "formal"},
+    )
+
+
+def test_prompt_context_ignores_unknown_run(invocation_manager):
+    run_id = uuid.uuid4()
+
+    invocation_manager.set_prompt_context(
+        run_id,
+        name="greeting",
+        variables={"name": "Ada"},
+    )
+
+    assert invocation_manager.get_prompt_context(run_id) is None
+
+
 def test_none_invocation_can_be_stored_and_retrieved(invocation_manager):
     """Nodes with no associated span (None invocation) must still be tracked."""
     run_id = uuid.uuid4()

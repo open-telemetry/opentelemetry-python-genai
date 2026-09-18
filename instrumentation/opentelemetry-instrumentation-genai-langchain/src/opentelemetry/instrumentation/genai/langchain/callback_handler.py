@@ -69,6 +69,7 @@ CONVERSATION_ID_METADATA_KEYS = (
     "session_id",
     "conversation_id",
 )
+_PROMPT_TEMPLATE_TYPES = {"PromptTemplate", "ChatPromptTemplate"}
 
 
 def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
@@ -170,6 +171,48 @@ def _document_to_dict(doc: Any) -> dict[str, Any]:
     return doc_dict
 
 
+def _prompt_variables(
+    serialized: Mapping[str, Any], inputs: Mapping[str, Any]
+) -> dict[str, Any]:
+    raw_prompt_config = serialized.get("kwargs")
+    if not isinstance(raw_prompt_config, Mapping):
+        return {}
+    prompt_config = cast(Mapping[str, Any], raw_prompt_config)
+
+    raw_input_variables = prompt_config.get("input_variables")
+    if not isinstance(raw_input_variables, list):
+        return {}
+    untyped_input_variables = cast(list[Any], raw_input_variables)
+    if not all(isinstance(key, str) for key in untyped_input_variables):
+        return {}
+    input_variables = cast(list[str], untyped_input_variables)
+
+    partial_variables = prompt_config.get("partial_variables")
+    partials: Mapping[str, Any] = (
+        cast(Mapping[str, Any], partial_variables)
+        if isinstance(partial_variables, Mapping)
+        else {}
+    )
+
+    variables: dict[str, Any] = {}
+    partial_names: set[str] = set()
+    for name, value in partials.items():
+        partial_names.add(name)
+        if (
+            isinstance(value, Mapping)
+            and cast(Mapping[str, Any], value).get("type") == "not_implemented"
+        ):
+            continue
+        variables[name] = value
+
+    declared_names = set(input_variables) | partial_names
+    for name in declared_names:
+        if name in inputs:
+            variables[name] = inputs[name]
+
+    return variables
+
+
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     """
     A callback handler for LangChain that uses OpenTelemetry to create spans for LLM calls and chains, tools etc,. in future.
@@ -191,6 +234,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        serialized = serialized or {}
         parent_agent, ancestor_agent_names = self._find_agent_context(
             parent_run_id
         )
@@ -294,6 +338,32 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
                 run_id, parent_run_id, None
+            )
+
+        serialized_name = (
+            value if isinstance(value := serialized.get("name"), str) else None
+        )
+        serialized_id = (
+            value[-1]
+            if isinstance(value := serialized.get("id"), list)
+            and value
+            and isinstance(value[-1], str)
+            else None
+        )
+        template_type = None
+        if serialized_id in _PROMPT_TEMPLATE_TYPES:
+            template_type = serialized_id
+        elif (
+            serialized_id is None and serialized_name in _PROMPT_TEMPLATE_TYPES
+        ):
+            template_type = serialized_name
+        if template_type is not None:
+            self._invocation_manager.set_prompt_context(
+                parent_run_id or run_id,
+                name=(metadata or {}).get("prompt_name")
+                or serialized_name
+                or template_type,
+                variables=_prompt_variables(serialized, inputs),
             )
 
     def on_chain_end(
@@ -439,6 +509,15 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
+        if parent_run_id is not None:
+            prompt_context = self._invocation_manager.get_prompt_context(
+                parent_run_id
+            )
+            if prompt_context is not None:
+                (
+                    llm_invocation.prompt_name,
+                    llm_invocation.prompt_variables,
+                ) = prompt_context
         llm_invocation.top_p = top_p
         llm_invocation.top_k = top_k
         llm_invocation.request_choice_count = request_choice_count
