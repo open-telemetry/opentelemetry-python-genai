@@ -703,7 +703,7 @@ class _BedrockAgentEventStreamMixin:
         self._self_accumulated_text = []
 
     def _process_chunk(self, chunk: dict[str, Any]) -> None:
-        if not _is_dict(chunk):
+        if not self._self_capture_content or not _is_dict(chunk):
             return
         chunk_obj = chunk.get("chunk")
         if _is_dict(chunk_obj):

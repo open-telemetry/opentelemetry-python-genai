@@ -25,6 +25,7 @@ from opentelemetry.util.genai.types import (
     MessagePart,
     OutputMessage,
     ReasoningPart,
+    RetrievalDocument,
     Role,
     SystemInstructionPart,
     TextPart,
@@ -998,35 +999,21 @@ def extract_retrieve_response(
     if not _is_list(results):
         return
 
-    docs: list[dict[str, Any]] = []
+    docs: list[RetrievalDocument] = []
     for item in results:
         if not _is_dict(item):
             continue
-        doc: dict[str, Any] = {}
 
-        document_id = item.get("documentId")
-        if document_id is not None:
-            doc["id"] = str(document_id)
-
-        content = item.get("content")
-        if _is_dict(content):
-            text = content.get("text")
-            if text is not None:
-                doc["content"] = str(text)
-
-        score = _safe_float(item.get("score"))
-        if score is not None:
-            doc["score"] = score
-
-        metadata = item.get("metadata")
-        if _is_dict(metadata):
-            doc["metadata"] = metadata
+        document_id: str | None = None
+        raw_doc_id = item.get("documentId")
+        if raw_doc_id is not None:
+            document_id = str(raw_doc_id)
 
         # `location` is a union keyed by data source (s3Location, webLocation, …), each
         # holding a single `uri`/`url` member. Scanning generically keeps new AWS data
         # source types working; sqlLocation has no locator and is skipped.
         location = item.get("location")
-        if "id" not in doc and _is_dict(location):
+        if document_id is None and _is_dict(location):
             for key, value in location.items():
                 if key == "type" or not _is_dict(value):
                     continue
@@ -1034,11 +1021,13 @@ def extract_retrieve_response(
                     value.get("uri"), value.get("url"), value.get("id")
                 )
                 if locator is not None:
-                    doc["id"] = str(locator)
+                    document_id = str(locator)
                     break
 
-        if doc:
-            docs.append(doc)
+        score = _safe_float(item.get("score"))
+
+        if document_id is not None or score is not None:
+            docs.append(RetrievalDocument(id=document_id, score=score))
 
     if docs:
         invocation.documents = docs

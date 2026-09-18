@@ -18,6 +18,8 @@ from typing import (
     cast,
 )
 
+from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
+
 if TYPE_CHECKING:
     from opentelemetry.util.genai._invocation import GenAIInvocation
 
@@ -63,6 +65,15 @@ class _AsyncStream(AsyncIterable[_ChunkT_co], Protocol[_ChunkT_co]):
     """
 
 
+class AbandonedStreamError(Exception):
+    """Raised when a stream is abandoned before being drained, closed, or exited."""
+
+    _gen_ai_error_type: str = ErrorTypeValues.OTHER.value
+
+    def __init__(self, message: str = "abandoned stream") -> None:
+        super().__init__(message)
+
+
 class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     """Finalize-once bookkeeping and telemetry hooks shared by both wrappers."""
 
@@ -80,21 +91,20 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
         self._self_finalized = True
         self._on_stream_error(error)
 
-    def _finalize_abandoned(self) -> None:
+    def __del__(self) -> None:
         """Finalize a stream that was never drained, closed, or exited.
 
-        Reached from ``__del__``. A caller that breaks out of iteration -- or
-        raises inside the loop body -- without a ``with`` block or ``close()``
-        hands the wrapper no other opportunity to end the span, so it would
-        otherwise leak. The caller's own exception is not recorded: it never
-        reaches the wrapper, and it is not the stream's failure.
+        A caller that breaks out of iteration -- or raises inside the loop body --
+        without a ``with`` block or ``close()`` hands the wrapper no other opportunity
+        to end the span, so it would otherwise leak. An ``AbandonedStreamError`` is
+        recorded with error.type ``_OTHER`` and description ``"abandoned stream"``.
         """
         # __del__ can run during interpreter shutdown or on an object whose
         # __init__ raised, so nothing here may assume state exists.
         if getattr(self, "_self_finalized", True):
             return
         try:
-            self._finalize_success()
+            self._finalize_failure(AbandonedStreamError())
         except Exception:  # pylint: disable=broad-exception-caught
             _logger.debug(
                 "GenAI stream finalization error for abandoned stream",
@@ -112,9 +122,6 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     @abstractmethod
     def _on_stream_error(self, error: BaseException) -> None:
         """Finalize the stream with failure."""
-
-    def __del__(self) -> None:
-        self._finalize_abandoned()
 
 
 class SyncStreamWrapper(
@@ -577,6 +584,7 @@ class AsyncStreamManagerWrapper(
 
 
 __all__ = [
+    "AbandonedStreamError",
     "AsyncStreamManagerWrapper",
     "AsyncStreamWrapper",
     "SyncStreamManagerWrapper",

@@ -331,6 +331,18 @@ class OutputMessage:
     name: str | None = None
 
 
+@dataclass()
+class RetrievalDocument:
+    """Represents a single document retrieved from a vector database or search system.
+
+    This model is specified as part of semconv in `GenAI retrieval Python models - RetrievalDocument
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    id: str | None = None
+    score: float | None = None
+
+
 # Callback an instrumentor may supply to derive the error.type attribute from a
 # provider exception.
 # Returns None to fall back to the exception's fully qualified type name.
@@ -360,6 +372,8 @@ class Error:
         )
 
         error_type = type_resolver(exception) if type_resolver else None
+        if error_type is None and hasattr(exception, "_gen_ai_error_type"):
+            error_type = getattr(exception, "_gen_ai_error_type")
         return cls(
             message=str(exception),
             type=error_type or fq_exception_type(exception),

@@ -26,7 +26,7 @@ from opentelemetry.util.genai.environment_variables import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import RetrievalInvocation
-from opentelemetry.util.genai.types import Error
+from opentelemetry.util.genai.types import Error, RetrievalDocument
 
 
 class _RetrievalTestBase(TestCase):
@@ -197,6 +197,32 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         raw = spans[0].attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
         self.assertIsInstance(raw, str)
         self.assertEqual(json.loads(raw), docs)
+
+    @patch.dict(
+        os.environ,
+        {
+            OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY",
+        },
+    )
+    def test_stop_sets_retrieval_document_models_when_content_capture_enabled(
+        self,
+    ) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        docs = [
+            RetrievalDocument(id="doc_1", score=0.95),
+            RetrievalDocument(id="doc_2"),
+        ]
+        invocation = handler.retrieval()
+        invocation.documents = docs
+        invocation.stop()
+
+        spans = self._get_finished_spans()
+        raw = spans[0].attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
+        self.assertIsInstance(raw, str)
+        self.assertEqual(
+            json.loads(raw),
+            [{"id": "doc_1", "score": 0.95}, {"id": "doc_2"}],
+        )
 
     @patch.dict(
         os.environ,

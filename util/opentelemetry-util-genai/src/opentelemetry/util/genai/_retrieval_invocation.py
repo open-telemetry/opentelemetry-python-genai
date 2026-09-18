@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict, is_dataclass
 from typing import Any, Final
 
 from opentelemetry._logs import Logger
@@ -15,6 +16,7 @@ from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     gen_ai_json_dumps,
@@ -79,7 +81,9 @@ class RetrievalInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.top_k: int | None = None
         self.query_text: str | None = None
-        self.documents: Sequence[Mapping[str, Any]] | None = None
+        self.documents: (
+            Sequence[RetrievalDocument | Mapping[str, Any]] | None
+        ) = None
         self._start(self._get_start_attributes())
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
@@ -117,13 +121,19 @@ class RetrievalInvocation(GenAIInvocation):
             or not self._should_capture_content_on_span
         ):
             return {}
+        docs = None
+        if self.documents is not None:
+            docs = [
+                {k: v for k, v in asdict(d).items() if v is not None}
+                if is_dataclass(d) and not isinstance(d, type)
+                else d
+                for d in self.documents
+            ]
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
             (GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT, self.query_text),
             (
                 GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                gen_ai_json_dumps(self.documents)
-                if self.documents is not None
-                else None,
+                gen_ai_json_dumps(docs) if docs is not None else None,
             ),
         )
         return {k: v for k, v in optional_attrs if v is not None}

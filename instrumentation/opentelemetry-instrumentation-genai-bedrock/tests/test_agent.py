@@ -191,7 +191,10 @@ def test_invoke_agent_sync_no_content(
             sessionId="session-456",
             inputText="Secret question",
         )
-        list(response["completion"])
+        stream = response["completion"]
+        list(stream)
+
+    assert stream._self_accumulated_text == []
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -414,12 +417,9 @@ def test_retrieve_sync_with_content(
     )
     assert len(docs) == 2
     assert docs[0]["id"] == "s3://my-bucket/doc1.txt"
-    assert docs[0]["content"] == "Document 1 content"
     assert isinstance(docs[0]["score"], float)
     assert docs[0]["score"] == 0.95
-    assert docs[0]["metadata"] == {"author": "Alice"}
     assert docs[1]["id"] == "https://example.com/doc2"
-    assert docs[1]["content"] == "Document 2 content"
     assert docs[1]["score"] == 0.85
 
 
@@ -482,14 +482,11 @@ def test_extract_retrieve_response_document_ids(
     docs = json.loads(
         spans[0].attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
     )
-    assert len(docs) == 3
+    assert len(docs) == 2
     # documentId wins over the location locator.
     assert docs[0]["id"] == "doc-1"
     # No documentId: fall back to the location locator.
     assert docs[1]["id"] == "https://drive.google.com/doc2"
-    # sqlLocation carries a query, not a locator, so no id can be derived.
-    assert "id" not in docs[2]
-    assert docs[2]["content"] == "Document 3 content"
 
 
 def test_retrieve_sync_no_content(
@@ -674,8 +671,11 @@ async def test_async_invoke_agent_no_content(
             sessionId="async-session-123",
             inputText="Hello async agent",
         )
-        async for _ in response["completion"]:
+        stream = response["completion"]
+        async for _ in stream:
             pass
+
+    assert stream._self_accumulated_text == []
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -873,7 +873,6 @@ async def test_async_retrieve_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
     )
     assert len(docs) == 1
-    assert docs[0]["content"] == "Async doc content"
     assert docs[0]["id"] == "s3://my-bucket/async.txt"
     assert docs[0]["score"] == 0.98
 
