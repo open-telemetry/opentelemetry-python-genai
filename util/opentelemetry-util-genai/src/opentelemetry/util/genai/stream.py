@@ -18,6 +18,9 @@ from typing import (
     cast,
 )
 
+from opentelemetry.util.genai._tool_invocation import ToolInvocation
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
+
 if TYPE_CHECKING:
     from opentelemetry.util.genai._invocation import GenAIInvocation
 
@@ -359,6 +362,126 @@ class AsyncStreamWrapper(
         return chunk
 
 
+class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
+    """Stream wrapper for synchronous tool executions that return iterators/generators.
+
+    Tool executions return an iterator or generator to the caller before it is
+    drained. This wrapper restores the caller's context before returning, and
+    makes the tool span current only while tool code runs -- producing a chunk,
+    closing, or finalizing -- so caller work between chunks is not parented
+    under the tool. Per-chunk content is accumulated and set on
+    ``invocation.tool_result`` upon completion.
+    """
+
+    def __init__(
+        self,
+        stream: _SyncStream[ChunkT],
+        invocation: ToolInvocation,
+    ) -> None:
+        super().__init__(stream)
+        self._self_tool_invocation = invocation
+        invocation.suspend()
+        self._self_chunks: list[Any] = []
+
+    def __next__(self) -> ChunkT:
+        with self._self_tool_invocation.activate():
+            return super().__next__()
+
+    def close(self) -> None:
+        with self._self_tool_invocation.activate():
+            super().close()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        with self._self_tool_invocation.activate():
+            return super().__exit__(exc_type, exc_val, exc_tb)
+
+    def _process_chunk(self, chunk: ChunkT) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            if isinstance(chunk, str):
+                self._self_chunks.append(chunk)
+            else:
+                try:
+                    self._self_chunks.append(gen_ai_json_dumps(chunk))
+                except Exception:
+                    self._self_chunks.append(str(chunk))
+
+    def _on_stream_end(self) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            if all(isinstance(c, str) for c in self._self_chunks):
+                self._self_tool_invocation.tool_result = "".join(
+                    self._self_chunks
+                )
+            else:
+                self._self_tool_invocation.tool_result = self._self_chunks
+        self._self_tool_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_tool_invocation.fail(error)
+
+
+class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
+    """Stream wrapper for asynchronous tool executions that return async iterators/generators.
+
+    Async counterpart of ``SyncToolStreamWrapper``; the same context scoping
+    applies.
+    """
+
+    def __init__(
+        self,
+        stream: _AsyncStream[ChunkT],
+        invocation: ToolInvocation,
+    ) -> None:
+        super().__init__(stream)
+        self._self_tool_invocation = invocation
+        invocation.suspend()
+        self._self_chunks: list[Any] = []
+
+    async def __anext__(self) -> ChunkT:
+        with self._self_tool_invocation.activate():
+            return await super().__anext__()
+
+    async def _close(self) -> None:
+        with self._self_tool_invocation.activate():
+            await super()._close()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        with self._self_tool_invocation.activate():
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+
+    def _process_chunk(self, chunk: ChunkT) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            if isinstance(chunk, str):
+                self._self_chunks.append(chunk)
+            else:
+                try:
+                    self._self_chunks.append(gen_ai_json_dumps(chunk))
+                except Exception:
+                    self._self_chunks.append(str(chunk))
+
+    def _on_stream_end(self) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            if all(isinstance(c, str) for c in self._self_chunks):
+                self._self_tool_invocation.tool_result = "".join(
+                    self._self_chunks
+                )
+            else:
+                self._self_tool_invocation.tool_result = self._self_chunks
+        self._self_tool_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_tool_invocation.fail(error)
+
+
 class _CloseFinalizingProxy(_ObjectProxy):
     def __init__(self, wrapped: object, finalize: Callable[[], None]) -> None:
         super().__init__(wrapped)
@@ -555,8 +678,10 @@ class AsyncStreamManagerWrapper(
 __all__ = [
     "AsyncStreamManagerWrapper",
     "AsyncStreamWrapper",
+    "AsyncToolStreamWrapper",
     "SyncStreamManagerWrapper",
     "SyncStreamWrapper",
+    "SyncToolStreamWrapper",
     "finalize_on_aclose",
     "finalize_on_close",
 ]
