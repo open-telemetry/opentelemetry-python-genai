@@ -33,7 +33,6 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _message_name,
     _normalize_role,
-    _prompt_variables,
     extract_token_details,
     is_stream_end_marker,
     make_input_message,
@@ -170,6 +169,49 @@ def _document_to_dict(doc: Any) -> dict[str, Any]:
     if score is not None:
         doc_dict["score"] = score
     return doc_dict
+
+
+def _prompt_variables(
+    serialized: Mapping[str, Any], inputs: Mapping[str, Any]
+) -> dict[str, Any]:
+    raw_prompt_config = serialized.get("kwargs")
+    if not isinstance(raw_prompt_config, Mapping):
+        return dict(inputs)
+    prompt_config = cast(Mapping[str, Any], raw_prompt_config)
+
+    raw_input_variables = prompt_config.get("input_variables")
+    if not isinstance(raw_input_variables, list):
+        return dict(inputs)
+    untyped_input_variables = cast(list[Any], raw_input_variables)
+    if not all(isinstance(key, str) for key in untyped_input_variables):
+        return dict(inputs)
+    input_variables = cast(list[str], untyped_input_variables)
+
+    partial_variables = prompt_config.get("partial_variables")
+    partials: Mapping[str, Any] = (
+        cast(Mapping[str, Any], partial_variables)
+        if isinstance(partial_variables, Mapping)
+        else {}
+    )
+
+    variables: dict[str, Any] = {}
+    partial_names: set[str] = set()
+    for name, value in partials.items():
+        partial_names.add(name)
+        if (
+            isinstance(value, Mapping)
+            and cast(Mapping[str, Any], value).get("type")
+            == "not_implemented"
+        ):
+            continue
+        variables[name] = value
+
+    declared_names = set(input_variables) | partial_names
+    for name in declared_names:
+        if name in inputs:
+            variables[name] = inputs[name]
+
+    return variables
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
