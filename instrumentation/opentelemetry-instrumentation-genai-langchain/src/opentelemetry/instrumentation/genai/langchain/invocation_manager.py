@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
 from opentelemetry.util.genai.types import GenAIInvocation
@@ -14,6 +15,7 @@ class _InvocationState:
     invocation: GenAIInvocation | None
     children: list[UUID] = field(default_factory=lambda: list())
     parent_run_id: UUID | None = None
+    graph_metadata: tuple[dict[str, Any], ...] | None = None
     ended: bool = False
 
 
@@ -30,10 +32,14 @@ class _InvocationManager:
         run_id: UUID,
         parent_run_id: UUID | None,
         invocation: GenAIInvocation | None,
+        *,
+        graph_metadata: tuple[dict[str, Any], ...] | None = None,
     ) -> None:
-        invocation_state = _InvocationState(invocation=invocation)
-
-        invocation_state.parent_run_id = parent_run_id
+        invocation_state = _InvocationState(
+            invocation=invocation,
+            parent_run_id=parent_run_id,
+            graph_metadata=graph_metadata,
+        )
         if parent_run_id is not None and parent_run_id in self._invocations:
             parent_invocation_state = self._invocations[parent_run_id]
             parent_invocation_state.children.append(run_id)
@@ -47,6 +53,12 @@ class _InvocationManager:
     def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.parent_run_id if invocation_state else None
+
+    def get_graph_metadata(
+        self, run_id: UUID
+    ) -> tuple[dict[str, Any], ...] | None:
+        invocation_state = self._invocations.get(run_id)
+        return invocation_state.graph_metadata if invocation_state else None
 
     def delete_invocation_state(self, run_id: UUID) -> None:
         invocation_state = self._invocations.get(run_id)
