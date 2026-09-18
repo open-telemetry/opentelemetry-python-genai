@@ -33,6 +33,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
     _message_name,
     _normalize_role,
+    _prompt_variables,
     extract_token_details,
     is_stream_end_marker,
     make_input_message,
@@ -321,7 +322,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 name=(metadata or {}).get("prompt_name")
                 or serialized_name
                 or template_type,
-                variables=inputs,
+                variables=_prompt_variables(serialized, inputs),
             )
 
     def on_chain_end(

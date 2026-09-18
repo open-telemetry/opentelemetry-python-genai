@@ -126,6 +126,47 @@ def test_chat_openai_prompt_template(
     )
 
 
+@pytest.mark.asyncio
+async def test_async_prompt_template_propagates_prompt_context(
+    span_exporter, tracer_provider, meter_provider, logger_provider
+):
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="It is raining.")]
+    )
+    prompt = PromptTemplate.from_template(
+        "Answer this weather question briefly: {question}",
+        name="weather_prompt",
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        response = await (prompt | model).ainvoke(
+            {"question": "What's the weather like in Seattle?"},
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+
+    assert response.content == "It is raining."
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_prompt"
+    )
+    assert (
+        chat_span.attributes["gen_ai.prompt.variable.question"]
+        == "What's the weather like in Seattle?"
+    )
+
+
 @pytest.mark.skipif(
     _langchain_openai_version() < (1, 0, 0),
     reason="cassettes were recorded with langchain-openai 1.x",
