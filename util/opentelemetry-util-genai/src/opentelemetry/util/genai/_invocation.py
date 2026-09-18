@@ -15,13 +15,28 @@ from typing import Any, TypeAlias, cast
 from typing_extensions import Self
 
 from opentelemetry._logs import Logger, LogRecord
-from opentelemetry.context import Context, attach, detach
+from opentelemetry.context import (
+    Context,
+    attach,
+    detach,
+    get_current,
+    get_value,
+    set_value,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.trace import INVALID_SPAN as _INVALID_SPAN
-from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
+from opentelemetry.trace import (
+    INVALID_SPAN as _INVALID_SPAN,
+)
+from opentelemetry.trace import (
+    Span,
+    SpanKind,
+    Tracer,
+    get_current_span,
+    set_span_in_context,
+)
 from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import (
@@ -57,6 +72,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     Use the factory methods on TelemetryHandler (inference, embedding,
     workflow, tool) rather than constructing invocations directly.
+    """
+
+    _context_attributes_key: str | None = None
+    """Context key used to attach an attributes dictionary for nested deduplication.
+
+    Subclasses opting into context deduplication should:
+    1. Set ``_context_attributes_key`` to their type-specific context key.
+    2. Implement ``_finish_already_started`` to populate the context dict with inner attributes.
+    3. In ``_apply_finish``, read the context dict from ``self._span_context`` to merge downstream attributes.
     """
 
     def __init__(
@@ -99,8 +123,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._span_context: Context
         self._span_name: str = span_name
         self._span_kind: SpanKind = span_kind
+        # Remains None when _already_started is True since no new context is attached.
         self._context_token: ContextToken | None = None
         self._monotonic_start_s: float
+        self._already_started: bool = (
+            get_value(self._context_attributes_key) is not None
+            if self._context_attributes_key is not None
+            else False
+        )
+        self._finished: bool = False
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
         # (gen_ai.request.stream); the timing fields are populated by
@@ -112,6 +143,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     @property
     def should_capture_content(self) -> bool:
         """Return True when message content should be captured for this invocation."""
+        if self._already_started:
+            return False
         return self._content_capturing_mode in (
             ContentCapturingMode.SPAN_ONLY,
             ContentCapturingMode.EVENT_ONLY,
@@ -120,6 +153,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     @property
     def _should_capture_content_on_span(self) -> bool:
+        if self._already_started:
+            return False
         return self._content_capturing_mode in (
             ContentCapturingMode.SPAN_ONLY,
             ContentCapturingMode.SPAN_AND_EVENT,
@@ -141,15 +176,23 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             attributes: Initial span attributes available for sampling decisions.
             context: An optional OpenTelemetry Context to parent the span.
         """
-        self.span = self._tracer.start_span(
-            name=self._span_name,
-            kind=self._span_kind,
-            attributes=attributes,
-            context=context,
-        )
-        self._span_context = set_span_in_context(self.span)
+        if self._already_started:
+            self.span = get_current_span()
+            self._span_context = get_current()
+        else:
+            self.span = self._tracer.start_span(
+                name=self._span_name,
+                kind=self._span_kind,
+                attributes=attributes,
+                context=context,
+            )
+            ctx = set_span_in_context(self.span)
+            if self._context_attributes_key is not None:
+                ctx = set_value(self._context_attributes_key, {}, context=ctx)
+            self._span_context = ctx
+            self._context_token = attach(self._span_context)
+
         self._monotonic_start_s = timeit.default_timer()
-        self._context_token = attach(self._span_context)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
@@ -161,7 +204,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def record_stream_chunk(self) -> None:
         """Mark the request as streamed and record one output chunk arriving."""
-        if self._context_token is None:
+        if self._finished:
             return
         self._request_stream = True
         self._on_stream_chunk(timeit.default_timer())
@@ -182,9 +225,15 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
         self._stream_last_chunk_at = chunk_at
         delta = max(chunk_at - last_chunk_at, 0.0)
-        attributes = self._get_metric_attributes()
-        if self._ttfc_seconds is None:
+        is_first_chunk = self._ttfc_seconds is None
+        if is_first_chunk:
             self._ttfc_seconds = delta
+
+        if self._already_started:
+            return
+
+        attributes = self._get_metric_attributes()
+        if is_first_chunk:
             self._instruments.time_to_first_chunk.record(
                 delta,
                 attributes=attributes,
@@ -253,12 +302,26 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             log_record=log_record,
         )
 
+    def _finish_already_started(self) -> None:
+        """Handle finish when the invocation was already started upstream."""
+
     @abstractmethod
     def _apply_finish(self, error: Error | None = None) -> None:
         """Apply finish telemetry (attributes, metrics, events)."""
 
     def _finish(self, error: Error | None = None) -> None:
         """Apply finish telemetry and end the span. Finishes at most once."""
+        if self._finished:
+            return
+        self._finished = True
+
+        if self._already_started:
+            self._finish_already_started()
+            return
+
+        # Context token can only be None if _already_started is true
+        # or finish was already called (both of which we verify above)
+        # so this condition should never be true; it's just a safeguard.
         if self._context_token is None:
             return
         # Clear up front so a nested or repeated finish is a no-op even if
