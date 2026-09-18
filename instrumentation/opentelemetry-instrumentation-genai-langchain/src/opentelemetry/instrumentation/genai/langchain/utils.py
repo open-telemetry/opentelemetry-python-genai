@@ -700,7 +700,10 @@ def _prompt_variables(
         if not isinstance(name, str):
             continue
         partial_names.add(name)
-        if isinstance(value, Mapping) and value.get("type") == "not_implemented":
+        if (
+            isinstance(value, Mapping)
+            and value.get("type") == "not_implemented"
+        ):
             continue
         variables[name] = value
 
