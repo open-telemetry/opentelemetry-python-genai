@@ -33,7 +33,8 @@ dependencies = [
 
 [project.optional-dependencies]
 instruments = [
-  "crewai >= 1.10.1, < 2",
+  # Floor rationale in src/opentelemetry/instrumentation/genai/crewai/package.py
+  "crewai >= 1.11.0, < 2",
 ]
 
 [project.entry-points.opentelemetry_instrumentor]
