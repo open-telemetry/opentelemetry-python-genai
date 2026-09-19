@@ -28,7 +28,7 @@ run-name: "Release: ${{ inputs.package }}"
 
 jobs:
   build:
-    uses: ./.github/workflows/_release-build.yml
+    uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ inputs.package }}
 
@@ -54,7 +54,7 @@ jobs:
     needs: publish
     permissions:
       contents: write
-    uses: ./.github/workflows/_release-finalize.yml
+    uses: $/.github/workflows/_release-finalize.yml
     with:
       package: ${{ inputs.package }}
       bump_after_release: true

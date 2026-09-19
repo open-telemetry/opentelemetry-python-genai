@@ -363,7 +363,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation,
     )
-    assert invocation.top_k == 40.0
+    assert invocation.top_k == 40
+    assert isinstance(invocation.top_k, int)
     assert invocation.seed == 123
 
     invocation2 = handler.inference(provider="aws.bedrock")
@@ -373,7 +374,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation2,
     )
-    assert invocation2.top_k == 250.0
+    assert invocation2.top_k == 250
+    assert isinstance(invocation2.top_k, int)
     assert invocation2.seed == 456
 
     invocation3 = handler.inference(provider="aws.bedrock")
@@ -383,7 +385,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation3,
     )
-    assert invocation3.top_k == 20.0
+    assert invocation3.top_k == 20
+    assert isinstance(invocation3.top_k, int)
 
     invocation4 = handler.inference(provider="aws.bedrock")
     extract_converse_request(
@@ -392,7 +395,8 @@ def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
         },
         invocation4,
     )
-    assert invocation4.top_k == 0.0
+    assert invocation4.top_k == 0
+    assert isinstance(invocation4.top_k, int)
     assert invocation4.seed == 0
 
 

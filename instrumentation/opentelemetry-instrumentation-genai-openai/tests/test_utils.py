@@ -85,6 +85,66 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
         "name": None,
     }
 ]
+# Canonical base64, so the payloads round-trip unchanged through the span
+# attribute (the GenAI JSON encoder re-encodes blob bytes).
+_WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
+_PDF_B64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
+AUDIO_AND_FILE_PROMPT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the clip and the documents"},
+            {
+                "type": "input_audio",
+                "input_audio": {"data": _WAV_B64, "format": "wav"},
+            },
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "spec.pdf",
+                    "file_data": f"data:application/pdf;base64,{_PDF_B64}",
+                },
+            },
+        ],
+    }
+]
+AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [
+            {
+                "type": "text",
+                "content": "Summarize the clip and the documents",
+            },
+            {
+                "type": "blob",
+                "mime_type": "audio/wav",
+                "modality": "audio",
+                "content": _WAV_B64,
+            },
+            {
+                "type": "file",
+                "mime_type": None,
+                "modality": "document",
+                "file_id": "file-123",
+            },
+            {
+                "type": "blob",
+                "mime_type": "application/pdf",
+                "modality": "document",
+                "content": _PDF_B64,
+            },
+        ],
+        "name": None,
+    }
+]
+
+REFUSAL_PROMPT = [
+    {"role": "user", "content": "Tell me how to do something disallowed."}
+]
+REFUSAL_TEXT = "I'm sorry, I can't help with that."
+
 MULTIMODAL_PROMPT = [
     {
         "role": "user",
@@ -276,6 +336,26 @@ def test_chat_content_parts_drop_malformed_image_and_keep_text():
     assert parts == [TextPart(content="Keep this")]
 
 
+def test_prepare_input_messages_captures_assistant_refusal():
+    # A refused turn replayed as chat history carries content=None, so the
+    # message used to be dropped for having no parts.
+    messages = [
+        {"role": "user", "content": "disallowed request"},
+        {
+            "role": "assistant",
+            "content": None,
+            "refusal": "I cannot help with that.",
+        },
+    ]
+
+    input_messages = _prepare_input_messages(messages)
+
+    assert len(input_messages) == 2
+    assert input_messages[1].parts == [
+        TextPart(content="I cannot help with that.")
+    ]
+
+
 def test_prepare_input_messages_drops_messages_without_parts():
     messages = _prepare_input_messages(
         [
@@ -386,7 +466,6 @@ def assert_fetch_response_attributes(
     response_model: str | None = None,
     response_status: str | None = None,
     finish_reasons: tuple | None = None,
-    request_stream: bool | None = None,
     stream_cursor: str | None = None,
     response_service_tier: str | None = None,
     server_address: str = "api.openai.com",
@@ -419,6 +498,7 @@ def assert_fetch_response_attributes(
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
     assert GenAIAttributes.GEN_AI_REQUEST_MODEL not in span.attributes
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in span.attributes
 
     _assert_optional_attribute(
         span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response_model
@@ -426,9 +506,6 @@ def assert_fetch_response_attributes(
     _assert_optional_attribute(span, GEN_AI_RESPONSE_STATUS, response_status)
     _assert_optional_attribute(
         span, GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons
-    )
-    _assert_optional_attribute(
-        span, GenAIAttributes.GEN_AI_REQUEST_STREAM, request_stream
     )
     _assert_optional_attribute(
         span, GEN_AI_REQUEST_STREAM_CURSOR, stream_cursor

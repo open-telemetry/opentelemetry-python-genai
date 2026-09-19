@@ -307,7 +307,7 @@ def extract_converse_request(
         invocation.top_p = inf_config.get("topP")
         invocation.max_tokens = inf_config.get("maxTokens")
         invocation.stop_sequences = inf_config.get("stopSequences")
-        invocation.top_k = _safe_float(
+        invocation.top_k = _safe_int(
             _first_not_none(inf_config.get("topK"), inf_config.get("top_k"))
         )
         invocation.seed = inf_config.get("seed")
@@ -322,7 +322,7 @@ def extract_converse_request(
             add_inf.get("top_k") if _is_dict(add_inf) else None,
             invocation.top_k,
         )
-        invocation.top_k = _safe_float(top_k_val)
+        invocation.top_k = _safe_int(top_k_val)
         if "seed" in add_fields:
             invocation.seed = add_fields.get("seed")
 
@@ -496,7 +496,7 @@ def extract_invoke_model_request(
     )
 
     # Top K
-    invocation.top_k = _safe_float(
+    invocation.top_k = _safe_int(
         _first_not_none(
             body.get("top_k"),
             body.get("topK"),

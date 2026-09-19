@@ -111,16 +111,8 @@ def test_embeddings_with_dimensions(
     )
     assert duration_metric is not None
 
-    # Verify the dimensions attribute is present in metrics
     for point in duration_metric.data.data_points:
-        if "gen_ai.embeddings.dimension.count" in point.attributes:
-            assert (
-                point.attributes["gen_ai.embeddings.dimension.count"]
-                == dimensions
-            )
-            break
-    else:
-        assert False, "Dimensions attribute not found in metrics"
+        assert "gen_ai.embeddings.dimension.count" not in point.attributes
 
 
 def test_embeddings_with_batch_input(

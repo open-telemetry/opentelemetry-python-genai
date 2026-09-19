@@ -10,7 +10,7 @@ from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from contextvars import ContextVar, Token
 from mimetypes import guess_type
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 from weakref import WeakKeyDictionary
 
 from llama_index.core.agent.workflow.base_agent import BaseWorkflowAgent
@@ -21,6 +21,7 @@ from llama_index.core.agent.workflow.workflow_events import (
     ToolCall,
     ToolCallResult,
 )
+from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.llms.types import (
     AudioBlock,
     ChatMessage,
@@ -32,17 +33,24 @@ from llama_index.core.base.llms.types import (
 )
 from llama_index.core.instrumentation.span import BaseSpan
 from llama_index.core.instrumentation.span_handlers import BaseSpanHandler
+from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.tools import BaseTool, FunctionTool, ToolOutput
 from pydantic import PrivateAttr
 
 from opentelemetry.context import Context, attach, detach
-from opentelemetry.trace import set_span_in_context
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    GenAIInvocation,
     LocalAgentInvocation,
+    RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
+)
+
+_AnyInvocation: TypeAlias = (
+    WorkflowInvocation
+    | LocalAgentInvocation
+    | ToolInvocation
+    | RetrievalInvocation
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
@@ -298,6 +306,52 @@ def _request_model(agent: BaseWorkflowAgent) -> str | None:
     return model_name if isinstance(model_name, str) and model_name else None
 
 
+def _retrieval_query(bound_args: inspect.BoundArguments) -> str | None:
+    """Extract text from either accepted LlamaIndex retrieval query form."""
+    query = bound_args.arguments.get("str_or_query_bundle")
+    if isinstance(query, str):
+        return query
+    if isinstance(query, QueryBundle):
+        return query.query_str
+    return None
+
+
+def _retrieval_top_k(retriever: BaseRetriever) -> int | None:
+    """Read the common top-k setting without requiring a retriever subtype."""
+    top_k = getattr(retriever, "similarity_top_k", None)
+    if isinstance(top_k, int) and not isinstance(top_k, bool):
+        return top_k
+    return None
+
+
+def _retrieval_documents(
+    result: object,
+) -> list[dict[str, Any]] | None:
+    """Convert retrieved LlamaIndex nodes to semconv document objects."""
+    if not isinstance(result, Sequence):
+        return None
+    candidates = cast(Sequence[object], result)
+    documents: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, NodeWithScore):
+            continue
+        try:
+            document: dict[str, Any] = {
+                "id": candidate.node_id,
+                "content": candidate.node.get_content(),
+            }
+            if candidate.score is not None:
+                document["score"] = candidate.score
+            documents.append(document)
+        except BaseException:
+            continue
+    # Preserve [] for a genuine empty result, but omit the attribute when a
+    # non-empty result could not be converted into semantic-convention docs.
+    if documents:
+        return documents
+    return [] if len(candidates) == 0 else None
+
+
 def _tool_attributes(
     candidate: object,
 ) -> tuple[str, str, str | None] | None:
@@ -503,7 +557,7 @@ def _tool_arguments(
 class _LlamaIndexInvocation(BaseSpan):
     """Pair a LlamaIndex span ID with the GenAI invocation it controls."""
 
-    _invocation: GenAIInvocation = PrivateAttr()
+    _invocation: _AnyInvocation = PrivateAttr()
     _tool_attributes_token: (
         Token[dict[str, _ToolExecutionAttributes] | None] | None
     ) = PrivateAttr()
@@ -518,7 +572,6 @@ class _LlamaIndexInvocation(BaseSpan):
     _workflow_agent_invocation: LocalAgentInvocation | None = PrivateAttr()
     _workflow_handoff: bool = PrivateAttr()
     _workflow_agent_context_token: Token[Context] | None = PrivateAttr()
-    _tool_parent_context_token: Token[Context] | None = PrivateAttr()
     _workflow_tool_token: Token[tuple[str, ToolInvocation] | None] | None = (
         PrivateAttr()
     )
@@ -533,7 +586,7 @@ class _LlamaIndexInvocation(BaseSpan):
         *,
         id_: str,
         parent_id: str | None,
-        invocation: GenAIInvocation,
+        invocation: _AnyInvocation,
         tool_attributes_token: Token[
             dict[str, _ToolExecutionAttributes] | None
         ]
@@ -545,7 +598,6 @@ class _LlamaIndexInvocation(BaseSpan):
         workflow_agent: BaseWorkflowAgent | None = None,
         workflow_agent_invocation: LocalAgentInvocation | None = None,
         workflow_handoff: bool = False,
-        tool_parent_context_token: Token[Context] | None = None,
     ) -> None:
         """Create the adapter used by LlamaIndex's span-handler lifecycle."""
         super().__init__(id_=id_, parent_id=parent_id)
@@ -560,7 +612,6 @@ class _LlamaIndexInvocation(BaseSpan):
         self._workflow_agent_invocation = workflow_agent_invocation
         self._workflow_handoff = workflow_handoff
         self._workflow_agent_context_token = None
-        self._tool_parent_context_token = tool_parent_context_token
         self._workflow_tool_counts = {}
         self._workflow_return_direct_runs = set()
         self._workflow_tool_errors = {}
@@ -644,15 +695,6 @@ class _LlamaIndexInvocation(BaseSpan):
                 pass
             self._workflow_tool_token = None
 
-    def reset_tool_parent_context(self) -> None:
-        """Detach the agent context after the tool span has finished."""
-        if self._tool_parent_context_token is not None:
-            try:
-                detach(self._tool_parent_context_token)
-            except ValueError:
-                pass
-            self._tool_parent_context_token = None
-
     def expect_workflow_tools(self, run_id: str, count: int) -> None:
         """Record how many tool calls the agent's current turn requested.
 
@@ -717,7 +759,7 @@ class _LlamaIndexInvocation(BaseSpan):
         """Make a resumed member-agent span current for this workflow step."""
         if self._workflow_agent_context_token is None:
             self._workflow_agent_context_token = attach(
-                set_span_in_context(self._invocation.span)
+                self._invocation.context
             )
 
     def reset_workflow_agent(self) -> None:
@@ -756,7 +798,7 @@ class _LlamaIndexInvocation(BaseSpan):
 
 
 class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
-    """Map LlamaIndex-owned agent and tool operations to GenAI spans."""
+    """Map LlamaIndex-owned agent, tool, and retrieval operations to spans."""
 
     _handler: TelemetryHandler = PrivateAttr()
 
@@ -784,13 +826,13 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         tags: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> _LlamaIndexInvocation | None:
-        """Start GenAI invocations for LlamaIndex-owned agents and tools.
+        """Start GenAI invocations for agents, tools, and retrievers.
 
         Provider inference is deliberately ignored so its own instrumentation
         can emit inference telemetry, and nested tool callbacks are deduplicated.
         """
         method_name = _method_name(id_)
-        invocation: GenAIInvocation
+        invocation: _AnyInvocation
         tool_attributes_token: (
             Token[dict[str, _ToolExecutionAttributes] | None] | None
         ) = None
@@ -803,7 +845,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
         workflow_tool_token: (
             Token[tuple[str, ToolInvocation] | None] | None
         ) = None
-        tool_parent_context_token: Token[Context] | None = None
 
         if isinstance(instance, AgentWorkflow) and method_name == "run":
             capture_content = self._handler.should_capture_content()
@@ -913,6 +954,15 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 if workflow_run_id is not None:
                     parent.register_workflow_agent(workflow_run_id, agent)
             workflow_agent = agent
+        elif isinstance(instance, BaseRetriever) and method_name in {
+            "retrieve",
+            "aretrieve",
+        }:
+            retrieval_invocation = self._handler.retrieval()
+            retrieval_invocation.top_k = _retrieval_top_k(instance)
+            if retrieval_invocation.should_capture_content:
+                retrieval_invocation.query_text = _retrieval_query(bound_args)
+            invocation = retrieval_invocation
         elif method_name == "call_tool" and isinstance(
             (tool_call := bound_args.arguments.get("ev")), ToolCall
         ):
@@ -954,22 +1004,16 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             # The member-agent span stays open across workflow steps, each of
             # which runs in its own asyncio task. Pass its context explicitly
             # so the tool span nests under the agent that requested the call.
-            agent_context_token = (
-                attach(set_span_in_context(active_invocation.span))
-                if active_invocation is not None
-                else None
+            tool_invocation = self._handler.tool(
+                tool_call.tool_name,
+                tool_type=tool_type,
+                agent_name=getattr(active_invocation, "_agent_name", None),
+                context=(
+                    active_invocation.context
+                    if active_invocation is not None
+                    else None
+                ),
             )
-            try:
-                tool_invocation = self._handler.tool(
-                    tool_call.tool_name,
-                    tool_type=tool_type,
-                    agent_name=getattr(active_invocation, "_agent_name", None),
-                )
-            except BaseException:
-                if agent_context_token is not None:
-                    detach(agent_context_token)
-                raise
-            tool_parent_context_token = agent_context_token
             workflow_tool_token = _ACTIVE_WORKFLOW_TOOL.set(
                 (tool_call.tool_name, tool_invocation)
             )
@@ -1031,7 +1075,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             invocation=invocation,
             tool_attributes_token=tool_attributes_token,
             workflow_tool_token=workflow_tool_token,
-            tool_parent_context_token=tool_parent_context_token,
             workflow_agents=workflow_agents,
             workflow_run_id=workflow_run_id,
             workflow_agent=workflow_agent,
@@ -1138,7 +1181,10 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                 if not _agent_step_is_complete(result):
                     self._expect_workflow_tools(span, result)
                 return span
-        elif isinstance(span._invocation, ToolInvocation):
+        elif isinstance(span._invocation, RetrievalInvocation):
+            if span._invocation.should_capture_content:
+                span._invocation.documents = _retrieval_documents(result)
+        else:
             span.reset_workflow_tool()
             tool_output: ToolOutput | None = None
             if isinstance(result, ToolCallResult):
@@ -1175,7 +1221,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                         else RuntimeError(tool_output.content)
                     )
                     span._invocation.fail(error)
-                    span.reset_tool_parent_context()
                     self._finish_workflow_tool(
                         span,
                         handoff_succeeded=False,
@@ -1183,7 +1228,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                     )
                     return span
         span._invocation.stop()
-        span.reset_tool_parent_context()
         if isinstance(span._invocation, ToolInvocation):
             self._finish_workflow_tool(span)
         return span
@@ -1214,7 +1258,6 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             span._invocation.stop()
         else:
             span._invocation.fail(err)
-        span.reset_tool_parent_context()
         if isinstance(span._invocation, LocalAgentInvocation):
             span.reset_workflow_agent()
             self._release_workflow_invocation(span, span._invocation)

@@ -47,9 +47,6 @@ def _create_embedding_invocation(
 
     if (dimensions := get_value(kwargs.get("dimensions"))) is not None:
         invocation.dimension_count = dimensions
-        invocation.metric_attributes[
-            GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
-        ] = dimensions
 
     if (
         encoding_format := get_value(kwargs.get("encoding_format"))
@@ -242,14 +239,7 @@ def _set_embeddings_response_properties(
     if getattr(result, "data", None) and len(result.data) > 0:
         first_embedding = result.data[0]
         if getattr(first_embedding, "embedding", None):
-            dimension_count = len(first_embedding.embedding)
-            invocation.dimension_count = dimension_count
-            # Mirror _create_embedding_invocation: EmbeddingInvocation does
-            # not put dimension_count on metric attributes, so surface it
-            # explicitly when we derive it from the response too.
-            invocation.metric_attributes[
-                GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
-            ] = dimension_count
+            invocation.dimension_count = len(first_embedding.embedding)
 
     # Embeddings only have input tokens; output tokens are not applicable.
     if getattr(result, "usage", None):

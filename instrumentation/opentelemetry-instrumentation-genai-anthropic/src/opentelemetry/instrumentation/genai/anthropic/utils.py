@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
-import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from os import PathLike
+from typing import TYPE_CHECKING, cast
 
 from anthropic.types import (
     InputJSONDelta,
@@ -20,21 +20,33 @@ from anthropic.types import (
     ThinkingBlock,
     ThinkingDelta,
     ToolUseBlock,
-    WebSearchToolResultBlock,
 )
 
 from opentelemetry.util.genai.types import (
     BlobPart,
+    FilePart,
+    GenericPart,
     MessagePart,
     ReasoningPart,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
+    UriPart,
 )
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
+_SERVER_TOOL_RESULT_TYPES = {
+    "web_search_tool_result": "web_search",
+    "web_fetch_tool_result": "web_fetch",
+    "code_execution_tool_result": "code_execution",
+    "bash_code_execution_tool_result": "bash_code_execution",
+    "text_editor_code_execution_tool_result": "text_editor_code_execution",
+    "tool_search_tool_result": "tool_search",
+}
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
+if TYPE_CHECKING:
     from anthropic.types import (
         ContentBlock,
         ContentBlockParam,
@@ -92,26 +104,24 @@ def normalize_finish_reason(stop_reason: str | None) -> str | None:
     return normalized or stop_reason
 
 
-def _decode_base64(data: str) -> bytes | None:
-    try:
-        return base64.b64decode(data)
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None
+def _extract_base64_blob(source: object, modality: str) -> MessagePart | None:
+    """Convert an Anthropic base64 source to a GenAI message part.
 
-
-def _extract_base64_blob(source: object, modality: str) -> BlobPart | None:
-    """Extract a BlobPart from a base64-encoded source dict."""
+    String data becomes a ``BlobPart``; file-backed data is represented as a
+    ``GenericPart`` without being read.
+    """
     if not isinstance(source, dict):
         return None
-    # source is a TypedDict (e.g. Base64ImageSourceParam) narrowed to dict;
-    # pyright cannot infer value types from isinstance-narrowed dicts.
-    data: object = source.get("data")  # type: ignore[reportUnknownMemberType]
+    source_dict = cast(dict[str, object], source)
+    data = source_dict.get("data")
     if not isinstance(data, str):
+        if isinstance(data, PathLike) or callable(getattr(data, "read", None)):
+            return GenericPart(type="blob")
         return None
-    decoded = _decode_base64(data)
+    decoded = decode_base64(data)
     if decoded is None:
         return None
-    media_type: object = source.get("media_type")  # type: ignore[reportUnknownMemberType]
+    media_type = source_dict.get("media_type")
     return BlobPart(
         mime_type=media_type if isinstance(media_type, str) else None,
         modality=modality,
@@ -119,8 +129,91 @@ def _extract_base64_blob(source: object, modality: str) -> BlobPart | None:
     )
 
 
+def _extract_image_source(source: object) -> MessagePart | None:
+    """Convert an Anthropic image source into a GenAI message part."""
+    if not isinstance(source, dict):
+        return None
+    source_dict = cast(dict[str, object], source)
+    source_type = source_dict.get("type")
+    if source_type == "base64":
+        return _extract_base64_blob(source_dict, "image")
+    if source_type == "url":
+        url = source_dict.get("url")
+        if isinstance(url, str) and url:
+            return image_from_url(url)
+    if source_type == "file":
+        return _extract_file_source(source_dict, "image")
+    return None
+
+
+def _extract_file_source(
+    source: Mapping[str, object], modality: str
+) -> FilePart | None:
+    file_id = source.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    return FilePart(mime_type=None, modality=modality, file_id=file_id)
+
+
+def _extract_document_source(source: object) -> list[MessagePart]:
+    """Convert an Anthropic document source into GenAI message parts."""
+    if not isinstance(source, dict):
+        return []
+    source_dict = cast(dict[str, object], source)
+    source_type = source_dict.get("type")
+    if source_type == "base64":
+        part = _extract_base64_blob(source_dict, "document")
+        return [part] if part is not None else []
+    if source_type == "url":
+        url = source_dict.get("url")
+        if isinstance(url, str) and url:
+            media_type = source_dict.get("media_type")
+            return [
+                UriPart(
+                    mime_type=media_type
+                    if isinstance(media_type, str)
+                    else None,
+                    modality="document",
+                    uri=url,
+                )
+            ]
+        return []
+    if source_type == "text":
+        data = source_dict.get("data")
+        if isinstance(data, str):
+            media_type = source_dict.get("media_type")
+            return [
+                BlobPart(
+                    mime_type=media_type
+                    if isinstance(media_type, str)
+                    else "text/plain",
+                    modality="document",
+                    content=data.encode(),
+                )
+            ]
+        return []
+    if source_type == "content":
+        content = source_dict.get("content")
+        if isinstance(content, str):
+            return [TextPart(content=content)]
+        if isinstance(content, Iterator):
+            return [GenericPart(type="blob")]
+        if isinstance(content, Iterable):
+            return convert_content_to_parts(
+                cast("Iterable[ContentBlock | ContentBlockParam]", content)
+            )
+    if source_type == "file":
+        part = _extract_file_source(source_dict, "document")
+        return [part] if part is not None else []
+    return []
+
+
+def _convert_document_block(block: Mapping[str, object]) -> list[MessagePart]:
+    return _extract_document_source(block.get("source"))
+
+
 def _convert_dict_block_to_part(
-    block: Mapping[str, Any],
+    block: Mapping[str, object],
 ) -> MessagePart | None:
     """Convert a request-param content block (TypedDict/dict) to a MessagePart."""
     block_type = block.get("type")
@@ -137,10 +230,40 @@ def _convert_dict_block_to_part(
             id=str(block.get("id", "")),
         )
 
+    if block_type == "server_tool_use":
+        name = str(block.get("name", ""))
+        server_tool_call = {
+            key: value
+            for key, value in block.items()
+            if key not in ("id", "name", "type")
+        }
+        server_tool_call["type"] = name
+        block_id = block.get("id")
+        return ServerToolCallPart(
+            name=name,
+            server_tool_call=server_tool_call,
+            id=str(block_id) if block_id is not None else None,
+        )
+
     if block_type == "tool_result":
         return ToolCallResponsePart(
             response=block.get("content"),
             id=str(block.get("tool_use_id", "")),
+        )
+
+    if isinstance(block_type, str) and (
+        server_tool_name := _SERVER_TOOL_RESULT_TYPES.get(block_type)
+    ):
+        server_tool_call_response = {
+            key: value
+            for key, value in block.items()
+            if key not in ("tool_use_id", "type")
+        }
+        server_tool_call_response["type"] = server_tool_name
+        tool_use_id = block.get("tool_use_id")
+        return ServerToolCallResponsePart(
+            server_tool_call_response=server_tool_call_response,
+            id=str(tool_use_id) if tool_use_id is not None else None,
         )
 
     if block_type in ("thinking", "redacted_thinking"):
@@ -149,7 +272,14 @@ def _convert_dict_block_to_part(
             content=str(thinking) if thinking is not None else ""
         )
 
-    if block_type in ("image", "audio", "video", "document", "file"):
+    if block_type == "image":
+        return _extract_image_source(block.get("source"))
+
+    if block_type == "document":
+        parts = _convert_document_block(block)
+        return parts[0] if parts else None
+
+    if block_type in ("audio", "video", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))
 
     return None
@@ -159,13 +289,19 @@ def _convert_content_block_to_part(
     block: ContentBlock | ContentBlockParam,
 ) -> MessagePart | None:
     """Convert an Anthropic content block to a MessagePart."""
+    if isinstance(block, Mapping):
+        return _convert_dict_block_to_part(cast(Mapping[str, object], block))
+
     if isinstance(block, TextBlock):
         return TextPart(content=block.text)
 
-    if isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
+    if isinstance(block, ToolUseBlock):
         return ToolCallRequestPart(
             arguments=block.input, name=block.name, id=block.id
         )
+
+    if isinstance(block, ServerToolUseBlock):
+        return _convert_dict_block_to_part(block.model_dump(exclude_none=True))
 
     if isinstance(block, (ThinkingBlock, RedactedThinkingBlock)):
         content = (
@@ -173,15 +309,12 @@ def _convert_content_block_to_part(
         )
         return ReasoningPart(content=content)
 
-    if isinstance(block, WebSearchToolResultBlock):
-        return ToolCallResponsePart(
-            response=block.model_dump().get("content"),
-            id=block.tool_use_id,
+    if block.type in _SERVER_TOOL_RESULT_TYPES:
+        return _convert_dict_block_to_part(
+            cast(Mapping[str, object], block.model_dump(exclude_none=True))
         )
 
-    if not hasattr(block, "get"):
-        return None
-    return _convert_dict_block_to_part(cast(Mapping[str, Any], block))
+    return None
 
 
 def convert_content_to_parts(
@@ -193,6 +326,11 @@ def convert_content_to_parts(
         return [TextPart(content=content)]
     parts: list[MessagePart] = []
     for item in content:
+        if isinstance(item, Mapping):
+            item_mapping = cast(Mapping[str, object], item)
+            if item_mapping.get("type") == "document":
+                parts.extend(_convert_document_block(item_mapping))
+                continue
         part = _convert_content_block_to_part(item)
         if part is not None:
             parts.append(part)

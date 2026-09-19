@@ -1,0 +1,1 @@
+Do not record `gen_ai.request.stream` on `fetch_response` spans.

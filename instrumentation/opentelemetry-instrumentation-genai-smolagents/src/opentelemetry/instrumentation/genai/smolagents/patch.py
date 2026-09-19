@@ -34,7 +34,6 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    GenAIInvocation,
     InferenceInvocation,
     LocalAgentInvocation,
 )
@@ -75,7 +74,8 @@ _RunStreamChunk: TypeAlias = (
 
 
 def _finish(
-    invocation: GenAIInvocation, error: BaseException | None = None
+    invocation: InferenceInvocation | LocalAgentInvocation,
+    error: BaseException | None = None,
 ) -> None:
     if error is not None:
         invocation.fail(error)
@@ -224,7 +224,7 @@ def _apply_request_parameters(
 
     invocation.temperature = _coerce_float(merged.get("temperature"))
     invocation.top_p = _coerce_float(merged.get("top_p"))
-    invocation.top_k = _coerce_float(merged.get("top_k"))
+    invocation.top_k = _coerce_int(merged.get("top_k"))
     invocation.frequency_penalty = _coerce_float(
         merged.get("frequency_penalty")
     )

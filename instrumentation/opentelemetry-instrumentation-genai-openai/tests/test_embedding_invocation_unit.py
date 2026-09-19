@@ -119,8 +119,8 @@ def test_server_address_and_port_from_non_httpx_url(handler, span_exporter):
 # ─── create_embedding_invocation: dimensions / encoding_format ──────────────
 
 
-def test_dimensions_propagated_to_metric_attributes(handler):
-    """Request-side ``dimensions`` should be exposed as a metric attribute."""
+def test_dimensions_propagated_to_dimension_count(handler):
+    """Request-side ``dimensions`` should be set on dimension_count."""
     invocation = create_embedding_invocation(
         handler,
         {"model": "m", "dimensions": 256},
@@ -129,16 +129,8 @@ def test_dimensions_propagated_to_metric_attributes(handler):
     try:
         assert invocation.dimension_count == 256
         assert (
-            invocation.metric_attributes[
-                GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
-            ]
-            == 256
-        )
-        assert isinstance(
-            invocation.metric_attributes[
-                GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
-            ],
-            int,
+            GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
+            not in invocation.metric_attributes
         )
     finally:
         invocation.stop()
@@ -193,10 +185,10 @@ def _fake_embedding_response(
     )
 
 
-def test_response_derived_dimension_count_lands_on_metric_attributes(
+def test_response_derived_dimension_count_lands_on_span(
     handler, span_exporter, metric_reader
 ):
-    """When ``dimensions`` is inferred from the response, it must still be on metrics."""
+    """When ``dimensions`` is inferred from the response, it must be on the span."""
     response = _fake_embedding_response(dim=8)
 
     def wrapped(*_args, **_kwargs):
@@ -215,22 +207,14 @@ def test_response_derived_dimension_count_lands_on_metric_attributes(
     )
 
     metrics = metric_reader.get_metrics_data()
-    found_dim_on_metric = False
     for resource_metric in metrics.resource_metrics:
         for scope_metric in resource_metric.scope_metrics:
             for metric in scope_metric.metrics:
                 for point in metric.data.data_points:
-                    if (
-                        point.attributes.get(
-                            GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
-                        )
-                        == 8
-                    ):
-                        found_dim_on_metric = True
-    assert found_dim_on_metric, (
-        "dimension count should be propagated to the metric attributes "
-        "when derived from the response"
-    )
+                    assert (
+                        GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
+                        not in point.attributes
+                    )
 
 
 def test_extraction_error_is_swallowed_and_does_not_break_wrapped_call(
