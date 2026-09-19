@@ -208,6 +208,9 @@ class LocalAgentInvocation(AgentInvocation):
             agent_name=agent_name,
             content_capturing_mode=content_capturing_mode,
         )
+        self.inference_calls: int | None = None
+        self.tool_calls: int | None = None
+
         self._start(self._get_start_attributes())
 
     def _get_start_attributes(self) -> dict[str, AttributeValue]:
@@ -229,16 +232,34 @@ class LocalAgentInvocation(AgentInvocation):
         attrs.update(self.metric_attributes)
         return attrs
 
+    def _record_call_metrics(
+        self, attributes: dict[str, AttributeValue]
+    ) -> None:
+        if self.inference_calls is not None:
+            self._instruments.invoke_agent_inference_calls.record(
+                self.inference_calls,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        if self.tool_calls is not None:
+            self._instruments.invoke_agent_tool_calls.record(
+                self.tool_calls,
+                attributes=attributes,
+                context=self._span_context,
+            )
+
     def _record_metrics(self) -> None:
         duration_seconds = max(
             timeit.default_timer() - self._monotonic_start_s,
             0.0,
         )
+        attributes = self._get_metric_attributes()
         self._instruments.invoke_agent_duration.record(
             duration_seconds,
-            attributes=self._get_metric_attributes(),
+            attributes=attributes,
             context=self._span_context,
         )
+        self._record_call_metrics(attributes)
 
 
 class RemoteAgentInvocation(AgentInvocation):
