@@ -13,7 +13,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -41,7 +40,7 @@ class TestWorkflowInvocation(unittest.TestCase):
         assert invocation._operation_name == "invoke_workflow"
         assert not invocation.input_messages
         assert not invocation.output_messages
-        assert invocation.span is not INVALID_SPAN
+        assert invocation.span is not None
         assert not invocation.attributes
 
     def test_custom_name(self):

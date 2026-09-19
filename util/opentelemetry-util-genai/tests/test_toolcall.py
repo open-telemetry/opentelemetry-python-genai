@@ -18,8 +18,11 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.trace import SpanKind
-from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.trace import (
+    SpanKind,
+    get_current_span,
+    set_span_in_context,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -370,9 +373,7 @@ def test_tool_span_omits_agent_name_when_absent():
     assert GenAI.GEN_AI_AGENT_NAME not in attrs
 
 
-def test_tool_start_attributes_omit_agent_name_at_sampling_time():
-    """`gen_ai.agent.name` is not sampling-relevant for `execute_tool` in
-    current semconv"""
+def test_tool_start_attributes_include_agent_name_at_sampling_time():
     captured_attributes: dict[str, object] = {}
 
     class AttributeCapturingSampler:  # pylint: disable=no-self-use
@@ -398,7 +399,7 @@ def test_tool_start_attributes_omit_agent_name_at_sampling_time():
 
     handler.tool("get_weather", agent_name="weather_agent").stop()
 
-    assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
+    assert captured_attributes[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
     finalized = span_exporter.get_finished_spans()[0].attributes
     assert finalized[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
 
@@ -455,7 +456,7 @@ def test_tool_content_not_on_span_with_completion_hook():
         tracer_provider=tracer_provider, completion_hook=mock_hook
     )
     invocation = handler.tool("get_weather")
-    assert invocation.should_capture_content is True
+    assert invocation.should_capture_content is False
     assert invocation.should_capture_content_on_span is False
     invocation.arguments = {"city": "Paris"}
     invocation.tool_result = "sunny"
@@ -480,13 +481,11 @@ def test_direct_invocation_instantiation_falls_back_to_env():
     meter_provider = MeterProvider()
     meter = meter_provider.get_meter(__name__)
     mock_logger = MagicMock()
-    mock_hook = MagicMock(spec=CompletionHook)
 
     invocation = ToolInvocation(
-        tracer=tracer,
-        instruments=_Instruments(meter),
-        logger=mock_logger,
-        completion_hook=mock_hook,
+        tracer,
+        meter,
+        mock_logger,
         name="direct_tool",
     )
     assert invocation.should_capture_content is True
@@ -498,3 +497,51 @@ def test_direct_invocation_instantiation_falls_back_to_env():
     assert len(finished) == 1
     attrs = finished[0].attributes or {}
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
+
+
+def test_tool_invocation_context_property():
+    handler = _make_handler()
+    invocation = handler.tool("test_tool")
+    try:
+        assert invocation.context is not None
+        assert get_current_span(invocation.context).is_recording()
+    finally:
+        invocation.stop()
+
+
+def test_tool_invocation_explicit_context():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("parent_span") as parent_span:
+        parent_context = set_span_in_context(parent_span)
+
+    tool_invocation = handler.tool("child_tool", context=parent_context)
+    tool_invocation.stop()
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = [s for s in spans if s.name == "execute_tool child_tool"][0]
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == parent_span.get_span_context().span_id
+
+
+def test_start_tool_explicit_context():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("parent_span") as parent_span:
+        parent_context = set_span_in_context(parent_span)
+
+    tool_invocation = handler.start_tool("child_tool", context=parent_context)
+    tool_invocation.stop()
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = [s for s in spans if s.name == "execute_tool child_tool"][0]
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == parent_span.get_span_context().span_id

@@ -246,9 +246,21 @@ def weaver_live_check() -> Iterator[Any]:
     except ImportError:
         pytest.skip("opentelemetry-exporter-otlp-proto-grpc not installed")
 
+    try:
+        from opentelemetry.test_util_genai._setup_weaver import ensure_weaver
+
+        weaver_bin = ensure_weaver()
+        weaver_dir = str(weaver_bin.parent)
+        if weaver_dir not in os.environ.get("PATH", "").split(os.pathsep):
+            os.environ["PATH"] = (
+                f"{weaver_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            )
+    except Exception:  # pylint: disable=broad-except
+        pass
+
     if shutil.which("weaver") is None:
         pytest.skip(
-            "weaver binary not on PATH — install it from "
+            "weaver binary not on PATH - install it from "
             "https://github.com/open-telemetry/weaver/releases (CI installs "
             "it via the test.yml conformance setup step)"
         )

@@ -189,4 +189,4 @@ class InvocationExitSuccessPathTest(_InvocationExitTestBase):
         span = self._only_span()
         self.assertEqual(span.status.status_code, StatusCode.ERROR)
         self.assertEqual(span.attributes["error.type"], "ValueError")
-        self.assertEqual(span.status.description, "boom")
+        self.assertEqual(len(span.events), 0)

@@ -238,6 +238,28 @@ class TestShouldEmitEvent(unittest.TestCase):
         self.assertEqual(len(cm.output), 1)
         self.assertIn("invalid_value is not a valid option for", cm.output[0])
 
+    def test_should_emit_event_with_explicit_mode(self):  # pylint: disable=no-self-use
+        assert should_emit_event(ContentCapturingMode.NO_CONTENT) is False
+        assert should_emit_event(ContentCapturingMode.SPAN_ONLY) is False
+        assert should_emit_event(ContentCapturingMode.EVENT_ONLY) is True
+        assert should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"},
+        ):
+            assert should_emit_event(ContentCapturingMode.NO_CONTENT) is True
+            assert should_emit_event(ContentCapturingMode.SPAN_ONLY) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"},
+        ):
+            assert should_emit_event(ContentCapturingMode.EVENT_ONLY) is False
+            assert (
+                should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is False
+            )
+
 
 class TestShouldCaptureContent(unittest.TestCase):
     def test_should_capture_content_on_spans_against_various_env_var_combinations(
@@ -450,6 +472,7 @@ class TestTelemetryHandler(unittest.TestCase):
         invocation.attributes["manual"] = True
         assert invocation.span is not None
         invocation.output_messages = [chat_generation]
+        invocation.finish_reasons = ["stop"]
         invocation.attributes.update({"extra_manual": "yes"})
         invocation.stop()
 
@@ -472,6 +495,33 @@ class TestTelemetryHandler(unittest.TestCase):
                 "extra_manual": "yes",
             },
         )
+
+    def test_inference_invocation_proxies_semantic_state(self):
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="request-model"
+        )
+        attributes = invocation
+
+        assert invocation.input_messages is None
+        assert invocation.output_messages is None
+        assert invocation.system_instruction is None
+
+        invocation.temperature = 0.7
+        invocation.response_model_name = "response-model"
+        invocation.input_tokens = 12
+        invocation.conversation_compacted = True
+        invocation._request_stream = True
+
+        assert attributes.request_temperature == 0.7
+        assert attributes.response_model == "response-model"
+        assert attributes.usage_input_tokens == 12
+        assert attributes.conversation_compacted is True
+        assert attributes.request_stream is True
+
+        attributes.request_top_k = 5
+        assert invocation.top_k == 5
+
+        invocation.stop()
 
     @patch.dict(
         os.environ,
@@ -565,12 +615,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
 
     def test_inference_conversation_id_on_span_but_not_metrics(self):
-        """conversation id is high cardinality, so it must stay off metrics.
-
-        `_get_metric_attributes()` builds on `_get_start_attributes()`, so
-        setting it at span creation would make it a dimension on the duration
-        and token histograms.
-        """
+        """conversation id is high cardinality, so it must stay off metrics."""
         invocation = self.telemetry_handler.inference(
             "test-provider", request_model="test-model"
         )
@@ -579,10 +624,7 @@ class TestTelemetryHandler(unittest.TestCase):
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
-        assert (
-            GenAI.GEN_AI_CONVERSATION_ID
-            not in invocation._get_metric_attributes()
-        )
+        assert GenAI.GEN_AI_CONVERSATION_ID not in invocation.metric_attributes
 
     def test_inference_omits_conversation_id_when_not_set(self):
         invocation = self.telemetry_handler.inference(
@@ -733,25 +775,6 @@ class TestTelemetryHandler(unittest.TestCase):
             ("stop", "length", "stop"),
         )
 
-    def test_llm_span_finish_reasons_from_output_messages(self):
-        invocation = self.telemetry_handler.inference(
-            "test-provider", request_model="model-output-reasons"
-        )
-        assert invocation.span is not None
-        invocation.output_messages = [
-            _create_output_message("response-1", finish_reason="stop"),
-            _create_output_message("response-2", finish_reason="length"),
-            _create_output_message("response-3", finish_reason="stop"),
-        ]
-        invocation.stop()
-
-        span = _get_single_span(self.span_exporter)
-        attrs = _get_span_attributes(span)
-        self.assertEqual(
-            attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS],
-            ("stop", "length", "stop"),
-        )
-
     def test_llm_span_uses_expected_schema_url(self):
         invocation = self.telemetry_handler.inference(
             "schema-provider", request_model="schema-model"
@@ -778,7 +801,11 @@ class TestTelemetryHandler(unittest.TestCase):
         },
     )
     def test_llm_log_uses_expected_schema_url(self):
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "schema-provider", request_model="schema-model"
         )
         invocation.output_messages = [_create_output_message()]

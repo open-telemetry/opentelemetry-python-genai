@@ -19,7 +19,6 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from opentelemetry.util.genai._invocation import GenAIInvocation
 
     class _ObjectProxy:
         __wrapped__: Any
@@ -39,9 +38,19 @@ AsyncStreamWrapperT = TypeVar(
     "AsyncStreamWrapperT", bound="AsyncStreamWrapper[Any]"
 )
 StreamT = TypeVar("StreamT")
-InvocationT = TypeVar("InvocationT", bound="GenAIInvocation")
 _ChunkT_co = TypeVar("_ChunkT_co", covariant=True)
 _logger = logging.getLogger(__name__)
+
+
+class _StreamTimingInvocation(Protocol):
+    def _on_stream_chunk(self, chunk_at: float) -> None: ...
+
+
+class _StreamingInvocation(_StreamTimingInvocation, Protocol):
+    def fail(self, error: BaseException) -> None: ...
+
+
+InvocationT = TypeVar("InvocationT", bound="_StreamingInvocation")
 
 
 class _StreamWrapperMeta(ABCMeta, type(_ObjectProxy)):
@@ -115,15 +124,13 @@ class SyncStreamWrapper(
     def __init__(
         self,
         stream: _SyncStream[ChunkT],
-        invocation: GenAIInvocation | None = None,
+        invocation: _StreamTimingInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
-        # Marks the request as streamed (gen_ai.request.stream) and receives
-        # per-chunk timing via _on_stream_chunk.
         self._self_invocation = invocation
-        if invocation is not None:
-            invocation._request_stream = True
+        if invocation is not None and hasattr(invocation, "_request_stream"):
+            setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
     # The SDK stream, held loosely typed: subclasses re-expose it through a
@@ -222,15 +229,13 @@ class AsyncStreamWrapper(
     def __init__(
         self,
         stream: _AsyncStream[ChunkT],
-        invocation: GenAIInvocation | None = None,
+        invocation: _StreamTimingInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
-        # Marks the request as streamed (gen_ai.request.stream) and receives
-        # per-chunk timing via _on_stream_chunk.
         self._self_invocation = invocation
-        if invocation is not None:
-            invocation._request_stream = True
+        if invocation is not None and hasattr(invocation, "_request_stream"):
+            setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
     # See ``SyncStreamWrapper._self_stream``.
