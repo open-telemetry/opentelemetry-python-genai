@@ -1754,6 +1754,57 @@ class TestOnLlmEndTokenDetails:
         assert llm_inv.input_tokens == 13
         assert llm_inv.output_tokens == 7
 
+    def test_vertexai_generation_info_usage_metadata(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="hi")
+        gen = ChatGeneration(
+            message=ai_msg,
+            generation_info={
+                "finish_reason": "stop",
+                "usage_metadata": {
+                    "prompt_token_count": 13,
+                    "candidates_token_count": 7,
+                    "total_token_count": 20,
+                },
+            },
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 13
+        assert llm_inv.output_tokens == 7
+
+    def test_anthropic_llm_output_usage_includes_cached_input_tokens(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="hi")
+        gen = ChatGeneration(
+            message=ai_msg,
+            generation_info={"finish_reason": "stop"},
+        )
+        response = LLMResult(
+            generations=[[gen]],
+            llm_output={
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 3,
+                    "cache_read_input_tokens": 2,
+                    "output_tokens": 4,
+                }
+            },
+        )
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.input_tokens == 15
+        assert llm_inv.cache_write_input_tokens == 3
+        assert llm_inv.cache_read_input_tokens == 2
+        assert llm_inv.output_tokens == 4
+
 
 # ---------------------------------------------------------------------------
 # utils.extract_token_details

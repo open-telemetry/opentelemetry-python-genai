@@ -616,6 +616,13 @@ def resolve_response_model_and_id(
     return response_model, response_id
 
 
+def _get_positive_int(values: Mapping[str, Any], key: str) -> int | None:
+    value = values.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def extract_token_details(usage_metadata: Mapping[str, Any]) -> dict[str, int]:
     """Extract cache, reasoning, and modality token break-downs from LangChain usage metadata."""
 
@@ -633,21 +640,22 @@ def extract_token_details(usage_metadata: Mapping[str, Any]) -> dict[str, int]:
         else {}
     )
 
-    def _get_positive_int(d: dict[str, Any], key: str) -> int | None:
-        val = d.get(key)
-        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
-            return val
-        return None
-
     cache_write = _get_positive_int(input_details, "cache_write")
     if cache_write is None:
         cache_write = _get_positive_int(input_details, "cache_creation")
+    if cache_write is None:
+        cache_write = _get_positive_int(
+            usage_metadata, "cache_creation_input_tokens"
+        )
     if cache_write is not None:
         token_details["cache_write_input_tokens"] = cache_write
 
-    if (
-        cache_read := _get_positive_int(input_details, "cache_read")
-    ) is not None:
+    cache_read = _get_positive_int(input_details, "cache_read")
+    if cache_read is None:
+        cache_read = _get_positive_int(
+            usage_metadata, "cache_read_input_tokens"
+        )
+    if cache_read is not None:
         token_details["cache_read_input_tokens"] = cache_read
 
     if (
@@ -685,10 +693,22 @@ def extract_usage_tokens(
     input_tokens = _first_int_value(
         usage_metadata.get("input_tokens"),
         usage_metadata.get("prompt_tokens"),
+        usage_metadata.get("prompt_token_count"),
     )
+    if input_tokens is not None:
+        input_tokens += sum(
+            cache_tokens
+            for key in (
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            )
+            if (cache_tokens := _get_positive_int(usage_metadata, key))
+            is not None
+        )
     output_tokens = _first_int_value(
         usage_metadata.get("output_tokens"),
         usage_metadata.get("completion_tokens"),
+        usage_metadata.get("candidates_token_count"),
     )
     return input_tokens, output_tokens
 
