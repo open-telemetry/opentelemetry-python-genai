@@ -21,6 +21,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
     RemoteAgentInvocation,
     RetrievalInvocation,
 )
@@ -33,6 +34,9 @@ from .extractors import (
     extract_invoke_agent_request,
     extract_invoke_model_request,
     extract_invoke_model_response,
+    extract_retrieve_and_generate_model,
+    extract_retrieve_and_generate_request,
+    extract_retrieve_and_generate_response,
     extract_retrieve_request,
     extract_retrieve_response,
     extract_server_address_and_port,
@@ -42,10 +46,12 @@ from .stream import (
     AsyncBedrockAgentEventStreamWrapper,
     AsyncBedrockConverseStreamWrapper,
     AsyncBedrockInvokeModelStreamWrapper,
+    AsyncBedrockRetrieveAndGenerateStreamWrapper,
     AsyncBedrockStreamingBodyWrapper,
     BedrockAgentEventStreamWrapper,
     BedrockConverseStreamWrapper,
     BedrockInvokeModelStreamWrapper,
+    BedrockRetrieveAndGenerateStreamWrapper,
 )
 
 _logger = logging.getLogger(__name__)
@@ -536,6 +542,110 @@ async def _handle_async_retrieve(
     return _finish_retrieve(response, invocation)
 
 
+def _start_retrieve_and_generate(
+    instance: BaseClient,
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> InferenceInvocation:
+    server_address, server_port = _server_address_and_port(instance)
+    request_model = extract_retrieve_and_generate_model(api_params)
+    invocation = handler.inference(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        request_model=request_model,
+        server_address=server_address,
+        server_port=server_port,
+    )
+    extract_retrieve_and_generate_request(
+        api_params,
+        invocation,
+        capture_content=invocation.should_capture_content,
+    )
+    return invocation
+
+
+def _finish_retrieve_and_generate(
+    response: Any,
+    invocation: InferenceInvocation,
+    *,
+    is_stream: bool,
+    wrapper_cls: type[
+        BedrockRetrieveAndGenerateStreamWrapper
+        | AsyncBedrockRetrieveAndGenerateStreamWrapper
+    ],
+) -> Any:
+    if is_stream:
+        session_id = response.get("sessionId")
+        if session_id and not invocation.conversation_id:
+            invocation.conversation_id = str(session_id)
+        if "stream" in response and response["stream"] is not None:
+            response["stream"] = wrapper_cls(
+                response["stream"],
+                invocation=invocation,
+                capture_content=invocation.should_capture_content,
+            )
+            return response
+        invocation.stop()
+        return response
+
+    extract_retrieve_and_generate_response(
+        response,
+        invocation,
+        capture_content=invocation.should_capture_content,
+    )
+    invocation.stop()
+    return response
+
+
+def _handle_retrieve_and_generate(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+    *,
+    is_stream: bool = False,
+) -> Any:
+    invocation = _start_retrieve_and_generate(instance, api_params, handler)
+    try:
+        response: Any = wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_retrieve_and_generate(
+        response,
+        invocation,
+        is_stream=is_stream,
+        wrapper_cls=BedrockRetrieveAndGenerateStreamWrapper,
+    )
+
+
+async def _handle_async_retrieve_and_generate(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+    *,
+    is_stream: bool = False,
+) -> Any:
+    invocation = _start_retrieve_and_generate(instance, api_params, handler)
+    try:
+        response: Any = await wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_retrieve_and_generate(
+        response,
+        invocation,
+        is_stream=is_stream,
+        wrapper_cls=AsyncBedrockRetrieveAndGenerateStreamWrapper,
+    )
+
+
 def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
     def _wrapper(
         wrapped: Callable[..., Any],
@@ -575,6 +685,19 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
                     kwargs,
                     api_params,
                     handler,
+                )
+            if operation_name in (
+                "RetrieveAndGenerate",
+                "RetrieveAndGenerateStream",
+            ):
+                return _handle_retrieve_and_generate(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                    is_stream=(operation_name == "RetrieveAndGenerateStream"),
                 )
             return wrapped(*args, **kwargs)
 
@@ -646,6 +769,19 @@ def _make_aio_api_call_wrapper(
                     kwargs,
                     api_params,
                     handler,
+                )
+            if operation_name in (
+                "RetrieveAndGenerate",
+                "RetrieveAndGenerateStream",
+            ):
+                return await _handle_async_retrieve_and_generate(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                    is_stream=(operation_name == "RetrieveAndGenerateStream"),
                 )
             return await wrapped(*args, **kwargs)
 
