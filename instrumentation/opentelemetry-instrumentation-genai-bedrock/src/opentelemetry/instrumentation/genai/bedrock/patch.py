@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import io
 import logging
 from collections.abc import Callable
@@ -27,6 +29,9 @@ from .extractors import (
     extract_server_address_and_port,
 )
 from .stream import (
+    AsyncBedrockConverseStreamWrapper,
+    AsyncBedrockInvokeModelStreamWrapper,
+    AsyncBedrockStreamingBodyWrapper,
     BedrockConverseStreamWrapper,
     BedrockInvokeModelStreamWrapper,
 )
@@ -73,6 +78,58 @@ def _handle_converse(
         # Any 200 response is guaranteed to have this..
         if "stream" in response:
             response["stream"] = BedrockConverseStreamWrapper(
+                response["stream"],
+                invocation=invocation,
+                capture_content=capture_content,
+            )
+            return response
+    else:
+        extract_converse_response(
+            response,
+            invocation,
+            capture_content=capture_content,
+        )
+
+    invocation.stop()
+    return response
+
+
+async def _handle_async_converse(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+    *,
+    is_stream: bool = False,
+) -> Any:
+    endpoint_url = getattr(
+        getattr(instance, "meta", None), "endpoint_url", None
+    )
+    server_address, server_port = extract_server_address_and_port(endpoint_url)
+    raw_model_id = api_params.get("modelId")
+    model_id = str(raw_model_id) if raw_model_id else None
+    invocation = handler.inference(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        request_model=model_id,
+        server_address=server_address,
+        server_port=server_port,
+        operation_name=GenAiOperationNameValues.CHAT.value,
+    )
+    capture_content = handler.should_capture_content()
+    extract_converse_request(
+        api_params, invocation, capture_content=capture_content
+    )
+    try:
+        response: Any = await wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    if is_stream:
+        if "stream" in response:
+            response["stream"] = AsyncBedrockConverseStreamWrapper(
                 response["stream"],
                 invocation=invocation,
                 capture_content=capture_content,
@@ -137,10 +194,6 @@ def _handle_invoke_model(
             response["body"] = StreamingBody(
                 io.BytesIO(raw_bytes), len(raw_bytes)
             )
-        elif isinstance(body_stream, (bytes, bytearray)):
-            raw_bytes = bytes(body_stream)
-        elif isinstance(body_stream, str):
-            raw_bytes = body_stream.encode("utf-8")
 
         extract_invoke_model_response(
             response,
@@ -148,6 +201,79 @@ def _handle_invoke_model(
             invocation,
             capture_content=capture_content,
         )
+
+    invocation.stop()
+    return response
+
+
+async def _handle_async_invoke_model(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+    *,
+    is_stream: bool = False,
+) -> Any:
+    endpoint_url = getattr(
+        getattr(instance, "meta", None), "endpoint_url", None
+    )
+    server_address, server_port = extract_server_address_and_port(endpoint_url)
+    raw_model_id = api_params.get("modelId")
+    model_id = str(raw_model_id) if raw_model_id else None
+    invocation = handler.inference(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        request_model=model_id,
+        server_address=server_address,
+        server_port=server_port,
+    )
+    capture_content = handler.should_capture_content()
+    extract_invoke_model_request(
+        api_params, invocation, capture_content=capture_content
+    )
+    try:
+        response: Any = await wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    if is_stream:
+        if "body" in response:
+            response["body"] = AsyncBedrockInvokeModelStreamWrapper(
+                response["body"],
+                invocation=invocation,
+                capture_content=capture_content,
+            )
+            return response
+    else:
+        body_stream = response.get("body")
+        if body_stream is not None:
+            if hasattr(body_stream, "read") and (
+                inspect.iscoroutinefunction(body_stream.read)
+                or asyncio.iscoroutinefunction(body_stream.read)
+            ):
+                response["body"] = AsyncBedrockStreamingBodyWrapper(
+                    body_stream,
+                    invocation=invocation,
+                    response=response,
+                    capture_content=capture_content,
+                )
+                return response
+
+            raw_bytes = b""
+            if hasattr(body_stream, "read"):
+                raw_bytes = body_stream.read()
+                response["body"] = StreamingBody(
+                    io.BytesIO(raw_bytes), len(raw_bytes)
+                )
+
+            extract_invoke_model_response(
+                response,
+                raw_bytes,
+                invocation,
+                capture_content=capture_content,
+            )
 
     invocation.stop()
     return response
@@ -201,17 +327,76 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
     return _wrapper
 
 
+def _make_aio_api_call_wrapper(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def _wrapper(
+        wrapped: Callable[..., Any],
+        instance: BaseClient,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        service_name = getattr(
+            getattr(instance, "_service_model", None), "service_name", None
+        )
+        if service_name != BEDROCK_RUNTIME:
+            return await wrapped(*args, **kwargs)
+
+        operation_name = args[0] if args else kwargs.get("operation_name")
+        raw_params = args[1] if len(args) > 1 else kwargs.get("api_params")
+        api_params: dict[str, Any] = (
+            cast(dict[str, Any], raw_params)
+            if isinstance(raw_params, dict)
+            else {}
+        )
+
+        if operation_name in ("Converse", "ConverseStream"):
+            return await _handle_async_converse(
+                wrapped,
+                instance,
+                args,
+                kwargs,
+                api_params,
+                handler,
+                is_stream=(operation_name == "ConverseStream"),
+            )
+
+        if operation_name in ("InvokeModel", "InvokeModelWithResponseStream"):
+            return await _handle_async_invoke_model(
+                wrapped,
+                instance,
+                args,
+                kwargs,
+                api_params,
+                handler,
+                is_stream=(operation_name == "InvokeModelWithResponseStream"),
+            )
+
+        return await wrapped(*args, **kwargs)
+
+    return _wrapper
+
+
 def patch_bedrock(handler: TelemetryHandler) -> None:
-    """Patch botocore BaseClient to instrument Bedrock runtime operations."""
+    """Patch botocore and aiobotocore BaseClient to instrument Bedrock runtime operations."""
     wrap_function_wrapper(
         "botocore.client",
         "BaseClient._make_api_call",
         _make_api_call_wrapper(handler),
     )
 
+    try:
+        wrap_function_wrapper(
+            "aiobotocore.client",
+            "AioBaseClient._make_api_call",
+            _make_aio_api_call_wrapper(handler),
+        )
+    except (ImportError, ModuleNotFoundError):
+        pass
+
 
 def unpatch_bedrock() -> None:
-    """Unpatch botocore BaseClient._make_api_call."""
+    """Unpatch botocore and aiobotocore BaseClient._make_api_call."""
     import botocore.client
 
     try:
@@ -219,4 +404,11 @@ def unpatch_bedrock() -> None:
     except Exception:
         _logger.debug(
             "Failed to unwrap BaseClient._make_api_call", exc_info=True
+        )
+
+    try:
+        unwrap("aiobotocore.client.AioBaseClient", "_make_api_call")
+    except Exception:
+        _logger.debug(
+            "Failed to unwrap AioBaseClient._make_api_call", exc_info=True
         )
