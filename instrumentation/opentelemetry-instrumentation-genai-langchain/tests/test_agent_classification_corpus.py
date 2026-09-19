@@ -584,9 +584,7 @@ def test_unnamed_inner_agent_does_not_leak_outer_agent_name_to_its_tools(
     inner_tool_span = _span_named(spans, "execute_tool lookup")
     outer_tool_span = _span_named(spans, "execute_tool delegate")
 
-    assert (
-        outer_tool_span.attributes.get("gen_ai.agent.name") == "outer_agent"
-    )
+    assert outer_tool_span.attributes.get("gen_ai.agent.name") == "outer_agent"
     assert "gen_ai.agent.name" not in inner_tool_span.attributes
 
 
