@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import openai
 from openai import NotGiven
+from openai.types import CompletionUsage
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -64,6 +65,52 @@ def get_property_value(obj, property_name):
         return obj.get(property_name, None)
 
     return getattr(obj, property_name, None)
+
+
+def set_chat_usage(
+    invocation: InferenceInvocation, usage: CompletionUsage
+) -> None:
+    invocation.input_tokens = usage.prompt_tokens
+    invocation.output_tokens = usage.completion_tokens
+    prompt_details: object = get_property_value(
+        obj=usage, property_name="prompt_tokens_details"
+    )
+    completion_details: object = get_property_value(
+        obj=usage, property_name="completion_tokens_details"
+    )
+    invocation.cache_read_input_tokens = get_property_value(
+        obj=prompt_details, property_name="cached_tokens"
+    )
+    invocation.cache_write_input_tokens = get_property_value(
+        obj=prompt_details, property_name="cache_write_tokens"
+    )
+    invocation.thinking_tokens = get_property_value(
+        obj=completion_details, property_name="reasoning_tokens"
+    )
+    invocation.set_input_tokens(
+        entries=(
+            (
+                modality,
+                get_property_value(
+                    obj=prompt_details,
+                    property_name=f"{modality}_tokens",
+                ),
+            )
+            for modality in ("text", "image", "audio")
+        )
+    )
+    invocation.set_output_tokens(
+        entries=(
+            (
+                modality,
+                get_property_value(
+                    obj=completion_details,
+                    property_name=f"{modality}_tokens",
+                ),
+            )
+            for modality in ("text", "audio")
+        )
+    )
 
 
 def get_server_address_and_port(
