@@ -130,6 +130,28 @@ uv run tox -e changelog-preview
 If your change doesn't need an entry (pure docs/tooling), add the
 `Skip Changelog` label to the PR.
 
+## Working with generated semconv code
+
+The semantic convention constants and operation classes under
+`util/opentelemetry-util-genai/src/opentelemetry/util/genai/semconv/` are generated from the
+[GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) using
+[Weaver](https://github.com/open-telemetry/weaver).
+
+- **Do not edit generated files directly.** Files marked `# Code generated ... DO NOT EDIT.` are
+  overwritten when regenerating.
+- **Automated updates:** A weekly workflow (`.github/workflows/update-semconv.yml`) tracks upstream
+  semantic conventions, updates `SEMCONV_GENAI_REF` in `versions.env`, and opens a PR.
+- **Manual generation:** To regenerate code locally, run:
+  ```sh
+  uv run scripts/semconv/generate.py
+  # or via tox
+  uv run tox -e generate
+  ```
+  CI checks that generated files match checked-in code and fails if there is any diff.
+- **Adding or modifying operations:** To add a new operation or associate a different set of signals
+  (spans, metrics, events) with an operation, update
+  `scripts/semconv/templates/registry/python-genai/weaver.yaml`. 
+
 ## Skills
 
 This repo ships skills (under `.github/skills/`) that automate the heavy,

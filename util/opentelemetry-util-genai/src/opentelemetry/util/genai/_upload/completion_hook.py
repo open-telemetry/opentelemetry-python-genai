@@ -26,9 +26,9 @@ from uuid import uuid4
 import fsspec
 
 from opentelemetry._logs import LogRecord
-from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import Span
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.semconv.gen_ai import attributes as Attr
 from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
@@ -38,19 +38,12 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import gen_ai_json_dump
 
-GEN_AI_INPUT_MESSAGES_REF: Final = (
-    gen_ai_attributes.GEN_AI_INPUT_MESSAGES + "_ref"
-)
-GEN_AI_OUTPUT_MESSAGES_REF: Final = (
-    gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES + "_ref"
-)
+GEN_AI_INPUT_MESSAGES_REF: Final = Attr.GEN_AI_INPUT_MESSAGES + "_ref"
+GEN_AI_OUTPUT_MESSAGES_REF: Final = Attr.GEN_AI_OUTPUT_MESSAGES + "_ref"
 GEN_AI_SYSTEM_INSTRUCTIONS_REF: Final = (
-    gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS + "_ref"
+    Attr.GEN_AI_SYSTEM_INSTRUCTIONS + "_ref"
 )
-
-# TODO: Migrate to gen_ai_attributes constant once available in semconv package
-GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
-GEN_AI_TOOL_DEFINITIONS_REF: Final = GEN_AI_TOOL_DEFINITIONS + "_ref"
+GEN_AI_TOOL_DEFINITIONS_REF: Final = Attr.GEN_AI_TOOL_DEFINITIONS + "_ref"
 
 _MESSAGE_INDEX_KEY = "index"
 _DEFAULT_MAX_QUEUE_SIZE = 20

@@ -18,7 +18,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.test.test_base import TestBase
-from opentelemetry.trace import INVALID_SPAN, SpanKind
+from opentelemetry.trace import SpanKind, get_current_span
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import WorkflowInvocation
@@ -54,7 +54,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
 
     def test_start_workflow_creates_span(self) -> None:
         invocation = self.handler.workflow(name="my_workflow")
-        self.assertIsNot(invocation.span, INVALID_SPAN)
+        self.assertTrue(get_current_span(invocation.context).is_recording())
         invocation.stop()
 
     def test_start_workflow_span_name(self) -> None:
@@ -215,7 +215,7 @@ class TelemetryHandlerWorkflowContextManagerTest(_WorkflowTestBase):
 
     def test_workflow_context_manager_creates_and_ends_span(self) -> None:
         with self.handler.workflow(name="ctx_wf") as inv:
-            self.assertIsNot(inv.span, INVALID_SPAN)
+            self.assertTrue(get_current_span(inv.context).is_recording())
 
         spans = self._get_finished_spans()
         self.assertEqual(len(spans), 1)
@@ -263,12 +263,13 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
         self.assertEqual(
             captured_attributes[GenAI.GEN_AI_OPERATION_NAME], "invoke_workflow"
         )
-        self.assertEqual(
-            captured_attributes[GenAI.GEN_AI_WORKFLOW_NAME], "my-workflow"
-        )
+        self.assertNotIn(GenAI.GEN_AI_WORKFLOW_NAME, captured_attributes)
 
         spans = self._get_finished_spans()
         self.assertEqual(len(spans), 1)
+        self.assertEqual(
+            spans[0].attributes[GenAI.GEN_AI_WORKFLOW_NAME], "my-workflow"
+        )
 
     def test_workflow_context_manager_sets_attributes_on_span(self) -> None:
         with self.handler.workflow("wf") as inv:

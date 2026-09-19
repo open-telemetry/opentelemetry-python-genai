@@ -109,26 +109,21 @@ class TelemetryHandlerFetchResponseTest(_FetchResponseTestBase):
     # required and conditionally required attributes
     # ------------------------------------------------------------------
 
-    def test_required_attributes_are_set_at_span_creation(self) -> None:
+    def test_sampling_attributes_are_set_at_span_creation(self) -> None:
         invocation = self._fetch_response()
 
         attrs = invocation.span.attributes
         self.assertEqual(attrs[GenAI.GEN_AI_OPERATION_NAME], "fetch_response")
         self.assertEqual(attrs[GenAI.GEN_AI_PROVIDER_NAME], "openai")
-        self.assertEqual(attrs[GenAI.GEN_AI_RESPONSE_ID], RESPONSE_ID)
+        self.assertNotIn(GenAI.GEN_AI_RESPONSE_ID, attrs)
         invocation.stop()
+
+        attrs = self._get_finished_spans()[0].attributes
+        self.assertEqual(attrs[GenAI.GEN_AI_RESPONSE_ID], RESPONSE_ID)
 
     def test_response_id_is_exposed(self) -> None:
         invocation = self._fetch_response()
         self.assertEqual(invocation.response_id, RESPONSE_ID)
-        invocation.stop()
-
-    def test_request_stream_is_set_at_span_creation(self) -> None:
-        invocation = self._fetch_response(request_stream=True)
-
-        self.assertIs(
-            invocation.span.attributes[GenAI.GEN_AI_REQUEST_STREAM], True
-        )
         invocation.stop()
 
     def test_stop_sets_server_address_and_port(self) -> None:
@@ -213,6 +208,32 @@ class TelemetryHandlerFetchResponseTest(_FetchResponseTestBase):
         )
         # High cardinality — must stay off the metric.
         self.assertNotIn(GenAI.GEN_AI_RESPONSE_ID, point.attributes)
+
+    def test_stream_records_chunk_timing_metrics(self) -> None:
+        with patch("timeit.default_timer", return_value=1000.0):
+            invocation = self._fetch_response()
+        invocation.response_model_name = "gpt-4o-mini"
+
+        invocation._on_stream_chunk(1000.25)
+        invocation._on_stream_chunk(1000.4)
+        invocation.stop()
+
+        metrics = self._get_metrics()
+        ttfc = metrics["gen_ai.client.operation.time_to_first_chunk"]
+        (ttfc_point,) = ttfc.data.data_points
+        self.assertAlmostEqual(ttfc_point.sum, 0.25)
+        self.assertEqual(
+            ttfc_point.attributes[GenAI.GEN_AI_OPERATION_NAME],
+            "fetch_response",
+        )
+        self.assertEqual(
+            ttfc_point.attributes[GenAI.GEN_AI_RESPONSE_MODEL],
+            "gpt-4o-mini",
+        )
+
+        per_chunk = metrics["gen_ai.client.operation.time_per_output_chunk"]
+        (per_chunk_point,) = per_chunk.data.data_points
+        self.assertAlmostEqual(per_chunk_point.sum, 0.15)
 
     # ------------------------------------------------------------------
     # fail

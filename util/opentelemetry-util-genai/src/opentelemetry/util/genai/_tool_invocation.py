@@ -3,37 +3,24 @@
 
 from __future__ import annotations
 
-import timeit
-
 from opentelemetry._logs import Logger
 from opentelemetry.context import Context
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
+from opentelemetry.metrics import Meter
+from opentelemetry.trace import Tracer
+from opentelemetry.util.genai._attribute import _Attribute
+from opentelemetry.util.genai._invocation import GenAIInvocation
+from opentelemetry.util.genai.semconv.gen_ai import GenAiOperationName
+from opentelemetry.util.genai.semconv.gen_ai._generated import (
+    ExecuteToolInternalOperation,
 )
-from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
-from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
+    get_content_capturing_mode,
 )
-from opentelemetry.util.types import AnyValue, AttributeValue
+from opentelemetry.util.types import AnyValue
 
 
-def _any_value_to_attribute_value(value: AnyValue) -> AttributeValue | None:
-    """Serialize an AnyValue to an AttributeValue for OTel span attributes."""
-    if value is None:
-        return None
-    if isinstance(value, (bool, str, bytes, int, float)):
-        return value
-    try:
-        return gen_ai_json_dumps(value)
-    except (TypeError, ValueError):
-        return str(value)
-
-
-class ToolInvocation(GenAIInvocation):
+class ToolInvocation(GenAIInvocation, ExecuteToolInternalOperation):
     """Represents a tool call invocation for execute_tool span tracking.
 
     Not used as a message part — use ToolCallRequestPart for that purpose.
@@ -55,12 +42,15 @@ class ToolInvocation(GenAIInvocation):
     - error.type: Error type if operation failed (Conditionally Required)
     """
 
+    _name = _Attribute[str]("tool_name")
+    tool_result = _Attribute[AnyValue | None]("tool_call_result")
+    arguments = _Attribute[AnyValue | None]("tool_call_arguments")
+
     def __init__(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
-        completion_hook: CompletionHook,
         name: str,
         *,
         tool_type: str | None = None,
@@ -77,38 +67,27 @@ class ToolInvocation(GenAIInvocation):
             is deprecated. Set ``invocation.tool_call_id`` and
             ``invocation.tool_description`` on the returned invocation instead.
         """
-        _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
-        start_attributes: dict[str, AttributeValue] = {
-            k: v
-            for k, v in (
-                (GenAI.GEN_AI_TOOL_NAME, name),
-                (GenAI.GEN_AI_TOOL_TYPE, tool_type),
-            )
-            if v is not None
-        }
-        super().__init__(
-            tracer,
-            instruments,
-            logger,
-            completion_hook,
-            operation_name=_operation_name,
-            span_name=f"{_operation_name} {name}" if name else _operation_name,
-            span_kind=SpanKind.INTERNAL,
-            start_attributes=start_attributes,
-            context=context,
-            content_capturing_mode=content_capturing_mode,
+        _operation_name = GenAiOperationName.EXECUTE_TOOL.value
+        mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
         )
-        self._name: str = name
-        self.tool_result: AnyValue | None = None
-        # Since arguments and tool_result can be expensive to serialize,
-        # it's recommended to check the content capture flag in the
-        # instrumentation library before assigning these attributes
-        # to the invocation.
-        self.arguments: AnyValue | None = None
-        self.tool_call_id: str | None = tool_call_id
-        self.tool_description: str | None = tool_description
-        self._tool_type: str | None = tool_type
-        self._agent_name: str | None = agent_name
+        ExecuteToolInternalOperation.__init__(
+            self,
+            tracer,
+            meter,
+            logger,
+            operation_name=_operation_name,
+            tool_name=name,
+            tool_type=tool_type,
+            agent_name=agent_name,
+            tool_call_id=tool_call_id,
+            tool_description=tool_description,
+            content_capturing_mode=mode,
+        )
+        GenAIInvocation.__init__(self)
+        self.start(context=context)
 
     @property
     def should_capture_content_on_span(self) -> bool:
@@ -117,54 +96,7 @@ class ToolInvocation(GenAIInvocation):
         .. deprecated:: 1.2b0
             Use :attr:`should_capture_content` instead.
         """
-        return self._should_capture_content_on_span
-
-    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_TOOL_NAME: self._name,
-        }
-        if self._tool_type is not None:
-            attrs[GenAI.GEN_AI_TOOL_TYPE] = self._tool_type
-        if self._agent_name is not None:
-            attrs[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
-        attrs.update(self.metric_attributes)
-        return attrs
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-        capture_content_on_span = self._should_capture_content_on_span
-        optional_attrs = (
-            (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
-            (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
-            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
-            (
-                GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
-                _any_value_to_attribute_value(self.arguments)
-                if capture_content_on_span and self.arguments is not None
-                else None,
-            ),
-            (
-                GenAI.GEN_AI_TOOL_CALL_RESULT,
-                _any_value_to_attribute_value(self.tool_result)
-                if capture_content_on_span and self.tool_result is not None
-                else None,
-            ),
-        )
-        attributes: dict[str, AttributeValue] = {
-            k: v for k, v in optional_attrs if v is not None
-        }
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._record_metrics()
-
-    def _record_metrics(self) -> None:
-        duration_seconds = max(
-            timeit.default_timer() - self._monotonic_start_s,
-            0.0,
-        )
-        self._instruments.execute_tool_duration.record(
-            duration_seconds,
-            attributes=self._get_metric_attributes(),
-            context=self._span_context,
+        return self.content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
         )
