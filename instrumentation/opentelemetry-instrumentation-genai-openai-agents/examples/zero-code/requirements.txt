@@ -1,4 +1,4 @@
-openai-agents~=0.22.2
+openai-agents~=0.22.3
 python-dotenv>=1.2.3
 
 opentelemetry-sdk~=1.44.0
