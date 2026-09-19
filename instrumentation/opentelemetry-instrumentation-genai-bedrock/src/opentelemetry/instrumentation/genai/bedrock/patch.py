@@ -32,6 +32,8 @@ from .extractors import (
     extract_embedding_request,
     extract_embedding_response,
     extract_invoke_agent_request,
+    extract_invoke_inline_agent_model,
+    extract_invoke_inline_agent_request,
     extract_invoke_model_request,
     extract_invoke_model_response,
     extract_retrieve_and_generate_model,
@@ -506,6 +508,72 @@ async def _handle_async_invoke_agent(
     )
 
 
+def _start_invoke_inline_agent(
+    instance: BaseClient,
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> RemoteAgentInvocation:
+    server_address, server_port = _server_address_and_port(instance)
+
+    request_model = extract_invoke_inline_agent_model(api_params)
+    raw_agent_name = api_params.get("agentName")
+    agent_name = str(raw_agent_name) if raw_agent_name else None
+
+    invocation = handler.invoke_remote_agent(
+        provider=GenAiProviderNameValues.AWS_BEDROCK.value,
+        request_model=request_model,
+        agent_name=agent_name,
+        server_address=server_address,
+        server_port=server_port,
+    )
+    extract_invoke_inline_agent_request(
+        api_params,
+        invocation,
+        capture_content=invocation.should_capture_content,
+    )
+    return invocation
+
+
+def _handle_invoke_inline_agent(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> Any:
+    invocation = _start_invoke_inline_agent(instance, api_params, handler)
+    try:
+        response: Any = wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_invoke_agent(
+        response, invocation, BedrockAgentEventStreamWrapper
+    )
+
+
+async def _handle_async_invoke_inline_agent(
+    wrapped: Callable[..., Any],
+    instance: BaseClient,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    api_params: dict[str, Any],
+    handler: TelemetryHandler,
+) -> Any:
+    invocation = _start_invoke_inline_agent(instance, api_params, handler)
+    try:
+        response: Any = await wrapped(*args, **kwargs)
+    except BaseException as exc:
+        invocation.fail(exc)
+        raise
+
+    return _finish_invoke_agent(
+        response, invocation, AsyncBedrockAgentEventStreamWrapper
+    )
+
+
 def _handle_retrieve(
     wrapped: Callable[..., Any],
     instance: BaseClient,
@@ -677,6 +745,15 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
                     api_params,
                     handler,
                 )
+            if operation_name == "InvokeInlineAgent":
+                return _handle_invoke_inline_agent(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                )
             if operation_name == "Retrieve":
                 return _handle_retrieve(
                     wrapped,
@@ -754,6 +831,15 @@ def _make_aio_api_call_wrapper(
         if service_name == BEDROCK_AGENT_RUNTIME:
             if operation_name == "InvokeAgent":
                 return await _handle_async_invoke_agent(
+                    wrapped,
+                    instance,
+                    args,
+                    kwargs,
+                    api_params,
+                    handler,
+                )
+            if operation_name == "InvokeInlineAgent":
+                return await _handle_async_invoke_inline_agent(
                     wrapped,
                     instance,
                     args,
