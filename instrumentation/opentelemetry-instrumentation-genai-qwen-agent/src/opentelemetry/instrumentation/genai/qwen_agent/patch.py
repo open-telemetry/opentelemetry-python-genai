@@ -29,6 +29,7 @@ from opentelemetry.instrumentation.genai.qwen_agent.utils import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import SyncStreamWrapper
+from opentelemetry.util.genai.utils import get_argument
 
 
 class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
@@ -76,7 +77,7 @@ def wrap_agent_run(
     """Wrapper for ``Agent.run()`` producing an ``invoke_agent`` span."""
     # Agent.run() is a generator function; calling it never raises.
     result = wrapped(*args, **kwargs)
-    messages = args[0] if args else kwargs.get("messages", [])
+    messages = get_argument("messages", wrapped, args, kwargs, default=[])
     invocation = create_agent_invocation(handler, instance, messages)
     return _AgentRunStreamWrapper(
         result, invocation, handler.should_capture_content()
@@ -91,17 +92,18 @@ def wrap_agent_call_tool(
     handler: TelemetryHandler,
 ) -> Any:
     """Wrapper for ``Agent._call_tool()`` producing an ``execute_tool`` span."""
-    tool_name = str(args[0]) if args else str(kwargs.get("tool_name", ""))
-    tool_args = args[1] if len(args) > 1 else kwargs.get("tool_args")
+    tool_name = str(
+        get_argument("tool_name", wrapped, args, kwargs, default="")
+    )
+    tool_args = get_argument("tool_args", wrapped, args, kwargs)
     tool = getattr(instance, "function_map", {}).get(tool_name)
 
     invocation = handler.tool(
         tool_name,
         tool_type="function",
     )
-    invocation.tool_call_id = find_tool_call_id(
-        kwargs.get("messages"), tool_name
-    )
+    messages_arg = get_argument("messages", wrapped, args, kwargs)
+    invocation.tool_call_id = find_tool_call_id(messages_arg, tool_name)
     invocation.tool_description = getattr(tool, "description", None)
     if invocation.should_capture_content and tool_args is not None:
         invocation.arguments = tool_args

@@ -1,11 +1,15 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+import inspect
 import json
 import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
+from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Any
 
@@ -179,3 +183,66 @@ gen_ai_json_dumps = partial(
 )
 """Should be used by GenAI instrumentations when serializing objects that may contain
 bytes, datetimes, etc. for GenAI observability."""
+
+
+_SIGNATURE_CACHE_MAX_SIZE = 1024
+_signature_cache: dict[tuple[object, bool], inspect.Signature] = {}
+_inspect_signature = inspect.signature
+
+
+def _get_signature(func: Callable[..., object]) -> inspect.Signature:
+    """Return the cached inspect.Signature for a callable.
+
+    For bound methods, keying on the underlying function prevents cache churn
+    across instances, while distinguishing bound methods from unbound functions
+    to prevent parameter signature mismatch.
+    """
+    is_bound = getattr(func, "__self__", None) is not None
+    underlying = getattr(func, "__func__", None) or func
+    key: object = (underlying, is_bound)
+    try:
+        sig = _signature_cache.get(key)
+        if sig is not None:
+            _signature_cache[key] = _signature_cache.pop(key)
+            return sig
+        sig = _inspect_signature(func)
+        _signature_cache[key] = sig
+        if len(_signature_cache) > _SIGNATURE_CACHE_MAX_SIZE:
+            del _signature_cache[next(iter(_signature_cache))]
+        return sig
+    except TypeError:
+        return _inspect_signature(func)
+
+
+def bind_arguments(
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    *,
+    apply_defaults: bool = False,
+) -> dict[str, object]:
+    """Bind positional and keyword arguments to func's parameters by name."""
+    try:
+        sig = _get_signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+        if apply_defaults:
+            bound.apply_defaults()
+        return dict(bound.arguments)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+
+
+def get_argument(
+    name: str,
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    default: Any = None,
+    *,
+    apply_defaults: bool = False,
+) -> Any:
+    """Extract a named argument from kwargs or args via signature binding."""
+    if name in kwargs:
+        return kwargs[name]
+    bound = bind_arguments(func, args, kwargs, apply_defaults=apply_defaults)
+    return bound.get(name, default)

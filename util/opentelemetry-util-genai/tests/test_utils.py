@@ -54,8 +54,11 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    _get_signature,
+    bind_arguments,
     decode_base64,
     gen_ai_json_dumps,
+    get_argument,
     get_content_capturing_mode,
     image_from_url,
     should_capture_content_on_spans,
@@ -1553,3 +1556,165 @@ class TestMediaHelpers(unittest.TestCase):
         corrupted = _REAL_PNG_B64[:-4] + "!!!!"
         part = image_from_url(f"data:image/png;base64,{corrupted}")
         self.assertIsNone(part)
+
+
+class TestArgumentBinding(unittest.TestCase):
+    def test_bind_arguments_positional_and_keyword(self):
+        def sample_func(
+            a: int, b: str, c: bool = False, *extra: int, **kw: str
+        ):
+            pass
+
+        bound = bind_arguments(
+            sample_func, (1, "foo"), {"c": True, "custom": "val"}
+        )
+        self.assertEqual(bound["a"], 1)
+        self.assertEqual(bound["b"], "foo")
+        self.assertEqual(bound["c"], True)
+        self.assertEqual(bound["kw"], {"custom": "val"})
+
+    def test_bind_arguments_with_defaults(self):
+        def sample_func(x: int, y: str = "default_y", z: bool = True):
+            pass
+
+        bound_without_defaults = bind_arguments(sample_func, (42,), {})
+        self.assertEqual(bound_without_defaults, {"x": 42})
+
+        bound_with_defaults = bind_arguments(
+            sample_func, (42,), {}, apply_defaults=True
+        )
+        self.assertEqual(
+            bound_with_defaults, {"x": 42, "y": "default_y", "z": True}
+        )
+
+    def test_bind_arguments_bound_method(self):
+        class Greeter:
+            def greet(self, name: str, greeting: str = "Hello"):
+                return f"{greeting}, {name}"
+
+        g = Greeter()
+        bound = bind_arguments(g.greet, ("Alice",), {})
+        self.assertNotIn("self", bound)
+        self.assertEqual(bound["name"], "Alice")
+
+        bound_kw = bind_arguments(
+            g.greet, (), {"name": "Bob", "greeting": "Hi"}
+        )
+        self.assertNotIn("self", bound_kw)
+        self.assertEqual(bound_kw["name"], "Bob")
+        self.assertEqual(bound_kw["greeting"], "Hi")
+
+    def test_bind_arguments_invalid_args_falls_back_to_kwargs(self):
+        def sample_func(x: int):
+            pass
+
+        # Passing too many positional arguments causes TypeError in bind_partial
+        bound = bind_arguments(sample_func, (1, 2, 3), {"extra": "kept"})
+        self.assertEqual(bound, {"extra": "kept"})
+
+    def test_get_argument_fast_path_in_kwargs(self):
+        def sample_func(user_id: str, session_id: str):
+            pass
+
+        val = get_argument(
+            "user_id", sample_func, ("pos_user",), {"user_id": "kw_user"}
+        )
+        self.assertEqual(val, "kw_user")
+
+    def test_get_argument_positional(self):
+        def sample_func(user_id: str, session_id: str = "default_sess"):
+            pass
+
+        val = get_argument("user_id", sample_func, ("pos_user",), {})
+        self.assertEqual(val, "pos_user")
+
+        val_sess = get_argument(
+            "session_id", sample_func, ("pos_user", "pos_sess"), {}
+        )
+        self.assertEqual(val_sess, "pos_sess")
+
+    def test_get_argument_default_value(self):
+        def sample_func(user_id: str):
+            pass
+
+        val = get_argument(
+            "missing", sample_func, ("pos_user",), {}, default="fallback"
+        )
+        self.assertEqual(val, "fallback")
+
+    def test_get_argument_with_apply_defaults(self):
+        def sample_func(user_id: str, background: bool = False):
+            pass
+
+        val_no_defaults = get_argument(
+            "background", sample_func, ("user1",), {}
+        )
+        self.assertIsNone(val_no_defaults)
+
+        val_with_defaults = get_argument(
+            "background", sample_func, ("user1",), {}, apply_defaults=True
+        )
+        self.assertEqual(val_with_defaults, False)
+
+    def test_get_signature_caching(self):
+        class Service:
+            def execute(self, task: str):
+                pass
+
+        s1 = Service()
+        s2 = Service()
+
+        sig1 = _get_signature(s1.execute)
+        sig2 = _get_signature(s2.execute)
+        self.assertIs(sig1, sig2)
+        self.assertNotIn("self", sig1.parameters)
+
+        sig_unbound = _get_signature(Service.execute)
+        self.assertIn("self", sig_unbound.parameters)
+        self.assertIsNot(sig1, sig_unbound)
+
+    def test_get_signature_cache_eviction(self):
+        from opentelemetry.util.genai import utils
+
+        with (
+            patch.object(utils, "_signature_cache", {}),
+            patch.object(utils, "_SIGNATURE_CACHE_MAX_SIZE", 2),
+        ):
+
+            def f1(a: int):
+                pass
+
+            def f2(b: int):
+                pass
+
+            def f3(c: int):
+                pass
+
+            _get_signature(f1)
+            _get_signature(f2)
+            self.assertIn((f1, False), utils._signature_cache)
+            self.assertIn((f2, False), utils._signature_cache)
+
+            # Accessing f3 should evict f1 (the oldest)
+            _get_signature(f3)
+            self.assertNotIn((f1, False), utils._signature_cache)
+            self.assertIn((f2, False), utils._signature_cache)
+            self.assertIn((f3, False), utils._signature_cache)
+
+            # Accessing f2 moves it to MRU; adding f1 then evicts f3
+            _get_signature(f2)
+            _get_signature(f1)
+            self.assertIn((f2, False), utils._signature_cache)
+            self.assertIn((f1, False), utils._signature_cache)
+            self.assertNotIn((f3, False), utils._signature_cache)
+
+    def test_get_signature_unhashable_callable(self):
+        class UnhashableCallable:
+            __hash__ = None
+
+            def __call__(self, x: int):
+                pass
+
+        obj = UnhashableCallable()
+        sig = _get_signature(obj)
+        self.assertIn("x", sig.parameters)

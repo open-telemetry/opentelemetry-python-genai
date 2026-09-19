@@ -14,6 +14,7 @@ from google.genai.types import (
 )
 
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.utils import bind_arguments
 
 ToolFunction = Callable[..., Any]
 
@@ -46,19 +47,10 @@ def _to_otel_value(python_value):
 def _get_function_args(wrapped_function, function_args, function_kwargs):
     """Records the details about a function invocation as span attributes."""
     function_arg_attr = {}
-    signature = inspect.signature(wrapped_function)
-    params = list(signature.parameters.values())
-    for index, entry in enumerate(function_args):
-        param_name = f"args[{index}]"
-        if index < len(params):
-            param_name = params[index].name
-        function_arg_attr[f"code.function.parameters.{param_name}.type"] = (
-            type(entry).__name__
-        )
-        function_arg_attr[f"code.function.parameters.{param_name}.value"] = (
-            _to_otel_value(entry)
-        )
-    for key, value in function_kwargs.items():
+    bound = bind_arguments(
+        wrapped_function, function_args, function_kwargs, apply_defaults=False
+    )
+    for key, value in bound.items():
         function_arg_attr[f"code.function.parameters.{key}.type"] = type(
             value
         ).__name__

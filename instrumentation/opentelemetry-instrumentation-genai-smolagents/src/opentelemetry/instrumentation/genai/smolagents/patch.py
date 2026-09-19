@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator, Mapping
 from contextlib import ExitStack
-from inspect import Signature, signature
 from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 from smolagents import AgentMaxStepsError
@@ -39,6 +38,7 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.types import OutputMessage, Role, TextPart
+from opentelemetry.util.genai.utils import bind_arguments
 
 from ._messages import (
     final_answer_parts,
@@ -81,45 +81,6 @@ def _finish(
         invocation.fail(error)
     else:
         invocation.stop()
-
-
-# Keyed on the underlying function: wrapt hands the wrapper a freshly bound
-# method per call, so keying on that would retain every model and agent.
-_signatures: dict[object, Signature] = {}
-
-
-def _bind_arguments(
-    wrapped: Callable[..., Any],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> dict[str, Any]:
-    """Bind call args to the wrapped callable's signature, applying defaults.
-
-    smolagents passes the interesting arguments positionally
-    (``model.generate(input_messages)``, ``agent.run(task)``), so binding is
-    what makes them readable by name. On a binding failure the keyword
-    arguments are returned on their own, without the positional ones and
-    without the defaults.
-    """
-    try:
-        function: object | None = getattr(wrapped, "__func__", None)
-        call_signature = (
-            _signatures.get(function) if function is not None else None
-        )
-        if call_signature is None:
-            call_signature = signature(wrapped)
-            if function is not None:
-                _signatures[function] = call_signature
-        bound = call_signature.bind(*args, **kwargs)
-        bound.apply_defaults()
-        return dict(bound.arguments)
-    except (TypeError, ValueError):
-        _logger.debug(
-            "Failed to bind arguments of %s; falling back to keyword arguments",
-            getattr(wrapped, "__qualname__", wrapped),
-            exc_info=True,
-        )
-        return dict(kwargs)
 
 
 def _coerce_float(value: object) -> float | None:
@@ -261,7 +222,7 @@ def _record_request(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> None:
-    bound = _bind_arguments(wrapped, args, kwargs)
+    bound = bind_arguments(wrapped, args, kwargs, apply_defaults=True)
     _apply_request_parameters(invocation, instance, bound)
     invocation.tool_definitions = to_tool_definitions(
         bound.get("tools_to_call_from")
@@ -579,7 +540,7 @@ def agent_run(handler: TelemetryHandler) -> _Wrapper[MultiStepAgent]:
         kwargs: dict[str, Any],
     ) -> Any:
         agent = instance
-        bound = _bind_arguments(wrapped, args, kwargs)
+        bound = bind_arguments(wrapped, args, kwargs, apply_defaults=True)
         capture_content = handler.should_capture_content()
         # Only managed agents require names. Use the class name for unnamed agents.
         # Models may omit ``model_id``.

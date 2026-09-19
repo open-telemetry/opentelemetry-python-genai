@@ -18,6 +18,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.utils import get_argument
 
 from .extractors import (
     extract_converse_request,
@@ -166,8 +167,8 @@ def _make_api_call_wrapper(handler: TelemetryHandler) -> Callable[..., Any]:
         if service_name != BEDROCK_RUNTIME:
             return wrapped(*args, **kwargs)
 
-        operation_name = args[0] if args else kwargs.get("operation_name")
-        raw_params = args[1] if len(args) > 1 else kwargs.get("api_params")
+        operation_name = get_argument("operation_name", wrapped, args, kwargs)
+        raw_params = get_argument("api_params", wrapped, args, kwargs)
         api_params: dict[str, Any] = (
             cast(dict[str, Any], raw_params)
             if isinstance(raw_params, dict)
