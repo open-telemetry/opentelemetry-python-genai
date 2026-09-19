@@ -6,6 +6,7 @@ import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
+from dataclasses import asdict, is_dataclass
 from functools import partial
 from typing import Any
 
@@ -93,14 +94,16 @@ def is_experimental_mode() -> bool:
     return True
 
 
-def should_emit_event() -> bool:
+def _should_emit_event(
+    content_capturing_mode: ContentCapturingMode,
+) -> bool:
     """Check if event emission is enabled.
 
     Returns True if event emission is enabled, False otherwise.
 
     If the environment variable OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is explicitly set,
     its value takes precedence. Otherwise, the default value is determined by
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT:
+    the provided ContentCapturingMode:
     - NO_CONTENT or SPAN_ONLY: defaults to False
     - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
     """
@@ -120,10 +123,23 @@ def should_emit_event() -> bool:
             OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
         )
     # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
-    return get_content_capturing_mode() in (
+    return content_capturing_mode in (
         ContentCapturingMode.EVENT_ONLY,
         ContentCapturingMode.SPAN_AND_EVENT,
     )
+
+
+def should_emit_event() -> bool:
+    """Check if event emission is enabled.
+
+    Returns True if event emission is enabled, False otherwise.
+
+    .. deprecated:: 1.2b0
+        This function reads environment variables on every call and should NOT
+        be called on the hot path. Event emission is managed internally by
+        telemetry handlers and invocations.
+    """
+    return _should_emit_event(get_content_capturing_mode())
 
 
 def should_capture_content_on_spans() -> bool:
@@ -163,6 +179,8 @@ def fq_exception_type(exception: BaseException) -> str:
 
 class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
+        if is_dataclass(o) and not isinstance(o, type):
+            return asdict(o)
         if isinstance(o, bytes):
             return b64encode(o).decode()
         return super().default(o)

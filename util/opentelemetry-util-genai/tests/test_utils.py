@@ -54,6 +54,7 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    _should_emit_event,
     decode_base64,
     gen_ai_json_dumps,
     get_content_capturing_mode,
@@ -194,7 +195,10 @@ class TestShouldEmitEvent(unittest.TestCase):
                     "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": emit_event,
                 },
             ):
-                assert should_emit_event() is expected
+                assert (
+                    _should_emit_event(get_content_capturing_mode())
+                    is expected
+                )
 
     @patch.dict(
         os.environ,
@@ -209,7 +213,7 @@ class TestShouldEmitEvent(unittest.TestCase):
         # When invalid value is set, should fall back to default based on content_capturing_mode
         # EVENT_ONLY should default to True
         with self.assertLogs(level="WARNING") as cm:
-            result = should_emit_event()
+            result = _should_emit_event(ContentCapturingMode.EVENT_ONLY)
             assert result is True, (
                 f"Expected True but got {result} (EVENT_ONLY should default to True)"
             )
@@ -231,12 +235,45 @@ class TestShouldEmitEvent(unittest.TestCase):
     ):  # pylint: disable=no-self-use
         # When invalid value is set with SPAN_ONLY, should default to False
         with self.assertLogs(level="WARNING") as cm:
-            result = should_emit_event()
+            result = _should_emit_event(ContentCapturingMode.SPAN_ONLY)
             assert result is False, (
                 f"Expected False but got {result} (SPAN_ONLY should default to False)"
             )
         self.assertEqual(len(cm.output), 1)
         self.assertIn("invalid_value is not a valid option for", cm.output[0])
+
+    def test_should_emit_event_with_explicit_mode(self):  # pylint: disable=no-self-use
+        assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is False
+        assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is False
+        assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is True
+        assert _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"},
+        ):
+            assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is True
+            assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"},
+        ):
+            assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is False
+            assert (
+                _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT)
+                is False
+            )
+
+    def test_deprecated_should_emit_event(self):  # pylint: disable=no-self-use
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+                "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "",
+            },
+        ):
+            assert should_emit_event() is True
 
 
 class TestShouldCaptureContent(unittest.TestCase):
@@ -1427,6 +1464,13 @@ class TestMessageModels(unittest.TestCase):
         self.assertEqual(
             json.loads(gen_ai_json_dumps(asdict(generic_part))),
             {"type": "custom"},
+        )
+
+    def test_gen_ai_json_dumps_dataclass(self):
+        text_part = TextPart(content="hello")
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(text_part)),
+            {"type": "text", "content": "hello"},
         )
 
 
