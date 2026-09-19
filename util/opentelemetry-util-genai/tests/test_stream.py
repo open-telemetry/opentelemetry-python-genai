@@ -456,6 +456,16 @@ class _FakeTimingInvocation:
         self.chunk_times.append(chunk_at)
 
 
+class _ProtocolOnlyTimingInvocation:
+    """Implements only the timing protocol without _request_stream."""
+
+    def __init__(self):
+        self.chunk_times = []
+
+    def _on_stream_chunk(self, chunk_at):
+        self.chunk_times.append(chunk_at)
+
+
 class _TimingSyncWrapper(SyncStreamWrapper):
     def __init__(self, stream, invocation=None, process_hook=None):
         super().__init__(stream, invocation=invocation)
@@ -508,6 +518,18 @@ def test_sync_wrapper_marks_request_stream():
     # chunk is read.
     _TimingSyncWrapper(_FakeSyncStream(chunks=["a"]), invocation=invocation)
     assert invocation._request_stream is True
+
+
+def test_sync_wrapper_works_without_request_stream():
+    invocation = _ProtocolOnlyTimingInvocation()
+    wrapper = _TimingSyncWrapper(
+        _FakeSyncStream(chunks=["a"]), invocation=invocation
+    )
+    with patch("timeit.default_timer", side_effect=iter([10.0])):
+        assert list(wrapper) == ["a"]
+
+    assert invocation.chunk_times == pytest.approx([10.0])
+    assert not hasattr(invocation, "_request_stream")
 
 
 def test_sync_wrapper_single_chunk_one_report():
@@ -575,6 +597,22 @@ def test_async_wrapper_reports_each_chunk_arrival():
 
         assert chunks == ["x", "y", "z"]
         assert invocation.chunk_times == pytest.approx([201.3, 202.0, 202.2])
+
+    asyncio.run(exercise())
+
+
+def test_async_wrapper_works_without_request_stream():
+    async def exercise():
+        invocation = _ProtocolOnlyTimingInvocation()
+        stream = _FakeAsyncStream(chunks=["x"])
+        wrapper = _TimingAsyncWrapper(stream, invocation=invocation)
+
+        with patch("timeit.default_timer", side_effect=iter([20.0])):
+            chunks = [chunk async for chunk in wrapper]
+
+        assert chunks == ["x"]
+        assert invocation.chunk_times == pytest.approx([20.0])
+        assert not hasattr(invocation, "_request_stream")
 
     asyncio.run(exercise())
 
