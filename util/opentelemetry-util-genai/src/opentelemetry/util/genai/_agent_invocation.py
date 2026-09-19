@@ -262,8 +262,6 @@ class RemoteAgentInvocation(AgentInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-        agent_id: str | None = None,
-        agent_version: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         super().__init__(
@@ -280,8 +278,8 @@ class RemoteAgentInvocation(AgentInvocation):
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
 
-        self.agent_id: str | None = agent_id
-        self.agent_version: str | None = agent_version
+        self.agent_id: str | None = None
+        self.agent_version: str | None = None
         self.previous_response_id: str | None = None
         self._cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None

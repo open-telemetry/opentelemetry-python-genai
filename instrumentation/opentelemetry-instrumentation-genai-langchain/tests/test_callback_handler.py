@@ -9,6 +9,7 @@ the callback-handler logic and the invocation-manager bookkeeping.
 """
 
 import base64
+import math
 import uuid
 from unittest import mock
 
@@ -37,6 +38,8 @@ from langchain_core.outputs import (
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
+    _document_to_dict,
+    _extract_document_score,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
@@ -51,8 +54,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     to_output_messages,
 )
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
     RetrievalInvocation,
     WorkflowInvocation,
 )
@@ -72,32 +75,14 @@ from opentelemetry.util.genai.types import (
 
 
 def _make_agent_inv_mock() -> mock.MagicMock:
-    """Return a spec'd AgentInvocation mock with agent_name pre-configured."""
-    agent_inv = mock.MagicMock(spec=AgentInvocation)
-    agent_inv.span = mock.MagicMock()
-    agent_inv.span.is_recording.return_value = False
-    # agent_name is an instance attribute set in AgentInvocation.__init__ via the
-    # constructor arg; pre-configure it so spec-restricted attribute access works.
-    agent_inv.agent_name = None
+    """Return a spec'd LocalAgentInvocation mock."""
+    agent_inv = mock.MagicMock(spec=LocalAgentInvocation)
     agent_inv.agent_id = None
     return agent_inv
 
 
-def _make_invoke_local_agent_side_effect(inv: mock.MagicMock):
-    """Return a side_effect for invoke_local_agent that mirrors what the real
-    AgentInvocation constructor does: set agent_name from the kwarg."""
-
-    def _side_effect(*args, **kwargs):
-        inv.agent_name = kwargs.get("agent_name")
-        return inv
-
-    return _side_effect
-
-
 def _make_retrieval_inv_mock() -> mock.MagicMock:
     retrieval_inv = mock.MagicMock(spec=RetrievalInvocation)
-    retrieval_inv.span = mock.MagicMock()
-    retrieval_inv.span.is_recording.return_value = False
     retrieval_inv.query_text = None
     retrieval_inv.documents = None
     return retrieval_inv
@@ -109,16 +94,10 @@ def _make_handler():
 
     # workflow returns a mock WorkflowInvocation
     workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
-    workflow_inv.span = mock.MagicMock()
-    workflow_inv.span.is_recording.return_value = False
     telemetry.workflow.return_value = workflow_inv
 
-    # invoke_local_agent returns a mock AgentInvocation whose agent_name is set
-    # to match whatever agent_name kwarg was passed (mirrors real constructor).
     agent_inv = _make_agent_inv_mock()
-    telemetry.invoke_local_agent.side_effect = (
-        _make_invoke_local_agent_side_effect(agent_inv)
-    )
+    telemetry.invoke_local_agent.return_value = agent_inv
 
     handler = OpenTelemetryLangChainCallbackHandler(telemetry)
     return handler, telemetry, workflow_inv, agent_inv
@@ -237,7 +216,9 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
         )
-        assert agent_inv.agent_name == "math_agent"
+        assert (
+            handler._invocation_manager.get_agent_name(run_id) == "math_agent"
+        )
         assert handler._invocation_manager.get_invocation(run_id) is agent_inv
 
     def test_agent_metadata_set(self):
@@ -335,9 +316,11 @@ class TestOnChainStartAgent:
 
         # First agent
         first_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = (
-            _make_invoke_local_agent_side_effect(first_agent_inv)
-        )
+        second_agent_inv = _make_agent_inv_mock()
+        telemetry.invoke_local_agent.side_effect = [
+            first_agent_inv,
+            second_agent_inv,
+        ]
 
         handler.on_chain_start(
             serialized={"name": "math_agent"},
@@ -345,12 +328,6 @@ class TestOnChainStartAgent:
             run_id=parent_run_id,
             parent_run_id=None,
             metadata={"agent_name": "math_agent"},
-        )
-
-        # Second agent with a different name
-        second_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = (
-            _make_invoke_local_agent_side_effect(second_agent_inv)
         )
 
         handler.on_chain_start(
@@ -365,7 +342,10 @@ class TestOnChainStartAgent:
             handler._invocation_manager.get_invocation(child_run_id)
             is second_agent_inv
         )
-        assert second_agent_inv.agent_name == "weather_agent"
+        assert (
+            handler._invocation_manager.get_agent_name(child_run_id)
+            == "weather_agent"
+        )
 
     def test_agent_name_comparison_is_case_insensitive(self):
         handler, telemetry, _, _ = _make_handler()
@@ -373,9 +353,7 @@ class TestOnChainStartAgent:
         child_run_id = _run_id()
 
         parent_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = (
-            _make_invoke_local_agent_side_effect(parent_agent_inv)
-        )
+        telemetry.invoke_local_agent.return_value = parent_agent_inv
 
         handler.on_chain_start(
             serialized={"name": "Math_Agent"},
@@ -583,8 +561,6 @@ class TestOnChainEnd:
             parent_run_id=None,
         )
 
-        # span.is_recording() returns False → should be cleaned up
-        workflow_inv.span.is_recording.return_value = False
         handler.on_chain_end(outputs={}, run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -652,7 +628,6 @@ class TestOnChainError:
             parent_run_id=None,
         )
 
-        workflow_inv.span.is_recording.return_value = False
         handler.on_chain_error(error=RuntimeError("boom"), run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -1206,10 +1181,7 @@ class TestOutputMessagesOnInvocations:
 
 
 def _make_llm_invocation_mock() -> mock.MagicMock:
-    inv = mock.MagicMock(spec=InferenceInvocation)
-    inv.span = mock.MagicMock()
-    inv.span.is_recording.return_value = False
-    return inv
+    return mock.MagicMock(spec=InferenceInvocation)
 
 
 def _make_handler_with_llm_invocation(
@@ -1251,6 +1223,7 @@ class TestOnLlmEndToolCalls:
         assigned: list[OutputMessage] = llm_inv.output_messages
         assert len(assigned) == 1
         assert assigned[0].finish_reason == "tool_calls"
+        assert llm_inv.finish_reasons == ["tool_calls"]
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
         assert isinstance(part, ToolCallRequestPart)
@@ -1282,12 +1255,48 @@ class TestOnLlmEndToolCalls:
         assigned: list[OutputMessage] = llm_inv.output_messages
         assert len(assigned) == 1
         assert assigned[0].finish_reason == "tool_use"
+        assert llm_inv.finish_reasons == ["tool_use"]
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
         assert isinstance(part, ToolCallRequestPart)
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
+
+    def test_on_llm_end_preserves_finish_reasons_positional_alignment(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen1 = ChatGeneration(
+            message=AIMessage(content="First"),
+            generation_info={"finish_reason": "stop"},
+        )
+        gen2 = ChatGeneration(
+            message=AIMessage(
+                content="Second",
+                response_metadata={"model_name": "gpt-4"},
+            ),
+            generation_info=None,
+        )
+        gen3 = ChatGeneration(
+            message=AIMessage(content="Third"),
+            generation_info={},
+        )
+        gen4 = ChatGeneration(
+            message=AIMessage(content="Fourth"),
+            generation_info={"finish_reason": "length"},
+        )
+        response = LLMResult(generations=[[gen1, gen2, gen3, gen4]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.finish_reasons == ["stop", "error", "error", "length"]
+        assert [m.finish_reason for m in llm_inv.output_messages] == [
+            "stop",
+            "error",
+            "error",
+            "length",
+        ]
 
     def test_on_llm_end_preserves_message_name(self):
         run_id = _run_id()
@@ -1512,7 +1521,6 @@ class TestOnRetrieverEnd:
         run_id = _run_id()
 
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        retrieval_inv.span.is_recording.return_value = False
         handler.on_retriever_end(documents=[], run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -1543,6 +1551,446 @@ class TestOnRetrieverEnd:
         handler, _, _ = _make_handler_with_retrieval()
         handler.on_retriever_end(documents=[], run_id=_run_id())
 
+    def test_document_score_from_attribute(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        class DuckDoc:
+            page_content = "text"
+            id = "doc-1"
+            score = 0.85
+            metadata = {}
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
+
+        assert retrieval_inv.documents[0]["score"] == 0.85
+
+    def test_document_score_from_metadata(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        doc = Document(
+            page_content="text", id="doc-2", metadata={"score": 0.92}
+        )
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[doc], run_id=run_id)
+
+        assert retrieval_inv.documents[0]["score"] == 0.92
+
+    def test_document_score_precedence(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        class DuckDoc:
+            page_content = "text"
+            id = "doc-3"
+            score = 0.9
+            metadata = {"score": 0.5}
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
+
+        assert retrieval_inv.documents[0]["score"] == 0.9
+
+    def test_document_score_fallback_to_metadata_when_attr_is_none(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        class DuckDoc:
+            page_content = "text"
+            id = "doc-4"
+            score = None
+            metadata = {"score": 0.77}
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
+
+        assert retrieval_inv.documents[0]["score"] == 0.77
+
+    def test_document_score_zero_preserved(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        class DuckDoc:
+            page_content = "text"
+            id = "doc-5"
+            score = 0.0
+
+        doc_meta = Document(
+            page_content="text-meta", id="doc-6", metadata={"score": 0}
+        )
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(
+            documents=[DuckDoc(), doc_meta], run_id=run_id
+        )
+
+        assert "score" in retrieval_inv.documents[0]
+        assert retrieval_inv.documents[0]["score"] == 0.0
+        assert "score" in retrieval_inv.documents[1]
+        assert retrieval_inv.documents[1]["score"] == 0
+
+    @pytest.mark.parametrize(
+        "invalid_score",
+        ["high", True, False, [1.0], {"val": 1}],
+    )
+    def test_document_score_non_numeric_ignored(self, invalid_score):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        doc = Document(page_content="text", metadata={"score": invalid_score})
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(documents=[doc], run_id=run_id)
+
+        assert "score" not in retrieval_inv.documents[0]
+
+    @pytest.mark.parametrize(
+        "non_finite_score",
+        [
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            math.nan,
+            math.inf,
+            -math.inf,
+        ],
+    )
+    def test_document_score_non_finite_ignored(self, non_finite_score):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        class DuckDocAttr:
+            page_content = "attr text"
+            score = non_finite_score
+
+        doc_meta = Document(
+            page_content="meta text", metadata={"score": non_finite_score}
+        )
+        doc_dict = {"page_content": "dict text", "score": non_finite_score}
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(
+            documents=[DuckDocAttr(), doc_meta, doc_dict], run_id=run_id
+        )
+
+        for item in retrieval_inv.documents:
+            assert "score" not in item
+
+    def test_document_score_plain_dict_and_duck_typed(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        dict_doc_1 = {
+            "page_content": "dict content 1",
+            "id": "dict-1",
+            "score": 0.88,
+        }
+        dict_doc_2 = {
+            "content": "dict content 2",
+            "metadata": {"score": 0.72},
+        }
+        dict_doc_3 = {
+            "page_content": None,
+            "content": "dict content fallback when page_content is None",
+            "id": "dict-3",
+            "score": 0.64,
+        }
+
+        class CustomDuckDoc:
+            page_content = "duck content"
+            id = "duck-1"
+            score = 0.95
+
+        class CustomDuckDocContentFallback:
+            content = "duck content fallback"
+            id = "duck-2"
+            score = 0.81
+
+        class CustomDuckDocNonePageContentFallback:
+            page_content = None
+            content = "duck content fallback when page_content is None"
+            id = "duck-3"
+            score = 0.55
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(
+            documents=[
+                dict_doc_1,
+                dict_doc_2,
+                dict_doc_3,
+                CustomDuckDoc(),
+                CustomDuckDocContentFallback(),
+                CustomDuckDocNonePageContentFallback(),
+            ],
+            run_id=run_id,
+        )
+
+        assigned = retrieval_inv.documents
+        assert len(assigned) == 6
+        assert assigned[0] == {
+            "content": "dict content 1",
+            "id": "dict-1",
+            "score": 0.88,
+        }
+        assert assigned[1] == {
+            "content": "dict content 2",
+            "id": None,
+            "score": 0.72,
+        }
+        assert assigned[2] == {
+            "content": "dict content fallback when page_content is None",
+            "id": "dict-3",
+            "score": 0.64,
+        }
+        assert assigned[3] == {
+            "content": "duck content",
+            "id": "duck-1",
+            "score": 0.95,
+        }
+        assert assigned[4] == {
+            "content": "duck content fallback",
+            "id": "duck-2",
+            "score": 0.81,
+        }
+        assert assigned[5] == {
+            "content": "duck content fallback when page_content is None",
+            "id": "duck-3",
+            "score": 0.55,
+        }
+
+    def test_document_score_non_mapping_metadata(self):
+        handler, _, retrieval_inv = _make_handler_with_retrieval()
+        run_id = _run_id()
+
+        class DuckDocNoMeta:
+            page_content = "text"
+            id = "doc-no-meta"
+
+        class DuckDocStringMeta:
+            page_content = "text"
+            id = "doc-str-meta"
+            metadata = "not-a-mapping"
+
+        class DuckDocNoneMeta:
+            page_content = "text"
+            id = "doc-none-meta"
+            metadata = None
+
+        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
+        handler.on_retriever_end(
+            documents=[
+                DuckDocNoMeta(),
+                DuckDocStringMeta(),
+                DuckDocNoneMeta(),
+            ],
+            run_id=run_id,
+        )
+
+        for item in retrieval_inv.documents:
+            assert "score" not in item
+
+
+class TestExtractDocumentScore:
+    def test_attribute_score(self):
+        class Obj:
+            score = 0.88
+
+        assert _extract_document_score(Obj()) == 0.88
+
+    def test_metadata_score(self):
+        class Obj:
+            metadata = {"score": 0.75}
+
+        assert _extract_document_score(Obj()) == 0.75
+
+    def test_metadata_relevance_score_fallback(self):
+        class Obj:
+            metadata = {"relevance_score": 0.82}
+
+        assert _extract_document_score(Obj()) == 0.82
+
+    def test_attr_relevance_score_fallback(self):
+        class Obj:
+            relevance_score = 0.91
+
+        assert _extract_document_score(Obj()) == 0.91
+
+    def test_precedence_score_over_relevance_score(self):
+        class Obj:
+            metadata = {"score": 0.85, "relevance_score": 0.42}
+
+        assert _extract_document_score(Obj()) == 0.85
+
+    def test_precedence_attr_over_metadata(self):
+        class Obj:
+            score = 0.9
+            metadata = {"score": 0.4}
+
+        assert _extract_document_score(Obj()) == 0.9
+
+    def test_attr_none_falls_back_to_metadata(self):
+        class Obj:
+            score = None
+            metadata = {"score": 0.65}
+
+        assert _extract_document_score(Obj()) == 0.65
+
+    def test_zero_scores(self):
+        class ObjFloat:
+            score = 0.0
+
+        class ObjInt:
+            score = 0
+
+        assert _extract_document_score(ObjFloat()) == 0.0
+        assert _extract_document_score(ObjInt()) == 0
+
+    def test_negative_score(self):
+        class Obj:
+            score = -1.25
+
+        assert _extract_document_score(Obj()) == -1.25
+
+    def test_non_numeric_and_bool(self):
+        class ObjBool:
+            score = True
+
+        class ObjStr:
+            score = "0.9"
+
+        assert _extract_document_score(ObjBool()) is None
+        assert _extract_document_score(ObjStr()) is None
+
+    def test_non_finite_float_score(self):
+        class ObjNaN:
+            score = float("nan")
+
+        class ObjInf:
+            score = float("inf")
+
+        class ObjNegInf:
+            score = float("-inf")
+
+        class ObjMathNaN:
+            score = math.nan
+
+        class ObjMathInf:
+            score = math.inf
+
+        class ObjMathNegInf:
+            score = -math.inf
+
+        assert _extract_document_score(ObjNaN()) is None
+        assert _extract_document_score(ObjInf()) is None
+        assert _extract_document_score(ObjNegInf()) is None
+        assert _extract_document_score(ObjMathNaN()) is None
+        assert _extract_document_score(ObjMathInf()) is None
+        assert _extract_document_score(ObjMathNegInf()) is None
+        assert _extract_document_score({"score": float("nan")}) is None
+        assert _extract_document_score({"score": math.nan}) is None
+        assert (
+            _extract_document_score({"metadata": {"score": float("inf")}})
+            is None
+        )
+        assert (
+            _extract_document_score({"metadata": {"score": math.inf}}) is None
+        )
+        assert (
+            _extract_document_score({"metadata": {"score": float("-inf")}})
+            is None
+        )
+        assert (
+            _extract_document_score({"metadata": {"score": -math.inf}}) is None
+        )
+
+    def test_dict_score(self):
+        assert _extract_document_score({"score": 0.82}) == 0.82
+        assert _extract_document_score({"metadata": {"score": 0.91}}) == 0.91
+        assert (
+            _extract_document_score(
+                {"score": 0.99, "metadata": {"score": 0.1}}
+            )
+            == 0.99
+        )
+
+    def test_no_score(self):
+        assert _extract_document_score(object()) is None
+        assert _extract_document_score({}) is None
+        assert _extract_document_score({"metadata": None}) is None
+        assert _extract_document_score({"metadata": "str"}) is None
+
+
+class TestDocumentToDict:
+    def test_document_with_page_content_and_score(self):
+        doc = Document(
+            page_content="doc content", id="d1", metadata={"score": 0.85}
+        )
+        assert _document_to_dict(doc) == {
+            "content": "doc content",
+            "id": "d1",
+            "score": 0.85,
+        }
+
+    def test_duck_typed_with_content_fallback_missing_page_content(self):
+        class DuckNoPageContent:
+            content = "fallback content"
+            id = "d2"
+            score = 0.9
+
+        assert _document_to_dict(DuckNoPageContent()) == {
+            "content": "fallback content",
+            "id": "d2",
+            "score": 0.9,
+        }
+
+    def test_duck_typed_with_content_fallback_none_page_content(self):
+        class DuckNonePageContent:
+            page_content = None
+            content = "fallback content when page_content is None"
+            id = "d3"
+            score = 0.75
+
+        assert _document_to_dict(DuckNonePageContent()) == {
+            "content": "fallback content when page_content is None",
+            "id": "d3",
+            "score": 0.75,
+        }
+
+    def test_mapping_with_content_fallback_missing_page_content(self):
+        doc_map = {"content": "mapping fallback", "id": "m1", "score": 0.8}
+        assert _document_to_dict(doc_map) == {
+            "content": "mapping fallback",
+            "id": "m1",
+            "score": 0.8,
+        }
+
+    def test_mapping_with_content_fallback_none_page_content(self):
+        doc_map = {
+            "page_content": None,
+            "content": "mapping fallback when page_content is None",
+            "id": "m2",
+            "score": 0.7,
+        }
+        assert _document_to_dict(doc_map) == {
+            "content": "mapping fallback when page_content is None",
+            "id": "m2",
+            "score": 0.7,
+        }
+
+    def test_non_finite_scores_omitted(self):
+        doc_nan = Document(page_content="c", metadata={"score": math.nan})
+        doc_inf = Document(page_content="c", metadata={"score": float("inf")})
+        doc_neginf = Document(
+            page_content="c", metadata={"score": float("-inf")}
+        )
+
+        assert _document_to_dict(doc_nan) == {"content": "c", "id": None}
+        assert _document_to_dict(doc_inf) == {"content": "c", "id": None}
+        assert _document_to_dict(doc_neginf) == {"content": "c", "id": None}
+
 
 class TestOnRetrieverError:
     def test_invocation_failed(self):
@@ -1560,7 +2008,6 @@ class TestOnRetrieverError:
         run_id = _run_id()
 
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        retrieval_inv.span.is_recording.return_value = False
         handler.on_retriever_error(error=RuntimeError("boom"), run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -1664,14 +2111,48 @@ class TestOnLlmEndTokenDetails:
 
         handler.on_llm_end(response=response, run_id=run_id)
 
+        # The breakdown is applied by InferenceInvocation, so the handler's
+        # contract is the pairs it forwards. util-genai covers the mapping
+        # from those pairs onto span attributes.
         assert llm_inv.input_tokens == 100
-        assert llm_inv.text_input_tokens == 70
-        assert llm_inv.image_input_tokens == 20
-        assert llm_inv.audio_input_tokens == 10
         assert llm_inv.output_tokens == 50
-        assert llm_inv.text_output_tokens == 35
-        assert llm_inv.image_output_tokens == 10
-        assert llm_inv.audio_output_tokens == 5
+        # LangChain's pydantic model reorders the details mapping, so compare
+        # the pairs rather than their order.
+        (input_pairs,), _ = llm_inv.set_input_tokens.call_args
+        assert sorted(input_pairs) == [
+            ("audio", 10),
+            ("image", 20),
+            ("text", 70),
+        ]
+        (output_pairs,), _ = llm_inv.set_output_tokens.call_args
+        assert sorted(output_pairs) == [
+            ("audio", 5),
+            ("image", 10),
+            ("text", 35),
+        ]
+
+    def test_absent_token_details_forward_none(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(
+            content="hi",
+            usage_metadata={
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "total_tokens": 3,
+            },
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "stop"}
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(generations=[[gen]]), run_id=run_id
+        )
+
+        llm_inv.set_input_tokens.assert_called_once_with(None)
+        llm_inv.set_output_tokens.assert_called_once_with(None)
 
 
 # ---------------------------------------------------------------------------
@@ -1729,17 +2210,13 @@ def test_extract_token_details_modalities():
             "reasoning": 10,
         },
     }
+    # Modality break-downs are forwarded to InferenceInvocation rather than
+    # flattened here, so only cache and reasoning remain.
     details = extract_token_details(usage)
     assert details == {
         "cache_write_input_tokens": 15,
         "cache_read_input_tokens": 25,
-        "text_input_tokens": 70,
-        "image_input_tokens": 20,
-        "audio_input_tokens": 10,
         "reasoning_tokens": 10,
-        "text_output_tokens": 30,
-        "image_output_tokens": 15,
-        "audio_output_tokens": 5,
     }
 
 

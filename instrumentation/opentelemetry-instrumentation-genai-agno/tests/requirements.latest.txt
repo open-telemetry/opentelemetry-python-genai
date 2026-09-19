@@ -37,7 +37,7 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-agno~=3.0.9
+agno~=3.0.10
 wrapt>=2.4.1
 fastapi
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
