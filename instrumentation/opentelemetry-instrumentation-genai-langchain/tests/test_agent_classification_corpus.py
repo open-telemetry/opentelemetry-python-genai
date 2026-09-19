@@ -539,6 +539,57 @@ def test_nested_named_agent_uses_its_declared_name(
     _assert_parent(inner_span, tool_span)
 
 
+def test_unnamed_inner_agent_does_not_leak_outer_agent_name_to_its_tools(
+    span_exporter, start_instrumentation
+) -> None:
+    @tool
+    def lookup() -> str:
+        """A tool inside the inner agent."""
+        return "data"
+
+    inner = create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "lookup", "args": {}, "id": "c1"}],
+                ),
+                AIMessage(content="inner done"),
+            ]
+        ),
+        [lookup],
+    )
+
+    @tool
+    def delegate(config: RunnableConfig) -> str:
+        """Delegate to the inner agent."""
+        result = inner.invoke({"messages": [("user", "work")]}, config)
+        return str(result["messages"][-1].content)
+
+    create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "delegate", "args": {}, "id": "c2"}],
+                ),
+                AIMessage(content="outer done"),
+            ]
+        ),
+        [delegate],
+        name="outer_agent",
+    ).invoke({"messages": [("user", "start")]})
+
+    spans = span_exporter.get_finished_spans()
+    inner_tool_span = _span_named(spans, "execute_tool lookup")
+    outer_tool_span = _span_named(spans, "execute_tool delegate")
+
+    assert (
+        outer_tool_span.attributes.get("gen_ai.agent.name") == "outer_agent"
+    )
+    assert "gen_ai.agent.name" not in inner_tool_span.attributes
+
+
 def test_three_level_agents_resolve_names_against_all_ancestors(
     span_exporter, start_instrumentation
 ) -> None:

@@ -413,17 +413,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                 # Resolve finish_reason from generation_info or response
                 # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
-                # (snake_case); older versions used ``stopReason``. Empty
-                # values are filtered out by util-genai when emitting
-                # ``gen_ai.response.finish_reasons``.
-                finish_reason = ""
+                # (snake_case); older versions used ``stopReason``.
+                finish_reason: str | None = None
                 generation_info = getattr(
                     chat_generation, "generation_info", None
                 )
                 if generation_info is not None:
-                    finish_reason = generation_info.get(
-                        "finish_reason", "unknown"
-                    )
+                    finish_reason = generation_info.get("finish_reason")
 
                 if chat_generation.message:
                     # Responses API (RAPI) may include the served model in the
@@ -451,9 +447,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                     served_model = str(value)
                                     break
 
-                    # Get finish reason if generation_info is None above
+                    # Get finish reason if not found in generation_info above
                     if (
-                        generation_info is None
+                        not finish_reason
                         and chat_generation.message.response_metadata
                     ):
                         finish_reason = (
@@ -461,9 +457,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 "stopReason"
                             )
                             or chat_generation.message.response_metadata.get(
-                                "stop_reason", "unknown"
+                                "stop_reason"
                             )
                         )
+                    finish_reason = finish_reason or "error"
 
                     name_str = _message_name(chat_generation.message)
 
@@ -516,7 +513,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             name=name_str,
                         )
                     output_messages.append(output_message)
-                    finish_reasons.append(finish_reason or "error")
+                    finish_reasons.append(finish_reason)
 
                     # Get token usage if available
                     if chat_generation.message.usage_metadata:
@@ -774,14 +771,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         current = run_id
         visited: set[UUID] = set()
         nearest_agent_name: str | None = None
+        found_nearest_agent = False
         ancestor_agent_names: set[str] = set()
         while current is not None and current not in visited:
             visited.add(current)
             entity = self._invocation_manager.get_invocation(current)
             if isinstance(entity, LocalAgentInvocation):
                 agent_name = self._invocation_manager.get_agent_name(current)
-                if nearest_agent_name is None:
+                if not found_nearest_agent:
                     nearest_agent_name = agent_name
+                    found_nearest_agent = True
                 if agent_name:
                     ancestor_agent_names.add(agent_name.lower())
             current = self._invocation_manager.get_parent_run_id(current)

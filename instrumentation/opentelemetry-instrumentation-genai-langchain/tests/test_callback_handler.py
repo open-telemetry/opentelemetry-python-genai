@@ -1269,18 +1269,31 @@ class TestOnLlmEndToolCalls:
             generation_info={"finish_reason": "stop"},
         )
         gen2 = ChatGeneration(
-            message=AIMessage(content="Second"),
+            message=AIMessage(
+                content="Second",
+                response_metadata={"model_name": "gpt-4"},
+            ),
             generation_info=None,
         )
         gen3 = ChatGeneration(
             message=AIMessage(content="Third"),
+            generation_info={},
+        )
+        gen4 = ChatGeneration(
+            message=AIMessage(content="Fourth"),
             generation_info={"finish_reason": "length"},
         )
-        response = LLMResult(generations=[[gen1, gen2, gen3]])
+        response = LLMResult(generations=[[gen1, gen2, gen3, gen4]])
 
         handler.on_llm_end(response=response, run_id=run_id)
 
-        assert llm_inv.finish_reasons == ["stop", "error", "length"]
+        assert llm_inv.finish_reasons == ["stop", "error", "error", "length"]
+        assert [m.finish_reason for m in llm_inv.output_messages] == [
+            "stop",
+            "error",
+            "error",
+            "length",
+        ]
 
     def test_on_llm_end_preserves_message_name(self):
         run_id = _run_id()
