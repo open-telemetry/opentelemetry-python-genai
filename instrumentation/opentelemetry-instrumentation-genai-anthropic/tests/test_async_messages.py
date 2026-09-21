@@ -44,6 +44,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
+from .conftest import (
+    assert_multimodal_input,
+    multimodal_input_message,
+)
+
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
@@ -243,6 +248,27 @@ async def test_async_messages_create_captures_content(
     assert input_messages[0]["parts"][0]["type"] == "text"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"][0]["type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_captures_multimodal_content(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_async_messages_create_captures_multimodal_content.yaml"
+    ):
+        await async_anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio
@@ -452,6 +478,31 @@ async def test_async_messages_create_streaming_captures_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_streaming_captures_multimodal_content(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_async_messages_create_streaming_captures_multimodal_content.yaml"
+    ):
+        stream = await async_anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+            stream=True,
+        )
+        async with stream:
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio

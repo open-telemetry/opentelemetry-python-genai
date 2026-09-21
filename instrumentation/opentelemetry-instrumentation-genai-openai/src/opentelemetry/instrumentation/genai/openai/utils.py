@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+import mimetypes
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
@@ -28,6 +29,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     Role,
     TextPart,
@@ -212,7 +214,7 @@ def _audio_to_part(input_audio: Any) -> MessagePart | None:
         mime_type=_AUDIO_MIME_TYPES.get(audio_format)
         if isinstance(audio_format, str)
         else None,
-        modality="audio",
+        modality=Modality.AUDIO,
         content=decoded,
     )
 
@@ -220,24 +222,50 @@ def _audio_to_part(input_audio: Any) -> MessagePart | None:
 def _document_to_part(file_obj: Any) -> MessagePart | None:
     """Build a part for a file descriptor: a reference when the file is
     hosted by OpenAI (``file_id``), a blob when it is uploaded inline
-    (``file_data``, a data: URL)."""
+    (``file_data``)."""
     if file_obj is None:
         return None
+    # The SDK carries no media type, but `filename` is what it sends for an
+    # inline upload, and an uploaded file keeps its name.
+    filename = get_property_value(file_obj, "filename")
+    mime_type = (
+        mimetypes.guess_type(filename)[0]
+        if isinstance(filename, str) and filename
+        else None
+    )
     file_id = get_property_value(file_obj, "file_id")
     if isinstance(file_id, str) and file_id:
-        return FilePart(mime_type=None, modality="document", file_id=file_id)
+        return FilePart(
+            mime_type=mime_type, modality=Modality.DOCUMENT, file_id=file_id
+        )
     file_data = get_property_value(file_obj, "file_data")
-    if isinstance(file_data, str) and file_data.startswith("data:"):
+    if not isinstance(file_data, str) or not file_data:
+        return None
+    if file_data.startswith("data:"):
         # Same data: URL shape as an inline image, so the mime type comes
-        # from the URL header.
-        return image_from_url(file_data, modality="document")
-    return None
+        # from the URL header rather than from the filename.
+        return image_from_url(file_data, modality=Modality.DOCUMENT)
+    # `file_data` is documented as plain base64.
+    content = decode_base64(file_data)
+    if content is None:
+        # Malformed payload: recording garbage bytes would be worse than
+        # dropping the part.
+        return None
+    return BlobPart(
+        mime_type=mime_type, modality=Modality.DOCUMENT, content=content
+    )
 
 
 def _content_to_parts(content: Any) -> list[MessagePart]:
     if isinstance(content, str):
         return [TextPart(content=content)]
-    if not isinstance(content, Iterable) or isinstance(content, Mapping):
+    # Only a materialized sequence is walked. The SDK accepts any iterable
+    # for `content` and consumes it itself, so iterating a generator here -
+    # this runs before the wrapped call - would drain the caller's input and
+    # leave the request with no content at all.
+    if not isinstance(content, Sequence) or isinstance(
+        content, (bytes, bytearray)
+    ):
         return []
 
     parts: list[MessagePart] = []
@@ -297,7 +325,7 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
             parts.append(
                 FilePart(
                     mime_type=None,
-                    modality="image",
+                    modality=Modality.IMAGE,
                     file_id=file_id,
                 )
             )

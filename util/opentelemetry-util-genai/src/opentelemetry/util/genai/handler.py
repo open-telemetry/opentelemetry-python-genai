@@ -583,8 +583,6 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-        agent_id: str | None = None,
-        agent_version: str | None = None,
         context: Context | None = None,
         conversation_id: str | None = None,
     ) -> RemoteAgentInvocation:
@@ -609,8 +607,6 @@ class TelemetryHandler:
             provider=provider,
             request_model=request_model,
             agent_name=agent_name,
-            agent_id=agent_id,
-            agent_version=agent_version,
             server_address=server_address,
             server_port=server_port,
             content_capturing_mode=self._content_capturing_mode,

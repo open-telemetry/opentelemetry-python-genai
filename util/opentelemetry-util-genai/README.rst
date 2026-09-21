@@ -24,6 +24,34 @@ See the module docstring in ``opentelemetry.util.genai.handler`` for usage examp
 including context manager and manual lifecycle patterns.
 
 
+Modalities
+----------
+
+``opentelemetry.util.genai.types.Modality`` provides string enum members
+``TEXT``, ``IMAGE``, ``VIDEO``, ``AUDIO``, and ``DOCUMENT``. Use these constants
+when constructing ``BlobPart``, ``FilePart``, and ``UriPart`` or passing
+modality/token-count pairs to the inference invocation's token setters:
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import Modality, UriPart
+
+    image = UriPart(
+        mime_type="image/png",
+        modality=Modality.IMAGE,
+        uri="https://example.com/image.png",
+    )
+
+Members serialize and format as their string values, such as ``"image"``.
+Message parts continue to accept plain strings, including provider-specific
+modalities. Token setters continue to record only ``text``, ``image``, and
+``audio``; other modalities are ignored.
+
+``Modality`` replaces the previous ``Literal`` type alias. Annotations that
+also accept raw strings should use ``Modality | str`` rather than ``Modality``
+alone. Custom modalities remain strings, not additional enum members.
+
+
 Environment Variables
 ---------------------
 

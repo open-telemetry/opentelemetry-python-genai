@@ -29,6 +29,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     ModalityTokens,
     OutputMessage,
     ReasoningPart,
@@ -115,7 +116,7 @@ def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
         return None
     return BlobPart(
         mime_type=mime_type if isinstance(mime_type, str) else None,
-        modality="image",
+        modality=Modality.IMAGE,
         content=decoded,
     )
 
@@ -126,7 +127,7 @@ def _file_from_id(file_id: Any, mime_type: Any) -> MessagePart | None:
         return None
     return FilePart(
         mime_type=mime_type if isinstance(mime_type, str) else None,
-        modality="image",
+        modality=Modality.IMAGE,
         file_id=file_id,
     )
 

@@ -116,3 +116,93 @@ def test_refusal_part_is_recorded_as_text():
     )
 
     assert parts == [TextPart(content="I cannot help with that.")]
+
+
+def test_file_inline_base64_data_is_captured():
+    # `file_data` is documented as plain base64, not a data: URL.
+    parts = _content_to_parts(
+        [
+            {
+                "type": "file",
+                "file": {
+                    "filename": "spec.pdf",
+                    "file_data": "JVBERi0xLjQK",
+                },
+            }
+        ]
+    )
+
+    assert parts == [
+        BlobPart(
+            mime_type="application/pdf",
+            modality="document",
+            content=b"%PDF-1.4\n",
+        )
+    ]
+
+
+def test_malformed_base64_file_data_is_skipped():
+    parts = _content_to_parts(
+        [
+            {
+                "type": "file",
+                "file": {"filename": "spec.pdf", "file_data": "$$$$abcd!!!!"},
+            },
+            {"type": "text", "text": "still captured"},
+        ]
+    )
+
+    assert parts == [TextPart(content="still captured")]
+
+
+def test_file_by_id_takes_its_media_type_from_the_filename():
+    parts = _content_to_parts(
+        [
+            {
+                "type": "file",
+                "file": {"file_id": "file-abc", "filename": "spec.pdf"},
+            }
+        ]
+    )
+
+    assert parts == [
+        FilePart(
+            mime_type="application/pdf",
+            modality="document",
+            file_id="file-abc",
+        )
+    ]
+
+
+def test_data_url_media_type_wins_over_the_filename():
+    parts = _content_to_parts(
+        [
+            {
+                "type": "file",
+                "file": {
+                    "filename": "spec.bin",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            }
+        ]
+    )
+
+    assert parts == [
+        BlobPart(
+            mime_type="application/pdf",
+            modality="document",
+            content=b"%PDF-1.4\n",
+        )
+    ]
+
+
+def test_generator_content_is_left_for_the_sdk_to_consume():
+    # The SDK accepts any iterable for `content` and materializes it itself.
+    # This runs before the wrapped call, so consuming the generator here would
+    # leave the request with no content at all.
+    content = ({"type": "text", "text": "hello"} for _ in range(1))
+
+    parts = _content_to_parts(content)
+
+    assert parts == []
+    assert list(content) == [{"type": "text", "text": "hello"}]

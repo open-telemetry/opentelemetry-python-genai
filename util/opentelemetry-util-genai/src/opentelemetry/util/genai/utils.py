@@ -6,6 +6,7 @@ import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
+from dataclasses import asdict, is_dataclass
 from functools import partial
 from typing import Any
 
@@ -17,6 +18,7 @@ from opentelemetry.util.genai.types import (
     BlobPart,
     ContentCapturingMode,
     MessagePart,
+    Modality,
     UriPart,
 )
 
@@ -54,14 +56,19 @@ def decode_base64(data: str) -> bytes | None:
         return None
 
 
-def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
-    """Return a media part for an image ``url``.
+def image_from_url(
+    url: str, *, modality: Modality | str = Modality.IMAGE
+) -> MessagePart | None:
+    """Return a media part for a ``url``, defaulting to the image modality.
+
+    Override ``modality`` for other standard or provider-specific media,
+    such as audio or documents.
 
     A ``data:<mime>;base64,<payload>`` URL is decoded into a
     :class:`~opentelemetry.util.genai.types.BlobPart`; a ``data:`` URL without
     base64 encoding has its percent-encoded payload decoded into bytes; any
     other URL becomes a :class:`~opentelemetry.util.genai.types.UriPart`. Shared
-    by instrumentations that parse provider image blocks.
+    by instrumentations that parse provider media blocks.
 
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
@@ -93,14 +100,16 @@ def is_experimental_mode() -> bool:
     return True
 
 
-def should_emit_event() -> bool:
+def _should_emit_event(
+    content_capturing_mode: ContentCapturingMode,
+) -> bool:
     """Check if event emission is enabled.
 
     Returns True if event emission is enabled, False otherwise.
 
     If the environment variable OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is explicitly set,
     its value takes precedence. Otherwise, the default value is determined by
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT:
+    the provided ContentCapturingMode:
     - NO_CONTENT or SPAN_ONLY: defaults to False
     - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
     """
@@ -120,10 +129,23 @@ def should_emit_event() -> bool:
             OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
         )
     # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
-    return get_content_capturing_mode() in (
+    return content_capturing_mode in (
         ContentCapturingMode.EVENT_ONLY,
         ContentCapturingMode.SPAN_AND_EVENT,
     )
+
+
+def should_emit_event() -> bool:
+    """Check if event emission is enabled.
+
+    Returns True if event emission is enabled, False otherwise.
+
+    .. deprecated:: 1.2b0
+        This function reads environment variables on every call and should NOT
+        be called on the hot path. Event emission is managed internally by
+        telemetry handlers and invocations.
+    """
+    return _should_emit_event(get_content_capturing_mode())
 
 
 def should_capture_content_on_spans() -> bool:
@@ -163,6 +185,8 @@ def fq_exception_type(exception: BaseException) -> str:
 
 class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
+        if is_dataclass(o) and not isinstance(o, type):
+            return asdict(o)
         if isinstance(o, bytes):
             return b64encode(o).decode()
         return super().default(o)

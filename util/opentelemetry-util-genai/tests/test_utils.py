@@ -43,6 +43,7 @@ from opentelemetry.util.genai.types import (
     GenericPart,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     Reasoning,
     ReasoningPart,
@@ -54,6 +55,7 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    _should_emit_event,
     decode_base64,
     gen_ai_json_dumps,
     get_content_capturing_mode,
@@ -194,7 +196,10 @@ class TestShouldEmitEvent(unittest.TestCase):
                     "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": emit_event,
                 },
             ):
-                assert should_emit_event() is expected
+                assert (
+                    _should_emit_event(get_content_capturing_mode())
+                    is expected
+                )
 
     @patch.dict(
         os.environ,
@@ -209,7 +214,7 @@ class TestShouldEmitEvent(unittest.TestCase):
         # When invalid value is set, should fall back to default based on content_capturing_mode
         # EVENT_ONLY should default to True
         with self.assertLogs(level="WARNING") as cm:
-            result = should_emit_event()
+            result = _should_emit_event(ContentCapturingMode.EVENT_ONLY)
             assert result is True, (
                 f"Expected True but got {result} (EVENT_ONLY should default to True)"
             )
@@ -231,12 +236,45 @@ class TestShouldEmitEvent(unittest.TestCase):
     ):  # pylint: disable=no-self-use
         # When invalid value is set with SPAN_ONLY, should default to False
         with self.assertLogs(level="WARNING") as cm:
-            result = should_emit_event()
+            result = _should_emit_event(ContentCapturingMode.SPAN_ONLY)
             assert result is False, (
                 f"Expected False but got {result} (SPAN_ONLY should default to False)"
             )
         self.assertEqual(len(cm.output), 1)
         self.assertIn("invalid_value is not a valid option for", cm.output[0])
+
+    def test_should_emit_event_with_explicit_mode(self):  # pylint: disable=no-self-use
+        assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is False
+        assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is False
+        assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is True
+        assert _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"},
+        ):
+            assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is True
+            assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"},
+        ):
+            assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is False
+            assert (
+                _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT)
+                is False
+            )
+
+    def test_deprecated_should_emit_event(self):  # pylint: disable=no-self-use
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+                "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "",
+            },
+        ):
+            assert should_emit_event() is True
 
 
 class TestShouldCaptureContent(unittest.TestCase):
@@ -1176,6 +1214,107 @@ class TestTelemetryHandler(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs["gen_ai.usage.audio.input_tokens"] == 11
 
+    def test_set_modality_tokens_accepts_standard_enums(self) -> None:
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        entries = [
+            (Modality.TEXT, 10),
+            (Modality.IMAGE, 20),
+            (Modality.AUDIO, 30),
+            (Modality.VIDEO, 40),
+            (Modality.DOCUMENT, 50),
+            ("vendor_custom", 60),
+        ]
+        invocation.set_input_tokens(entries)
+        invocation.set_output_tokens(entries)
+        invocation.set_cache_read_input_tokens(entries)
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        usage = {
+            key: value
+            for key, value in attrs.items()
+            if key.startswith("gen_ai.usage.")
+        }
+        assert usage == {
+            f"gen_ai.usage.{modality}.{bucket}": count
+            for modality, count in (("text", 10), ("image", 20), ("audio", 30))
+            for bucket in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read.input_tokens",
+            )
+        }
+        assert all(type(value) is int for value in usage.values())
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_modality_content_on_spans_and_events(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        modalities = [*Modality, "image", "vendor_custom"]
+        parts = [
+            part
+            for modality in modalities
+            for part in (
+                BlobPart(
+                    mime_type=None, modality=modality, content=b"content"
+                ),
+                FilePart(mime_type=None, modality=modality, file_id="file-id"),
+                UriPart(
+                    mime_type=None,
+                    modality=modality,
+                    uri="https://example.com/content",
+                ),
+            )
+        ]
+        with handler.inference(
+            "test-provider", request_model="test-model"
+        ) as invocation:
+            invocation.input_messages = [
+                InputMessage(role=Role.USER, parts=parts)
+            ]
+            invocation.output_messages = [
+                OutputMessage(role=Role.ASSISTANT, parts=parts)
+            ]
+
+        span_attrs = self.span_exporter.get_finished_spans()[0].attributes
+        event_attrs = self.log_exporter.get_finished_logs()[
+            0
+        ].log_record.attributes
+        expected = [
+            modality
+            for modality in (
+                "text",
+                "image",
+                "video",
+                "audio",
+                "document",
+                "image",
+                "vendor_custom",
+            )
+            for _ in range(3)
+        ]
+        for key in (
+            GenAI.GEN_AI_INPUT_MESSAGES,
+            GenAI.GEN_AI_OUTPUT_MESSAGES,
+        ):
+            with self.subTest(key=key):
+                span_parts = json.loads(span_attrs[key])[0]["parts"]
+                event_parts = event_attrs[key][0]["parts"]
+                for recorded_parts in (span_parts, event_parts):
+                    values = [part["modality"] for part in recorded_parts]
+                    assert values == expected
+                    assert all(isinstance(value, str) for value in values)
+
     def test_set_modality_tokens_replaces_rather_than_merges(self):
         invocation = self.telemetry_handler.inference(
             "test-provider", request_model="test-model"
@@ -1383,6 +1522,34 @@ class TestRole(unittest.TestCase):
         self.assertEqual(serialized["role"], "assistant")
 
 
+class TestModality(unittest.TestCase):
+    def test_values(self) -> None:
+        self.assertEqual(
+            {modality.name: modality.value for modality in Modality},
+            {
+                "TEXT": "text",
+                "IMAGE": "image",
+                "VIDEO": "video",
+                "AUDIO": "audio",
+                "DOCUMENT": "document",
+            },
+        )
+
+    def test_members_behave_as_strings(self) -> None:
+        for modality in Modality:
+            with self.subTest(modality=modality):
+                self.assertIsInstance(modality, str)
+                self.assertEqual(modality, modality.value)
+                self.assertEqual(hash(modality), hash(modality.value))
+                self.assertEqual(str(modality), modality.value)
+                self.assertEqual(
+                    f"{modality}_tokens", f"{modality.value}_tokens"
+                )
+                self.assertEqual(
+                    json.loads(gen_ai_json_dumps(modality)), modality.value
+                )
+
+
 class TestMessageModels(unittest.TestCase):
     def test_output_message_optional_finish_reason(self):
         message = OutputMessage(
@@ -1427,6 +1594,13 @@ class TestMessageModels(unittest.TestCase):
         self.assertEqual(
             json.loads(gen_ai_json_dumps(asdict(generic_part))),
             {"type": "custom"},
+        )
+
+    def test_gen_ai_json_dumps_dataclass(self):
+        text_part = TextPart(content="hello")
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(text_part)),
+            {"type": "text", "content": "hello"},
         )
 
 
@@ -1492,6 +1666,20 @@ class TestMediaHelpers(unittest.TestCase):
         )
         self.assertIsInstance(uri_part, UriPart)
         self.assertEqual(uri_part.modality, "audio")
+
+    def test_image_from_url_accepts_enum_and_custom_modalities(self) -> None:
+        for modality in (Modality.AUDIO, "vendor_custom"):
+            for url in (
+                "data:application/octet-stream;base64,QUJD",
+                "https://example.com/content",
+            ):
+                with self.subTest(modality=modality, url=url):
+                    part = image_from_url(url, modality=modality)
+                    self.assertEqual(part.modality, modality)
+                    self.assertEqual(
+                        json.loads(gen_ai_json_dumps(part))["modality"],
+                        str(modality),
+                    )
 
     def test_image_from_url_percent_encoded_data_url(self):
         part = image_from_url("data:image/svg+xml,%3Csvg%2F%3E")

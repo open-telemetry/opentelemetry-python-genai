@@ -104,6 +104,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     ModalityTokens,
     OutputMessage,
     Role,
@@ -332,7 +333,7 @@ def _interactions_input_to_messages(
         elif item_type == "document":
             part = UriPart(
                 mime_type=_get_field(item, "mime_type"),
-                modality="document",
+                modality=Modality.DOCUMENT,
                 uri=_get_field(item, "uri") or "",
             )
             parts.append(part)
