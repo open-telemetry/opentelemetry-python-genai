@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import io
 import logging
@@ -249,9 +248,8 @@ async def _handle_async_invoke_model(
     else:
         body_stream = response.get("body")
         if body_stream is not None:
-            if hasattr(body_stream, "read") and (
-                inspect.iscoroutinefunction(body_stream.read)
-                or asyncio.iscoroutinefunction(body_stream.read)
+            if hasattr(body_stream, "read") and inspect.iscoroutinefunction(
+                body_stream.read
             ):
                 response["body"] = AsyncBedrockStreamingBodyWrapper(
                     body_stream,

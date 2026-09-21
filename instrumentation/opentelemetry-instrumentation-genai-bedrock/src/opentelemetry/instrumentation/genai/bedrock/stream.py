@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import AsyncIterator
+from logging import getLogger
 from typing import TYPE_CHECKING, Any
+
+_logger = getLogger(__name__)
 
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.stream import (
@@ -228,9 +232,23 @@ class BedrockConverseStreamWrapper(
         self._init_converse_stream(invocation, capture_content=capture_content)
 
 
+class _AsyncBedrockStreamWrapper(AsyncStreamWrapper[dict[str, Any]]):
+    """Base async stream wrapper that safely handles synchronous close() on EventStream."""
+
+    async def _close_stream(self) -> None:
+        close = getattr(self._self_stream, "aclose", None)
+        if close is None:
+            close = getattr(self._self_stream, "close", None)
+        if close is None:
+            return
+        res = close()
+        if inspect.isawaitable(res):
+            await res
+
+
 class AsyncBedrockConverseStreamWrapper(
     _BedrockConverseStreamMixin,
-    AsyncStreamWrapper[dict[str, Any]],
+    _AsyncBedrockStreamWrapper,
 ):
     """Wrapper for async Bedrock converse_stream EventStream."""
 
@@ -516,7 +534,7 @@ class BedrockInvokeModelStreamWrapper(
 
 class AsyncBedrockInvokeModelStreamWrapper(
     _BedrockInvokeModelStreamMixin,
-    AsyncStreamWrapper[dict[str, Any]],
+    _AsyncBedrockStreamWrapper,
 ):
     """Wrapper for async Bedrock invoke_model_with_response_stream EventStream."""
 
@@ -559,17 +577,31 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_finalized = False
         self._self_body_class = type(body)
 
+    @property
+    def __class__(self) -> type:
+        return self._self_body_class
+
+    @__class__.setter
+    def __class__(self, cls: type) -> None:
+        self._self_body_class = cls
+
     def _finalize(self, full_bytes: bytes) -> None:
         if self._self_finalized:
             return
         self._self_finalized = True
         self._self_chunks.clear()
-        extract_invoke_model_response(
-            self._self_response,
-            full_bytes,
-            self._self_invocation,
-            capture_content=self._self_capture_content,
-        )
+        try:
+            extract_invoke_model_response(
+                self._self_response,
+                full_bytes,
+                self._self_invocation,
+                capture_content=self._self_capture_content,
+            )
+        except Exception:
+            _logger.debug(
+                "Error extracting Bedrock invoke_model response",
+                exc_info=True,
+            )
         self._self_invocation.stop()
 
     def _finalize_error(self, exc: BaseException) -> None:
@@ -586,13 +618,14 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
             self._finalize_error(exc)
             raise
 
-        if amt is None:
+        if amt == 0:
+            return chunk
+
+        if chunk:
             self._self_chunks.append(chunk)
+
+        if amt is None or amt < 0 or not chunk or len(chunk) < amt:
             self._finalize(b"".join(self._self_chunks))
-        elif not chunk:
-            self._finalize(b"".join(self._self_chunks))
-        else:
-            self._self_chunks.append(chunk)
 
         return chunk
 
@@ -671,5 +704,5 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
 
     def __del__(self) -> None:
         if not getattr(self, "_self_finalized", True):
-            self._self_finalized = True
-            self._self_invocation.stop()
+            chunks = getattr(self, "_self_chunks", [])
+            self._finalize(b"".join(chunks))

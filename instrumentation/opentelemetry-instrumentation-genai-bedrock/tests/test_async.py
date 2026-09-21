@@ -102,6 +102,10 @@ def _streaming_body(data: bytes | None = None) -> AioStreamingBody:
 class _MockAsyncEventStream:
     def __init__(self, events: list[dict[str, Any]]) -> None:
         self._events = events
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def __aiter__(self) -> _MockAsyncEventStream:
         self._iter = iter(self._events)
@@ -117,6 +121,10 @@ class _MockAsyncEventStream:
 class _FailingAsyncEventStream:
     def __init__(self, events: list[dict[str, Any]]) -> None:
         self._events = events
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def __aiter__(self) -> _FailingAsyncEventStream:
         self._iter = iter(self._events)
@@ -375,6 +383,34 @@ async def test_async_converse_stream_caller_error(
 
 
 @pytest.mark.asyncio
+async def test_async_converse_stream_async_with_success(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    mock_stream = _MockAsyncEventStream(CONVERSE_STREAM_EVENTS)
+    with _stub(
+        async_bedrock_client,
+        "converse_stream",
+        {"stream": mock_stream},
+        modelId=NOVA_MODEL_ID,
+        messages=[],
+    ):
+        response = await async_bedrock_client.converse_stream(
+            modelId=NOVA_MODEL_ID, messages=[]
+        )
+
+        async with response["stream"] as stream:
+            chunks = [chunk async for chunk in stream]
+            assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
+
+    assert mock_stream.closed
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
+
+
+@pytest.mark.asyncio
 async def test_async_invoke_model_records_cancelled_error(
     async_bedrock_client,
     instrument_with_content,
@@ -461,14 +497,6 @@ async def test_async_invoke_model_body_forwards_attributes(
         assert body.tell() == len(body_content)
 
 
-@pytest.mark.skipif(
-    int(aiobotocore.__version__.split(".")[0]) < 3,
-    reason=(
-        "aiobotocore 2.x's StreamingBody is itself a wrapt proxy that reports "
-        "the HTTP response as its __class__, so isinstance cannot survive a "
-        "second proxy layer"
-    ),
-)
 @pytest.mark.asyncio
 async def test_async_invoke_model_body_is_transparent_proxy(
     async_bedrock_client,
@@ -557,6 +585,121 @@ async def test_async_invoke_model_chunked_then_drain_read(
     assert len(spans) == 1
     assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 18
     assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 4
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_read_negative_amt(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    body_content = _anthropic_body("Negative amt", inp=8, out=3)
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _streaming_body(body_content),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        data = await response["body"].read(-1)
+        assert data == body_content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 8
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_read_zero_amt(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    body_content = _anthropic_body("Zero amt", inp=6, out=2)
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _streaming_body(body_content),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        empty = await response["body"].read(0)
+        assert empty == b""
+        assert len(span_exporter.get_finished_spans()) == 0
+
+        data = await response["body"].read()
+        assert data == body_content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 6
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_read_larger_than_content(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    body_content = _anthropic_body("Larger", inp=12, out=5)
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _streaming_body(body_content),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        data = await response["body"].read(len(body_content) + 500)
+        assert data == body_content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_extract_error_does_not_fail_read(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    malformed_body = b"not valid json at all"
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": _streaming_body(malformed_body),
+        },
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        data = await response["body"].read()
+        assert data == malformed_body
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
 
 
 @pytest.mark.asyncio
@@ -874,6 +1017,35 @@ async def test_async_invoke_model_stream_caller_error(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_stream_async_with_success(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    mock_stream = _MockAsyncEventStream(INVOKE_MODEL_STREAM_EVENTS)
+    with _stub(
+        async_bedrock_client,
+        "invoke_model_with_response_stream",
+        {"body": mock_stream},
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = (
+            await async_bedrock_client.invoke_model_with_response_stream(
+                modelId=MODEL_ID, body="{}"
+            )
+        )
+
+        async with response["body"] as stream:
+            chunks = [chunk async for chunk in stream]
+            assert len(chunks) == len(INVOKE_MODEL_STREAM_EVENTS)
+
+    assert mock_stream.closed
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
 
 
 @pytest.mark.asyncio
