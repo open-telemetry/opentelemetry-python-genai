@@ -159,6 +159,19 @@ def _has_agent_signals(
     )
 
 
+def _detect_agent_name(
+    agent_name: str | None,
+    metadata: dict[str, Any] | None,
+) -> bool:
+    """Return whether a chain name identifies an agent-like runnable."""
+    if not agent_name or "agent" not in agent_name.lower():
+        return False
+
+    # A LangGraph node named "agent" is internal graph plumbing, not proof
+    # that the graph itself represents an agent.
+    return not (metadata and metadata.get(LANGGRAPH_NODE_KEY))
+
+
 def _looks_like_workflow(
     serialized: dict[str, Any],
     metadata: dict[str, Any] | None,
@@ -277,6 +290,7 @@ def classify_chain_run(
         announced_agent
         or declared_agent_name
         or _has_agent_signals(metadata, ancestor_agent_names)
+        or _detect_agent_name(agent_name, metadata)
     ):
         return OperationName.INVOKE_AGENT
 

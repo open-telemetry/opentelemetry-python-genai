@@ -387,6 +387,17 @@ def test_ordinary_runnable_is_not_an_agent() -> None:
     telemetry.invoke_local_agent.assert_not_called()
 
 
+def test_agent_named_runnable_is_an_agent() -> None:
+    handler, telemetry = _handler()
+    RunnableLambda(lambda value: value).with_config(
+        run_name="SupportAgentRunner"
+    ).invoke("value", {"callbacks": [handler]})
+
+    telemetry.invoke_local_agent.assert_called_once_with(
+        agent_name="SupportAgentRunner"
+    )
+
+
 def test_plain_state_graph_is_not_an_agent() -> None:
     handler, telemetry = _handler()
     builder = StateGraph(dict[str, int])

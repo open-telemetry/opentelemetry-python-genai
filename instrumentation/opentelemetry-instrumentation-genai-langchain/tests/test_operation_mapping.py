@@ -240,6 +240,37 @@ class TestClassifyChainRun:
         )
         assert result == OperationName.INVOKE_AGENT
 
+    @pytest.mark.parametrize(
+        "name",
+        ["AgentExecutor", "customer_agent_runner", "SupportAGENTChain"],
+    )
+    def test_chain_name_containing_agent_is_agent(self, name: str):
+        result = classify_chain_run(
+            serialized={"name": name},
+            metadata=None,
+            kwargs={},
+            parent_run_id=None,
+        )
+        assert result == OperationName.INVOKE_AGENT
+
+    def test_runtime_name_containing_agent_is_nested_agent(self):
+        result = classify_chain_run(
+            serialized={},
+            metadata=None,
+            kwargs={"name": "customer_agent_runner"},
+            parent_run_id=uuid.uuid4(),
+        )
+        assert result == OperationName.INVOKE_AGENT
+
+    def test_agent_named_langgraph_node_is_not_inferred_as_agent(self):
+        result = classify_chain_run(
+            serialized={},
+            metadata={"langgraph_node": "agent"},
+            kwargs={"name": "agent"},
+            parent_run_id=uuid.uuid4(),
+        )
+        assert result is None
+
     def test_internal_langgraph_node_is_not_agent(
         self, span_exporter, start_instrumentation
     ):
@@ -424,7 +455,7 @@ class TestClassifyChainRun:
 
     def test_otel_agent_span_false_with_no_other_signals_suppressed(self):
         result = classify_chain_run(
-            serialized={},
+            serialized={"name": "AgentExecutor"},
             metadata={"otel_agent_span": False},
             kwargs={},
             parent_run_id=uuid.uuid4(),
