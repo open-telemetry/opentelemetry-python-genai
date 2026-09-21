@@ -308,6 +308,7 @@ class RemoteAgentInvocation(AgentInvocation):
         self.previous_response_id: str | None = None
         self._cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
+
     @property
     def cache_write_input_tokens(self) -> int | None:
         """The number of cache write input tokens."""

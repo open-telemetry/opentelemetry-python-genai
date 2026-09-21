@@ -75,6 +75,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         *,
         start_attributes: dict[str, AttributeValue] | None = None,
         context: Context | None = None,
+        attach_to_context: bool = True,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
@@ -140,6 +141,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def context(self) -> Context:
         """The OpenTelemetry Context containing this invocation's span."""
         return self._span_context
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
         return self.metric_attributes

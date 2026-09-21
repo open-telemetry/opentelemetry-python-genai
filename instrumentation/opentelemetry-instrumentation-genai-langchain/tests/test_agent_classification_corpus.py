@@ -752,6 +752,10 @@ async def test_concurrent_async_agents_have_distinct_roots(
     assert second_span.parent is None
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
 @pytest.mark.asyncio
 async def test_async_agent_with_tool_and_chat_parenting(
     span_exporter, start_instrumentation
