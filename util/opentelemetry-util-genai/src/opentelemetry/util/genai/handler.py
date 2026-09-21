@@ -56,6 +56,7 @@ from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
+    _SafeCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
@@ -130,7 +131,14 @@ class TelemetryHandler:
             schema_url=schema_url,
         )
         self._content_capturing_mode = get_content_capturing_mode()
-        self._completion_hook = completion_hook or _NoOpCompletionHook()
+        if completion_hook is None or isinstance(
+            completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
+        ):
+            self._completion_hook: CompletionHook = (
+                completion_hook or _NoOpCompletionHook()
+            )
+        else:
+            self._completion_hook = _SafeCompletionHook(completion_hook)
         self._capture_content = (
             self._content_capturing_mode
             in (
@@ -569,8 +577,6 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-        agent_id: str | None = None,
-        agent_version: str | None = None,
     ) -> RemoteAgentInvocation:
         """Returns an agent invocation (CLIENT span kind). Starts span when called.
 
@@ -590,8 +596,6 @@ class TelemetryHandler:
             provider=provider,
             request_model=request_model,
             agent_name=agent_name,
-            agent_id=agent_id,
-            agent_version=agent_version,
             server_address=server_address,
             server_port=server_port,
             content_capturing_mode=self._content_capturing_mode,

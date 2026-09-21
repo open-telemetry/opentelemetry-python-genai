@@ -265,6 +265,7 @@ For more information about the maintainer role, see the [community repository](h
 - [Mike Goldsmith](https://github.com/MikeGoldsmith), Honeycomb
 - [Keith Decker](https://github.com/keith-decker), Cisco
 - [Leighton Chen](https://github.com/lzchen), Microsoft
+- [Radhika Gupta](https://github.com/rads-1996), Microsoft
 
 For more information about the approver role, see the [community repository](https://github.com/open-telemetry/community/blob/main/guides/contributor/membership.md#approver).
 

@@ -374,21 +374,40 @@ class TestAgentInvocationContent(unittest.TestCase):
         assert GenAI.GEN_AI_SYSTEM_INSTRUCTIONS in attrs
 
     @patch(
-        "opentelemetry.util.genai._invocation.get_content_capturing_mode",
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
         return_value=ContentCapturingMode.SPAN_AND_EVENT,
     )
     def test_tool_definitions_on_span(self, _mock_cap):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
         tool = FunctionToolDefinition(
             name="get_weather",
             description="Get the weather",
             parameters={"type": "object", "properties": {}},
         )
-        invocation = self.handler.invoke_local_agent()
+        invocation = handler.invoke_local_agent()
         invocation.tool_definitions = [tool]
         invocation.stop()
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
+
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.NO_CONTENT,
+    )
+    def test_tool_definitions_omitted_without_content_capture(self, _mock_cap):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather",
+            parameters={"type": "object", "properties": {}},
+        )
+        invocation = handler.invoke_local_agent()
+        invocation.tool_definitions = [tool]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_TOOL_DEFINITIONS not in attrs
 
     @patch(
         "opentelemetry.util.genai.handler.get_content_capturing_mode",
@@ -494,12 +513,10 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert invocation.span is not INVALID_SPAN
         assert not invocation.attributes
 
-    def test_constructor_agent_id_and_version(self):
-        invocation = self.handler.invoke_remote_agent(
-            "openai",
-            agent_id="agent-999",
-            agent_version="2.0.0",
-        )
+    def test_agent_id_and_version(self):
+        invocation = self.handler.invoke_remote_agent("openai")
+        invocation.agent_id = "agent-999"
+        invocation.agent_version = "2.0.0"
         invocation.stop()
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_AGENT_ID] == "agent-999"

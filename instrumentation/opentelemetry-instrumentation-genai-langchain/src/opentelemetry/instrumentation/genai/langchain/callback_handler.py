@@ -46,8 +46,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
@@ -191,7 +191,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        parent_agent, ancestor_agent_names = self._find_agent_context(
+        parent_agent_name, ancestor_agent_names = self._find_agent_context(
             parent_run_id
         )
         # A claimed announcement is proof this run is a create_agent root, which
@@ -236,24 +236,17 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 agent_announcement is not None,
             )
             # find if there is an agent already
-            agent_invocation = parent_agent
-            agent_invocation_name = (
-                agent_invocation.agent_name if agent_invocation else None
-            )
             if suggested_agent_name:
                 suggested_agent_name_lower = suggested_agent_name.lower()
-                agent_invocation_name_lower = (
-                    agent_invocation_name.lower()
-                    if agent_invocation_name
-                    else None
+                parent_agent_name_lower = (
+                    parent_agent_name.lower() if parent_agent_name else None
                 )
                 # An announced create_agent root always opens its own layer. For
                 # non-announced runs, suppress a repeated metadata name matching the
                 # enclosing agent - that repetition is inherited config, not a new agent.
                 if (
                     agent_announcement is not None
-                    or suggested_agent_name_lower
-                    != agent_invocation_name_lower
+                    or suggested_agent_name_lower != parent_agent_name_lower
                 ):
                     agent = self._telemetry_handler.invoke_local_agent(
                         agent_name=suggested_agent_name,
@@ -268,7 +261,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
 
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, agent
+                        run_id,
+                        parent_run_id,
+                        agent,
+                        agent_name=suggested_agent_name,
                     )
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
@@ -306,7 +302,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
-            invocation, (WorkflowInvocation, AgentInvocation)
+            invocation, (WorkflowInvocation, LocalAgentInvocation)
         ):
             # If the invocation does not exist, we cannot set attributes or end it
             self._invocation_manager.delete_invocation_state(run_id)
@@ -316,9 +312,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             invocation.output_messages = make_last_output_message(outputs)
 
         invocation.stop()
-
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id)
+        self._invocation_manager.delete_invocation_state(run_id)
 
     def on_chain_error(
         self,
@@ -330,15 +324,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
-            invocation, (WorkflowInvocation, AgentInvocation)
+            invocation, (WorkflowInvocation, LocalAgentInvocation)
         ):
             # If the invocation does not exist, we cannot set attributes or end it
             self._invocation_manager.delete_invocation_state(run_id)
             return
 
         invocation.fail(error)
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_chat_model_start(
         self,
@@ -495,6 +488,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         output_messages: list[OutputMessage] = []
+        finish_reasons: list[str] = []
         served_model: str | None = None
         generation_model: str | None = None
         generation_response_id: str | None = None
@@ -515,17 +509,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                 # Resolve finish_reason from generation_info or response
                 # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
-                # (snake_case); older versions used ``stopReason``. Empty
-                # values are filtered out by util-genai when emitting
-                # ``gen_ai.response.finish_reasons``.
-                finish_reason = ""
+                # (snake_case); older versions used ``stopReason``.
+                finish_reason: str | None = None
                 generation_info = getattr(
                     chat_generation, "generation_info", None
                 )
                 if generation_info is not None:
-                    finish_reason = generation_info.get(
-                        "finish_reason", "unknown"
-                    )
+                    finish_reason = generation_info.get("finish_reason")
 
                 if chat_generation.message:
                     # Responses API (RAPI) may include the served model in the
@@ -553,9 +543,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                     served_model = str(value)
                                     break
 
-                    # Get finish reason if generation_info is None above
+                    # Get finish reason if not found in generation_info above
                     if (
-                        generation_info is None
+                        not finish_reason
                         and chat_generation.message.response_metadata
                     ):
                         finish_reason = (
@@ -563,9 +553,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 "stopReason"
                             )
                             or chat_generation.message.response_metadata.get(
-                                "stop_reason", "unknown"
+                                "stop_reason"
                             )
                         )
+                    finish_reason = finish_reason or "error"
 
                     name_str = _message_name(chat_generation.message)
 
@@ -618,6 +609,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             name=name_str,
                         )
                     output_messages.append(output_message)
+                    finish_reasons.append(finish_reason)
 
                     # Get token usage if available
                     if chat_generation.message.usage_metadata:
@@ -674,6 +666,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         llm_invocation.output_tokens = output_tokens
 
         llm_invocation.output_messages = output_messages
+        if finish_reasons:
+            llm_invocation.finish_reasons = finish_reasons
 
         response_model, response_id = resolve_response_model_and_id(
             llm_output=getattr(response, "llm_output", None),
@@ -687,8 +681,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             llm_invocation.response_id = response_id
 
         llm_invocation.stop()
-        if not llm_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_llm_error(
         self,
@@ -707,8 +700,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         llm_invocation.fail(error)
-        if not llm_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_tool_start(
         self,
@@ -736,8 +728,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 arguments = json.loads(input_str)
             except (json.JSONDecodeError, ValueError):
                 arguments = input_str
-        nearest_agent, _ = self._find_agent_context(parent_run_id)
-        agent_name = nearest_agent.agent_name if nearest_agent else None
+        agent_name, _ = self._find_agent_context(parent_run_id)
 
         tool_invocation = self._telemetry_handler.tool(
             name=name,
@@ -769,8 +760,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             tool_invocation.tool_call_id = end_tool_call_id
         tool_invocation.tool_result = getattr(output, "content", None)
         tool_invocation.stop()
-        if not tool_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_tool_error(
         self,
@@ -784,8 +774,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if not isinstance(tool_invocation, ToolInvocation):
             return
         tool_invocation.fail(error)
-        if not tool_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_retriever_start(
         self,
@@ -829,8 +818,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 _document_to_dict(doc) for doc in documents
             ]
         invocation.stop()
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id)
+        self._invocation_manager.delete_invocation_state(run_id)
 
     def on_retriever_error(
         self,
@@ -848,23 +836,25 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         invocation.fail(error)
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def _find_agent_context(
         self, run_id: UUID | None
-    ) -> tuple[AgentInvocation | None, set[str]]:
+    ) -> tuple[str | None, set[str]]:
         current = run_id
         visited: set[UUID] = set()
-        nearest_agent: AgentInvocation | None = None
+        nearest_agent_name: str | None = None
+        found_nearest_agent = False
         ancestor_agent_names: set[str] = set()
         while current is not None and current not in visited:
             visited.add(current)
             entity = self._invocation_manager.get_invocation(current)
-            if isinstance(entity, AgentInvocation):
-                if nearest_agent is None:
-                    nearest_agent = entity
-                if entity.agent_name:
-                    ancestor_agent_names.add(entity.agent_name.lower())
+            if isinstance(entity, LocalAgentInvocation):
+                agent_name = self._invocation_manager.get_agent_name(current)
+                if not found_nearest_agent:
+                    nearest_agent_name = agent_name
+                    found_nearest_agent = True
+                if agent_name:
+                    ancestor_agent_names.add(agent_name.lower())
             current = self._invocation_manager.get_parent_run_id(current)
-        return nearest_agent, ancestor_agent_names
+        return nearest_agent_name, ancestor_agent_names

@@ -60,14 +60,9 @@ jobs:
 
       - name: Install weaver ${{ steps.versions.outputs.WEAVER_VERSION }}
         if: ${{ matrix.needs_weaver }}
-        env:
-          WEAVER_VERSION: ${{ steps.versions.outputs.WEAVER_VERSION }}
-        run: |
-          WEAVER_ASSET="weaver-x86_64-unknown-linux-gnu"
-          WEAVER_URL="https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${WEAVER_ASSET}.tar.xz"
-          curl -sSL "$WEAVER_URL" | tar -xJ -C /tmp "${WEAVER_ASSET}/weaver"
-          sudo mv "/tmp/${WEAVER_ASSET}/weaver" /usr/local/bin/weaver
-          weaver --version
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@38befce4bc68fe320d20f189465c93835ac20c12 # v0.26.1
+        with:
+          version: ${{ steps.versions.outputs.WEAVER_VERSION }}
 
       - name: Run tests
         run: uvx --with tox-uv tox -e "${MATRIX_TOX_ENV}" -- -ra

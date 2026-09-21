@@ -92,6 +92,17 @@ class FetchResponseInvocation(GenAIInvocation):
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+                (GenAI.GEN_AI_RESPONSE_ID, response_id),
+                (GenAI.GEN_AI_REQUEST_STREAM, request_stream),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -103,6 +114,7 @@ class FetchResponseInvocation(GenAIInvocation):
             span_name=_FETCH_RESPONSE_OPERATION_NAME,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
         )
         self._provider: str = provider
@@ -120,30 +132,11 @@ class FetchResponseInvocation(GenAIInvocation):
         ) = []
         """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self.tool_definitions: list[ToolDefinition] | None = None
-        self._start(self._get_start_attributes())
 
     @property
     def response_id(self) -> str:
         """The identifier of the response being fetched."""
         return self._response_id
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return attributes known at span creation time."""
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self._provider,
-            GenAI.GEN_AI_RESPONSE_ID: self._response_id,
-            **(
-                {GenAI.GEN_AI_REQUEST_STREAM: self._request_stream}
-                if self._request_stream is not None
-                else {}
-            ),
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         # response_id intentionally excluded — high cardinality.

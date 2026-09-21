@@ -154,13 +154,32 @@ class CompactionPart:
     type: Literal["compaction"] = "compaction"
 
 
-Modality = Literal["text", "image", "video", "audio", "document"]
+class Modality(str, Enum):
+    """Well-known content and token modalities.
+
+    Based on the `GenAI messages Python models - Modality
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    Token setters record only ``TEXT``, ``IMAGE``, and ``AUDIO``; other
+    modalities are ignored. Message parts accept all members and plain
+    strings for provider-specific modalities.
+    """
+
+    TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    DOCUMENT = "document"
+
+    def __str__(self) -> str:
+        return self.value
+
 
 ModalityTokens: TypeAlias = Iterable[tuple[Modality | str, int | None]]
 """A per-modality token breakdown, as ``(modality, token count)`` pairs.
 
 The modality may be a plain string or an enum member carrying one as its
 ``value``, so a provider SDK's own enum can be passed straight through.
+Token setters record only text, image, and audio; other modalities are ignored.
 """
 
 

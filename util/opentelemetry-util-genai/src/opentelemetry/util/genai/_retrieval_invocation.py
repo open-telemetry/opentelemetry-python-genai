@@ -60,6 +60,17 @@ class RetrievalInvocation(GenAIInvocation):
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_DATA_SOURCE_ID, data_source_id),
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -70,6 +81,7 @@ class RetrievalInvocation(GenAIInvocation):
             if data_source_id
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
         )
         self._data_source_id: str | None = data_source_id
@@ -80,21 +92,6 @@ class RetrievalInvocation(GenAIInvocation):
         self.top_k: int | None = None
         self.query_text: str | None = None
         self.documents: Sequence[Mapping[str, Any]] | None = None
-        self._start(self._get_start_attributes())
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data_source_id),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         # data_source_id intentionally excluded — high cardinality

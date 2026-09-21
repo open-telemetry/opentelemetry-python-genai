@@ -58,6 +58,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     ReasoningPart,
     Role,
@@ -155,7 +156,7 @@ def _chat_message_parts(message: ChatMessage) -> list[MessagePart]:
                 path=block.path,
                 url=block.url,
                 mime_type=block.image_mimetype,
-                modality="image",
+                modality=Modality.IMAGE,
             )
             if part is not None:
                 parts.append(part)
@@ -165,7 +166,7 @@ def _chat_message_parts(message: ChatMessage) -> list[MessagePart]:
                 path=block.path,
                 url=block.url,
                 mime_type=_audio_mime_type(block.format),
-                modality="audio",
+                modality=Modality.AUDIO,
             )
             if part is not None:
                 parts.append(part)
@@ -175,7 +176,7 @@ def _chat_message_parts(message: ChatMessage) -> list[MessagePart]:
                 path=block.path,
                 url=block.url,
                 mime_type=block.document_mimetype,
-                modality="document",
+                modality=Modality.DOCUMENT,
             )
             if part is not None:
                 parts.append(part)
@@ -188,7 +189,7 @@ def _media_part(
     path: object,
     url: object,
     mime_type: str | None,
-    modality: str,
+    modality: Modality | str,
 ) -> MessagePart | None:
     """Represent inline or referenced media as a semconv message part.
 

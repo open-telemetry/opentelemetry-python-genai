@@ -143,7 +143,7 @@ def test_code_agent_no_content(instrument_no_content, span_exporter) -> None:
         span_exporter.get_finished_spans(), "invoke_agent"
     )
     assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
-    assert attr(agent_span, GenAI.GEN_AI_TOOL_DEFINITIONS) is not None
+    assert attr(agent_span, GenAI.GEN_AI_TOOL_DEFINITIONS) is None
     assert attr(agent_span, GenAI.GEN_AI_INPUT_MESSAGES) is None
     assert attr(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES) is None
 

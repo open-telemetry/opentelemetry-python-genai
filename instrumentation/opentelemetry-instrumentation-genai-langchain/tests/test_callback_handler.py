@@ -54,8 +54,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     to_output_messages,
 )
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
     RetrievalInvocation,
     WorkflowInvocation,
 )
@@ -75,32 +75,14 @@ from opentelemetry.util.genai.types import (
 
 
 def _make_agent_inv_mock() -> mock.MagicMock:
-    """Return a spec'd AgentInvocation mock with agent_name pre-configured."""
-    agent_inv = mock.MagicMock(spec=AgentInvocation)
-    agent_inv.span = mock.MagicMock()
-    agent_inv.span.is_recording.return_value = False
-    # agent_name is an instance attribute set in AgentInvocation.__init__ via the
-    # constructor arg; pre-configure it so spec-restricted attribute access works.
-    agent_inv.agent_name = None
+    """Return a spec'd LocalAgentInvocation mock."""
+    agent_inv = mock.MagicMock(spec=LocalAgentInvocation)
     agent_inv.agent_id = None
     return agent_inv
 
 
-def _make_invoke_local_agent_side_effect(inv: mock.MagicMock):
-    """Return a side_effect for invoke_local_agent that mirrors what the real
-    AgentInvocation constructor does: set agent_name from the kwarg."""
-
-    def _side_effect(*args, **kwargs):
-        inv.agent_name = kwargs.get("agent_name")
-        return inv
-
-    return _side_effect
-
-
 def _make_retrieval_inv_mock() -> mock.MagicMock:
     retrieval_inv = mock.MagicMock(spec=RetrievalInvocation)
-    retrieval_inv.span = mock.MagicMock()
-    retrieval_inv.span.is_recording.return_value = False
     retrieval_inv.query_text = None
     retrieval_inv.documents = None
     return retrieval_inv
@@ -112,16 +94,10 @@ def _make_handler():
 
     # workflow returns a mock WorkflowInvocation
     workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
-    workflow_inv.span = mock.MagicMock()
-    workflow_inv.span.is_recording.return_value = False
     telemetry.workflow.return_value = workflow_inv
 
-    # invoke_local_agent returns a mock AgentInvocation whose agent_name is set
-    # to match whatever agent_name kwarg was passed (mirrors real constructor).
     agent_inv = _make_agent_inv_mock()
-    telemetry.invoke_local_agent.side_effect = (
-        _make_invoke_local_agent_side_effect(agent_inv)
-    )
+    telemetry.invoke_local_agent.return_value = agent_inv
 
     handler = OpenTelemetryLangChainCallbackHandler(telemetry)
     return handler, telemetry, workflow_inv, agent_inv
@@ -240,7 +216,9 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
         )
-        assert agent_inv.agent_name == "math_agent"
+        assert (
+            handler._invocation_manager.get_agent_name(run_id) == "math_agent"
+        )
         assert handler._invocation_manager.get_invocation(run_id) is agent_inv
 
     def test_agent_metadata_set(self):
@@ -338,9 +316,11 @@ class TestOnChainStartAgent:
 
         # First agent
         first_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = (
-            _make_invoke_local_agent_side_effect(first_agent_inv)
-        )
+        second_agent_inv = _make_agent_inv_mock()
+        telemetry.invoke_local_agent.side_effect = [
+            first_agent_inv,
+            second_agent_inv,
+        ]
 
         handler.on_chain_start(
             serialized={"name": "math_agent"},
@@ -348,12 +328,6 @@ class TestOnChainStartAgent:
             run_id=parent_run_id,
             parent_run_id=None,
             metadata={"agent_name": "math_agent"},
-        )
-
-        # Second agent with a different name
-        second_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = (
-            _make_invoke_local_agent_side_effect(second_agent_inv)
         )
 
         handler.on_chain_start(
@@ -368,7 +342,10 @@ class TestOnChainStartAgent:
             handler._invocation_manager.get_invocation(child_run_id)
             is second_agent_inv
         )
-        assert second_agent_inv.agent_name == "weather_agent"
+        assert (
+            handler._invocation_manager.get_agent_name(child_run_id)
+            == "weather_agent"
+        )
 
     def test_agent_name_comparison_is_case_insensitive(self):
         handler, telemetry, _, _ = _make_handler()
@@ -376,9 +353,7 @@ class TestOnChainStartAgent:
         child_run_id = _run_id()
 
         parent_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = (
-            _make_invoke_local_agent_side_effect(parent_agent_inv)
-        )
+        telemetry.invoke_local_agent.return_value = parent_agent_inv
 
         handler.on_chain_start(
             serialized={"name": "Math_Agent"},
@@ -586,8 +561,6 @@ class TestOnChainEnd:
             parent_run_id=None,
         )
 
-        # span.is_recording() returns False → should be cleaned up
-        workflow_inv.span.is_recording.return_value = False
         handler.on_chain_end(outputs={}, run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -655,7 +628,6 @@ class TestOnChainError:
             parent_run_id=None,
         )
 
-        workflow_inv.span.is_recording.return_value = False
         handler.on_chain_error(error=RuntimeError("boom"), run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -1209,10 +1181,7 @@ class TestOutputMessagesOnInvocations:
 
 
 def _make_llm_invocation_mock() -> mock.MagicMock:
-    inv = mock.MagicMock(spec=InferenceInvocation)
-    inv.span = mock.MagicMock()
-    inv.span.is_recording.return_value = False
-    return inv
+    return mock.MagicMock(spec=InferenceInvocation)
 
 
 def _make_handler_with_llm_invocation(
@@ -1254,6 +1223,7 @@ class TestOnLlmEndToolCalls:
         assigned: list[OutputMessage] = llm_inv.output_messages
         assert len(assigned) == 1
         assert assigned[0].finish_reason == "tool_calls"
+        assert llm_inv.finish_reasons == ["tool_calls"]
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
         assert isinstance(part, ToolCallRequestPart)
@@ -1285,12 +1255,48 @@ class TestOnLlmEndToolCalls:
         assigned: list[OutputMessage] = llm_inv.output_messages
         assert len(assigned) == 1
         assert assigned[0].finish_reason == "tool_use"
+        assert llm_inv.finish_reasons == ["tool_use"]
         assert len(assigned[0].parts) == 1
         part = assigned[0].parts[0]
         assert isinstance(part, ToolCallRequestPart)
         assert part.name == "get_weather"
         assert part.id == "tooluse_abc"
         assert part.arguments == {"location": "London"}
+
+    def test_on_llm_end_preserves_finish_reasons_positional_alignment(self):
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        gen1 = ChatGeneration(
+            message=AIMessage(content="First"),
+            generation_info={"finish_reason": "stop"},
+        )
+        gen2 = ChatGeneration(
+            message=AIMessage(
+                content="Second",
+                response_metadata={"model_name": "gpt-4"},
+            ),
+            generation_info=None,
+        )
+        gen3 = ChatGeneration(
+            message=AIMessage(content="Third"),
+            generation_info={},
+        )
+        gen4 = ChatGeneration(
+            message=AIMessage(content="Fourth"),
+            generation_info={"finish_reason": "length"},
+        )
+        response = LLMResult(generations=[[gen1, gen2, gen3, gen4]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assert llm_inv.finish_reasons == ["stop", "error", "error", "length"]
+        assert [m.finish_reason for m in llm_inv.output_messages] == [
+            "stop",
+            "error",
+            "error",
+            "length",
+        ]
 
     def test_on_llm_end_preserves_message_name(self):
         run_id = _run_id()
@@ -1515,7 +1521,6 @@ class TestOnRetrieverEnd:
         run_id = _run_id()
 
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        retrieval_inv.span.is_recording.return_value = False
         handler.on_retriever_end(documents=[], run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
@@ -2003,7 +2008,6 @@ class TestOnRetrieverError:
         run_id = _run_id()
 
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        retrieval_inv.span.is_recording.return_value = False
         handler.on_retriever_error(error=RuntimeError("boom"), run_id=run_id)
 
         assert run_id not in handler._invocation_manager._invocations
