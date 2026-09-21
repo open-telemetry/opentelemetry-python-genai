@@ -970,10 +970,66 @@ def test_extract_output_messages_merges_parallel_tool_calls(loaded_module):
     assert [part.id for part in message.parts] == ["call_1", "call_2"]
 
 
-def test_extract_output_messages_keeps_text_out_of_a_tool_turn(loaded_module):
-    """Text ends the tool turn, so a later call starts its own message."""
+def test_extract_output_messages_merges_text_and_tool_calls(loaded_module):
+    """Assistant text and the calls it introduces are one generation."""
     response = _make_response(
         output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "I will check the weather for both cities.",
+                        "annotations": [],
+                    }
+                ],
+            },
+            {
+                "id": "fc_1",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": "call_1",
+                "name": "get_current_weather",
+                "arguments": '{"location":"Seattle, WA"}',
+            },
+            {
+                "id": "fc_2",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": "call_2",
+                "name": "get_current_weather",
+                "arguments": '{"location":"Boston, MA"}',
+            },
+        ]
+    )
+
+    (message,) = loaded_module.get_output_messages_from_response(response)
+    assert message.role == "assistant"
+    assert message.finish_reason == "tool_call"
+    assert [part.type for part in message.parts] == [
+        "text",
+        "tool_call",
+        "tool_call",
+    ]
+    assert [part.id for part in message.parts[1:]] == ["call_1", "call_2"]
+
+
+def test_extract_output_messages_absorbs_into_a_partless_message(
+    loaded_module,
+):
+    """A message that carried no parts still holds the generation's tool call."""
+    response = _make_response(
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [],
+            },
             {
                 "id": "fc_1",
                 "type": "function_call",
@@ -982,32 +1038,47 @@ def test_extract_output_messages_keeps_text_out_of_a_tool_turn(loaded_module):
                 "name": "f",
                 "arguments": "{}",
             },
+        ]
+    )
+
+    (message,) = loaded_module.get_output_messages_from_response(response)
+    assert message.finish_reason == "tool_call"
+    assert [part.type for part in message.parts] == ["tool_call"]
+
+
+def test_extract_output_messages_keeps_unfinished_message_separate(
+    loaded_module,
+):
+    """A turn that ended early keeps its own finish reason."""
+    response = _make_response(
+        output=[
             {
                 "id": "msg_1",
                 "type": "message",
-                "status": "completed",
+                "status": "incomplete",
                 "role": "assistant",
                 "content": [
                     {"type": "output_text", "text": "hi", "annotations": []}
                 ],
             },
             {
-                "id": "fc_2",
+                "id": "fc_1",
                 "type": "function_call",
                 "status": "completed",
-                "call_id": "call_2",
+                "call_id": "call_1",
                 "name": "f",
                 "arguments": "{}",
             },
         ]
     )
 
-    messages = loaded_module.get_output_messages_from_response(response)
-    assert [[part.type for part in message.parts] for message in messages] == [
-        ["tool_call"],
-        ["text"],
-        ["tool_call"],
-    ]
+    text_message, tool_message = (
+        loaded_module.get_output_messages_from_response(response)
+    )
+    assert text_message.finish_reason == "incomplete"
+    assert [part.type for part in text_message.parts] == ["text"]
+    assert tool_message.finish_reason == "tool_call"
+    assert [part.type for part in tool_message.parts] == ["tool_call"]
 
 
 def test_extract_finish_reasons_maps_terminal_message_and_tool_items(

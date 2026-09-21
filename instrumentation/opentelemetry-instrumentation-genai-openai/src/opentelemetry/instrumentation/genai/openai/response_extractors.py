@@ -604,6 +604,25 @@ def _tool_call_is_terminal(item: object) -> bool:
     return status is None or status in _TERMINAL_TOOL_CALL_STATUSES
 
 
+_MERGEABLE_OUTPUT_PARTS = tuple(
+    part for part in (TextPart, ToolCall) if part is not None
+)
+_MERGEABLE_FINISH_REASONS = frozenset({"stop", "tool_call"})
+
+
+def _absorbs_tool_call(message: OutputMessage) -> bool:
+    """Whether a tool call from the same generation belongs on this message."""
+    return (
+        bool(_MERGEABLE_OUTPUT_PARTS)
+        and Role is not None
+        and message.role == Role.ASSISTANT.value
+        and message.finish_reason in _MERGEABLE_FINISH_REASONS
+        and all(
+            isinstance(part, _MERGEABLE_OUTPUT_PARTS) for part in message.parts
+        )
+    )
+
+
 def _response_types_available() -> bool:
     return (
         Response is not None
@@ -649,10 +668,9 @@ def get_output_messages_from_response(
                 name=item.name,
                 arguments=_tool_call_arguments(item),
             )
-            # One generation cannot span messages, and parallel calls are one
-            # generation the flat item list splits up.
-            if messages and _is_tool_call_turn(messages[-1]):
+            if messages and _absorbs_tool_call(messages[-1]):
                 messages[-1].parts.append(part)
+                messages[-1].finish_reason = "tool_call"
                 continue
 
             messages.append(
