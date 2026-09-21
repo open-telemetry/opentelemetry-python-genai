@@ -56,6 +56,7 @@ from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
+    _SafeCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
     AgentInvocation,
@@ -130,7 +131,14 @@ class TelemetryHandler:
             schema_url=schema_url,
         )
         self._content_capturing_mode = get_content_capturing_mode()
-        self._completion_hook = completion_hook or _NoOpCompletionHook()
+        if completion_hook is None or isinstance(
+            completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
+        ):
+            self._completion_hook: CompletionHook = (
+                completion_hook or _NoOpCompletionHook()
+            )
+        else:
+            self._completion_hook = _SafeCompletionHook(completion_hook)
         self._capture_content = (
             self._content_capturing_mode
             in (

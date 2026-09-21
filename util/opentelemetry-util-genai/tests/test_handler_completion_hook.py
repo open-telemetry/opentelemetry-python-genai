@@ -368,3 +368,12 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
     def test_should_capture_content_false_when_noop_hook(self):
         handler = self._make_handler(_NoOpCompletionHook())
         self.assertFalse(handler.should_capture_content())
+
+    def test_programmatic_hook_exception_is_suppressed(self):
+        hook = MagicMock()
+        hook.on_completion.side_effect = RuntimeError("hook failure")
+        handler = self._make_handler(hook)
+
+        # Should not raise
+        handler.inference("openai", request_model="gpt-4o").stop()
+        hook.on_completion.assert_called_once()

@@ -256,6 +256,33 @@ def _document_to_part(file_obj: Any) -> MessagePart | None:
     )
 
 
+def _tool_response_to_data(value: Any) -> Any:
+    """Reduce a tool result payload to data the GenAI attributes can carry.
+
+    A caller hands back whatever its tool produced, which may include SDK
+    models. Those are flattened via ``model_dump()``; anything that is neither
+    plain data nor a model is dropped rather than guessed at, so recording a
+    tool result never raises into the instrumented call.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _tool_response_to_data(model_dump())
+    if isinstance(value, Mapping):
+        return {
+            str(key): _tool_response_to_data(item)
+            for key, item in value.items()
+        }
+    # Bytes are a Sequence, but iterating them into a list of ints is not a
+    # useful reading of a tool result.
+    if isinstance(value, Sequence) and not isinstance(
+        value, (bytes, bytearray)
+    ):
+        return [_tool_response_to_data(item) for item in value]
+    return None
+
+
 def _content_to_parts(content: Any) -> list[MessagePart]:
     if isinstance(content, str):
         return [TextPart(content=content)]
@@ -355,7 +382,10 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
             parts.append(
-                ToolCallResponsePart(id=tool_call_id, response=content)
+                ToolCallResponsePart(
+                    id=tool_call_id,
+                    response=_tool_response_to_data(content),
+                )
             )
 
         else:

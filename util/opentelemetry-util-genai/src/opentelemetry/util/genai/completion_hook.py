@@ -51,10 +51,9 @@ class CompletionHook(Protocol):
     :func:`~opentelemetry.util.genai.utils.get_content_capturing_mode`.
 
     .. note::
-        Hooks returned from :func:`load_completion_hook` are wrapped so any
-        exception raised by :meth:`on_completion` is logged and swallowed.
-        Instrumentation code calling ``on_completion`` on a hook obtained
-        from :func:`load_completion_hook` does not need a ``try``/``except``
+        Hooks provided to ``TelemetryHandler`` or returned from :func:`load_completion_hook`
+        are wrapped so any exception raised by :meth:`on_completion` is logged and swallowed.
+        Instrumentation code calling ``on_completion`` does not need a ``try``/``except``
         around the call - exceptions never escape into the instrumented
         application.
 

@@ -20,7 +20,6 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.trace import INVALID_SPAN as _INVALID_SPAN
 from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai._conversation_context import (
@@ -78,6 +77,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         metric_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         *,
+        start_attributes: dict[str, AttributeValue] | None = None,
+        context: Context | None = None,
+        conversation_id: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
@@ -99,13 +101,30 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             {} if metric_attributes is None else metric_attributes
         )
         """Additional attributes to set on metrics. Must be low cardinality. Not set on spans or events."""
-        self.span: Span = _INVALID_SPAN
-        self._span_context: Context
-        self._span_name: str = span_name
-        self._span_kind: SpanKind = span_kind
-        self._context_token: ContextToken | None = None
-        self.conversation_id: str | None = None
-        self._monotonic_start_s: float
+        self.conversation_id: str | None = (
+            conversation_id
+            if conversation_id is not None
+            else get_ambient_conversation_id(context)
+        )
+        """Emitted as ``gen_ai.conversation.id`` by the operations semconv
+        defines it on: inference, invoke_agent, invoke_workflow."""
+        if self.conversation_id:
+            context = with_conversation_id(
+                self.conversation_id, context=context
+            )
+        self._start_attributes: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: operation_name,
+            **(start_attributes or {}),
+        }
+        self.span: Span = self._tracer.start_span(
+            name=span_name,
+            kind=span_kind,
+            attributes=self._start_attributes,
+            context=context,
+        )
+        self._span_context: Context = set_span_in_context(self.span, context)
+        self._context_token: ContextToken | None = attach(self._span_context)
+        self._monotonic_start_s: float = timeit.default_timer()
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
         # (gen_ai.request.stream); the timing fields are populated by
@@ -134,41 +153,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def context(self) -> Context:
         """The OpenTelemetry Context containing this invocation's span."""
         return self._span_context
-
-    def _start(
-        self,
-        attributes: dict[str, AttributeValue] | None = None,
-        context: Context | None = None,
-        *,
-        conversation_id: str | None = None,
-    ) -> None:
-        """Start the invocation span and attach it to the current context.
-
-        Args:
-            attributes: Initial span attributes available for sampling decisions.
-            context: An optional OpenTelemetry Context to parent the span.
-            conversation_id: Overrides the conversation id inherited from
-                ``context``. Either way the resolved value is put back on the
-                attached context, so nested invocations inherit it in turn.
-        """
-        self.conversation_id = (
-            conversation_id
-            if conversation_id is not None
-            else get_ambient_conversation_id(context)
-        )
-        if self.conversation_id:
-            context = with_conversation_id(
-                self.conversation_id, context=context
-            )
-        self.span = self._tracer.start_span(
-            name=self._span_name,
-            kind=self._span_kind,
-            attributes=attributes,
-            context=context,
-        )
-        self._span_context = set_span_in_context(self.span, context)
-        self._monotonic_start_s = timeit.default_timer()
-        self._context_token = attach(self._span_context)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""

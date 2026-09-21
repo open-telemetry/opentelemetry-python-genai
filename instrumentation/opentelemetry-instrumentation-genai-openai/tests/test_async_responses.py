@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib.util
 import inspect
 import json
 from importlib import import_module
@@ -36,8 +37,11 @@ from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_responses import assert_responses_streaming_timing_metrics
 from .test_utils import (
+    CUSTOM_TOOL_MODEL,
     DEFAULT_MODEL,
+    EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
     EXPECTED_TOOL_DEFINITIONS,
+    EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
     GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
@@ -46,6 +50,9 @@ from .test_utils import (
     assert_fetch_response_attributes,
     assert_messages_attribute,
     format_simple_expected_output_message,
+    get_responses_custom_tool_definition,
+    get_responses_custom_tool_loop_input,
+    get_responses_tool_loop_input,
     get_responses_weather_tool_definition,
 )
 
@@ -61,11 +68,23 @@ try:
     _has_tools_param = "tools" in _create_params
     _has_reasoning_param = "reasoning" in _create_params
     _has_conversation_param = "conversation" in _create_params
+    _stream_params = set(
+        inspect.signature(_responses_module.AsyncResponses.stream).parameters
+    )
+    _stream_has_service_tier = "service_tier" in _stream_params
+    _has_custom_tool_types = (
+        importlib.util.find_spec(
+            "openai.types.responses.response_custom_tool_call"
+        )
+        is not None
+    )
 except ImportError:
     HAS_RESPONSES_API = False
     _has_tools_param = False
     _has_reasoning_param = False
     _has_conversation_param = False
+    _stream_has_service_tier = False
+    _has_custom_tool_types = False
 
 
 pytestmark = pytest.mark.skipif(
@@ -702,6 +721,10 @@ async def test_async_responses_create_with_all_params(
 @pytest.mark.asyncio()
 @pytest.mark.cassette("test_async_responses_stream_until_done[content_mode0]")
 @pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_conversation_param,
+    reason="openai SDK too old to support 'conversation' on Responses.create",
+)
 async def test_async_responses_stream_records_conversation_id(
     span_exporter, async_openai_client, instrument_no_content
 ):
@@ -952,6 +975,10 @@ async def test_async_responses_stream_captures_content(
 
 @pytest.mark.asyncio()
 @pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _stream_has_service_tier,
+    reason="openai SDK too old to support 'service_tier' on Responses.stream",
+)
 async def test_async_responses_stream_until_done(
     span_exporter, async_openai_client, instrument_no_content
 ):
@@ -1249,6 +1276,63 @@ async def test_async_responses_create_streaming_user_exception(
         span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
     )
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.skipif(
+    not _has_custom_tool_types,
+    reason="openai SDK too old to support custom tool call types",
+)
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+async def test_async_responses_create_captures_custom_tool_history(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_captures_custom_tool_history[content_mode0].yaml"
+    ):
+        await async_openai_client.responses.create(
+            model=CUSTOM_TOOL_MODEL,
+            input=get_responses_custom_tool_loop_input(),
+            tools=[get_responses_custom_tool_definition()],
+            tool_choice="auto",
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="openai SDK too old to support 'tools' parameter on Responses.create",
+)
+async def test_async_responses_create_captures_tool_loop_history(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_captures_tool_loop_history[content_mode0].yaml"
+    ):
+        await async_openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            input=get_responses_tool_loop_input(),
+            tools=[get_responses_weather_tool_definition()],
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+        EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
+    )
 
 
 @pytest.mark.asyncio()
