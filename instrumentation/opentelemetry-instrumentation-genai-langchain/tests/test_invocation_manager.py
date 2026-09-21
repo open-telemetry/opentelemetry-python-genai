@@ -10,7 +10,7 @@ import pytest
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
 )
-from opentelemetry.util.genai.types import GenAIInvocation
+from opentelemetry.util.genai.invocation import InferenceInvocation
 
 
 @pytest.fixture
@@ -20,7 +20,7 @@ def invocation_manager():
 
 @pytest.fixture
 def mock_invocation():
-    return mock.Mock(spec=GenAIInvocation)
+    return mock.Mock(spec=InferenceInvocation)
 
 
 def test_add_invocation_state_without_parent(
@@ -41,8 +41,8 @@ def test_add_invocation_state_without_parent(
 def test_add_invocation_state_with_parent(invocation_manager):
     parent_id = uuid.uuid4()
     child_id = uuid.uuid4()
-    parent_invocation = mock.Mock(spec=GenAIInvocation)
-    child_invocation = mock.Mock(spec=GenAIInvocation)
+    parent_invocation = mock.Mock(spec=InferenceInvocation)
+    child_invocation = mock.Mock(spec=InferenceInvocation)
 
     # Add parent first
     invocation_manager.add_invocation_state(
@@ -114,8 +114,8 @@ def test_delete_invocation_state_deferred_while_children_live(
     parent_id = uuid.uuid4()
     child_id = uuid.uuid4()
 
-    parent_invocation = mock.Mock(spec=GenAIInvocation)
-    child_invocation = mock.Mock(spec=GenAIInvocation)
+    parent_invocation = mock.Mock(spec=InferenceInvocation)
+    child_invocation = mock.Mock(spec=InferenceInvocation)
 
     invocation_manager.add_invocation_state(
         run_id=parent_id, parent_run_id=None, invocation=parent_invocation
@@ -152,7 +152,7 @@ def test_delete_invocation_state_propagates_upward(invocation_manager):
         invocation_manager.add_invocation_state(
             run_id=run_id,
             parent_run_id=parent,
-            invocation=mock.Mock(spec=GenAIInvocation),
+            invocation=mock.Mock(spec=InferenceInvocation),
         )
 
     # Mark grandparent and parent as ended (deferred)
@@ -178,9 +178,9 @@ def test_delete_invocation_state_with_multiple_children_defers_until_last(
     child1_id = uuid.uuid4()
     child2_id = uuid.uuid4()
 
-    parent_invocation = mock.Mock(spec=GenAIInvocation)
-    child1_invocation = mock.Mock(spec=GenAIInvocation)
-    child2_invocation = mock.Mock(spec=GenAIInvocation)
+    parent_invocation = mock.Mock(spec=InferenceInvocation)
+    child1_invocation = mock.Mock(spec=InferenceInvocation)
+    child2_invocation = mock.Mock(spec=InferenceInvocation)
 
     invocation_manager.add_invocation_state(
         run_id=parent_id, parent_run_id=None, invocation=parent_invocation
@@ -216,12 +216,12 @@ def test_get_parent_run_id_returns_registered_parent(invocation_manager):
     invocation_manager.add_invocation_state(
         run_id=parent_id,
         parent_run_id=None,
-        invocation=mock.Mock(spec=GenAIInvocation),
+        invocation=mock.Mock(spec=InferenceInvocation),
     )
     invocation_manager.add_invocation_state(
         run_id=child_id,
         parent_run_id=parent_id,
-        invocation=mock.Mock(spec=GenAIInvocation),
+        invocation=mock.Mock(spec=InferenceInvocation),
     )
 
     assert invocation_manager.get_parent_run_id(child_id) == parent_id

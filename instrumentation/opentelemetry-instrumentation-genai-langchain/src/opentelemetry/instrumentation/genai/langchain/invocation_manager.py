@@ -2,19 +2,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
+from typing import TypeAlias
 from uuid import UUID
 
-from opentelemetry.util.genai.types import GenAIInvocation
+from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
+    LocalAgentInvocation,
+    RetrievalInvocation,
+    ToolInvocation,
+    WorkflowInvocation,
+)
 
 __all__ = ["_InvocationManager"]
+
+_AnyInvocation: TypeAlias = (
+    InferenceInvocation
+    | ToolInvocation
+    | WorkflowInvocation
+    | LocalAgentInvocation
+    | RetrievalInvocation
+)
 
 
 @dataclass
 class _InvocationState:
-    invocation: GenAIInvocation | None
+    invocation: _AnyInvocation | None
     children: list[UUID] = field(default_factory=lambda: list())
     parent_run_id: UUID | None = None
     ended: bool = False
+    agent_name: str | None = None
 
 
 class _InvocationManager:
@@ -29,9 +45,13 @@ class _InvocationManager:
         self,
         run_id: UUID,
         parent_run_id: UUID | None,
-        invocation: GenAIInvocation | None,
+        invocation: _AnyInvocation | None,
+        agent_name: str | None = None,
     ) -> None:
-        invocation_state = _InvocationState(invocation=invocation)
+        invocation_state = _InvocationState(
+            invocation=invocation,
+            agent_name=agent_name,
+        )
 
         invocation_state.parent_run_id = parent_run_id
         if parent_run_id is not None and parent_run_id in self._invocations:
@@ -40,9 +60,13 @@ class _InvocationManager:
 
         self._invocations[run_id] = invocation_state
 
-    def get_invocation(self, run_id: UUID) -> GenAIInvocation | None:
+    def get_invocation(self, run_id: UUID) -> _AnyInvocation | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.invocation if invocation_state else None
+
+    def get_agent_name(self, run_id: UUID) -> str | None:
+        invocation_state = self._invocations.get(run_id)
+        return invocation_state.agent_name if invocation_state else None
 
     def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)

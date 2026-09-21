@@ -24,6 +24,7 @@ from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
+    Modality,
     ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
@@ -31,7 +32,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    should_emit_event,
+    _should_emit_event,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -54,19 +55,19 @@ _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
     "gen_ai.usage.audio.cache_read.input_tokens"
 )
 _INPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    "text": "text_input_tokens",
-    "image": "image_input_tokens",
-    "audio": "audio_input_tokens",
+    Modality.TEXT: "text_input_tokens",
+    Modality.IMAGE: "image_input_tokens",
+    Modality.AUDIO: "audio_input_tokens",
 }
 _OUTPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    "text": "text_output_tokens",
-    "image": "image_output_tokens",
-    "audio": "audio_output_tokens",
+    Modality.TEXT: "text_output_tokens",
+    Modality.IMAGE: "image_output_tokens",
+    Modality.AUDIO: "audio_output_tokens",
 }
 _CACHE_READ_MODALITY_FIELDS: Final[Mapping[str, str]] = {
-    "text": "text_cache_read_input_tokens",
-    "image": "image_cache_read_input_tokens",
-    "audio": "audio_cache_read_input_tokens",
+    Modality.TEXT: "text_cache_read_input_tokens",
+    Modality.IMAGE: "image_cache_read_input_tokens",
+    Modality.AUDIO: "audio_cache_read_input_tokens",
 }
 _GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
 _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
@@ -119,6 +120,9 @@ class InferenceInvocation(GenAIInvocation):
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
         self.conversation_id: str | None = None
+        self._emit_event: bool = _should_emit_event(
+            self._content_capturing_mode
+        )
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -434,7 +438,7 @@ class InferenceInvocation(GenAIInvocation):
         For more details, see the semantic convention documentation:
         https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-events.md#event-eventgen_aiclientinferenceoperationdetails
         """
-        if not should_emit_event():
+        if not self._emit_event:
             return None
 
         attributes = self._get_start_attributes()

@@ -417,7 +417,9 @@ a `parts` array (not `content`); each part has a `type` field. When
 asserting on `gen_ai.output.messages`, parse the JSON and check
 `msg["parts"]`.
 
-`Modality` is `Literal["image", "video", "audio"]`. `error.type` and span
+`Modality` is a string enum with `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, and
+`DOCUMENT` members; message parts also accept custom modality strings.
+`error.type` and span
 status come from `invocation.fail(exc)` — do not emit a separate span
 exception event.
 

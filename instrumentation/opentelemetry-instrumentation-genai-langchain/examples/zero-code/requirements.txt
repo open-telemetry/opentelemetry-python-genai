@@ -1,4 +1,4 @@
-langchain==1.4.0
+langchain==1.4.2
 langchain-openai>=1.6.2
 opentelemetry-sdk>=1.44.0
 opentelemetry-exporter-otlp-proto-grpc>=1.44.0

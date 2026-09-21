@@ -18,7 +18,11 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import (
+    SpanKind,
+    get_current_span,
+    set_span_in_context,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
@@ -498,3 +502,41 @@ def test_direct_invocation_instantiation_falls_back_to_env():
     assert len(finished) == 1
     attrs = finished[0].attributes or {}
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
+
+
+def test_tool_invocation_context_property():
+    handler = _make_handler()
+    invocation = handler.tool("test_tool")
+    try:
+        assert invocation.context is not None
+        span = get_current_span(invocation.context)
+        assert span == invocation.span
+        assert span.is_recording()
+    finally:
+        invocation.stop()
+
+
+@pytest.mark.parametrize("method_name", ["tool", "start_tool"])
+def test_tool_invocation_explicit_context(method_name: str):
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("parent_span") as parent_span:
+        parent_context = set_span_in_context(parent_span)
+
+    with tracer.start_as_current_span("ambient_span"):
+        tool_invocation = getattr(handler, method_name)(
+            "child_tool", context=parent_context
+        )
+        tool_invocation.stop()
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = [s for s in spans if s.name == "execute_tool child_tool"][0]
+    assert (
+        tool_span.context.trace_id == parent_span.get_span_context().trace_id
+    )
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == parent_span.get_span_context().span_id
