@@ -633,6 +633,8 @@ def get_inference_creation_kwargs(
         creation_kwargs["server_address"] = address
     if port is not None:
         creation_kwargs["server_port"] = port
+    if params.conversation_id is not None:
+        creation_kwargs["conversation_id"] = params.conversation_id
     return creation_kwargs
 
 
@@ -662,8 +664,6 @@ def apply_request_attributes(
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
-    if params.conversation_id is not None:
-        invocation.conversation_id = params.conversation_id
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens

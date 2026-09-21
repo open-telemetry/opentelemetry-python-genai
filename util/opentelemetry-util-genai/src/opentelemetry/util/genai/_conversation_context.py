@@ -3,10 +3,10 @@
 
 """Carry ``gen_ai.conversation.id`` on the OTel Context.
 
-A framework instrumentation writes the id. Inference, invoke_agent and
-invoke_workflow invocations read it when the caller set none explicitly.
-That is how a ``chat`` span from another instrumentation package, which
-only sees the HTTP call, ends up with the id.
+``GenAIInvocation._start()`` resolves the id and puts it back here, so a
+``chat`` span owned by another instrumentation package -- which only sees
+the HTTP call -- ends up with the id its enclosing agent run established.
+Callers reach this through ``handler.*(conversation_id=...)``.
 """
 
 from __future__ import annotations
@@ -33,10 +33,3 @@ def with_conversation_id(
     context: Context | None = None,
 ) -> Context:
     return set_value(CONVERSATION_ID_KEY, conversation_id, context=context)
-
-
-__all__ = [
-    "CONVERSATION_ID_KEY",
-    "get_ambient_conversation_id",
-    "with_conversation_id",
-]

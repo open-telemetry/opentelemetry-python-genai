@@ -17,7 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.util.genai.conversation_context import (
+from opentelemetry.util.genai._conversation_context import (
     get_ambient_conversation_id,
     with_conversation_id,
 )
@@ -120,6 +120,23 @@ class TestAmbientFallback(unittest.TestCase):
         self.assertEqual(
             chat_span.attributes[GenAI.GEN_AI_CONVERSATION_ID], "thread-late"
         )
+
+    def test_explicit_empty_string_does_not_fall_back_to_ambient(self):
+        token = attach(with_conversation_id("thread-ambient"))
+        try:
+            with self.handler.inference(
+                provider="openai",
+                request_model="gpt-4o-mini",
+                conversation_id="",
+            ) as inference:
+                self.assertEqual(inference.conversation_id, "")
+                # An empty id is not worth propagating, so the enclosing one
+                # is left in place rather than replaced with it.
+                self.assertEqual(
+                    get_ambient_conversation_id(), "thread-ambient"
+                )
+        finally:
+            detach(token)
 
     def test_no_ambient_and_no_explicit_omits_attribute(self):
         with self.handler.inference(

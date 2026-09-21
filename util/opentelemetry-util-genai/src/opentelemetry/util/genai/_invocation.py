@@ -23,14 +23,14 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import INVALID_SPAN as _INVALID_SPAN
 from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
+from opentelemetry.util.genai._conversation_context import (
+    get_ambient_conversation_id,
+    with_conversation_id,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
-)
-from opentelemetry.util.genai.conversation_context import (
-    get_ambient_conversation_id,
-    with_conversation_id,
 )
 from opentelemetry.util.genai.types import (
     Error,
@@ -151,8 +151,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 ``context``. Either way the resolved value is put back on the
                 attached context, so nested invocations inherit it in turn.
         """
-        self.conversation_id = conversation_id or get_ambient_conversation_id(
-            context
+        self.conversation_id = (
+            conversation_id
+            if conversation_id is not None
+            else get_ambient_conversation_id(context)
         )
         if self.conversation_id:
             context = with_conversation_id(
