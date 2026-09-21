@@ -102,6 +102,7 @@ def _handle_converse(
                 response["stream"],
                 invocation=invocation,
                 capture_content=capture_content,
+                response=response,
             )
             return response
     else:
@@ -154,6 +155,7 @@ async def _handle_async_converse(
                 response["stream"],
                 invocation=invocation,
                 capture_content=capture_content,
+                response=response,
             )
             return response
     else:
@@ -235,6 +237,7 @@ def _handle_invoke_model(
                 response["body"],
                 invocation=invocation,
                 capture_content=capture_content,
+                response=response,
             )
             return response
     else:
@@ -346,6 +349,7 @@ async def _handle_async_invoke_model(
                 response["body"],
                 invocation=invocation,
                 capture_content=capture_content,
+                response=response,
             )
             return response
     else:

@@ -437,12 +437,49 @@ def extract_converse_response(
 
     usage = response.get("usage")
     if _is_dict(usage):
-        invocation.input_tokens = usage.get("inputTokens")
-        invocation.output_tokens = usage.get("outputTokens")
-        invocation.cache_read_input_tokens = usage.get("cacheReadInputTokens")
-        invocation.cache_creation_input_tokens = usage.get(
-            "cacheWriteInputTokens"
+        invocation.input_tokens = _safe_int(usage.get("inputTokens"))
+        invocation.output_tokens = _safe_int(usage.get("outputTokens"))
+        invocation.cache_read_input_tokens = _safe_int(
+            _first_not_none(
+                usage.get("cacheReadInputTokenCount"),
+                usage.get("cacheReadInputTokens"),
+            )
         )
+        invocation.cache_creation_input_tokens = _safe_int(
+            _first_not_none(
+                usage.get("cacheWriteInputTokenCount"),
+                usage.get("cacheWriteInputTokens"),
+            )
+        )
+
+    resp_meta = response.get("ResponseMetadata")
+    http_headers = (
+        resp_meta.get("HTTPHeaders") if _is_dict(resp_meta) else None
+    )
+    if _is_dict(http_headers):
+        headers_lower: dict[str, str] = {
+            str(k).lower(): str(v) for k, v in http_headers.items()
+        }
+        if invocation.input_tokens is None:
+            invocation.input_tokens = _safe_int(
+                headers_lower.get("x-amzn-bedrock-input-token-count")
+            )
+        if invocation.output_tokens is None:
+            invocation.output_tokens = _safe_int(
+                headers_lower.get("x-amzn-bedrock-output-token-count")
+            )
+        if invocation.cache_read_input_tokens is None:
+            invocation.cache_read_input_tokens = _safe_int(
+                headers_lower.get(
+                    "x-amzn-bedrock-cache-read-input-token-count"
+                )
+            )
+        if invocation.cache_creation_input_tokens is None:
+            invocation.cache_creation_input_tokens = _safe_int(
+                headers_lower.get(
+                    "x-amzn-bedrock-cache-write-input-token-count"
+                )
+            )
 
 
 def _parse_body(body: Any) -> dict[str, Any] | None:
@@ -628,6 +665,12 @@ def extract_invoke_model_response(
         invocation.output_tokens = _safe_int(
             headers_lower.get("x-amzn-bedrock-output-token-count")
         )
+        invocation.cache_read_input_tokens = _safe_int(
+            headers_lower.get("x-amzn-bedrock-cache-read-input-token-count")
+        )
+        invocation.cache_creation_input_tokens = _safe_int(
+            headers_lower.get("x-amzn-bedrock-cache-write-input-token-count")
+        )
 
     body = _parse_body(raw_body_bytes)
     if not _is_dict(body):
@@ -648,18 +691,76 @@ def extract_invoke_model_response(
                     usage.get("output_tokens"), usage.get("outputTokens")
                 )
             )
-        invocation.cache_read_input_tokens = _safe_int(
-            _first_not_none(
-                usage.get("cache_read_input_tokens"),
-                usage.get("cacheReadInputTokens"),
+        if invocation.cache_read_input_tokens is None:
+            invocation.cache_read_input_tokens = _safe_int(
+                _first_not_none(
+                    usage.get("cache_read_input_tokens"),
+                    usage.get("cacheReadInputTokens"),
+                    usage.get("cacheReadInputTokenCount"),
+                )
             )
-        )
-        invocation.cache_creation_input_tokens = _safe_int(
-            _first_not_none(
-                usage.get("cache_creation_input_tokens"),
-                usage.get("cacheWriteInputTokens"),
+        if invocation.cache_creation_input_tokens is None:
+            invocation.cache_creation_input_tokens = _safe_int(
+                _first_not_none(
+                    usage.get("cache_creation_input_tokens"),
+                    usage.get("cacheWriteInputTokens"),
+                    usage.get("cacheWriteInputTokenCount"),
+                )
             )
-        )
+
+    inv_metrics = body.get("amazon-bedrock-invocationMetrics")
+    if _is_dict(inv_metrics):
+        if invocation.input_tokens is None:
+            invocation.input_tokens = _safe_int(
+                inv_metrics.get("inputTokenCount")
+            )
+        if invocation.output_tokens is None:
+            invocation.output_tokens = _safe_int(
+                inv_metrics.get("outputTokenCount")
+            )
+        if invocation.cache_read_input_tokens is None:
+            invocation.cache_read_input_tokens = _safe_int(
+                inv_metrics.get("cacheReadInputTokenCount")
+            )
+        if invocation.cache_creation_input_tokens is None:
+            invocation.cache_creation_input_tokens = _safe_int(
+                inv_metrics.get("cacheWriteInputTokenCount")
+            )
+
+    meta = body.get("metadata")
+    if _is_dict(meta):
+        meta_usage = meta.get("usage")
+        if _is_dict(meta_usage):
+            if invocation.input_tokens is None:
+                invocation.input_tokens = _safe_int(
+                    _first_not_none(
+                        meta_usage.get("inputTokens"),
+                        meta_usage.get("input_tokens"),
+                    )
+                )
+            if invocation.output_tokens is None:
+                invocation.output_tokens = _safe_int(
+                    _first_not_none(
+                        meta_usage.get("outputTokens"),
+                        meta_usage.get("output_tokens"),
+                    )
+                )
+            if invocation.cache_read_input_tokens is None:
+                invocation.cache_read_input_tokens = _safe_int(
+                    _first_not_none(
+                        meta_usage.get("cacheReadInputTokenCount"),
+                        meta_usage.get("cacheReadInputTokens"),
+                        meta_usage.get("cache_read_input_tokens"),
+                    )
+                )
+            if invocation.cache_creation_input_tokens is None:
+                invocation.cache_creation_input_tokens = _safe_int(
+                    _first_not_none(
+                        meta_usage.get("cacheWriteInputTokenCount"),
+                        meta_usage.get("cacheWriteInputTokens"),
+                        meta_usage.get("cache_creation_input_tokens"),
+                    )
+                )
 
     if invocation.input_tokens is None and "inputTextTokenCount" in body:
         invocation.input_tokens = _safe_int(body.get("inputTextTokenCount"))

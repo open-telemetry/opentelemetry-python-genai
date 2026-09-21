@@ -774,3 +774,100 @@ def test_invoke_model_with_response_stream_end_to_end_stubber(
     )
     assert len(output_msgs) == 1
     assert output_msgs[0]["parts"][0]["content"] == "Hello world!"
+
+
+def test_invoke_model_stream_invocation_metrics_cache_tokens(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    wrapper = BedrockInvokeModelStreamWrapper(
+        stream=MagicMock(),
+        invocation=invocation,
+        capture_content=False,
+    )
+    wrapper._process_chunk(
+        {
+            "chunk": {
+                "bytes": json.dumps(
+                    {
+                        "bytes": "Hello",
+                        "amazon-bedrock-invocationMetrics": {
+                            "inputTokenCount": 50,
+                            "outputTokenCount": 20,
+                            "cacheReadInputTokenCount": 25,
+                            "cacheWriteInputTokenCount": 15,
+                        },
+                    }
+                ).encode("utf-8")
+            }
+        }
+    )
+    wrapper._on_stream_end()
+    assert invocation.input_tokens == 50
+    assert invocation.output_tokens == 20
+    assert invocation.cache_read_input_tokens == 25
+    assert invocation.cache_creation_input_tokens == 15
+
+
+def test_invoke_model_stream_metadata_usage_cache_tokens(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    wrapper = BedrockInvokeModelStreamWrapper(
+        stream=MagicMock(),
+        invocation=invocation,
+        capture_content=False,
+    )
+    wrapper._process_chunk(
+        {
+            "chunk": {
+                "bytes": json.dumps(
+                    {
+                        "metadata": {
+                            "usage": {
+                                "inputTokens": 45,
+                                "outputTokens": 15,
+                                "cacheReadInputTokenCount": 16,
+                                "cacheWriteInputTokenCount": 7,
+                            }
+                        }
+                    }
+                ).encode("utf-8")
+            }
+        }
+    )
+    wrapper._on_stream_end()
+    assert invocation.input_tokens == 45
+    assert invocation.output_tokens == 15
+    assert invocation.cache_read_input_tokens == 16
+    assert invocation.cache_creation_input_tokens == 7
+
+
+def test_invoke_model_stream_wrapper_with_response_headers(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    response = {
+        "ResponseMetadata": {
+            "HTTPHeaders": {
+                "x-amzn-bedrock-input-token-count": "40",
+                "x-amzn-bedrock-output-token-count": "12",
+                "x-amzn-bedrock-cache-read-input-token-count": "22",
+                "x-amzn-bedrock-cache-write-input-token-count": "11",
+            }
+        }
+    }
+    wrapper = BedrockInvokeModelStreamWrapper(
+        stream=MagicMock(),
+        invocation=invocation,
+        capture_content=False,
+        response=response,
+    )
+    wrapper._on_stream_end()
+    assert invocation.input_tokens == 40
+    assert invocation.output_tokens == 12
+    assert invocation.cache_read_input_tokens == 22
+    assert invocation.cache_creation_input_tokens == 11

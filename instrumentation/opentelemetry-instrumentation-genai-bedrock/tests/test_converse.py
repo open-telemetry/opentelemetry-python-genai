@@ -647,3 +647,97 @@ def test_extract_converse_request_system_instruction_generic(
         GenericPart(type="guardContent"),
         GenericPart(type="cachePoint"),
     ]
+
+
+def test_extract_converse_response_cache_token_count(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    extract_converse_response(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "hello"}],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 50,
+                "outputTokens": 25,
+                "cacheReadInputTokenCount": 15,
+                "cacheWriteInputTokenCount": 8,
+            },
+        },
+        invocation,
+        capture_content=False,
+    )
+    assert invocation.input_tokens == 50
+    assert invocation.output_tokens == 25
+    assert invocation.cache_read_input_tokens == 15
+    assert invocation.cache_creation_input_tokens == 8
+
+
+def test_extract_converse_response_headers_fallback(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    extract_converse_response(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "hello"}],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 30,
+                "outputTokens": 10,
+            },
+            "ResponseMetadata": {
+                "HTTPHeaders": {
+                    "x-amzn-bedrock-cache-read-input-token-count": "20",
+                    "x-amzn-bedrock-cache-write-input-token-count": "10",
+                }
+            },
+        },
+        invocation,
+        capture_content=False,
+    )
+    assert invocation.input_tokens == 30
+    assert invocation.output_tokens == 10
+    assert invocation.cache_read_input_tokens == 20
+    assert invocation.cache_creation_input_tokens == 10
+
+
+def test_extract_converse_response_usage_takes_precedence_over_headers(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    extract_converse_response(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "hello"}],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 30,
+                "outputTokens": 10,
+                "cacheReadInputTokenCount": 5,
+                "cacheWriteInputTokenCount": 2,
+            },
+            "ResponseMetadata": {
+                "HTTPHeaders": {
+                    "x-amzn-bedrock-cache-read-input-token-count": "99",
+                    "x-amzn-bedrock-cache-write-input-token-count": "88",
+                }
+            },
+        },
+        invocation,
+        capture_content=False,
+    )
+    assert invocation.cache_read_input_tokens == 5
+    assert invocation.cache_creation_input_tokens == 2

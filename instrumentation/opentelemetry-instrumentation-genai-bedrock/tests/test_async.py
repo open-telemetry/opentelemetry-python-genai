@@ -1301,3 +1301,109 @@ async def test_async_invoke_model_embedding_abandoned_body(
     assert span.status.status_code == StatusCode.ERROR
     assert span.status.description == "abandoned stream"
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "_OTHER"
+
+
+@pytest.mark.asyncio
+async def test_async_converse_prompt_cache_headers(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    service_response = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": "Hello async cache!"}],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 25,
+            "outputTokens": 10,
+        },
+        "ResponseMetadata": {
+            "HTTPHeaders": {
+                "x-amzn-bedrock-cache-read-input-token-count": "15",
+                "x-amzn-bedrock-cache-write-input-token-count": "5",
+            }
+        },
+    }
+
+    with _stub(
+        async_bedrock_client,
+        "converse",
+        service_response,
+        modelId=NOVA_MODEL_ID,
+        messages=[],
+    ):
+        response = await async_bedrock_client.converse(
+            modelId=NOVA_MODEL_ID, messages=[]
+        )
+
+    assert response["output"]["message"]["role"] == "assistant"
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 25
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 10
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
+        == 15
+    )
+    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_stream_metrics_cache_tokens(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    events = [
+        {"chunk": {"bytes": b'{"type":"message_start"}'}},
+        {
+            "chunk": {
+                "bytes": json.dumps(
+                    {
+                        "amazon-bedrock-invocationMetrics": {
+                            "inputTokenCount": 60,
+                            "outputTokenCount": 25,
+                            "cacheReadInputTokenCount": 35,
+                            "cacheWriteInputTokenCount": 10,
+                        }
+                    }
+                ).encode()
+            }
+        },
+        {
+            "chunk": {
+                "bytes": b'{"type":"message_delta","delta":{"stop_reason":"end_turn"}}'
+            }
+        },
+    ]
+    with _stub(
+        async_bedrock_client,
+        "invoke_model_with_response_stream",
+        {"body": _MockAsyncEventStream(events)},
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = (
+            await async_bedrock_client.invoke_model_with_response_stream(
+                modelId=MODEL_ID, body="{}"
+            )
+        )
+        chunks = [chunk async for chunk in response["body"]]
+        assert len(chunks) == len(events)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 60
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 25
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
+        == 35
+    )
+    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 10

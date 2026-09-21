@@ -1128,3 +1128,147 @@ def test_invoke_model_embedding_body_read_error(
     assert span.name == "embeddings amazon.titan-embed-text-v1"
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+
+def test_extract_invoke_model_response_prompt_cache_headers(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    response = {
+        "ResponseMetadata": {
+            "HTTPHeaders": {
+                "x-amzn-bedrock-input-token-count": "25",
+                "x-amzn-bedrock-output-token-count": "15",
+                "x-amzn-bedrock-cache-read-input-token-count": "10",
+                "x-amzn-bedrock-cache-write-input-token-count": "5",
+            }
+        }
+    }
+    raw_body = json.dumps({"completion": "Hello!"}).encode("utf-8")
+
+    extract_invoke_model_response(
+        response,
+        raw_body,
+        invocation,
+    )
+
+    assert invocation.input_tokens == 25
+    assert invocation.output_tokens == 15
+    assert invocation.cache_read_input_tokens == 10
+    assert invocation.cache_creation_input_tokens == 5
+
+
+def test_extract_invoke_model_response_invocation_metrics(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    raw_body = json.dumps(
+        {
+            "completion": "Hello!",
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 30,
+                "outputTokenCount": 20,
+                "cacheReadInputTokenCount": 12,
+                "cacheWriteInputTokenCount": 6,
+            },
+        }
+    ).encode("utf-8")
+
+    extract_invoke_model_response(
+        {},
+        raw_body,
+        invocation,
+    )
+
+    assert invocation.input_tokens == 30
+    assert invocation.output_tokens == 20
+    assert invocation.cache_read_input_tokens == 12
+    assert invocation.cache_creation_input_tokens == 6
+
+
+def test_extract_invoke_model_response_metadata_usage(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+
+    raw_body = json.dumps(
+        {
+            "completion": "Hello!",
+            "metadata": {
+                "usage": {
+                    "inputTokens": 40,
+                    "outputTokens": 18,
+                    "cacheReadInputTokenCount": 15,
+                    "cacheWriteInputTokenCount": 8,
+                }
+            },
+        }
+    ).encode("utf-8")
+
+    extract_invoke_model_response(
+        {},
+        raw_body,
+        invocation,
+    )
+
+    assert invocation.input_tokens == 40
+    assert invocation.output_tokens == 18
+    assert invocation.cache_read_input_tokens == 15
+    assert invocation.cache_creation_input_tokens == 8
+
+
+def test_invoke_model_prompt_cache_headers_recorded_on_span(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(bedrock_client)
+    request_body = {"prompt": "Hello"}
+    response_body = {"completion": "Hi there!"}
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+
+    stubber.add_response(
+        "invoke_model",
+        service_response={
+            "contentType": "application/json",
+            "body": StreamingBody(
+                io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+            ),
+            "ResponseMetadata": {
+                "HTTPHeaders": {
+                    "x-amzn-bedrock-input-token-count": "20",
+                    "x-amzn-bedrock-output-token-count": "10",
+                    "x-amzn-bedrock-cache-read-input-token-count": "14",
+                    "x-amzn-bedrock-cache-write-input-token-count": "6",
+                }
+            },
+        },
+        expected_params={
+            "modelId": "anthropic.claude-v2",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-v2",
+            body=json.dumps(request_body),
+        )
+
+    assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 20
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 10
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
+        == 14
+    )
+    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 6

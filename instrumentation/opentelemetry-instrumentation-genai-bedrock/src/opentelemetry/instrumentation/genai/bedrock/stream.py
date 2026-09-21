@@ -103,6 +103,7 @@ class _BedrockConverseStreamMixin:
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
+        response: dict[str, Any] | None = None,
     ) -> None:
         self._self_invocation = invocation
         self._self_capture_content = capture_content
@@ -116,6 +117,32 @@ class _BedrockConverseStreamMixin:
         self._self_reasoning_blocks = {}
         self._self_tool_blocks = {}
         self._self_all_block_indices = []
+
+        if _is_dict(response):
+            resp_meta = response.get("ResponseMetadata")
+            http_headers = (
+                resp_meta.get("HTTPHeaders") if _is_dict(resp_meta) else None
+            )
+            if _is_dict(http_headers):
+                headers_lower: dict[str, str] = {
+                    str(k).lower(): str(v) for k, v in http_headers.items()
+                }
+                self._self_input_tokens = _safe_int(
+                    headers_lower.get("x-amzn-bedrock-input-token-count")
+                )
+                self._self_output_tokens = _safe_int(
+                    headers_lower.get("x-amzn-bedrock-output-token-count")
+                )
+                self._self_cache_read_input_tokens = _safe_int(
+                    headers_lower.get(
+                        "x-amzn-bedrock-cache-read-input-token-count"
+                    )
+                )
+                self._self_cache_creation_input_tokens = _safe_int(
+                    headers_lower.get(
+                        "x-amzn-bedrock-cache-write-input-token-count"
+                    )
+                )
 
     def _process_chunk(self, chunk: dict[str, Any]) -> None:
         if "messageStart" in chunk and "role" in chunk["messageStart"]:
@@ -175,14 +202,18 @@ class _BedrockConverseStreamMixin:
                 self._self_input_tokens = _safe_int(usage["inputTokens"])
             if "outputTokens" in usage:
                 self._self_output_tokens = _safe_int(usage["outputTokens"])
-            if "cacheReadInputTokens" in usage:
-                self._self_cache_read_input_tokens = _safe_int(
-                    usage["cacheReadInputTokens"]
-                )
-            if "cacheWriteInputTokens" in usage:
-                self._self_cache_creation_input_tokens = _safe_int(
-                    usage["cacheWriteInputTokens"]
-                )
+            cache_read = _first_not_none(
+                usage.get("cacheReadInputTokenCount"),
+                usage.get("cacheReadInputTokens"),
+            )
+            if cache_read is not None:
+                self._self_cache_read_input_tokens = _safe_int(cache_read)
+            cache_write = _first_not_none(
+                usage.get("cacheWriteInputTokenCount"),
+                usage.get("cacheWriteInputTokens"),
+            )
+            if cache_write is not None:
+                self._self_cache_creation_input_tokens = _safe_int(cache_write)
 
     def _on_stream_end(self) -> None:
         finish_reason = map_finish_reason(self._self_stop_reason)
@@ -232,9 +263,12 @@ class BedrockConverseStreamWrapper(
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
+        response: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        self._init_converse_stream(invocation, capture_content=capture_content)
+        self._init_converse_stream(
+            invocation, capture_content=capture_content, response=response
+        )
 
 
 class AsyncBedrockConverseStreamWrapper(
@@ -249,9 +283,12 @@ class AsyncBedrockConverseStreamWrapper(
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
+        response: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
-        self._init_converse_stream(invocation, capture_content=capture_content)
+        self._init_converse_stream(
+            invocation, capture_content=capture_content, response=response
+        )
 
 
 class _BedrockInvokeModelStreamMixin:
@@ -274,6 +311,7 @@ class _BedrockInvokeModelStreamMixin:
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
+        response: dict[str, Any] | None = None,
     ) -> None:
         self._self_invocation = invocation
         self._self_capture_content = capture_content
@@ -288,6 +326,32 @@ class _BedrockInvokeModelStreamMixin:
         self._self_reasoning_blocks = {}
         self._self_tool_blocks = {}
         self._self_all_block_indices = []
+
+        if _is_dict(response):
+            resp_meta = response.get("ResponseMetadata")
+            http_headers = (
+                resp_meta.get("HTTPHeaders") if _is_dict(resp_meta) else None
+            )
+            if _is_dict(http_headers):
+                headers_lower: dict[str, str] = {
+                    str(k).lower(): str(v) for k, v in http_headers.items()
+                }
+                self._self_input_tokens = _safe_int(
+                    headers_lower.get("x-amzn-bedrock-input-token-count")
+                )
+                self._self_output_tokens = _safe_int(
+                    headers_lower.get("x-amzn-bedrock-output-token-count")
+                )
+                self._self_cache_read_input_tokens = _safe_int(
+                    headers_lower.get(
+                        "x-amzn-bedrock-cache-read-input-token-count"
+                    )
+                )
+                self._self_cache_creation_input_tokens = _safe_int(
+                    headers_lower.get(
+                        "x-amzn-bedrock-cache-write-input-token-count"
+                    )
+                )
 
     def _process_chunk(self, chunk: dict[str, Any]) -> None:
         raw_bytes = (
@@ -311,6 +375,14 @@ class _BedrockInvokeModelStreamMixin:
                 self._self_output_tokens = _safe_int(
                     metrics["outputTokenCount"]
                 )
+            if "cacheReadInputTokenCount" in metrics:
+                self._self_cache_read_input_tokens = _safe_int(
+                    metrics["cacheReadInputTokenCount"]
+                )
+            if "cacheWriteInputTokenCount" in metrics:
+                self._self_cache_creation_input_tokens = _safe_int(
+                    metrics["cacheWriteInputTokenCount"]
+                )
 
         # 2. Anthropic Messages format
         msg_type = chunk_data.get("type")
@@ -321,32 +393,27 @@ class _BedrockInvokeModelStreamMixin:
                     self._self_role = message["role"]
                 usage = message.get("usage", {})
                 if _is_dict(usage):
-                    if "input_tokens" in usage or "inputTokens" in usage:
-                        self._self_input_tokens = _safe_int(
-                            _first_not_none(
-                                usage.get("input_tokens"),
-                                usage.get("inputTokens"),
-                            )
-                        )
-                    if (
-                        "cache_read_input_tokens" in usage
-                        or "cacheReadInputTokens" in usage
-                    ):
-                        self._self_cache_read_input_tokens = _safe_int(
-                            _first_not_none(
-                                usage.get("cache_read_input_tokens"),
-                                usage.get("cacheReadInputTokens"),
-                            )
-                        )
-                    if (
-                        "cache_creation_input_tokens" in usage
-                        or "cacheWriteInputTokens" in usage
-                    ):
+                    inp = _first_not_none(
+                        usage.get("input_tokens"),
+                        usage.get("inputTokens"),
+                    )
+                    if inp is not None:
+                        self._self_input_tokens = _safe_int(inp)
+                    c_read = _first_not_none(
+                        usage.get("cache_read_input_tokens"),
+                        usage.get("cacheReadInputTokens"),
+                        usage.get("cacheReadInputTokenCount"),
+                    )
+                    if c_read is not None:
+                        self._self_cache_read_input_tokens = _safe_int(c_read)
+                    c_write = _first_not_none(
+                        usage.get("cache_creation_input_tokens"),
+                        usage.get("cacheWriteInputTokens"),
+                        usage.get("cacheWriteInputTokenCount"),
+                    )
+                    if c_write is not None:
                         self._self_cache_creation_input_tokens = _safe_int(
-                            _first_not_none(
-                                usage.get("cache_creation_input_tokens"),
-                                usage.get("cacheWriteInputTokens"),
-                            )
+                            c_write
                         )
         elif msg_type == "content_block_start":
             if self._self_capture_content:
@@ -405,8 +472,97 @@ class _BedrockInvokeModelStreamMixin:
             if _is_dict(delta) and "stop_reason" in delta:
                 self._self_stop_reason = delta["stop_reason"]
             usage = chunk_data.get("usage", {})
-            if _is_dict(usage) and "output_tokens" in usage:
-                self._self_output_tokens = _safe_int(usage["output_tokens"])
+            if _is_dict(usage):
+                out = _first_not_none(
+                    usage.get("output_tokens"),
+                    usage.get("outputTokens"),
+                )
+                if out is not None:
+                    self._self_output_tokens = _safe_int(out)
+                c_read = _first_not_none(
+                    usage.get("cache_read_input_tokens"),
+                    usage.get("cacheReadInputTokens"),
+                    usage.get("cacheReadInputTokenCount"),
+                )
+                if c_read is not None:
+                    self._self_cache_read_input_tokens = _safe_int(c_read)
+                c_write = _first_not_none(
+                    usage.get("cache_creation_input_tokens"),
+                    usage.get("cacheWriteInputTokens"),
+                    usage.get("cacheWriteInputTokenCount"),
+                )
+                if c_write is not None:
+                    self._self_cache_creation_input_tokens = _safe_int(c_write)
+
+        meta = chunk_data.get("metadata")
+        if _is_dict(meta):
+            meta_usage = meta.get("usage")
+            if _is_dict(meta_usage):
+                if self._self_input_tokens is None:
+                    inp = _first_not_none(
+                        meta_usage.get("inputTokens"),
+                        meta_usage.get("input_tokens"),
+                    )
+                    if inp is not None:
+                        self._self_input_tokens = _safe_int(inp)
+                if self._self_output_tokens is None:
+                    out = _first_not_none(
+                        meta_usage.get("outputTokens"),
+                        meta_usage.get("output_tokens"),
+                    )
+                    if out is not None:
+                        self._self_output_tokens = _safe_int(out)
+                if self._self_cache_read_input_tokens is None:
+                    c_read = _first_not_none(
+                        meta_usage.get("cacheReadInputTokenCount"),
+                        meta_usage.get("cacheReadInputTokens"),
+                        meta_usage.get("cache_read_input_tokens"),
+                    )
+                    if c_read is not None:
+                        self._self_cache_read_input_tokens = _safe_int(c_read)
+                if self._self_cache_creation_input_tokens is None:
+                    c_write = _first_not_none(
+                        meta_usage.get("cacheWriteInputTokenCount"),
+                        meta_usage.get("cacheWriteInputTokens"),
+                        meta_usage.get("cache_creation_input_tokens"),
+                    )
+                    if c_write is not None:
+                        self._self_cache_creation_input_tokens = _safe_int(
+                            c_write
+                        )
+
+        direct_usage = chunk_data.get("usage")
+        if _is_dict(direct_usage) and msg_type is None:
+            if self._self_input_tokens is None:
+                inp = _first_not_none(
+                    direct_usage.get("inputTokens"),
+                    direct_usage.get("input_tokens"),
+                )
+                if inp is not None:
+                    self._self_input_tokens = _safe_int(inp)
+            if self._self_output_tokens is None:
+                out = _first_not_none(
+                    direct_usage.get("outputTokens"),
+                    direct_usage.get("output_tokens"),
+                )
+                if out is not None:
+                    self._self_output_tokens = _safe_int(out)
+            if self._self_cache_read_input_tokens is None:
+                c_read = _first_not_none(
+                    direct_usage.get("cacheReadInputTokenCount"),
+                    direct_usage.get("cacheReadInputTokens"),
+                    direct_usage.get("cache_read_input_tokens"),
+                )
+                if c_read is not None:
+                    self._self_cache_read_input_tokens = _safe_int(c_read)
+            if self._self_cache_creation_input_tokens is None:
+                c_write = _first_not_none(
+                    direct_usage.get("cacheWriteInputTokenCount"),
+                    direct_usage.get("cacheWriteInputTokens"),
+                    direct_usage.get("cache_creation_input_tokens"),
+                )
+                if c_write is not None:
+                    self._self_cache_creation_input_tokens = _safe_int(c_write)
 
         # 3. Legacy Claude / Titan / Llama / Mistral / Cohere stream chunks
         if "completion" in chunk_data and isinstance(
@@ -516,10 +672,11 @@ class BedrockInvokeModelStreamWrapper(
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
+        response: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._init_invoke_model_stream(
-            invocation, capture_content=capture_content
+            invocation, capture_content=capture_content, response=response
         )
 
 
@@ -535,10 +692,11 @@ class AsyncBedrockInvokeModelStreamWrapper(
         invocation: InferenceInvocation,
         *,
         capture_content: bool = True,
+        response: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._init_invoke_model_stream(
-            invocation, capture_content=capture_content
+            invocation, capture_content=capture_content, response=response
         )
 
 

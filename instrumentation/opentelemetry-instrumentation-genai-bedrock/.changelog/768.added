@@ -1,0 +1,1 @@
+Extract prompt cache read and write tokens from response headers and payload metrics.

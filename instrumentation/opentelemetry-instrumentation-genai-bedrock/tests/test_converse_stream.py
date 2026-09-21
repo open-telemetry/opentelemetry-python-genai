@@ -467,3 +467,58 @@ def test_stream_wrapper_with_reasoning(tracer_provider) -> None:
     assert out_msg.parts[1].type == "text"
     assert getattr(out_msg.parts[1], "content") == "Here is the result."
     assert invocation.finish_reasons == ["stop"]
+
+
+def test_stream_wrapper_with_cache_token_count(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    wrapper = BedrockConverseStreamWrapper(
+        stream=mock.MagicMock(),
+        invocation=invocation,
+        capture_content=False,
+    )
+    wrapper._process_chunk(
+        {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 20,
+                    "outputTokens": 8,
+                    "cacheReadInputTokenCount": 12,
+                    "cacheWriteInputTokenCount": 4,
+                }
+            },
+            "messageStop": {"stopReason": "end_turn"},
+        }
+    )
+    wrapper._on_stream_end()
+    assert invocation.input_tokens == 20
+    assert invocation.output_tokens == 8
+    assert invocation.cache_read_input_tokens == 12
+    assert invocation.cache_creation_input_tokens == 4
+
+
+def test_stream_wrapper_with_response_headers(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    response = {
+        "ResponseMetadata": {
+            "HTTPHeaders": {
+                "x-amzn-bedrock-input-token-count": "18",
+                "x-amzn-bedrock-output-token-count": "6",
+                "x-amzn-bedrock-cache-read-input-token-count": "10",
+                "x-amzn-bedrock-cache-write-input-token-count": "3",
+            }
+        }
+    }
+    wrapper = BedrockConverseStreamWrapper(
+        stream=mock.MagicMock(),
+        invocation=invocation,
+        capture_content=False,
+        response=response,
+    )
+    wrapper._process_chunk({"messageStop": {"stopReason": "end_turn"}})
+    wrapper._on_stream_end()
+    assert invocation.input_tokens == 18
+    assert invocation.output_tokens == 6
+    assert invocation.cache_read_input_tokens == 10
+    assert invocation.cache_creation_input_tokens == 3
