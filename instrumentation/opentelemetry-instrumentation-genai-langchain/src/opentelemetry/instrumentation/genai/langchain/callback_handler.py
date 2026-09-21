@@ -176,6 +176,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     A callback handler for LangChain that uses OpenTelemetry to create spans for LLM calls and chains, tools etc,. in future.
     """
 
+    run_inline: bool = True
+
     def __init__(
         self,
         telemetry_handler: TelemetryHandler,
