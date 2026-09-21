@@ -271,6 +271,26 @@ class TestClassifyChainRun:
         )
         assert result is None
 
+    @pytest.mark.parametrize(
+        ("serialized", "kwargs"),
+        [
+            ({"name": "SupportAgentRunner"}, {}),
+            ({}, {"name": "SupportAgentRunner"}),
+        ],
+    )
+    def test_agent_named_runnable_in_other_langgraph_node_is_agent(
+        self,
+        serialized: dict[str, str],
+        kwargs: dict[str, str],
+    ):
+        result = classify_chain_run(
+            serialized=serialized,
+            metadata={"langgraph_node": "model"},
+            kwargs=kwargs,
+            parent_run_id=uuid.uuid4(),
+        )
+        assert result == OperationName.INVOKE_AGENT
+
     def test_internal_langgraph_node_is_not_agent(
         self, span_exporter, start_instrumentation
     ):

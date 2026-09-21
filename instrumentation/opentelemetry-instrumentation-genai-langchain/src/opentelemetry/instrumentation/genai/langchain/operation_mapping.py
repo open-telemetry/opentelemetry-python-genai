@@ -167,9 +167,10 @@ def _detect_agent_name(
     if not agent_name or "agent" not in agent_name.lower():
         return False
 
-    # A LangGraph node named "agent" is internal graph plumbing, not proof
-    # that the graph itself represents an agent.
-    return not (metadata and metadata.get(LANGGRAPH_NODE_KEY))
+    # A LangGraph node whose own name contains "agent" is internal graph
+    # plumbing, not proof that the graph itself represents an agent.
+    node_name = metadata.get(LANGGRAPH_NODE_KEY) if metadata else None
+    return not (node_name and str(node_name).lower() == agent_name.lower())
 
 
 def _looks_like_workflow(
