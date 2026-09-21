@@ -7,6 +7,7 @@ import timeit
 from dataclasses import asdict
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -46,6 +47,8 @@ class WorkflowInvocation(GenAIInvocation):
         name: str | None,
         *,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        attach_to_context: bool = True,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
@@ -63,6 +66,8 @@ class WorkflowInvocation(GenAIInvocation):
             span_kind=SpanKind.INTERNAL,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            attach_to_context=attach_to_context,
         )
         self._name: str | None = name
         self.conversation_id: str | None = None

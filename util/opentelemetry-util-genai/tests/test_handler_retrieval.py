@@ -137,6 +137,61 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         self.assertEqual(attrs["server.address"], "db.example.com")
         self.assertEqual(attrs["server.port"], 443)
 
+    def test_retrieval_with_explicit_context(self) -> None:
+        parent_inv = self.handler.retrieval(data_source_id="parent_ds")
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.handler.retrieval(
+                data_source_id="child_ds", context=parent_inv.context
+            )
+            child_inv.stop()
+
+        spans = self._get_finished_spans()
+        child_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_DATA_SOURCE_ID) == "child_ds"
+        )
+        parent_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_DATA_SOURCE_ID) == "parent_ds"
+        )
+        self.assertEqual(
+            child_span.parent.span_id, parent_span.context.span_id
+        )
+        self.assertNotEqual(
+            child_span.parent.span_id, ambient_span.get_span_context().span_id
+        )
+        self.assertEqual(
+            child_span.context.trace_id, parent_span.context.trace_id
+        )
+
+    def test_retrieval_with_attach_to_context_false(self) -> None:
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.handler.retrieval(
+                data_source_id="detached_ds", attach_to_context=False
+            )
+            self.assertEqual(get_current_span(), ambient_span)
+            inv.stop()
+            self.assertEqual(get_current_span(), ambient_span)
+
+        spans = self._get_finished_spans()
+        detached_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_DATA_SOURCE_ID) == "detached_ds"
+        )
+        self.assertIsNotNone(detached_span.parent)
+        self.assertEqual(
+            detached_span.parent.span_id,
+            ambient_span.get_span_context().span_id,
+        )
+
     # ------------------------------------------------------------------
     # stop (recommended + opt-in attributes set after construction)
     # ------------------------------------------------------------------

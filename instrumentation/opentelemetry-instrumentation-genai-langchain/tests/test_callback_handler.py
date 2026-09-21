@@ -8,6 +8,7 @@ All TelemetryHandler interactions are mocked so that these tests exercise only
 the callback-handler logic and the invocation-manager bookkeeping.
 """
 
+import asyncio
 import base64
 import math
 import uuid
@@ -149,7 +150,9 @@ class TestOnChainStartWorkflow:
             parent_run_id=None,
         )
 
-        telemetry.workflow.assert_called_once_with(name="MyLangGraph")
+        telemetry.workflow.assert_called_once_with(
+            name="MyLangGraph", context=None, attach_to_context=True
+        )
 
     def test_workflow_name_overridden_by_metadata(self):
         handler, telemetry, _, _ = _make_handler()
@@ -163,7 +166,9 @@ class TestOnChainStartWorkflow:
             metadata={"workflow_name": "custom_workflow"},
         )
 
-        telemetry.workflow.assert_called_once_with(name="custom_workflow")
+        telemetry.workflow.assert_called_once_with(
+            name="custom_workflow", context=None, attach_to_context=True
+        )
 
     def test_workflow_conversation_id_from_metadata(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -194,6 +199,33 @@ class TestOnChainStartWorkflow:
             handler._invocation_manager.get_invocation(run_id) is workflow_inv
         )
 
+    def test_child_agent_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, workflow_inv, _ = _make_handler()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=parent_id,
+            parent_run_id=None,
+        )
+        telemetry.invoke_local_agent.reset_mock()
+
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=child_id,
+            parent_run_id=parent_id,
+            metadata={"agent_name": "math_agent"},
+        )
+
+        telemetry.invoke_local_agent.assert_called_once_with(
+            agent_name="math_agent",
+            context=workflow_inv.context,
+            attach_to_context=True,
+        )
+
 
 # ---------------------------------------------------------------------------
 # on_chain_start – INVOKE_AGENT
@@ -215,6 +247,8 @@ class TestOnChainStartAgent:
 
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
+            context=None,
+            attach_to_context=True,
         )
         assert (
             handler._invocation_manager.get_agent_name(run_id) == "math_agent"
@@ -473,6 +507,32 @@ class TestOnChatModelStartConversationId:
 
         assert telemetry.inference.return_value.conversation_id is None
 
+    def test_chat_model_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, _, _ = _make_handler()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="What is 3 * 4?")]],
+            run_id=child_id,
+            parent_run_id=parent_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        telemetry.inference.assert_called_once_with(
+            "openai",
+            request_model="gpt-4",
+            context=parent_wf.context,
+            attach_to_context=True,
+        )
+
 
 class TestOnChainStartUnclassified:
     def test_unclassified_chain_registers_none_and_no_span(self):
@@ -635,7 +695,7 @@ class TestOnChainError:
 
 class TestAgentAncestryPublicBehavior:
     def test_named_child_under_workflow_opens_agent_layer(self):
-        handler, telemetry, _, _ = _make_handler()
+        handler, telemetry, workflow_inv, _ = _make_handler()
         workflow_id = _run_id()
         child_id = _run_id()
 
@@ -655,7 +715,9 @@ class TestAgentAncestryPublicBehavior:
         )
 
         telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="math_agent"
+            agent_name="math_agent",
+            context=workflow_inv.context,
+            attach_to_context=True,
         )
 
 
@@ -1342,6 +1404,38 @@ class TestOnLlmEndToolCalls:
 
 
 # ---------------------------------------------------------------------------
+# on_tool_start
+# ---------------------------------------------------------------------------
+
+
+class TestOnToolStart:
+    def test_tool_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, _, _ = _make_handler()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_tool_start(
+            serialized={"name": "search"},
+            input_str="query",
+            run_id=child_id,
+            parent_run_id=parent_id,
+        )
+
+        telemetry.tool.assert_called_once_with(
+            name="search",
+            tool_type="function",
+            agent_name=None,
+            context=parent_wf.context,
+            attach_to_context=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # on_retriever_start / on_retriever_end / on_retriever_error
 # ---------------------------------------------------------------------------
 
@@ -1400,7 +1494,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model=None
+            provider="Chroma",
+            request_model=None,
+            context=None,
+            attach_to_context=True,
         )
 
     def test_provider_none_when_metadata_absent(self):
@@ -1414,7 +1511,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider=None, request_model=None
+            provider=None,
+            request_model=None,
+            context=None,
+            attach_to_context=True,
         )
 
     def test_request_model_passed_from_ls_embedding_model(self):
@@ -1432,7 +1532,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model="text-embedding-3-small"
+            provider="Chroma",
+            request_model="text-embedding-3-small",
+            context=None,
+            attach_to_context=True,
         )
 
     def test_request_model_none_when_ls_embedding_model_absent(self):
@@ -1447,7 +1550,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model=None
+            provider="Chroma",
+            request_model=None,
+            context=None,
+            attach_to_context=True,
         )
 
     def test_registered_in_invocation_manager(self):
@@ -1463,6 +1569,31 @@ class TestOnRetrieverStart:
         assert run_id in handler._invocation_manager._invocations
         assert (
             handler._invocation_manager.get_invocation(run_id) is retrieval_inv
+        )
+
+    def test_retriever_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        # register parent workflow in invocation manager
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=child_id,
+            parent_run_id=parent_id,
+        )
+
+        telemetry.retrieval.assert_called_once_with(
+            provider=None,
+            request_model=None,
+            context=parent_wf.context,
+            attach_to_context=True,
         )
 
 
@@ -3291,3 +3422,46 @@ def test_on_chat_model_start_preserves_message_name():
 
     assert len(llm_inv.input_messages) == 1
     assert llm_inv.input_messages[0].name == "Alice"
+
+
+def test_asyncio_event_loop_defaults_attach_to_context_false():
+    telemetry = mock.MagicMock()
+    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
+    telemetry.workflow.return_value = workflow_inv
+
+    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
+    run_id = _run_id()
+
+    async def _run_in_loop():
+        handler.on_chain_start(
+            serialized={"name": "LangGraph", "id": ["langgraph"]},
+            inputs={},
+            run_id=run_id,
+            parent_run_id=None,
+        )
+
+    asyncio.run(_run_in_loop())
+
+    telemetry.workflow.assert_called_once_with(
+        name="LangGraph", context=None, attach_to_context=False
+    )
+
+
+def test_sync_defaults_attach_to_context_true():
+    telemetry = mock.MagicMock()
+    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
+    telemetry.workflow.return_value = workflow_inv
+
+    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
+    run_id = _run_id()
+
+    handler.on_chain_start(
+        serialized={"name": "LangGraph", "id": ["langgraph"]},
+        inputs={},
+        run_id=run_id,
+        parent_run_id=None,
+    )
+
+    telemetry.workflow.assert_called_once_with(
+        name="LangGraph", context=None, attach_to_context=True
+    )

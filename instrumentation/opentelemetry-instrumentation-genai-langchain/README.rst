@@ -134,6 +134,12 @@ programmatically, which takes precedence over the environment variable::
 
     LangChainInstrumentor().instrument(completion_hook=my_hook)
 
+Known Limitations
+-----------------
+
+Context propagation to nested calls (such as auto-instrumented HTTP clients 
+or database queries within tools) is not supported when using LangChain async API.
+
 References
 ----------
 

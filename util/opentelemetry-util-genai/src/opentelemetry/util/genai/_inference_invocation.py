@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -97,6 +98,8 @@ class InferenceInvocation(GenAIInvocation):
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        attach_to_context: bool = True,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -124,6 +127,8 @@ class InferenceInvocation(GenAIInvocation):
             error_type_resolver=error_type_resolver,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            attach_to_context=attach_to_context,
         )
         self.conversation_id: str | None = None
         self._emit_event: bool = _should_emit_event(

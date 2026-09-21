@@ -959,6 +959,110 @@ class TestTelemetryHandler(unittest.TestCase):
         assert child_span.parent.span_id == parent_span.context.span_id
         assert parent_span.parent is None
 
+    def test_inference_with_explicit_context(self):
+        parent_inv = self.telemetry_handler.inference(
+            "test-provider", request_model="parent-model"
+        )
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.telemetry_handler.inference(
+                "test-provider",
+                request_model="child-model",
+                context=parent_inv.context,
+            )
+            child_inv.stop()
+
+        spans = self.span_exporter.get_finished_spans()
+        child_span = next(s for s in spans if s.name == "chat child-model")
+        parent_span = next(s for s in spans if s.name == "chat parent-model")
+        assert child_span.parent is not None
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert (
+            child_span.parent.span_id
+            != ambient_span.get_span_context().span_id
+        )
+        assert child_span.context.trace_id == parent_span.context.trace_id
+
+    def test_inference_with_attach_to_context_false(self):
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.telemetry_handler.inference(
+                "test-provider",
+                request_model="detached-model",
+                attach_to_context=False,
+            )
+            # Ambient context should not have changed
+            assert get_current_span() == ambient_span
+            inv.stop()
+            assert get_current_span() == ambient_span
+
+        spans = self.span_exporter.get_finished_spans()
+        detached_span = next(
+            s for s in spans if s.name == "chat detached-model"
+        )
+        # Should still parent to ambient span because context was not passed
+        assert detached_span.parent is not None
+        assert (
+            detached_span.parent.span_id
+            == ambient_span.get_span_context().span_id
+        )
+
+    def test_embedding_with_explicit_context(self):
+        parent_inv = self.telemetry_handler.embedding(
+            "test-provider", request_model="parent-model"
+        )
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.telemetry_handler.embedding(
+                "test-provider",
+                request_model="child-model",
+                context=parent_inv.context,
+            )
+            child_inv.stop()
+
+        spans = self.span_exporter.get_finished_spans()
+        child_span = next(
+            s for s in spans if s.name == "embeddings child-model"
+        )
+        parent_span = next(
+            s for s in spans if s.name == "embeddings parent-model"
+        )
+        assert child_span.parent is not None
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert (
+            child_span.parent.span_id
+            != ambient_span.get_span_context().span_id
+        )
+        assert child_span.context.trace_id == parent_span.context.trace_id
+
+    def test_embedding_with_attach_to_context_false(self):
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.telemetry_handler.embedding(
+                "test-provider",
+                request_model="detached-embed-model",
+                attach_to_context=False,
+            )
+            assert get_current_span() == ambient_span
+            inv.stop()
+            assert get_current_span() == ambient_span
+
+        spans = self.span_exporter.get_finished_spans()
+        detached_span = next(
+            s for s in spans if s.name == "embeddings detached-embed-model"
+        )
+        assert detached_span.parent is not None
+        assert (
+            detached_span.parent.span_id
+            == ambient_span.get_span_context().span_id
+        )
+
     def test_llm_context_manager_error_path_records_error_status_and_attrs(
         self,
     ):

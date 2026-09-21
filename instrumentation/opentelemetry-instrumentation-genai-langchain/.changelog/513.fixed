@@ -1,0 +1,1 @@
+Propagate parent context to nested agent, tool, retrieval, and workflow spans in async execution paths.

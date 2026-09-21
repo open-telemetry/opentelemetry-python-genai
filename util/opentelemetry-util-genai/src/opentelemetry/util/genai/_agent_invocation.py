@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -61,6 +62,8 @@ class AgentInvocation(GenAIInvocation, ABC):
         request_model: str | None = None,
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        attach_to_context: bool = True,
     ) -> None:
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
         if start_attributes is None:
@@ -84,6 +87,8 @@ class AgentInvocation(GenAIInvocation, ABC):
             span_kind=span_kind,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            attach_to_context=attach_to_context,
         )
         self._request_model: str | None = request_model
         self._agent_name: str | None = agent_name
@@ -208,6 +213,8 @@ class LocalAgentInvocation(AgentInvocation):
         request_model: str | None = None,
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        attach_to_context: bool = True,
     ) -> None:
         super().__init__(
             tracer,
@@ -218,6 +225,8 @@ class LocalAgentInvocation(AgentInvocation):
             request_model=request_model,
             agent_name=agent_name,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            attach_to_context=attach_to_context,
         )
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
@@ -263,6 +272,8 @@ class RemoteAgentInvocation(AgentInvocation):
         server_port: int | None = None,
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        attach_to_context: bool = True,
     ) -> None:
         start_attributes: dict[str, AttributeValue] = {
             k: v
@@ -285,6 +296,8 @@ class RemoteAgentInvocation(AgentInvocation):
             agent_name=agent_name,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            attach_to_context=attach_to_context,
         )
         self._provider: str = provider
         self._server_address: str | None = server_address
@@ -295,7 +308,6 @@ class RemoteAgentInvocation(AgentInvocation):
         self.previous_response_id: str | None = None
         self._cache_write_input_tokens: int | None = None
         self.cache_read_input_tokens: int | None = None
-
     @property
     def cache_write_input_tokens(self) -> int | None:
         """The number of cache write input tokens."""

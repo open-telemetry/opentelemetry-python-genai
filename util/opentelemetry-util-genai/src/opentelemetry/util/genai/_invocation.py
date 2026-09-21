@@ -106,8 +106,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             attributes=self._start_attributes,
             context=context,
         )
-        self._span_context: Context = set_span_in_context(self.span)
-        self._context_token: ContextToken | None = attach(self._span_context)
+        self._span_context: Context = set_span_in_context(self.span, context)
+        self._context_token: ContextToken | None = (
+            attach(self._span_context) if attach_to_context else None
+        )
         self._monotonic_start_s: float = timeit.default_timer()
         # Streaming state, set when the invocation is handed to a stream
         # wrapper. ``_request_stream`` marks the request as streamed
@@ -116,6 +118,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._request_stream: bool | None = None
         self._ttfc_seconds: float | None = None
         self._stream_last_chunk_at: float | None = None
+        self._finished: bool = False
 
     @property
     def should_capture_content(self) -> bool:
@@ -137,7 +140,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def context(self) -> Context:
         """The OpenTelemetry Context containing this invocation's span."""
         return self._span_context
-
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
         return self.metric_attributes
@@ -148,7 +150,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def record_stream_chunk(self) -> None:
         """Mark the request as streamed and record one output chunk arriving."""
-        if self._context_token is None:
+        if self._finished:
             return
         self._request_stream = True
         self._on_stream_chunk(timeit.default_timer())
@@ -246,18 +248,17 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     def _finish(self, error: Error | None = None) -> None:
         """Apply finish telemetry and end the span. Finishes at most once."""
-        if self._context_token is None:
+        if self._finished:
             return
         # Clear up front so a nested or repeated finish is a no-op even if
         # _apply_finish raises.
+        self._finished = True
         context_token, self._context_token = self._context_token, None
         try:
             self._apply_finish(error)
         finally:
-            try:
+            if context_token is not None:
                 detach(context_token)
-            except Exception:  # pylint: disable=broad-except
-                pass
             self.span.end()
 
     def stop(self) -> None:

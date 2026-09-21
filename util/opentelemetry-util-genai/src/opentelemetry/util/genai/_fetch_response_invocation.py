@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -90,6 +91,8 @@ class FetchResponseInvocation(GenAIInvocation):
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        attach_to_context: bool = True,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
         start_attributes: dict[str, AttributeValue] = {
@@ -116,6 +119,8 @@ class FetchResponseInvocation(GenAIInvocation):
             error_type_resolver=error_type_resolver,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            attach_to_context=attach_to_context,
         )
         self._provider: str = provider
         self._response_id: str = response_id

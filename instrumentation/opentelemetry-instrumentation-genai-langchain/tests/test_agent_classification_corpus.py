@@ -664,14 +664,6 @@ async def test_async_root_agent(span_exporter, start_instrumentation) -> None:
     assert span.parent is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The LangChain async callback path does not propagate the context "
-        "token attached at span start, so spans are emitted without parentage. "
-        "Pre-existing behavior, not introduced by this change."
-    ),
-)
 @pytest.mark.asyncio
 async def test_async_nested_agent(
     span_exporter, start_instrumentation
@@ -738,6 +730,41 @@ async def test_concurrent_async_agents_have_distinct_roots(
     second_span = _span_named(spans, "invoke_agent second_agent")
     assert first_span.parent is None
     assert second_span.parent is None
+
+
+@pytest.mark.asyncio
+async def test_async_agent_with_tool_and_chat_parenting(
+    span_exporter, start_instrumentation
+) -> None:
+    agent = create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "noop", "args": {}, "id": "tc1"}],
+                ),
+                AIMessage(content="finished"),
+            ]
+        ),
+        [noop],
+        name="workflow_agent",
+    )
+    await agent.ainvoke(
+        {"messages": [("user", "go")]},
+        config={"metadata": {"ls_model_name": "fake-model"}},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _root_span_named(spans, "invoke_agent workflow_agent")
+    tool_span = _span_named(spans, "execute_tool noop")
+    chat_spans = [s for s in spans if s.name == "chat fake-model"]
+
+    assert agent_span.parent is None
+    _assert_parent(tool_span, agent_span)
+    assert len(chat_spans) == 2
+    for chat_span in chat_spans:
+        _assert_parent(chat_span, agent_span)
+    assert len({s.context.trace_id for s in spans}) == 1
 
 
 def test_announced_root_bypasses_inherited_middleware_name(

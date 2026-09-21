@@ -540,3 +540,27 @@ def test_tool_invocation_explicit_context(method_name: str):
     )
     assert tool_span.parent is not None
     assert tool_span.parent.span_id == parent_span.get_span_context().span_id
+
+
+@pytest.mark.parametrize("method_name", ["tool", "start_tool"])
+def test_tool_invocation_attach_to_context_false(method_name: str):
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("ambient_span") as ambient_span:
+        tool_invocation = getattr(handler, method_name)(
+            "detached_tool", attach_to_context=False
+        )
+        assert get_current_span() == ambient_span
+        tool_invocation.stop()
+        assert get_current_span() == ambient_span
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = next(
+        s for s in spans if s.name == "execute_tool detached_tool"
+    )
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == ambient_span.get_span_context().span_id
