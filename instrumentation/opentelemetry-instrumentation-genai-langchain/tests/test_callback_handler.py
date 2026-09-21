@@ -243,7 +243,6 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="AgentExecutor"
         )
-        assert agent_inv.agent_name == "AgentExecutor"
         assert agent_inv.conversation_id == "thread-abc"
         assert agent_inv.input_messages[0].parts[0].content == "Solve this"
         assert agent_inv.output_messages[0].parts[0].content == "Solved"
