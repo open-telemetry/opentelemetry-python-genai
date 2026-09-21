@@ -665,6 +665,26 @@ async def test_async_root_agent(span_exporter, start_instrumentation) -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_root_agent_parents_to_ambient_span(
+    span_exporter, tracer_provider, start_instrumentation
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("ambient") as ambient_span:
+        await create_agent(
+            FakeModel(responses=[AIMessage(content="done")]),
+            [noop],
+            name="async_root",
+        ).ainvoke({"messages": [("user", "hi")]})
+
+    span = _span_named(
+        span_exporter.get_finished_spans(), "invoke_agent async_root"
+    )
+    assert span.parent is not None
+    assert span.parent.span_id == ambient_span.get_span_context().span_id
+    assert span.context.trace_id == ambient_span.get_span_context().trace_id
+
+
+@pytest.mark.asyncio
 async def test_async_nested_agent(
     span_exporter, start_instrumentation
 ) -> None:

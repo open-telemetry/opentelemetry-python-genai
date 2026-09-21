@@ -41,11 +41,11 @@ from opentelemetry.util.genai.types import (
 class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-public-methods
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
-        self.handler = TelemetryHandler(tracer_provider=tracer_provider)
+        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
 
     def test_start_stop_creates_span(self):
         invocation = self.handler.invoke_local_agent(
@@ -530,11 +530,11 @@ class TestAgentInvocationContent(unittest.TestCase):
 class TestRemoteAgentInvocation(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
-        self.handler = TelemetryHandler(tracer_provider=tracer_provider)
+        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
 
     def test_span_kind_client(self):
         invocation = self.handler.invoke_remote_agent("openai")

@@ -60,8 +60,9 @@ class _FetchResponseTestBase(TestCase):
         )
 
     def _fetch_response(self, **kwargs) -> FetchResponseInvocation:
+        response_id = kwargs.pop("response_id", RESPONSE_ID)
         return self.handler.fetch_response(
-            "openai", response_id=RESPONSE_ID, **kwargs
+            "openai", response_id=response_id, **kwargs
         )
 
     def _get_finished_spans(self):
