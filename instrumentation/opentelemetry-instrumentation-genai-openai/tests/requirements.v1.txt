@@ -40,7 +40,7 @@
 # end of the range where those two do not coexist.
 # It also includes opentelemetry-instrumentation-httpx to exercise the httpx interop tests.
 
-openai==1.99.1
+openai==3.16.2
 # older pydantic is required for PyPy < 3.11
 pydantic==2.12.5
 httpx==0.28.1
