@@ -3,12 +3,20 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Callable, Iterable, Sequence
+import math
+from collections.abc import (
+    AsyncIterable,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
+from sys import float_info
 from typing import Any, cast
 
 try:
     # Google GenAI < 2.9.0
-    from google.genai._interactions._streaming import Stream
+    from google.genai._interactions._streaming import AsyncStream, Stream
     from google.genai._interactions.resources.interactions import (
         AsyncInteractionsResource,
         InteractionsResource,
@@ -30,10 +38,11 @@ except ImportError:
             AsyncInteractions as AsyncInteractionsResource,
         )
         from google.genai._gaos.interactions import (
-            Interactions as InteractionsResource,
+            AsyncStream,
+            Stream,
         )
         from google.genai._gaos.interactions import (
-            Stream,
+            Interactions as InteractionsResource,
         )
         from google.genai._gaos.types.interactions import (
             Interaction,
@@ -75,6 +84,9 @@ except ImportError:
             pass
 
         class Stream:
+            pass
+
+        class AsyncStream:
             pass
 
 
@@ -512,10 +524,137 @@ def _maybe_get_tool_definitions(
     return definitions if definitions else None
 
 
+def _explicit_request_fields(value: object) -> Mapping[str, object]:
+    stored_fields = getattr(value, "__dict__", value)
+    if not isinstance(stored_fields, dict):
+        return {}
+    fields: dict[str, object] = stored_fields
+    supplied = getattr(value, "model_fields_set", None)
+    if isinstance(supplied, set):
+        # Model dumps can serialize lazy content; stored fields also avoid
+        # invoking the SDK's deprecated property accessors.
+        extra = getattr(value, "model_extra", None)
+        if isinstance(extra, dict):
+            fields = fields | extra
+        return {name: fields[name] for name in supplied if name in fields}
+    return fields
+
+
+def _interaction_request(kwargs: dict[str, Any]) -> Mapping[str, object]:
+    body = _get_field(kwargs.get("request"), "body")
+    return _explicit_request_fields(body) if body is not None else kwargs
+
+
+def _is_interaction_stream(
+    response: object, request: Mapping[str, object]
+) -> bool:
+    if isinstance(response, (Stream, AsyncStream)):
+        return True
+    if isinstance(response, Interaction):
+        return False
+    return bool(_get_field(request, "stream"))
+
+
+def _output_type_from_mime_type(mime_type: object) -> str | None:
+    if not isinstance(mime_type, str):
+        return None
+    mime_type = mime_type.partition(";")[0].strip().lower()
+    output_types = GenAIAttributes.GenAiOutputTypeValues
+    if mime_type == "application/json" or mime_type.endswith("+json"):
+        return output_types.JSON.value
+    if mime_type.startswith("text/"):
+        return output_types.TEXT.value
+    if mime_type.startswith("image/"):
+        return output_types.IMAGE.value
+    if mime_type.startswith("audio/"):
+        return output_types.SPEECH.value
+    return None
+
+
+def _output_type_from_format(response_format: object) -> str | None:
+    if isinstance(response_format, (list, tuple)):
+        output_types = {
+            _output_type_from_format(item) for item in response_format
+        }
+        return output_types.pop() if len(output_types) == 1 else None
+
+    output_type = _output_type_from_mime_type(
+        _get_field(response_format, "mime_type")
+    )
+    if output_type is not None:
+        return output_type
+
+    format_type = _get_field(response_format, "type")
+    if not isinstance(format_type, str):
+        return None
+    output_types = GenAIAttributes.GenAiOutputTypeValues
+    if format_type == "text":
+        return output_types.TEXT.value
+    if format_type == "image":
+        return output_types.IMAGE.value
+    if format_type == "audio":
+        return output_types.SPEECH.value
+    if format_type in (
+        "object",
+        "array",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "null",
+        "json",
+        "json_object",
+        "json_schema",
+    ):
+        return output_types.JSON.value
+    return None
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > float_info.max:
+        return None
+    if isinstance(value, (int, float)) and value >= 0 and math.isfinite(value):
+        return float(value)
+    return None
+
+
+def _apply_interaction_request_attributes(
+    invocation: InferenceInvocation | RemoteAgentInvocation,
+    request: Mapping[str, object],
+) -> None:
+    config = _explicit_request_fields(_get_field(request, "generation_config"))
+    invocation.temperature = _coerce_float(_get_field(config, "temperature"))
+    invocation.top_p = _coerce_float(_get_field(config, "top_p"))
+    max_tokens = _get_field(config, "max_output_tokens")
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+        invocation.max_tokens = max_tokens
+    seed = _get_field(config, "seed")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        invocation.seed = seed
+    stop_sequences = _get_field(config, "stop_sequences")
+    if (
+        isinstance(stop_sequences, (list, tuple))
+        and stop_sequences
+        and all(isinstance(item, str) for item in stop_sequences)
+    ):
+        invocation.stop_sequences = list(stop_sequences)
+
+    response_format = _get_field(request, "response_format")
+    invocation.output_type = _output_type_from_format(response_format)
+    if invocation.output_type is None and not isinstance(
+        response_format, (list, tuple)
+    ):
+        invocation.output_type = _output_type_from_mime_type(
+            _get_field(request, "response_mime_type")
+        )
+
+
 def _start_interactions_invocation(
     telemetry_handler: TelemetryHandler,
     instance: InteractionsResource | AsyncInteractionsResource,
-    kwargs: dict[str, Any],
+    request: Mapping[str, object],
 ) -> InferenceInvocation | RemoteAgentInvocation:
     # Vertex AI does not support the interactions API yet, but eventually will.
     # SDK will raise an exception if model or agent is not passed or if input data is not passed.
@@ -525,11 +664,11 @@ def _start_interactions_invocation(
         if is_vertex
         else GenAIAttributes.GenAiSystemValues.GEMINI.value
     )
-    if agent := kwargs.get("agent"):
+    if agent := _get_field(request, "agent"):
         invocation: InferenceInvocation | RemoteAgentInvocation = (
             telemetry_handler.invoke_remote_agent(
                 provider=provider,
-                request_model=kwargs.get("model"),
+                request_model=_get_field(request, "model"),
                 server_address=server_address,
                 agent_name=agent,
             )
@@ -537,20 +676,21 @@ def _start_interactions_invocation(
     else:
         invocation = telemetry_handler.inference(
             provider=provider,
-            request_model=kwargs.get("model"),
+            request_model=_get_field(request, "model"),
             operation_name="interactions.create",
             server_address=server_address,
             error_type_resolver=resolve_error_type,
         )
     invocation.tool_definitions = _maybe_get_tool_definitions(
-        kwargs.get("tools")
+        _get_field(request, "tools")
     )
+    _apply_interaction_request_attributes(invocation, request)
 
     if telemetry_handler.should_capture_content():
         invocation.input_messages = _interactions_input_to_messages(
-            kwargs.get("input")
+            _get_field(request, "input")
         )
-        if system_instruction := kwargs.get("system_instruction"):
+        if system_instruction := _get_field(request, "system_instruction"):
             invocation.system_instruction = [
                 TextPart(content=system_instruction)
             ]
@@ -575,18 +715,19 @@ def _create_instrumented_interactions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Interaction | InteractionsStreamWrapper:
+        request = _interaction_request(kwargs)
         invocation = _start_interactions_invocation(
-            telemetry_handler, instance, kwargs
+            telemetry_handler, instance, request
         )
 
         try:
-            if kwargs.get("stream", False):
+            response = wrapped(*args, **kwargs)
+            if _is_interaction_stream(response, request):
                 return InteractionsStreamWrapper(
-                    wrapped(*args, **kwargs),
+                    response,
                     invocation,
                     telemetry_handler,
                 )
-            response = wrapped(*args, **kwargs)
             _apply_interaction_response_attributes(
                 response, invocation, telemetry_handler
             )
@@ -616,20 +757,22 @@ def _create_instrumented_async_interactions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Interaction | AsyncInteractionsStreamWrapper:
+        request = _interaction_request(kwargs)
         invocation = _start_interactions_invocation(
-            telemetry_handler, instance, kwargs
+            telemetry_handler, instance, request
         )
 
         try:
-            if kwargs.get("stream", False):
+            response = await wrapped(*args, **kwargs)
+            if _is_interaction_stream(response, request):
                 return AsyncInteractionsStreamWrapper(
-                    await wrapped(*args, **kwargs),
+                    response,
                     invocation,
                     telemetry_handler,
                 )
             response = cast(
                 Interaction,
-                await wrapped(*args, **kwargs),
+                response,
             )
             _apply_interaction_response_attributes(
                 response, invocation, telemetry_handler

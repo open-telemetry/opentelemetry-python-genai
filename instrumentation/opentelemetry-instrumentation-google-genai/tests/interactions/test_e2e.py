@@ -19,6 +19,7 @@ from opentelemetry.util.genai.environment_variables import (
 )
 
 from ..common.otel_mocker import OTelMocker
+from .util import create_request_parameters
 
 pytestmark = pytest.mark.skipif(
     not _HAS_INTERACTIONS,
@@ -179,15 +180,19 @@ def fixture_client():
 
 @pytest.mark.vcr
 def test_sync_interactions_create(
-    client, otel_mocker: OTelMocker, monkeypatch: pytest.MonkeyPatch
-):
+    client: Client,
+    otel_mocker: OTelMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
 
+    parameters, expected_attributes = create_request_parameters()
     response = client.interactions.create(
         model="gemini-2.5-flash",
         input="Hello, how can you help me today?",
+        **parameters,
     )
 
     assert response is not None
@@ -199,20 +204,31 @@ def test_sync_interactions_create(
     assert span.attributes["gen_ai.request.model"] == "gemini-2.5-flash"
     assert span.attributes["gen_ai.response.model"] == "gemini-2.5-flash"
     assert span.attributes["gen_ai.operation.name"] == "interactions.create"
+    for name, expected in expected_attributes.items():
+        actual = span.attributes[name]
+        if isinstance(expected, list):
+            assert isinstance(actual, tuple)
+            actual = list(actual)
+        assert actual == expected, name
+        assert type(actual) is type(expected), name
 
 
 @pytest.mark.vcr
 @pytest.mark.asyncio
 async def test_async_interactions_create(
-    client, otel_mocker: OTelMocker, monkeypatch: pytest.MonkeyPatch
-):
+    client: Client,
+    otel_mocker: OTelMocker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv(
         OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
     )
 
+    parameters, expected_attributes = create_request_parameters()
     response = await client.aio.interactions.create(
         model="gemini-2.5-flash",
         input="Hello, how can you help me today?",
+        **parameters,
     )
 
     assert response is not None
@@ -224,3 +240,10 @@ async def test_async_interactions_create(
     assert span.attributes["gen_ai.request.model"] == "gemini-2.5-flash"
     assert span.attributes["gen_ai.response.model"] == "gemini-2.5-flash"
     assert span.attributes["gen_ai.operation.name"] == "interactions.create"
+    for name, expected in expected_attributes.items():
+        actual = span.attributes[name]
+        if isinstance(expected, list):
+            assert isinstance(actual, tuple)
+            actual = list(actual)
+        assert actual == expected, name
+        assert type(actual) is type(expected), name

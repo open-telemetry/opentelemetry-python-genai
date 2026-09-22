@@ -387,6 +387,17 @@ def test_ordinary_runnable_is_not_an_agent() -> None:
     telemetry.invoke_local_agent.assert_not_called()
 
 
+def test_agent_named_runnable_is_an_agent() -> None:
+    handler, telemetry = _handler()
+    RunnableLambda(lambda value: value).with_config(
+        run_name="SupportAgentRunner"
+    ).invoke("value", {"callbacks": [handler]})
+
+    telemetry.invoke_local_agent.assert_called_once_with(
+        agent_name="SupportAgentRunner"
+    )
+
+
 def test_plain_state_graph_is_not_an_agent() -> None:
     handler, telemetry = _handler()
     builder = StateGraph(dict[str, int])
@@ -409,6 +420,22 @@ def test_plain_state_graph_with_agent_node_is_not_an_agent() -> None:
     )
 
     telemetry.invoke_local_agent.assert_not_called()
+
+
+def test_agent_named_runnable_inside_other_langgraph_node_is_agent() -> None:
+    handler, telemetry = _handler()
+    runnable = RunnableLambda(
+        lambda state: {"value": state["value"] + 1}
+    ).with_config(run_name="SupportAgentRunner")
+    builder = StateGraph(dict[str, int])
+    builder.add_node("model", runnable)
+    builder.add_edge(START, "model")
+    builder.add_edge("model", END)
+    builder.compile(name="support_pipeline").invoke(
+        {"value": 1}, {"callbacks": [handler]}
+    )
+
+    assert _agent_names(telemetry) == ["SupportAgentRunner"]
 
 
 def _span_named(spans: list[Any], name: str) -> Any:

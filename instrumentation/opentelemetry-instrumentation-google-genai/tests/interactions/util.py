@@ -7,6 +7,47 @@ import unittest.mock
 from typing import Any
 
 
+def create_request_parameters() -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        from google.genai._interactions.types.generation_config import (
+            GenerationConfig,
+        )
+        from google.genai._interactions.types.text_response_format import (
+            TextResponseFormat,
+        )
+    except ImportError:
+        from google.genai._gaos.types.interactions import (
+            GenerationConfig,
+            TextResponseFormat,
+        )
+
+    config: dict[str, object] = {
+        "max_output_tokens": 2048,
+        "seed": 0,
+        "stop_sequences": ["<END>"],
+    }
+    expected_attributes: dict[str, object] = {
+        "gen_ai.request.max_tokens": 2048,
+        "gen_ai.request.seed": 0,
+        "gen_ai.request.stop_sequences": ["<END>"],
+        "gen_ai.output.type": "text",
+    }
+    for name, value in (("temperature", 0.0), ("top_p", 0.75)):
+        if name in GenerationConfig.model_fields:
+            config[name] = value
+            expected_attributes[f"gen_ai.request.{name}"] = value
+
+    return (
+        {
+            "generation_config": GenerationConfig(**config),
+            "response_format": TextResponseFormat(
+                type="text", mime_type="text/plain"
+            ),
+        },
+        expected_attributes,
+    )
+
+
 def create_mock_interaction(
     interaction_id: str = "test-id",
     model_name: str = "test-model",
