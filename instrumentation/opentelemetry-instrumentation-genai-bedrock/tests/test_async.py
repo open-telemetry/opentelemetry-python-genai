@@ -1049,6 +1049,79 @@ async def test_async_invoke_model_stream_async_with_success(
 
 
 @pytest.mark.asyncio
+async def test_async_invoke_model_stream_sync_close(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    mock_stream = _MockAsyncEventStream(INVOKE_MODEL_STREAM_EVENTS)
+    with _stub(
+        async_bedrock_client,
+        "invoke_model_with_response_stream",
+        {"body": mock_stream},
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = (
+            await async_bedrock_client.invoke_model_with_response_stream(
+                modelId=MODEL_ID, body="{}"
+            )
+        )
+        response["body"].close()
+
+    assert mock_stream.closed
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_partial_socket_reads_do_not_prematurely_finalize(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    body_content = _anthropic_body("Partial socket reads", inp=19, out=6)
+    fake_resp = _FakeHTTPResponse(body_content)
+    orig_read = fake_resp.content.read
+
+    async def _trickle_read(n: int = -1) -> bytes:
+        # Simulate a socket returning at most 16 bytes per read call even when
+        # the caller asks for a larger buffer (e.g. read(1024)).
+        return await orig_read(16 if n is not None and n > 16 else n)
+
+    fake_resp.content.read = _trickle_read
+    body = AioStreamingBody(fake_resp, len(body_content))
+
+    with _stub(
+        async_bedrock_client,
+        "invoke_model",
+        {"contentType": "application/json", "body": body},
+        modelId=MODEL_ID,
+        body="{}",
+    ):
+        response = await async_bedrock_client.invoke_model(
+            modelId=MODEL_ID, body="{}"
+        )
+        first_chunk = await response["body"].read(1024)
+        assert len(first_chunk) == 16
+        assert len(span_exporter.get_finished_spans()) == 0
+
+        chunks = [first_chunk]
+        while True:
+            chunk = await response["body"].read(1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        assert b"".join(chunks) == body_content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 19
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
+
+
+@pytest.mark.asyncio
 async def test_async_non_bedrock_service_is_not_instrumented(
     instrument_with_content,
     span_exporter,

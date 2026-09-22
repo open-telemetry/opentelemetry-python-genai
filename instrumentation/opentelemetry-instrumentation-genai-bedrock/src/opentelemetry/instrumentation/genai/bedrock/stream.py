@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 from collections.abc import AsyncIterator
 from logging import getLogger
@@ -232,23 +231,9 @@ class BedrockConverseStreamWrapper(
         self._init_converse_stream(invocation, capture_content=capture_content)
 
 
-class _AsyncBedrockStreamWrapper(AsyncStreamWrapper[dict[str, Any]]):
-    """Base async stream wrapper that safely handles synchronous close() on EventStream."""
-
-    async def _close_stream(self) -> None:
-        close = getattr(self._self_stream, "aclose", None)
-        if close is None:
-            close = getattr(self._self_stream, "close", None)
-        if close is None:
-            return
-        res = close()
-        if inspect.isawaitable(res):
-            await res
-
-
 class AsyncBedrockConverseStreamWrapper(
     _BedrockConverseStreamMixin,
-    _AsyncBedrockStreamWrapper,
+    AsyncStreamWrapper[dict[str, Any]],
 ):
     """Wrapper for async Bedrock converse_stream EventStream."""
 
@@ -534,7 +519,7 @@ class BedrockInvokeModelStreamWrapper(
 
 class AsyncBedrockInvokeModelStreamWrapper(
     _BedrockInvokeModelStreamMixin,
-    _AsyncBedrockStreamWrapper,
+    AsyncStreamWrapper[dict[str, Any]],
 ):
     """Wrapper for async Bedrock invoke_model_with_response_stream EventStream."""
 
@@ -558,6 +543,8 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
     _self_response: dict[str, Any]
     _self_capture_content: bool
     _self_chunks: list[bytes]
+    _self_bytes_read: int
+    _self_content_length: int | None
     _self_finalized: bool
     _self_body_class: Any
 
@@ -574,6 +561,13 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_response = response
         self._self_capture_content = capture_content
         self._self_chunks = []
+        self._self_bytes_read = 0
+        self._self_content_length = _safe_int(
+            _first_not_none(
+                getattr(body, "_content_length", None),
+                getattr(body, "_self_content_length", None),
+            )
+        )
         self._self_finalized = False
         self._self_body_class = type(body)
 
@@ -623,8 +617,14 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
 
         if chunk:
             self._self_chunks.append(chunk)
+            self._self_bytes_read += len(chunk)
 
-        if amt is None or amt < 0 or not chunk or len(chunk) < amt:
+        reached_content_length = (
+            self._self_content_length is not None
+            and self._self_content_length > 0
+            and self._self_bytes_read >= self._self_content_length
+        )
+        if amt is None or amt < 0 or not chunk or reached_content_length:
             self._finalize(b"".join(self._self_chunks))
 
         return chunk
