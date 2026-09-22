@@ -1,0 +1,117 @@
+name: Update semantic conventions
+
+on:
+  schedule:
+    - cron: '0 8 * * 1' # weekly at 08:00 UTC on Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-semconv:
+    permissions:
+      contents: write
+    runs-on: cncf-ubuntu-2-8-x86
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the branch
+
+      - name: Verify branch
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "This workflow should only be run against main"
+            exit 1
+          fi
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Check and pin latest semantic-conventions-genai ref
+        id: update-ref
+        run: |
+          current_ref=$(sed -n 's/^SEMCONV_GENAI_REF=//p' versions.env)
+          latest_ref=$(git ls-remote https://github.com/open-telemetry/semantic-conventions-genai.git refs/heads/main | cut -f1)
+
+          if [[ -z "$latest_ref" ]]; then
+            echo "Failed to fetch latest ref from semantic-conventions-genai"
+            exit 1
+          fi
+
+          echo "Current ref: $current_ref"
+          echo "Latest ref:  $latest_ref"
+
+          if [[ "$current_ref" == "$latest_ref" ]]; then
+            echo "Already pinned to latest ref"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sed -i.bak "s/^SEMCONV_GENAI_REF=.*/SEMCONV_GENAI_REF=${latest_ref}/" versions.env
+          rm -f versions.env.bak
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          echo "latest_ref=${latest_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Read pinned weaver version
+        if: steps.update-ref.outputs.has_changes == 'true'
+        id: versions
+        run: |
+          # shellcheck disable=SC2002
+          cat versions.env | grep -E '^WEAVER_VERSION=' >> "$GITHUB_OUTPUT"
+
+      - name: Install weaver ${{ steps.versions.outputs.WEAVER_VERSION }}
+        if: steps.update-ref.outputs.has_changes == 'true'
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@38befce4bc68fe320d20f189465c93835ac20c12 # v0.26.1
+        with:
+          version: ${{ steps.versions.outputs.WEAVER_VERSION }}
+
+      - name: Regenerate semconv code
+        if: steps.update-ref.outputs.has_changes == 'true'
+        run: uv run scripts/semconv/generate.py
+
+      - name: Run pre-commit
+        if: steps.update-ref.outputs.has_changes == 'true'
+        run: uvx --with tox-uv tox -e precommit || true
+
+      - name: Configure CLA-approved git bot
+        if: steps.update-ref.outputs.has_changes == 'true'
+        run: .github/scripts/use-cla-approved-github-bot.sh
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        if: steps.update-ref.outputs.has_changes == 'true'
+        id: otelbot-token
+        with:
+          client-id: ${{ vars.OTELBOT_CLIENT_ID }}
+          private-key: ${{ secrets.OTELBOT_PRIVATE_KEY }}
+          permission-pull-requests: write
+
+      - name: Create pull request
+        if: steps.update-ref.outputs.has_changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+          REF: ${{ steps.update-ref.outputs.latest_ref }}
+        run: |
+          if git diff --quiet; then
+            echo "No changes after codegen"
+            exit 0
+          fi
+
+          short_ref="${REF:0:7}"
+          branch="otelbot/update-semconv-genai-${short_ref}"
+          title="Update semantic-conventions-genai to ${short_ref}"
+          body="Pins \`SEMCONV_GENAI_REF\` to [${short_ref}](https://github.com/open-telemetry/semantic-conventions-genai/commit/${REF}) and regenerates code."
+
+          git checkout -b "$branch"
+          git commit -a -m "$title"
+          git push -u origin "$branch" --force
+          pr_url=$(gh pr create --title "$title" \
+                                --body "$body" \
+                                --head "$branch" \
+                                --base main)
+          gh pr edit "$pr_url" --add-label dependencies

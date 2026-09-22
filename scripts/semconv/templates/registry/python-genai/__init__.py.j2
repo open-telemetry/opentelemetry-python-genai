@@ -1,0 +1,15 @@
+{% import "common.py.j2" as common %}
+{{ common.header() }}
+
+from opentelemetry.util.genai.semconv.{{ ctx.root_namespace }} import attributes
+from opentelemetry.util.genai.semconv.{{ ctx.root_namespace }}.attributes import (
+{% for attribute in ctx.attributes %}
+    {{ common.attribute_symbols(attribute) }}
+{% endfor %}
+)
+__all__ = [
+{% for attribute in ctx.attributes %}
+    {{ common.attribute_symbols(attribute, quoted=true) }}
+{% endfor %}
+    "attributes",
+]

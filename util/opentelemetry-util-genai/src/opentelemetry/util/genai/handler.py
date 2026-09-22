@@ -51,7 +51,6 @@ from opentelemetry.trace import (
     get_tracer,
 )
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
-from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
@@ -59,7 +58,6 @@ from opentelemetry.util.genai.completion_hook import (
     _SafeCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     EmbeddingInvocation,
     FetchResponseInvocation,
     InferenceInvocation,
@@ -73,7 +71,10 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
 )
-from opentelemetry.util.genai.utils import get_content_capturing_mode
+from opentelemetry.util.genai.utils import (
+    _should_emit_event,
+    get_content_capturing_mode,
+)
 from opentelemetry.util.genai.version import __version__
 
 
@@ -117,13 +118,12 @@ class TelemetryHandler:
             tracer_provider,
             schema_url=schema_url,
         )
-        meter: Meter = get_meter(
+        self._meter: Meter = get_meter(
             instrumentation_scope_name,
             version,
             meter_provider=meter_provider,
             schema_url=schema_url,
         )
-        self._instruments = _Instruments(meter)
         self._logger = get_logger(
             instrumentation_scope_name,
             version,
@@ -131,6 +131,7 @@ class TelemetryHandler:
             schema_url=schema_url,
         )
         self._content_capturing_mode = get_content_capturing_mode()
+        self._emit_event = _should_emit_event(self._content_capturing_mode)
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):
@@ -186,7 +187,7 @@ class TelemetryHandler:
         """
         return InferenceInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             provider,
@@ -195,6 +196,7 @@ class TelemetryHandler:
             server_port=server_port,
             operation_name=operation_name,
             content_capturing_mode=self._content_capturing_mode,
+            emit_event=self._emit_event,
         )
 
     def start_llm(self, invocation: LLMInvocation) -> LLMInvocation:
@@ -205,10 +207,11 @@ class TelemetryHandler:
         """
         invocation._start_with_handler(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             content_capturing_mode=self._content_capturing_mode,
+            emit_event=self._emit_event,
         )
         return invocation
 
@@ -230,9 +233,8 @@ class TelemetryHandler:
         """
         return EmbeddingInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
-            self._completion_hook,
             provider,
             request_model=request_model,
             server_address=server_address,
@@ -259,9 +261,8 @@ class TelemetryHandler:
         """
         return RetrievalInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
-            self._completion_hook,
             data_source_id=data_source_id,
             provider=provider,
             request_model=request_model,
@@ -289,9 +290,8 @@ class TelemetryHandler:
         """
         return ToolInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
-            self._completion_hook,
             name,
             tool_type=tool_type,
             tool_call_id=tool_call_id,
@@ -315,7 +315,7 @@ class TelemetryHandler:
         """
         return WorkflowInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             name,
@@ -370,7 +370,7 @@ class TelemetryHandler:
         """
         return InferenceInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -380,6 +380,7 @@ class TelemetryHandler:
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
             content_capturing_mode=self._content_capturing_mode,
+            emit_event=self._emit_event,
         )
 
     def embedding(
@@ -400,9 +401,8 @@ class TelemetryHandler:
         """
         return EmbeddingInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
-            self._completion_hook,
             provider=provider,
             request_model=request_model,
             server_address=server_address,
@@ -415,7 +415,6 @@ class TelemetryHandler:
         provider: str,
         *,
         response_id: str,
-        request_stream: bool | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
@@ -434,12 +433,11 @@ class TelemetryHandler:
         """
         return FetchResponseInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             provider=provider,
             response_id=response_id,
-            request_stream=request_stream,
             server_address=server_address,
             server_port=server_port,
             error_type_resolver=error_type_resolver,
@@ -473,9 +471,8 @@ class TelemetryHandler:
         """
         return ToolInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
-            self._completion_hook,
             name,
             tool_type=tool_type,
             agent_name=agent_name,
@@ -490,7 +487,7 @@ class TelemetryHandler:
         *,
         request_model: str | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+    ) -> LocalAgentInvocation:
         """Create and start a local agent invocation (INTERNAL span kind).
 
         .. deprecated:: 1.0b0
@@ -503,7 +500,7 @@ class TelemetryHandler:
         """
         return LocalAgentInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             request_model=request_model,
@@ -519,7 +516,7 @@ class TelemetryHandler:
         server_address: str | None = None,
         server_port: int | None = None,
         agent_name: str | None = None,
-    ) -> AgentInvocation:
+    ) -> RemoteAgentInvocation:
         """Create and start a remote agent invocation (CLIENT span kind).
 
         .. deprecated:: 1.0b0
@@ -532,7 +529,7 @@ class TelemetryHandler:
         """
         return RemoteAgentInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -561,7 +558,7 @@ class TelemetryHandler:
         """
         return LocalAgentInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             request_model=request_model,
@@ -590,7 +587,7 @@ class TelemetryHandler:
         """
         return RemoteAgentInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             provider=provider,
@@ -615,7 +612,7 @@ class TelemetryHandler:
         """
         return WorkflowInvocation(
             self._tracer,
-            self._instruments,
+            self._meter,
             self._logger,
             self._completion_hook,
             name,

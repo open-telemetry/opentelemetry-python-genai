@@ -1,0 +1,584 @@
+{% import "common.py.j2" as common %}
+{{ common.header() }}
+
+from __future__ import annotations
+
+from collections import ChainMap
+from collections.abc import Mapping, MutableMapping, Sequence
+from contextlib import AbstractContextManager
+from dataclasses import asdict, is_dataclass
+from enum import Enum
+from functools import cached_property
+import timeit
+from types import TracebackType
+from typing import cast
+
+from typing_extensions import Self
+
+from opentelemetry._logs import Logger, LogRecord
+from opentelemetry.context import Context
+from opentelemetry.metrics import Meter
+from opentelemetry.trace import (
+    INVALID_SPAN,
+    Span,
+    SpanKind,
+    Status,
+    StatusCode,
+    Tracer,
+    set_span_in_context,
+    use_span,
+)
+from opentelemetry.util.genai.semconv.error import attributes as ErrorAttr
+from opentelemetry.util.genai.semconv.{{ ctx.root_namespace }} import attributes as Attr
+{% for namespace in ctx.attribute_namespaces %}
+{% if namespace != ctx.root_namespace and namespace != "error" %}
+from opentelemetry.util.genai.semconv.{{ namespace }} import attributes as {{ common.attribute_module_alias(namespace) }}
+{% endif %}
+{% endfor %}
+from opentelemetry.util.genai.completion_hook import (
+    CompletionHook,
+    _NoOpCompletionHook,
+)
+from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
+    Error,
+    ErrorTypeResolver,
+    InputMessage,
+    MessagePart,
+    OutputMessage,
+    SystemInstructionPart,
+    ToolDefinition,
+)
+from opentelemetry.util.genai.utils import (
+    gen_ai_json_dumps,
+)
+from opentelemetry.util.types import AnyValue, AttributeValue
+
+
+def _value(value: AttributeValue | Enum) -> AttributeValue:
+    return value.value if isinstance(value, Enum) else value
+
+
+def _span_name_value(value: object | None) -> str | None:
+    if value is None:
+        return None
+    v = value.value if isinstance(value, Enum) else value
+    if not v or v == "_OTHER":
+        return None
+    return str(v)
+
+
+def _set_span_json_attribute(span: Span, name: str, value: object | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, (bool, str, bytes, int, float)):
+        span.set_attribute(name, _value(value))
+        return
+    span.set_attribute(name, gen_ai_json_dumps(value))
+
+
+def _combine_attributes(
+    typed_attributes: dict[str, AttributeValue],
+    additional_attributes: Mapping[str, AttributeValue] | None,
+) -> Mapping[str, AttributeValue]:
+    if not additional_attributes:
+        return typed_attributes
+    if not typed_attributes:
+        return additional_attributes
+    return ChainMap(
+        typed_attributes,
+        cast("MutableMapping[str, AttributeValue]", additional_attributes),
+    )
+
+
+def _structured_value(value: object) -> AnyValue:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _structured_value(asdict(value))
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        mapping = cast("Mapping[str, object]", value)
+        return {
+            name: _structured_value(item) for name, item in mapping.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        sequence = cast("Sequence[object]", value)
+        return [_structured_value(item) for item in sequence]
+    return cast("AnyValue", value)
+
+
+{% for op in ctx.operations %}
+class {{ op.class_name }}:
+    """`{{ op.operation_id }}` operation."""
+
+    def __init__(
+        self,
+        tracer: Tracer,
+        meter: Meter,
+        logger: Logger | None = None,
+        *,
+{% if op.completion_hook %}
+        completion_hook: CompletionHook | None = None,
+{% endif %}
+        error_type_resolver: ErrorTypeResolver | None = None,
+{% for attribute in op.attributes %}
+        {{ common.field_name(attribute, ctx.root_namespace) }}: {{ common.python_type(attribute, ctx.root_namespace) }} | None = None,
+{% endfor %}
+        attributes: Mapping[str, AttributeValue] | None = None,
+        metric_attributes: Mapping[str, AttributeValue] | None = None,
+        content_capturing_mode: ContentCapturingMode = ContentCapturingMode.SPAN_AND_EVENT,
+        emit_event: bool = True,
+    ) -> None:
+        self._tracer = tracer
+        self._meter = meter
+        self._logger = logger
+{% if op.completion_hook %}
+        self.completion_hook: CompletionHook | None = completion_hook
+{% endif %}
+        self._error_type_resolver: ErrorTypeResolver | None = error_type_resolver
+        self.content_capturing_mode: ContentCapturingMode = content_capturing_mode
+        self.emit_event: bool = emit_event
+        self._span: Span | None = None
+        self._context: Context | None = None
+        self._monotonic_start_s: float = timeit.default_timer()
+        self._ended: bool = False
+        self._scope: AbstractContextManager[Span] | None = None
+{% for attribute in op.attributes %}
+{% if attribute.sampling_relevant %}
+        self._{{ common.field_name(attribute, ctx.root_namespace) }}: {{ common.python_type(attribute, ctx.root_namespace) }} | None = {{ common.field_name(attribute, ctx.root_namespace) }}
+{% else %}
+        self.{{ common.field_name(attribute, ctx.root_namespace) }}: {{ common.python_type(attribute, ctx.root_namespace) }} | None = {{ common.field_name(attribute, ctx.root_namespace) }}
+{% endif %}
+{% endfor %}
+        self.attributes: dict[str, AttributeValue] = (
+            dict(attributes) if attributes else {}
+        )
+        self.metric_attributes: dict[str, AttributeValue] = (
+            dict(metric_attributes) if metric_attributes else {}
+        )
+        self._start_attributes: dict[str, AttributeValue] = {}
+
+    @property
+    def should_capture_content(self) -> bool:
+        """Return True when message content should be captured for this operation."""
+{% if op.completion_hook %}
+        return self.content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ) or (
+            self.completion_hook is not None
+            and not isinstance(self.completion_hook, _NoOpCompletionHook)
+        )
+{% else %}
+        return self.content_capturing_mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+{% endif %}
+
+    @property
+    def span(self) -> Span:
+        if self._span is None:
+            return INVALID_SPAN
+        return self._span
+
+    @property
+    def context(self) -> Context:
+        if self._context is None:
+            return Context()
+        return self._context
+
+{% if op.templates %}
+    @property
+    def span_name(self) -> str:
+        """The span name resolved from templates based on attribute availability."""
+{% for attr in op.template_attributes %}
+{% if common.is_sampling_relevant(op.attributes, attr) %}
+        {{ common.attr_field_name(attr, ctx.root_namespace) }} = _span_name_value(self._{{ common.attr_field_name(attr, ctx.root_namespace) }})
+{% else %}
+        {{ common.attr_field_name(attr, ctx.root_namespace) }} = _span_name_value(self.{{ common.attr_field_name(attr, ctx.root_namespace) }})
+{% endif %}
+{% endfor %}
+{% for t in op.templates %}
+{% if t.attributes %}
+        if {% for attr in t.attributes %}{{ common.attr_field_name(attr, ctx.root_namespace) }}{% if not loop.last %} and {% endif %}{% endfor %}:
+            return f"{{ common.format_template(t, ctx.root_namespace) }}"
+{% else %}
+        return "{{ t.pattern }}"
+{% endif %}
+{% endfor %}
+        return "{{ op.operation_id }}"
+
+{% endif %}
+    def start(
+        self,
+        name: str | None = None,
+        *,
+        context: Context | None = None,
+        start_time: int | None = None,
+    ) -> Span:
+        """Start the span for this operation."""
+{% if op.templates %}
+        if name is None:
+            name = self.span_name
+{% else %}
+        if name is None:
+            name = "{{ op.operation_id }}"
+{% endif %}
+        sampling_attributes: dict[str, AttributeValue] = {}
+{% for attribute in op.span.attributes %}
+{% if attribute.sampling_relevant %}
+        if self._{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+            sampling_attributes[{{ common.constant(attribute, ctx.root_namespace) }}] = _value(
+                self._{{ common.field_name(attribute, ctx.root_namespace) }}
+            )
+{% endif %}
+{% endfor %}
+        self._start_attributes = sampling_attributes
+        self._monotonic_start_s = timeit.default_timer()
+        self._span = self._tracer.start_span(
+            name,
+            context=context,
+            kind=SpanKind.{{ op.span.kind | upper }},
+            attributes=sampling_attributes,
+            start_time=start_time,
+        )
+        self._context = set_span_in_context(self._span, context)
+        return self._span
+
+    def __enter__(self) -> Self:
+        if self._span is not None:
+            self._scope = use_span(
+                self._span,
+                end_on_exit=False,
+                record_exception=False,
+                set_status_on_exception=False,
+            )
+            self._scope.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        try:
+            if exc_val is not None:
+                self.finish(error=exc_val)
+            else:
+                self.finish()
+        finally:
+            if self._scope is not None:
+                self._scope.__exit__(None, None, None)
+                self._scope = None
+
+    def finish(
+        self,
+        *,
+        error: Error | BaseException | None = None,
+        duration_s: float | None = None,
+        end_time: int | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
+        emit_event: bool | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Finish the operation: apply attributes, record metrics, emit event, and end span."""
+        if self._ended or self._span is None:
+            return
+        self._ended = True
+        span = self._span
+        ctx = context if context is not None else self._context
+{% if common.has_content_attributes(op.span.attributes, params.content_attributes) or (op.events and common.has_content_attributes(op.events[0].attributes, params.content_attributes)) %}
+        mode = (
+            content_capturing_mode
+            if content_capturing_mode is not None
+            else self.content_capturing_mode
+        )
+{% endif %}
+
+        if error is not None:
+            if isinstance(error, BaseException):
+                error = Error.from_exception(error, self._error_type_resolver)
+            self.error_type = error.type
+            span.set_status(Status(StatusCode.ERROR, error.message))
+            span.set_attribute(ErrorAttr.ERROR_TYPE, error.type)
+        elif self.error_type is not None:
+            span.set_status(Status(StatusCode.ERROR))
+            span.set_attribute(ErrorAttr.ERROR_TYPE, self.error_type)
+
+{% for attribute in op.span.attributes %}
+{% if not attribute.sampling_relevant and attribute.key not in params.content_attributes and attribute.key != "error.type" %}
+{% if attribute.type == "template[string]" %}
+        if self.{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+            for k, v in self.{{ common.field_name(attribute, ctx.root_namespace) }}.items():
+                span.set_attribute(f"{{ attribute.key }}.{k}", v)
+{% elif attribute.key in params.omit_falsy_attributes %}
+        if self.{{ common.field_name(attribute, ctx.root_namespace) }}:
+            span.set_attribute(
+                {{ common.constant(attribute, ctx.root_namespace) }},
+                _value(self.{{ common.field_name(attribute, ctx.root_namespace) }}),
+            )
+{% else %}
+        if self.{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+            span.set_attribute(
+                {{ common.constant(attribute, ctx.root_namespace) }},
+                _value(self.{{ common.field_name(attribute, ctx.root_namespace) }}),
+            )
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if common.has_content_attributes(op.span.attributes, params.content_attributes) %}
+        if mode in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ):
+{% for attribute in op.span.attributes %}
+{% if attribute.key in params.content_attributes %}
+{% if attribute.type == "template[string]" %}
+            if self.{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+                for k, v in self.{{ common.field_name(attribute, ctx.root_namespace) }}.items():
+                    val = v if isinstance(v, str) else gen_ai_json_dumps(v)
+                    span.set_attribute(f"{{ attribute.key }}.{k}", val)
+{% elif attribute.key in params.omit_falsy_attributes %}
+            if self.{{ common.field_name(attribute, ctx.root_namespace) }}:
+                _set_span_json_attribute(
+                    span,
+                    {{ common.constant(attribute, ctx.root_namespace) }},
+                    self.{{ common.field_name(attribute, ctx.root_namespace) }},
+                )
+{% else %}
+            if self.{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+                _set_span_json_attribute(
+                    span,
+                    {{ common.constant(attribute, ctx.root_namespace) }},
+                    self.{{ common.field_name(attribute, ctx.root_namespace) }},
+                )
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endif %}
+        if self.attributes:
+            for k, v in self.attributes.items():
+                span.set_attribute(k, v)
+
+{% if op.autoreport_metrics %}
+        if duration_s is None:
+            duration_s = max(timeit.default_timer() - self._monotonic_start_s, 0.0)
+
+{% for metric in op.autoreport_metrics %}
+        self._record_{{ common.metric_method_name(metric, ctx.root_namespace) }}(
+            duration_s, context=ctx
+        )
+{% endfor %}
+{% endif %}
+{% if op.events %}
+        log_record: LogRecord | None = None
+        should_emit = (
+            emit_event
+            if emit_event is not None
+            else self.emit_event
+        )
+{% for event in op.events %}
+        if should_emit and self._logger is not None:
+            event_attrs: dict[str, AnyValue] = {}
+{% for attribute in event.attributes %}
+{% if attribute.key not in params.content_attributes %}
+{% if attribute.type == "template[string]" %}
+            if {{ common.op_field_access(op, attribute, ctx.root_namespace) }} is not None:
+                for k, v in {{ common.op_field_access(op, attribute, ctx.root_namespace) }}.items():
+                    event_attrs[f"{{ attribute.key }}.{k}"] = v
+{% elif attribute.key in params.omit_falsy_attributes %}
+            if {{ common.op_field_access(op, attribute, ctx.root_namespace) }}:
+                event_attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _value(
+                    {{ common.op_field_access(op, attribute, ctx.root_namespace) }}
+                )
+{% else %}
+            if {{ common.op_field_access(op, attribute, ctx.root_namespace) }} is not None:
+                event_attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _value(
+                    {{ common.op_field_access(op, attribute, ctx.root_namespace) }}
+                )
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if common.has_content_attributes(event.attributes, params.content_attributes) %}
+            if mode in (
+                ContentCapturingMode.EVENT_ONLY,
+                ContentCapturingMode.SPAN_AND_EVENT,
+            ):
+{% for attribute in event.attributes %}
+{% if attribute.key in params.content_attributes %}
+{% if attribute.type == "template[string]" %}
+                if self.{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+                    for k, v in self.{{ common.field_name(attribute, ctx.root_namespace) }}.items():
+                        event_attrs[f"{{ attribute.key }}.{k}"] = (
+                            v if isinstance(v, str) else gen_ai_json_dumps(v)
+                        )
+{% elif attribute.key in params.omit_falsy_attributes %}
+                if self.{{ common.field_name(attribute, ctx.root_namespace) }}:
+                    event_attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _structured_value(
+                        self.{{ common.field_name(attribute, ctx.root_namespace) }}
+                    )
+{% else %}
+                if self.{{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+                    event_attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _structured_value(
+                        self.{{ common.field_name(attribute, ctx.root_namespace) }}
+                    )
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endif %}
+            if self.attributes:
+                event_attrs.update(self.attributes)
+            log_record = LogRecord(
+                event_name="{{ event.name }}",
+                context=ctx,
+                attributes=event_attrs,
+            )
+            self._logger.emit(log_record)
+{% endfor %}
+{% endif %}
+{% if op.completion_hook %}
+        if self.completion_hook is not None:
+            self.completion_hook.on_completion(
+{% for arg in op.completion_hook_args %}
+{% if arg.field_name %}
+{% if arg.cast %}
+                {{ arg.param }}=cast(
+                    "{{ arg.cast }}",
+                    list(self.{{ arg.field_name }})
+                    if self.{{ arg.field_name }}
+                    else {{ arg.default }},
+                ),
+{% elif arg.default == "None" %}
+                {{ arg.param }}=(
+                    list(self.{{ arg.field_name }})
+                    if self.{{ arg.field_name }}
+                    else None
+                ),
+{% else %}
+                {{ arg.param }}=(
+                    list(self.{{ arg.field_name }})
+                    if self.{{ arg.field_name }}
+                    else {{ arg.default }}
+                ),
+{% endif %}
+{% else %}
+                {{ arg.param }}={{ arg.default }},
+{% endif %}
+{% endfor %}
+                span=span,
+                log_record={% if op.events %}log_record{% else %}None{% endif %},
+            )
+{% endif %}
+        span.end(end_time=end_time)
+
+{% for metric in op.autoreport_metrics %}
+    def _record_{{ common.metric_method_name(metric, ctx.root_namespace) }}(
+        self,
+        value: float,
+        *,
+        context: Context | None = None,
+    ) -> None:
+        attrs: dict[str, AttributeValue] = {}
+{% for attribute in metric.attributes %}
+{% if common.has_attribute(op.attributes, attribute.key) %}
+        if {{ common.op_field_access(op, attribute, ctx.root_namespace) }} is not None:
+            attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _value(
+                {{ common.op_field_access(op, attribute, ctx.root_namespace) }}
+            )
+{% endif %}
+{% endfor %}
+        self._{{ common.metric_method_name(metric, ctx.root_namespace) }}_instrument.record(
+            value,
+            attributes=_combine_attributes(attrs, self.metric_attributes),
+            context=context if context is not None else self._context,
+        )
+
+{% endfor %}
+{% for metric in op.generate_metrics %}
+{% set value_type = common.metric_value_type(metric) %}
+    def {{ common.record_method_name(metric, ctx.root_namespace) }}(
+        self,
+        value: {{ value_type }},
+{% for attribute in metric.attributes %}
+{% if not common.has_attribute(op.attributes, attribute.key) and attribute.requirement_level == "required" %}
+        {{ common.field_name(attribute, ctx.root_namespace) }}: {{ common.python_type(attribute, ctx.root_namespace) }},
+{% endif %}
+{% endfor %}
+        *,
+{% for attribute in metric.attributes %}
+{% if not common.has_attribute(op.attributes, attribute.key) and attribute.requirement_level != "required" %}
+        {{ common.field_name(attribute, ctx.root_namespace) }}: {{ common.python_type(attribute, ctx.root_namespace) }} | None = None,
+{% endif %}
+{% endfor %}
+        context: Context | None = None,
+    ) -> None:
+        attrs: dict[str, AttributeValue] = {
+{% for attribute in metric.attributes %}
+{% if not common.has_attribute(op.attributes, attribute.key) and attribute.requirement_level == "required" %}
+            {{ common.constant(attribute, ctx.root_namespace) }}: _value({{ common.field_name(attribute, ctx.root_namespace) }}),
+{% endif %}
+{% endfor %}
+        }
+{% for attribute in metric.attributes %}
+{% if not common.has_attribute(op.attributes, attribute.key) and attribute.requirement_level != "required" %}
+        if {{ common.field_name(attribute, ctx.root_namespace) }} is not None:
+            attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _value(
+                {{ common.field_name(attribute, ctx.root_namespace) }}
+            )
+{% endif %}
+{% endfor %}
+{% for attribute in metric.attributes %}
+{% if common.has_attribute(op.attributes, attribute.key) %}
+        if {{ common.op_field_access(op, attribute, ctx.root_namespace) }} is not None:
+            attrs[{{ common.constant(attribute, ctx.root_namespace) }}] = _value(
+                {{ common.op_field_access(op, attribute, ctx.root_namespace) }}
+            )
+{% endif %}
+{% endfor %}
+        self._{{ common.metric_method_name(metric, ctx.root_namespace) }}_instrument.record(
+            value,
+            attributes=_combine_attributes(attrs, self.metric_attributes),
+            context=context if context is not None else self._context,
+        )
+
+{% endfor %}
+{% for metric in op.metrics %}
+    @cached_property
+    def _{{ common.metric_method_name(metric, ctx.root_namespace) }}_instrument(self):
+{% if metric.instrument == "histogram" %}
+        return self._meter.create_histogram(
+            "{{ metric.name }}",
+            unit="{{ metric.unit }}",
+            description={{ metric.brief | trim | tojson }},
+{% if metric.name in params.histogram_boundaries %}
+            explicit_bucket_boundaries_advisory={{ params.histogram_boundaries[metric.name] | tojson }},
+{% endif %}
+        )
+{% elif metric.instrument == "updowncounter" %}
+        return self._meter.create_up_down_counter(
+            "{{ metric.name }}",
+            unit="{{ metric.unit }}",
+            description={{ metric.brief | trim | tojson }},
+        )
+{% else %}
+        return self._meter.create_counter(
+            "{{ metric.name }}",
+            unit="{{ metric.unit }}",
+            description={{ metric.brief | trim | tojson }},
+        )
+{% endif %}
+
+{% endfor %}
+{% endfor %}
+
+__all__ = [
+{% for op in ctx.operations %}
+    "{{ op.class_name }}",
+{% endfor %}
+]

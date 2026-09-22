@@ -3,193 +3,35 @@
 
 from __future__ import annotations
 
-import timeit
-from abc import ABC, abstractmethod
-from typing import Final
+from abc import ABC
+from collections.abc import Sequence
 
 from opentelemetry._logs import Logger
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.semconv.attributes import server_attributes
-from opentelemetry.trace import SpanKind, Tracer
-from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import (
-    Error,
-    GenAIInvocation,
-    get_content_attributes,
-)
+from opentelemetry.context import Context
+from opentelemetry.metrics import Meter
+from opentelemetry.trace import Tracer
+from opentelemetry.util.genai._attribute import _Attribute
+from opentelemetry.util.genai._invocation import GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.semconv.gen_ai import (
+    GenAiOperationName,
+    GenAiTokenType,
+)
+from opentelemetry.util.genai.semconv.gen_ai._generated import (
+    InvokeAgentClientOperation,
+    InvokeAgentInternalOperation,
+)
 from opentelemetry.util.genai.types import (
-    InputMessage,
     MessagePart,
-    OutputMessage,
     SystemInstructionPart,
-    ToolDefinition,
 )
-from opentelemetry.util.genai.utils import ContentCapturingMode
-from opentelemetry.util.types import AttributeValue
-
-_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
-    "gen_ai.usage.cache_write.input_tokens"
-)
-_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
-    "gen_ai.request.previous_response.id"
+from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
+    get_content_capturing_mode,
 )
 
 
-class AgentInvocation(GenAIInvocation, ABC):
-    """Base class representing a GenAI agent invocation (invoke_agent span).
-
-    Use handler.invoke_local_agent() or handler.invoke_remote_agent()
-    rather than constructing this directly.
-
-    Reference:
-        Client span: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-client-span
-        Internal span: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-internal-span
-    """
-
-    def __init__(
-        self,
-        tracer: Tracer,
-        instruments: _Instruments,
-        logger: Logger,
-        completion_hook: CompletionHook,
-        *,
-        span_kind: SpanKind,
-        start_attributes: dict[str, AttributeValue] | None = None,
-        request_model: str | None = None,
-        agent_name: str | None = None,
-        content_capturing_mode: ContentCapturingMode | None = None,
-    ) -> None:
-        _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
-        if start_attributes is None:
-            start_attributes = {
-                k: v
-                for k, v in (
-                    (GenAI.GEN_AI_REQUEST_MODEL, request_model),
-                    (GenAI.GEN_AI_AGENT_NAME, agent_name),
-                )
-                if v is not None
-            }
-        super().__init__(
-            tracer,
-            instruments,
-            logger,
-            completion_hook,
-            operation_name=_operation_name,
-            span_name=f"{_operation_name} {agent_name}"
-            if agent_name
-            else _operation_name,
-            span_kind=span_kind,
-            start_attributes=start_attributes,
-            content_capturing_mode=content_capturing_mode,
-        )
-        self._request_model: str | None = request_model
-        self._agent_name: str | None = agent_name
-        self.agent_description: str | None = None
-
-        self.conversation_id: str | None = None
-        self.data_source_id: str | None = None
-        self.output_type: str | None = None
-
-        self.temperature: float | None = None
-        self.top_p: float | None = None
-        self.frequency_penalty: float | None = None
-        self.presence_penalty: float | None = None
-        self.max_tokens: int | None = None
-        self.stop_sequences: list[str] | None = None
-        self.seed: int | None = None
-        self.choice_count: int | None = None
-
-        self.finish_reasons: list[str] | None = None
-
-        self.input_tokens: int | None = None
-        self.output_tokens: int | None = None
-
-        self.input_messages: list[InputMessage] = []
-        self.output_messages: list[OutputMessage] = []
-        self.system_instruction: (
-            list[SystemInstructionPart] | list[MessagePart]
-        ) = []
-        """System instructions for the agent. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
-        self.tool_definitions: list[ToolDefinition] | None = None
-
-    @property
-    def agent_name(self) -> str | None:
-        """The agent name provided at construction time."""
-        return self._agent_name
-
-    def _get_agent_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_AGENT_DESCRIPTION, self.agent_description),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
-
-    def _get_request_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_CONVERSATION_ID, self.conversation_id),
-            (GenAI.GEN_AI_DATA_SOURCE_ID, self.data_source_id),
-            (GenAI.GEN_AI_OUTPUT_TYPE, self.output_type),
-            (GenAI.GEN_AI_REQUEST_TEMPERATURE, self.temperature),
-            (GenAI.GEN_AI_REQUEST_TOP_P, self.top_p),
-            (GenAI.GEN_AI_REQUEST_FREQUENCY_PENALTY, self.frequency_penalty),
-            (GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY, self.presence_penalty),
-            (GenAI.GEN_AI_REQUEST_MAX_TOKENS, self.max_tokens),
-            (GenAI.GEN_AI_REQUEST_STOP_SEQUENCES, self.stop_sequences),
-            (GenAI.GEN_AI_REQUEST_SEED, self.seed),
-            (GenAI.GEN_AI_REQUEST_CHOICE_COUNT, self.choice_count),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
-
-    def _get_response_attributes(self) -> dict[str, AttributeValue]:
-        if self.finish_reasons:
-            return {GenAI.GEN_AI_RESPONSE_FINISH_REASONS: self.finish_reasons}
-        return {}
-
-    def _get_usage_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self.input_tokens),
-            (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, self.output_tokens),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
-
-    def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
-        return get_content_attributes(
-            input_messages=self.input_messages,
-            output_messages=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-            for_span=True,
-            content_capturing_mode=self._content_capturing_mode,
-        )
-
-    def _apply_finish(self, error: Error | None = None) -> None:
-        if error is not None:
-            self._apply_error_attributes(error)
-
-        attributes: dict[str, AttributeValue] = {}
-        attributes.update(self._get_agent_attributes())
-        attributes.update(self._get_request_attributes())
-        attributes.update(self._get_response_attributes())
-        attributes.update(self._get_usage_attributes())
-        attributes.update(self._get_content_attributes_for_span())
-        attributes.update(self.attributes)
-        self.span.set_attributes(attributes)
-        self._call_completion_hook(
-            inputs=self.input_messages,
-            outputs=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-        )
-        self._record_metrics()
-
-    @abstractmethod
-    def _record_metrics(self) -> None:
-        """Record invocation metrics."""
-
-
-class LocalAgentInvocation(AgentInvocation):
+class LocalAgentInvocation(GenAIInvocation, InvokeAgentInternalOperation):
     """Represents an in-process agent invocation (INTERNAL span kind).
 
     Use handler.invoke_local_agent() rather than constructing this directly.
@@ -198,10 +40,25 @@ class LocalAgentInvocation(AgentInvocation):
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-internal-span
     """
 
+    temperature = _Attribute[float | None]("request_temperature")
+    top_p = _Attribute[float | None]("request_top_p")
+    frequency_penalty = _Attribute[float | None]("request_frequency_penalty")
+    presence_penalty = _Attribute[float | None]("request_presence_penalty")
+    max_tokens = _Attribute[int | None]("request_max_tokens")
+    stop_sequences = _Attribute[list[str] | None]("request_stop_sequences")
+    seed = _Attribute[int | None]("request_seed")
+    choice_count = _Attribute[int | None]("request_choice_count")
+    input_tokens = _Attribute[int | None]("usage_input_tokens")
+    output_tokens = _Attribute[int | None]("usage_output_tokens")
+    system_instruction = _Attribute[
+        list[SystemInstructionPart] | Sequence[MessagePart]
+    ]("system_instructions", default_factory=list)
+    finish_reasons = _Attribute[list[str] | None]("response_finish_reasons")
+
     def __init__(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         *,
@@ -209,39 +66,32 @@ class LocalAgentInvocation(AgentInvocation):
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
-        super().__init__(
+        operation_name = GenAiOperationName.INVOKE_AGENT.value
+        mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
+        InvokeAgentInternalOperation.__init__(
+            self,
             tracer,
-            instruments,
+            meter,
             logger,
-            completion_hook,
-            span_kind=SpanKind.INTERNAL,
+            completion_hook=completion_hook,
+            operation_name=operation_name,
             request_model=request_model,
             agent_name=agent_name,
-            content_capturing_mode=content_capturing_mode,
+            content_capturing_mode=mode,
         )
-
-    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs: dict[str, AttributeValue] = {}
-        if self._agent_name is not None:
-            attrs[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
-        if self._request_model is not None:
-            attrs[GenAI.GEN_AI_REQUEST_MODEL] = self._request_model
-        attrs.update(self.metric_attributes)
-        return attrs
-
-    def _record_metrics(self) -> None:
-        duration_seconds = max(
-            timeit.default_timer() - self._monotonic_start_s,
-            0.0,
-        )
-        self._instruments.invoke_agent_duration.record(
-            duration_seconds,
-            attributes=self._get_metric_attributes(),
-            context=self._span_context,
-        )
+        GenAIInvocation.__init__(self)
+        if self.input_messages is None:
+            self.input_messages = []
+        if self.output_messages is None:
+            self.output_messages = []
+        self.start()
 
 
-class RemoteAgentInvocation(AgentInvocation):
+class RemoteAgentInvocation(GenAIInvocation, InvokeAgentClientOperation):
     """Represents a remote agent invocation (CLIENT span kind).
 
     Use handler.invoke_remote_agent() rather than constructing this directly.
@@ -250,10 +100,35 @@ class RemoteAgentInvocation(AgentInvocation):
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-client-span
     """
 
+    _provider = _Attribute[str]("provider_name")
+    previous_response_id = _Attribute[str | None](
+        "request_previous_response_id"
+    )
+    cache_read_input_tokens = _Attribute[int | None](
+        "usage_cache_read_input_tokens"
+    )
+    cache_write_input_tokens = _Attribute[int | None](
+        "usage_cache_write_input_tokens"
+    )
+    temperature = _Attribute[float | None]("request_temperature")
+    top_p = _Attribute[float | None]("request_top_p")
+    frequency_penalty = _Attribute[float | None]("request_frequency_penalty")
+    presence_penalty = _Attribute[float | None]("request_presence_penalty")
+    max_tokens = _Attribute[int | None]("request_max_tokens")
+    stop_sequences = _Attribute[list[str] | None]("request_stop_sequences")
+    seed = _Attribute[int | None]("request_seed")
+    choice_count = _Attribute[int | None]("request_choice_count")
+    input_tokens = _Attribute[int | None]("usage_input_tokens")
+    output_tokens = _Attribute[int | None]("usage_output_tokens")
+    system_instruction = _Attribute[
+        list[SystemInstructionPart] | Sequence[MessagePart]
+    ]("system_instructions", default_factory=list)
+    finish_reasons = _Attribute[list[str] | None]("response_finish_reasons")
+
     def __init__(
         self,
         tracer: Tracer,
-        instruments: _Instruments,
+        meter: Meter,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -264,46 +139,32 @@ class RemoteAgentInvocation(AgentInvocation):
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
-        start_attributes: dict[str, AttributeValue] = {
-            k: v
-            for k, v in (
-                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
-                (GenAI.GEN_AI_AGENT_NAME, agent_name),
-                (server_attributes.SERVER_ADDRESS, server_address),
-                (server_attributes.SERVER_PORT, server_port),
-                (GenAI.GEN_AI_PROVIDER_NAME, provider),
-            )
-            if v is not None
-        }
-        super().__init__(
-            tracer,
-            instruments,
-            logger,
-            completion_hook,
-            span_kind=SpanKind.CLIENT,
-            request_model=request_model,
-            agent_name=agent_name,
-            start_attributes=start_attributes,
-            content_capturing_mode=content_capturing_mode,
+        operation_name = GenAiOperationName.INVOKE_AGENT.value
+        mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
         )
-        self._provider: str = provider
-        self._server_address: str | None = server_address
-        self._server_port: int | None = server_port
-
-        self.agent_id: str | None = None
-        self.agent_version: str | None = None
-        self.previous_response_id: str | None = None
-        self._cache_write_input_tokens: int | None = None
-        self.cache_read_input_tokens: int | None = None
-
-    @property
-    def cache_write_input_tokens(self) -> int | None:
-        """The number of cache write input tokens."""
-        return self._cache_write_input_tokens
-
-    @cache_write_input_tokens.setter
-    def cache_write_input_tokens(self, value: int | None) -> None:
-        self._cache_write_input_tokens = value
+        InvokeAgentClientOperation.__init__(
+            self,
+            tracer,
+            meter,
+            logger,
+            completion_hook=completion_hook,
+            operation_name=operation_name,
+            provider_name=provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            agent_name=agent_name,
+            content_capturing_mode=mode,
+        )
+        GenAIInvocation.__init__(self)
+        if self.input_messages is None:
+            self.input_messages = []
+        if self.output_messages is None:
+            self.output_messages = []
+        self.start()
 
     @property
     def cache_creation_input_tokens(self) -> int | None:
@@ -312,63 +173,37 @@ class RemoteAgentInvocation(AgentInvocation):
         .. deprecated:: 1.3b0
             Use :attr:`cache_write_input_tokens` instead.
         """
-        return self._cache_write_input_tokens
+        return self.cache_write_input_tokens
 
     @cache_creation_input_tokens.setter
     def cache_creation_input_tokens(self, value: int | None) -> None:
-        self._cache_write_input_tokens = value
+        self.cache_write_input_tokens = value
 
-    def _get_agent_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_AGENT_ID, self.agent_id),
-            (GenAI.GEN_AI_AGENT_DESCRIPTION, self.agent_description),
-            (GenAI.GEN_AI_AGENT_VERSION, self.agent_version),
-        )
-        return {k: v for k, v in optional_attrs if v is not None}
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        pass
 
-    def _get_request_attributes(self) -> dict[str, AttributeValue]:
-        attrs = super()._get_request_attributes()
-        if self.previous_response_id is not None:
-            attrs[_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID] = (
-                self.previous_response_id
+    def _on_finish(self, context: Context | None = None) -> None:
+        if self.usage_input_tokens is not None:
+            self.record_token_usage(
+                self.usage_input_tokens,
+                token_type=GenAiTokenType.INPUT,
+                context=context,
             )
-        return attrs
-
-    def _get_usage_attributes(self) -> dict[str, AttributeValue]:
-        attrs = super()._get_usage_attributes()
-        if self.cache_write_input_tokens is not None:
-            attrs[_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = (
-                self.cache_write_input_tokens
+        if self.usage_output_tokens is not None:
+            self.record_token_usage(
+                self.usage_output_tokens,
+                token_type=GenAiTokenType.OUTPUT,
+                context=context,
             )
-        if self.cache_read_input_tokens is not None:
-            attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = (
-                self.cache_read_input_tokens
-            )
-        return attrs
 
-    def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-        attrs.update(self.metric_attributes)
-        return attrs
 
-    def _get_metric_token_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        if self.input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = self.input_tokens
-        if self.output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
-                self.output_tokens
-            )
-        return counts
+class AgentInvocation(GenAIInvocation, ABC):
+    """Base class representing a GenAI agent invocation (invoke_agent span).
 
-    def _record_metrics(self) -> None:
-        self._record_client_metrics()
+    .. deprecated:: 1.4b0
+        Use :class:`LocalAgentInvocation` or :class:`RemoteAgentInvocation` instead.
+    """
+
+
+AgentInvocation.register(LocalAgentInvocation)
+AgentInvocation.register(RemoteAgentInvocation)

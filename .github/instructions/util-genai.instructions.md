@@ -1,5 +1,7 @@
 ---
-applyTo: "util/opentelemetry-util-genai/**"
+applyTo:
+  - "util/opentelemetry-util-genai/**"
+  - "!util/opentelemetry-util-genai/src/opentelemetry/util/genai/semconv/**"
 ---
 
 Review rules for PRs touching `util/opentelemetry-util-genai/**`. Flag violations with a link to

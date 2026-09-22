@@ -83,11 +83,27 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
+      - name: Read pinned weaver version
+        id: versions
+        run: |
+          # shellcheck disable=SC2002
+          cat versions.env | grep -E '^WEAVER_VERSION=' >> "$GITHUB_OUTPUT"
+
+      - name: Install weaver ${{ steps.versions.outputs.WEAVER_VERSION }}
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@38befce4bc68fe320d20f189465c93835ac20c12 # v0.26.1
+        with:
+          version: ${{ steps.versions.outputs.WEAVER_VERSION }}
+
       - name: Run generate
         run: uvx --with tox-uv tox -e generate
 
       - name: Check generated files are up to date
-        run: git diff --exit-code || (echo 'Generated code is out of date, run "tox -e generate" and commit the changes in this PR.' && exit 1)
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status
+            echo 'Generated code is out of date, run "tox -e generate" and commit the changes in this PR.'
+            exit 1
+          fi
 
   readme:
     name: readme

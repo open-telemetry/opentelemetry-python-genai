@@ -338,6 +338,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event_by_default_for_event_only(self):
+        """Test that event is emitted by default when content_capturing is EVENT_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -462,7 +463,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         )
         inv_enabled = InferenceInvocation(
             self.tracer_provider.get_tracer("test"),
-            handler._instruments,
+            handler._meter,
             self.logger_provider.get_logger("test"),
             handler._completion_hook,
             provider="test-provider",
@@ -472,10 +473,24 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         inv_disabled = InferenceInvocation(
             self.tracer_provider.get_tracer("test"),
-            handler._instruments,
+            handler._meter,
             self.logger_provider.get_logger("test"),
             handler._completion_hook,
             provider="test-provider",
             content_capturing_mode=ContentCapturingMode.NO_CONTENT,
         )
         self.assertFalse(inv_disabled._emit_event)
+
+    def test_finish_does_not_read_env_on_hot_path(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        invocation.output_messages = [_create_output_message()]
+
+        with patch.object(os, "environ") as mock_environ:
+            invocation.stop()
+            mock_environ.get.assert_not_called()
