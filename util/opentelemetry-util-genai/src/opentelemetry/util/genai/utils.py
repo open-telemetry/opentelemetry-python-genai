@@ -1,13 +1,17 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+import inspect
 import json
 import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, is_dataclass
-from functools import partial
+from functools import lru_cache, partial
 from typing import Any
 
 from opentelemetry.util.genai.environment_variables import (
@@ -203,3 +207,76 @@ gen_ai_json_dumps = partial(
 )
 """Should be used by GenAI instrumentations when serializing objects that may contain
 bytes, datetimes, etc. for GenAI observability."""
+
+
+_SIGNATURE_CACHE_MAX_SIZE = 1024
+_inspect_signature = inspect.signature
+
+
+@lru_cache(maxsize=_SIGNATURE_CACHE_MAX_SIZE)
+def _cached_signature(
+    fn: Callable[..., object], drop_first: bool
+) -> inspect.Signature:
+    sig = _inspect_signature(fn)
+    if drop_first:
+        params = list(sig.parameters.values())[1:]
+        sig = sig.replace(parameters=params)
+    return sig
+
+
+def get_signature(func: Callable[..., object]) -> inspect.Signature:
+    """Return the inspect.Signature for a callable, caching long-lived definitions.
+
+    Bound methods are new objects on every attribute access, so key on the
+    underlying function. Only long-lived definitions are cached; per-call
+    closures and callable instances would otherwise be pinned in the cache.
+    """
+    try:
+        underlying = getattr(func, "__func__", None)
+        if (
+            underlying is not None
+            and getattr(func, "__self__", None) is not None
+            and "<locals>" not in getattr(underlying, "__qualname__", "")
+        ):
+            return _cached_signature(underlying, True)
+        if inspect.isfunction(func) and "<locals>" not in func.__qualname__:
+            return _cached_signature(func, False)
+    except TypeError:
+        pass
+    return _inspect_signature(func)
+
+
+def bind_arguments(
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    *,
+    apply_defaults: bool = False,
+) -> dict[str, object]:
+    """Bind positional and keyword arguments to func's parameters by name."""
+    try:
+        sig = get_signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+        if apply_defaults:
+            bound.apply_defaults()
+        return dict(bound.arguments)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+
+
+def get_argument(
+    name: str,
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    default: object = None,
+    *,
+    apply_defaults: bool = False,
+) -> object:
+    """Extract a named argument from kwargs or args via signature binding."""
+    if name in kwargs:
+        return kwargs[name]
+    if not args and not apply_defaults:
+        return default
+    bound = bind_arguments(func, args, kwargs, apply_defaults=apply_defaults)
+    return bound.get(name, default)

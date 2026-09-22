@@ -61,6 +61,29 @@ def test_agent_run_spans(
     )
 
 
+def test_agent_run_captures_keyword_input(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that Agent.run captures input when passed as keyword argument."""
+    agent = Agent(name="test-kw-agent", model=MockModel(id="mock-model"))
+    mock_output = ModelResponse(content="Hello back!")
+
+    with (
+        patch.object(Agent, "run", wraps=agent.run),
+        patch("agno.models.base.Model.response", return_value=mock_output),
+    ):
+        res = agent.run(input="hello keyword")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    input_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert input_messages is not None
+    assert "hello keyword" in input_messages
+
+
 def test_agent_arun_spans(
     instrument_agno,
     span_exporter,

@@ -682,12 +682,68 @@ class _FakeBothCloseStream(_FakeAcloseOnlyStream):
         self.close_count += 1
 
 
+class _FakeSyncCloseAsyncStream:
+    """An async stream with a synchronous ``close()`` and no ``aclose()``."""
+
+    def __init__(self, chunks=None, close_error=None):
+        self._chunks = list(chunks or [])
+        self._close_error = close_error
+        self.close_count = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._chunks:
+            return self._chunks.pop(0)
+        raise StopAsyncIteration
+
+    def close(self):
+        self.close_count += 1
+        if self._close_error is not None:
+            raise self._close_error
+
+
+def test_async_stream_wrapper_sync_close_direct_and_context_manager():
+    async def exercise():
+        stream = _FakeSyncCloseAsyncStream(chunks=["a"])
+        wrapper = _TestAsyncStreamWrapper(stream)
+
+        wrapper.close()
+
+        assert stream.close_count == 1
+        assert wrapper._self_stop_count == 1
+
+        stream2 = _FakeSyncCloseAsyncStream(chunks=["b"])
+        wrapper2 = _TestAsyncStreamWrapper(stream2)
+        async with wrapper2:
+            pass
+
+        assert stream2.close_count == 1
+        assert wrapper2._self_stop_count == 1
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_sync_close_fails_with_close_error():
+    error = RuntimeError("sync close failure")
+    stream = _FakeSyncCloseAsyncStream(chunks=["a"], close_error=error)
+    wrapper = _TestAsyncStreamWrapper(stream)
+
+    with pytest.raises(RuntimeError, match="sync close failure"):
+        wrapper.close()
+
+    assert wrapper._self_failures == [error]
+    assert wrapper._self_stop_count == 0
+
+
 def test_async_stream_wrapper_prefers_aclose_over_sync_close():
     async def exercise():
         stream = _FakeBothCloseStream(chunks=["a"])
         wrapper = _TestAsyncStreamWrapper(stream)
 
-        await wrapper.close()
+        async with wrapper:
+            pass
 
         assert stream.aclose_count == 1
         assert stream.close_count == 0

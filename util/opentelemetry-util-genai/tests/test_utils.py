@@ -56,9 +56,12 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     _should_emit_event,
+    bind_arguments,
     decode_base64,
     gen_ai_json_dumps,
+    get_argument,
     get_content_capturing_mode,
+    get_signature,
     image_from_url,
     should_capture_content_on_spans,
     should_emit_event,
@@ -1763,3 +1766,214 @@ class TestMediaHelpers(unittest.TestCase):
         corrupted = _REAL_PNG_B64[:-4] + "!!!!"
         part = image_from_url(f"data:image/png;base64,{corrupted}")
         self.assertIsNone(part)
+
+
+class _SampleService:
+    def execute(self, task: str):
+        pass
+
+
+class TestArgumentBinding(unittest.TestCase):
+    def test_bind_arguments_positional_and_keyword(self):
+        def sample_func(
+            a: int, b: str, c: bool = False, *extra: int, **kw: str
+        ):
+            pass
+
+        bound = bind_arguments(
+            sample_func, (1, "foo"), {"c": True, "custom": "val"}
+        )
+        self.assertEqual(bound["a"], 1)
+        self.assertEqual(bound["b"], "foo")
+        self.assertEqual(bound["c"], True)
+        self.assertEqual(bound["kw"], {"custom": "val"})
+
+    def test_bind_arguments_with_defaults(self):
+        def sample_func(x: int, y: str = "default_y", z: bool = True):
+            pass
+
+        bound_without_defaults = bind_arguments(sample_func, (42,), {})
+        self.assertEqual(bound_without_defaults, {"x": 42})
+
+        bound_with_defaults = bind_arguments(
+            sample_func, (42,), {}, apply_defaults=True
+        )
+        self.assertEqual(
+            bound_with_defaults, {"x": 42, "y": "default_y", "z": True}
+        )
+
+    def test_bind_arguments_bound_method(self):
+        class Greeter:
+            def greet(self, name: str, greeting: str = "Hello"):
+                return f"{greeting}, {name}"
+
+        g = Greeter()
+        bound = bind_arguments(g.greet, ("Alice",), {})
+        self.assertNotIn("self", bound)
+        self.assertEqual(bound["name"], "Alice")
+
+        bound_kw = bind_arguments(
+            g.greet, (), {"name": "Bob", "greeting": "Hi"}
+        )
+        self.assertNotIn("self", bound_kw)
+        self.assertEqual(bound_kw["name"], "Bob")
+        self.assertEqual(bound_kw["greeting"], "Hi")
+
+    def test_bind_arguments_invalid_args_falls_back_to_kwargs(self):
+        def sample_func(x: int):
+            pass
+
+        # Passing too many positional arguments causes TypeError in bind_partial
+        bound = bind_arguments(sample_func, (1, 2, 3), {"extra": "kept"})
+        self.assertEqual(bound, {"extra": "kept"})
+
+    def test_get_argument_fast_path_in_kwargs(self):
+        def sample_func(user_id: str, session_id: str):
+            pass
+
+        val = get_argument(
+            "user_id", sample_func, ("pos_user",), {"user_id": "kw_user"}
+        )
+        self.assertEqual(val, "kw_user")
+
+    def test_get_argument_positional(self):
+        def sample_func(user_id: str, session_id: str = "default_sess"):
+            pass
+
+        val = get_argument("user_id", sample_func, ("pos_user",), {})
+        self.assertEqual(val, "pos_user")
+
+        val_sess = get_argument(
+            "session_id", sample_func, ("pos_user", "pos_sess"), {}
+        )
+        self.assertEqual(val_sess, "pos_sess")
+
+    def test_get_argument_default_value(self):
+        def sample_func(user_id: str):
+            pass
+
+        val = get_argument(
+            "missing", sample_func, ("pos_user",), {}, default="fallback"
+        )
+        self.assertEqual(val, "fallback")
+
+    def test_get_argument_with_apply_defaults(self):
+        def sample_func(user_id: str, background: bool = False):
+            pass
+
+        val_no_defaults = get_argument(
+            "background", sample_func, ("user1",), {}
+        )
+        self.assertIsNone(val_no_defaults)
+
+        val_with_defaults = get_argument(
+            "background", sample_func, ("user1",), {}, apply_defaults=True
+        )
+        self.assertEqual(val_with_defaults, False)
+
+    def test_get_signature_caching(self):
+        s1 = _SampleService()
+        s2 = _SampleService()
+
+        sig1 = get_signature(s1.execute)
+        sig2 = get_signature(s2.execute)
+        self.assertIs(sig1, sig2)
+        self.assertNotIn("self", sig1.parameters)
+
+        sig_unbound = get_signature(_SampleService.execute)
+        self.assertIn("self", sig_unbound.parameters)
+        self.assertIsNot(sig1, sig_unbound)
+
+        sig_fn1 = get_signature(decode_base64)
+        sig_fn2 = get_signature(decode_base64)
+        self.assertIs(sig_fn1, sig_fn2)
+
+    def test_get_signature_local_function_not_cached(self):
+        from opentelemetry.util.genai.utils import _cached_signature
+
+        def local_fn(x: int):
+            pass
+
+        info_before = _cached_signature.cache_info()
+        sig1 = get_signature(local_fn)
+        sig2 = get_signature(local_fn)
+        info_after = _cached_signature.cache_info()
+        self.assertEqual(info_before.misses, info_after.misses)
+        self.assertEqual(info_before.hits, info_after.hits)
+        self.assertEqual(sig1, sig2)
+
+    def test_get_signature_local_method_not_cached(self):
+        from opentelemetry.util.genai.utils import _cached_signature
+
+        class LocalService:
+            def execute(self, x: int):
+                pass
+
+        svc = LocalService()
+        info_before = _cached_signature.cache_info()
+        sig1 = get_signature(svc.execute)
+        sig2 = get_signature(svc.execute)
+        info_after = _cached_signature.cache_info()
+        self.assertEqual(info_before.misses, info_after.misses)
+        self.assertEqual(info_before.hits, info_after.hits)
+        self.assertEqual(sig1, sig2)
+
+    def test_cached_signature_lru_eviction(self):
+        from functools import lru_cache
+
+        from opentelemetry.util.genai.utils import _cached_signature
+
+        cached_fn = lru_cache(maxsize=2)(_cached_signature.__wrapped__)
+
+        def f1(a: int):
+            pass
+
+        def f2(b: int):
+            pass
+
+        def f3(c: int):
+            pass
+
+        cached_fn(f1, False)
+        cached_fn(f2, False)
+        self.assertEqual(cached_fn.cache_info().currsize, 2)
+
+        # Accessing f3 evicts f1
+        cached_fn(f3, False)
+        self.assertEqual(cached_fn.cache_info().currsize, 2)
+
+        # Accessing f2 is a hit
+        cached_fn(f2, False)
+        self.assertEqual(cached_fn.cache_info().hits, 1)
+
+        # Accessing f1 is a miss (was evicted)
+        cached_fn(f1, False)
+        self.assertEqual(cached_fn.cache_info().misses, 4)
+
+    def test_get_signature_unhashable_callable(self):
+        class UnhashableCallable:
+            __hash__ = None
+
+            def __call__(self, x: int):
+                pass
+
+        obj = UnhashableCallable()
+        sig = get_signature(obj)
+        self.assertIn("x", sig.parameters)
+
+    def test_get_argument_skips_binding_when_no_args_or_defaults(self):
+        def sample_func(user_id: str | None = None):
+            pass
+
+        with patch(
+            "opentelemetry.util.genai.utils.bind_arguments"
+        ) as mock_bind:
+            val = get_argument(
+                "user_id",
+                sample_func,
+                (),
+                {"other": "val"},
+                default="fallback",
+            )
+            self.assertEqual(val, "fallback")
+            mock_bind.assert_not_called()

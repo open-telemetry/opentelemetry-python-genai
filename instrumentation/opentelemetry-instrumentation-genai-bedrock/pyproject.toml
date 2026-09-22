@@ -32,6 +32,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# aiobotocore / aioboto3 are intentionally omitted from instruments:
+# 1. Listing them here would require all users (including sync boto3 users) to install them.
+# 2. aiobotocore tightly pins botocore patch versions, which would cause frequent resolver conflicts.
+# 3. aiobotocore and aioboto3 are transitively bounded by the boto3 / botocore version pin.
 instruments = [
   "boto3 >= 1.40.46, < 2",
 ]

@@ -1,16 +1,16 @@
 OpenTelemetry Amazon Bedrock Instrumentation
 ============================================
 
-This package provides OpenTelemetry instrumentation for Amazon Bedrock (via the AWS SDK for Python, ``boto3``),
+This package provides OpenTelemetry instrumentation for Amazon Bedrock (via the AWS SDK for Python: ``boto3``, ``botocore``, ``aioboto3``, and ``aiobotocore``),
 implementing the OpenTelemetry Generative AI semantic conventions.
 
 Supported Operations
 --------------------
 
-* Synchronous chat via the Converse API (``client.converse``)
-* Streaming chat via the ConverseStream API (``client.converse_stream``)
-* Model invocation via the InvokeModel API (``client.invoke_model``)
-* Streaming model invocation via the InvokeModelWithResponseStream API (``client.invoke_model_with_response_stream``)
+* Synchronous and asynchronous chat via the Converse API (``client.converse``)
+* Synchronous and asynchronous streaming chat via the ConverseStream API (``client.converse_stream``)
+* Synchronous and asynchronous model invocation via the InvokeModel API (``client.invoke_model``)
+* Synchronous and asynchronous streaming model invocation via the InvokeModelWithResponseStream API (``client.invoke_model_with_response_stream``)
 
 Installation
 ------------
