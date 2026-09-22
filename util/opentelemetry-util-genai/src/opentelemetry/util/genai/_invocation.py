@@ -75,7 +75,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         *,
         start_attributes: dict[str, AttributeValue] | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
@@ -109,7 +109,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         )
         self._span_context: Context = set_span_in_context(self.span, context)
         self._context_token: ContextToken | None = (
-            attach(self._span_context) if attach_to_context else None
+            attach(self._span_context) if _attach_to_context else None
         )
         self._monotonic_start_s: float = timeit.default_timer()
         # Streaming state, set when the invocation is handed to a stream

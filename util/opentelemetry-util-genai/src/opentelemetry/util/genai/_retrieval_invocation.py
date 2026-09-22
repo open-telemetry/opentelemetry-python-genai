@@ -59,7 +59,7 @@ class RetrievalInvocation(GenAIInvocation):
         server_port: int | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
@@ -87,7 +87,7 @@ class RetrievalInvocation(GenAIInvocation):
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
             context=context,
-            attach_to_context=attach_to_context,
+            _attach_to_context=_attach_to_context,
         )
         self._data_source_id: str | None = data_source_id
         self._provider: str | None = provider

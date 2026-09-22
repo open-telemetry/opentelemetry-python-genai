@@ -1,1 +1,1 @@
-Add optional ``context`` and ``attach_to_context`` parameters to TelemetryHandler methods and invocation classes.
+Add optional ``context`` parameter to TelemetryHandler methods and invocation classes.

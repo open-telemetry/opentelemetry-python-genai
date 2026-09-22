@@ -28,16 +28,11 @@ Context Management and Propagation
 ----------------------------------
 
 Invocation factory methods on ``TelemetryHandler`` (such as ``inference``, ``workflow``, ``tool``,
-``embedding``, ``retrieval``, and ``invoke_local_agent``) accept two optional keyword arguments
+``embedding``, ``retrieval``, and ``invoke_local_agent``) accept an optional ``context`` keyword argument
 to manage context:
 
 - ``context``: An explicit OpenTelemetry ``Context`` to parent the span. When omitted, the current
   ambient context is used.
-- ``attach_to_context``: A boolean (defaulting to ``True``) controlling whether the invocation's
-  span is attached to the ambient context runtime (via ``attach()``). In asynchronous execution
-  environments where invocations start and finish across distinct asyncio tasks or threads, set
-  ``attach_to_context=False`` to prevent cross-context detach issues while propagating parentage
-  via the explicit ``context`` parameter.
 
 
 Modalities

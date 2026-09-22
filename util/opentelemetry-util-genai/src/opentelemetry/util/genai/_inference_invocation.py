@@ -99,7 +99,7 @@ class InferenceInvocation(GenAIInvocation):
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
@@ -128,7 +128,7 @@ class InferenceInvocation(GenAIInvocation):
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
             context=context,
-            attach_to_context=attach_to_context,
+            _attach_to_context=_attach_to_context,
         )
         self.conversation_id: str | None = None
         self._emit_event: bool = _should_emit_event(

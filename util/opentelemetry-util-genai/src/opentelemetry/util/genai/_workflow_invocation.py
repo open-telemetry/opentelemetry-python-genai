@@ -48,7 +48,7 @@ class WorkflowInvocation(GenAIInvocation):
         *,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
@@ -67,7 +67,7 @@ class WorkflowInvocation(GenAIInvocation):
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
             context=context,
-            attach_to_context=attach_to_context,
+            _attach_to_context=_attach_to_context,
         )
         self._name: str | None = name
         self.conversation_id: str | None = None

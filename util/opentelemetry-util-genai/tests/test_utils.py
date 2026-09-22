@@ -992,7 +992,7 @@ class TestTelemetryHandler(unittest.TestCase):
             inv = self.telemetry_handler.inference(
                 "test-provider",
                 request_model="detached-model",
-                attach_to_context=False,
+                _attach_to_context=False,
             )
             # Ambient context should not have changed
             assert get_current_span() == ambient_span
@@ -1047,7 +1047,7 @@ class TestTelemetryHandler(unittest.TestCase):
             inv = self.telemetry_handler.embedding(
                 "test-provider",
                 request_model="detached-embed-model",
-                attach_to_context=False,
+                _attach_to_context=False,
             )
             assert get_current_span() == ambient_span
             inv.stop()

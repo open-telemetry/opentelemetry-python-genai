@@ -301,7 +301,7 @@ class TelemetryHandlerFetchResponseTest(_FetchResponseTestBase):
         tracer = self.tracer_provider.get_tracer(__name__)
         with tracer.start_as_current_span("ambient") as ambient_span:
             inv = self._fetch_response(
-                response_id="detached_resp", attach_to_context=False
+                response_id="detached_resp", _attach_to_context=False
             )
             self.assertEqual(get_current_span(), ambient_span)
             inv.stop()

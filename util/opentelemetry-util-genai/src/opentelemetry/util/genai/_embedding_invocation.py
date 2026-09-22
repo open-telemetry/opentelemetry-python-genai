@@ -36,7 +36,7 @@ class EmbeddingInvocation(GenAIInvocation):
         server_port: int | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
@@ -63,7 +63,7 @@ class EmbeddingInvocation(GenAIInvocation):
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
             context=context,
-            attach_to_context=attach_to_context,
+            _attach_to_context=_attach_to_context,
         )
         # e.g., azure.ai.openai, openai, aws.bedrock
         self._provider: str = provider

@@ -382,7 +382,7 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
         tracer = self.tracer_provider.get_tracer(__name__)
         with tracer.start_as_current_span("ambient") as ambient_span:
             inv = self.handler.invoke_local_agent(
-                agent_name="detached_agent", attach_to_context=False
+                agent_name="detached_agent", _attach_to_context=False
             )
             assert get_current_span() == ambient_span
             inv.stop()
@@ -751,7 +751,7 @@ class TestRemoteAgentInvocation(unittest.TestCase):
             inv = self.handler.invoke_remote_agent(
                 "test-provider",
                 agent_name="detached_remote",
-                attach_to_context=False,
+                _attach_to_context=False,
             )
             assert get_current_span() == ambient_span
             inv.stop()

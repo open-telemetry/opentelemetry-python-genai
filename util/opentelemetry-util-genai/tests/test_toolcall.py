@@ -552,7 +552,7 @@ def test_tool_invocation_attach_to_context_false(method_name: str):
     tracer = tracer_provider.get_tracer("test")
     with tracer.start_as_current_span("ambient_span") as ambient_span:
         tool_invocation = getattr(handler, method_name)(
-            "detached_tool", attach_to_context=False
+            "detached_tool", _attach_to_context=False
         )
         assert get_current_span() == ambient_span
         tool_invocation.stop()

@@ -137,7 +137,7 @@ programmatically, which takes precedence over the environment variable::
 Known Limitations
 -----------------
 
-Context propagation to nested calls (such as auto-instrumented HTTP clients 
+Context propagation to nested calls (such as auto-instrumented HTTP clients
 or database queries within tools) is not supported when using LangChain async API.
 
 References

@@ -394,7 +394,9 @@ def test_agent_named_runnable_is_an_agent() -> None:
     ).invoke("value", {"callbacks": [handler]})
 
     telemetry.invoke_local_agent.assert_called_once_with(
-        agent_name="SupportAgentRunner"
+        agent_name="SupportAgentRunner",
+        context=None,
+        _attach_to_context=True,
     )
 
 
@@ -816,6 +818,65 @@ async def test_async_agent_with_tool_and_chat_parenting(
     for chat_span in chat_spans:
         _assert_parent(chat_span, agent_span)
     assert len({s.context.trace_id for s in spans}) == 1
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+def test_sync_workflow_calls_async_agent(
+    span_exporter, start_instrumentation
+) -> None:
+    async_agent = create_agent(
+        FakeModel(responses=[AIMessage(content="async done")]),
+        [noop],
+        name="async_agent",
+    )
+
+    def sync_parent_fn(x: Any, config: RunnableConfig) -> Any:
+        return asyncio.run(
+            async_agent.ainvoke({"messages": [("user", "go")]}, config)
+        )
+
+    parent = RunnableLambda(sync_parent_fn).with_config(run_name="sync_parent")
+    parent.invoke({"value": 1})
+
+    spans = span_exporter.get_finished_spans()
+    parent_span = _root_span_named(spans, "invoke_workflow sync_parent")
+    child_span = _span_named(spans, "invoke_agent async_agent")
+    assert parent_span.parent is None
+    _assert_parent(child_span, parent_span)
+    assert child_span.context.trace_id == parent_span.context.trace_id
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+@pytest.mark.asyncio
+async def test_async_workflow_calls_sync_agent(
+    span_exporter, start_instrumentation
+) -> None:
+    sync_agent = create_agent(
+        FakeModel(responses=[AIMessage(content="sync done")]),
+        [noop],
+        name="sync_agent",
+    )
+
+    async def async_parent_fn(x: Any, config: RunnableConfig) -> Any:
+        return sync_agent.invoke({"messages": [("user", "go")]}, config)
+
+    parent = RunnableLambda(async_parent_fn).with_config(
+        run_name="async_parent"
+    )
+    await parent.ainvoke({"value": 1})
+
+    spans = span_exporter.get_finished_spans()
+    parent_span = _root_span_named(spans, "invoke_workflow async_parent")
+    child_span = _span_named(spans, "invoke_agent sync_agent")
+    assert parent_span.parent is None
+    _assert_parent(child_span, parent_span)
+    assert child_span.context.trace_id == parent_span.context.trace_id
 
 
 def test_announced_root_bypasses_inherited_middleware_name(

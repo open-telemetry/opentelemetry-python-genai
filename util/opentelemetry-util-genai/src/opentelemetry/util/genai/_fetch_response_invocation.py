@@ -92,7 +92,7 @@ class FetchResponseInvocation(GenAIInvocation):
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
         start_attributes: dict[str, AttributeValue] = {
@@ -120,7 +120,7 @@ class FetchResponseInvocation(GenAIInvocation):
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
             context=context,
-            attach_to_context=attach_to_context,
+            _attach_to_context=_attach_to_context,
         )
         self._provider: str = provider
         self._response_id: str = response_id

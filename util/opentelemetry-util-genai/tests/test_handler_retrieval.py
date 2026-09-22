@@ -174,7 +174,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         tracer = self.tracer_provider.get_tracer(__name__)
         with tracer.start_as_current_span("ambient") as ambient_span:
             inv = self.handler.retrieval(
-                data_source_id="detached_ds", attach_to_context=False
+                data_source_id="detached_ds", _attach_to_context=False
             )
             self.assertEqual(get_current_span(), ambient_span)
             inv.stop()

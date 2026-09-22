@@ -69,7 +69,7 @@ class ToolInvocation(GenAIInvocation):
         tool_description: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
-        attach_to_context: bool = True,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.tool(name) instead of calling this directly.
 
@@ -97,7 +97,7 @@ class ToolInvocation(GenAIInvocation):
             span_kind=SpanKind.INTERNAL,
             start_attributes=start_attributes,
             context=context,
-            attach_to_context=attach_to_context,
+            _attach_to_context=_attach_to_context,
             content_capturing_mode=content_capturing_mode,
         )
         self._name: str = name

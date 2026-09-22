@@ -244,7 +244,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
 
         tracer = self.tracer_provider.get_tracer(__name__)
         with tracer.start_as_current_span("ambient") as ambient_span:
-            inv = self.handler.workflow("async_wf", attach_to_context=False)
+            inv = self.handler.workflow("async_wf", _attach_to_context=False)
             self.assertEqual(get_current_span(), ambient_span)
 
             async def _finish_in_other_task():
