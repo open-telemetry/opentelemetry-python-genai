@@ -255,6 +255,33 @@ class TestOnChainStartAgent:
         )
         assert handler._invocation_manager.get_invocation(run_id) is agent_inv
 
+    def test_agent_name_heuristic_sets_standard_agent_attributes(self):
+        handler, telemetry, _, agent_inv = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        run_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={},
+            inputs={"messages": [HumanMessage(content="Solve this")]},
+            run_id=run_id,
+            parent_run_id=None,
+            metadata={"thread_id": "thread-abc"},
+            name="AgentExecutor",
+        )
+        handler.on_chain_end(
+            outputs={"messages": [AIMessage(content="Solved")]},
+            run_id=run_id,
+        )
+
+        telemetry.workflow.assert_not_called()
+        telemetry.invoke_local_agent.assert_called_once_with(
+            agent_name="AgentExecutor"
+        )
+        assert agent_inv.conversation_id == "thread-abc"
+        assert agent_inv.input_messages[0].parts[0].content == "Solve this"
+        assert agent_inv.output_messages[0].parts[0].content == "Solved"
+        agent_inv.stop.assert_called_once_with()
+
     def test_agent_metadata_set(self):
         handler, _, _, agent_inv = _make_handler()
         run_id = _run_id()
