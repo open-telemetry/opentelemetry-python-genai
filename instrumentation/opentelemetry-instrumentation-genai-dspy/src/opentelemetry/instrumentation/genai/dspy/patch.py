@@ -511,7 +511,7 @@ def _extract_retrieval_k(
 
 def _extract_server_address_and_port(
     instance: _RetrieverInstance,
-    rm: object,
+    rm: _RetrieverInstance | Callable[..., Any] | None,
 ) -> tuple[str | None, int | None]:
     url: object = getattr(instance, "url", None) or (
         getattr(rm, "url", None) if rm is not None else None
@@ -550,7 +550,9 @@ def _start_retrieval_invocation(
 ) -> RetrievalInvocation:
     import dspy
 
-    rm: object = getattr(instance, "rm", None)
+    rm: _RetrieverInstance | Callable[..., Any] | None = getattr(
+        instance, "rm", None
+    )
     if rm is None and type(instance) is dspy.Retrieve:
         rm = getattr(dspy.settings, "rm", None)
 
@@ -562,20 +564,15 @@ def _start_retrieval_invocation(
         or getattr(instance, "collection_name", None)
         or getattr(instance, "_weaviate_collection_name", None)
         or getattr(instance, "databricks_index_name", None)
-        or (getattr(rm, "data_source_id", None) if rm is not None else None)
-        or (getattr(rm, "index_name", None) if rm is not None else None)
-        or (getattr(rm, "collection_name", None) if rm is not None else None)
-        or (
-            getattr(rm, "_weaviate_collection_name", None)
-            if rm is not None
-            else None
-        )
-        or (
-            getattr(rm, "databricks_index_name", None)
-            if rm is not None
-            else None
-        )
     )
+    if data_source_id is None and rm is not None:
+        data_source_id = (
+            getattr(rm, "data_source_id", None)
+            or getattr(rm, "index_name", None)
+            or getattr(rm, "collection_name", None)
+            or getattr(rm, "_weaviate_collection_name", None)
+            or getattr(rm, "databricks_index_name", None)
+        )
 
     server_address, server_port = _extract_server_address_and_port(
         instance, rm
@@ -590,6 +587,8 @@ def _start_retrieval_invocation(
     )
 
     target_callable: Callable[..., Any] = wrapped
+    # Retrieve.__call__ delegates *args, **kwargs without named parameters; bind
+    # against forward() when available to extract query and k.
     if getattr(wrapped, "__name__", None) == "__call__":
         forward_attr = getattr(instance, "forward", None)
         if callable(forward_attr):
