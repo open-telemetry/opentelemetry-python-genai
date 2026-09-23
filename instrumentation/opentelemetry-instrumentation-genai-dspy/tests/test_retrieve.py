@@ -526,3 +526,66 @@ def test_retrieve_subclass_overriding_forward(
         {"id": "weav-0", "score": None},
         {"id": "weav-1", "score": None},
     ]
+
+
+def test_retrieval_reentrancy_guard(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dspy.dsp.colbertv2 as colbert_mod
+
+    from opentelemetry.instrumentation.genai.dspy.patch import (
+        _in_retrieval_invocation,
+    )
+
+    observed_contextvar_states: list[bool] = []
+    should_fail = False
+
+    def fake_colbert_request(url: str, query: str, k: int) -> list[Any]:
+        observed_contextvar_states.append(_in_retrieval_invocation.get())
+        if should_fail:
+            raise RuntimeError("ColBERT backend failure")
+        return [
+            {"long_text": f"Doc {i}", "pid": i, "score": 0.9} for i in range(k)
+        ]
+
+    monkeypatch.setattr(
+        colbert_mod, "colbertv2_get_request", fake_colbert_request
+    )
+
+    assert _in_retrieval_invocation.get() is False
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        colbert = dspy.ColBERTv2(url="http://colbert.local", port=8893)
+        dspy.settings.configure(rm=colbert)
+        retrieve = dspy.Retrieve(k=2)
+
+        # 1. Nested call chain: Retrieve.__call__ -> Retrieve.forward -> ColBERTv2.__call__
+        # must emit only 1 span and keep _in_retrieval_invocation True during execution.
+        retrieve("First nested query")
+        assert observed_contextvar_states == [True]
+        assert _in_retrieval_invocation.get() is False
+        assert len(span_exporter.get_finished_spans()) == 1
+
+        # 2. Error inside nested call must still reset _in_retrieval_invocation to False.
+        should_fail = True
+        with pytest.raises(RuntimeError, match="ColBERT backend failure"):
+            retrieve("Failing nested query")
+        assert observed_contextvar_states == [True, True]
+        assert _in_retrieval_invocation.get() is False
+        assert len(span_exporter.get_finished_spans()) == 2
+
+        # 3. Subsequent retrieval after error still emits a span normally.
+        should_fail = False
+        colbert("Direct recovery query", k=1)
+        assert observed_contextvar_states == [True, True, True]
+        assert _in_retrieval_invocation.get() is False
+        assert len(span_exporter.get_finished_spans()) == 3
