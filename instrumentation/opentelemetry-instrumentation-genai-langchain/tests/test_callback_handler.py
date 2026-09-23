@@ -149,9 +149,7 @@ class TestExtractPromptContext:
         assert context.name == "weather"
         assert context.variables == {
             "question": "Will it rain?",
-            "history": [
-                HumanMessage(content="Earlier question").model_dump()
-            ],
+            "history": [HumanMessage(content="Earlier question").model_dump()],
             "language": "French",
         }
 
@@ -766,9 +764,7 @@ class TestPromptContextLifecycle:
             run_id=prompt_id,
             parent_run_id=sequence_id,
         )
-        handler.on_chain_end(
-            outputs={"text": "Hello Ada"}, run_id=prompt_id
-        )
+        handler.on_chain_end(outputs={"text": "Hello Ada"}, run_id=prompt_id)
 
         handler.on_chat_model_start(
             serialized={"name": "ChatOpenAI"},

@@ -94,9 +94,7 @@ def _string_sequence(value: object) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str):
         return []
     return [
-        item
-        for item in cast(Sequence[object], value)
-        if isinstance(item, str)
+        item for item in cast(Sequence[object], value) if isinstance(item, str)
     ]
 
 
@@ -149,9 +147,7 @@ def _extract_prompt_context(
     if not isinstance(raw_serialized_kwargs, Mapping):
         serialized_kwargs: Mapping[str, object] = {}
     else:
-        serialized_kwargs = cast(
-            Mapping[str, object], raw_serialized_kwargs
-        )
+        serialized_kwargs = cast(Mapping[str, object], raw_serialized_kwargs)
 
     name = (metadata or {}).get("prompt_name")
     if not isinstance(name, str):
@@ -437,9 +433,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             metadata,
             capture_variables=capture_content,
         ):
-            self._invocation_manager.set_prompt_context(
-                run_id, prompt_context
-            )
+            self._invocation_manager.set_prompt_context(run_id, prompt_context)
 
     def on_chain_end(
         self,
