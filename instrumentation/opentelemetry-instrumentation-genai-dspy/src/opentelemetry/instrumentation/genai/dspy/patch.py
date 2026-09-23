@@ -41,11 +41,6 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import bind_arguments
 
-if TYPE_CHECKING:
-    from dspy.adapters.types.tool import Tool
-    from dspy.primitives.module import Module
-    from dspy.primitives.prediction import Prediction
-
 _REACT_MODULE = "dspy.predict.react"
 _REACT_CLASS = "ReAct"
 
@@ -59,8 +54,15 @@ _in_retrieval_invocation: ContextVar[bool] = ContextVar(
     "_in_retrieval_invocation", default=False
 )
 
-
 if TYPE_CHECKING:
+    from dspy.adapters.types.tool import Tool
+    from dspy.dsp.colbertv2 import ColBERTv2
+    from dspy.primitives.module import Module
+    from dspy.primitives.prediction import Prediction
+    from dspy.retrievers.embeddings import Embeddings
+    from dspy.retrievers.retrieve import Retrieve
+
+    _RetrieverInstance = Retrieve | ColBERTv2 | Embeddings
     _BoundFunctionWrapper = BoundFunctionWrapper[Any, Any]
     _FunctionWrapper = FunctionWrapper[Any, Any]
 else:
@@ -493,25 +495,25 @@ def _extract_retrieval_query(
 
 
 def _extract_retrieval_k(
-    instance: Any,
+    instance: _RetrieverInstance,
     bound: Mapping[str, object],
 ) -> int | None:
     k = bound.get("k")
-    if k is None and hasattr(instance, "k"):
+    if k is None:
         k = getattr(instance, "k", None)
-    if k is not None:
+    if isinstance(k, (int, str)) and not isinstance(k, bool):
         try:
-            return int(cast(Any, k))
+            return int(k)
         except (ValueError, TypeError):
             return None
     return None
 
 
 def _extract_server_address_and_port(
-    instance: Any,
-    rm: Any,
+    instance: _RetrieverInstance,
+    rm: object,
 ) -> tuple[str | None, int | None]:
-    url: Any = getattr(instance, "url", None) or (
+    url: object = getattr(instance, "url", None) or (
         getattr(rm, "url", None) if rm is not None else None
     )
     hostname: str | None = None
@@ -527,10 +529,10 @@ def _extract_server_address_and_port(
             pass
 
     if port is None:
-        raw_port: Any = getattr(instance, "port", None)
+        raw_port: object = getattr(instance, "port", None)
         if raw_port is None and rm is not None:
             raw_port = getattr(rm, "port", None)
-        if raw_port is not None and not isinstance(raw_port, bool):
+        if isinstance(raw_port, (int, str)) and not isinstance(raw_port, bool):
             try:
                 port = int(raw_port)
             except (ValueError, TypeError):
@@ -541,15 +543,15 @@ def _extract_server_address_and_port(
 
 def _start_retrieval_invocation(
     handler: TelemetryHandler,
-    instance: Any,
+    instance: _RetrieverInstance,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     wrapped: Callable[..., Any],
 ) -> RetrievalInvocation:
-    rm: Any = getattr(instance, "rm", None)
-    if rm is None and type(instance).__name__ == "Retrieve":
-        import dspy
+    import dspy
 
+    rm: object = getattr(instance, "rm", None)
+    if rm is None and type(instance) is dspy.Retrieve:
         rm = getattr(dspy.settings, "rm", None)
 
     # DSPy retrieval models lack a uniform identifier schema, so inspect common index
@@ -588,9 +590,7 @@ def _start_retrieval_invocation(
     )
 
     target_callable: Callable[..., Any] = wrapped
-    if getattr(wrapped, "__name__", None) == "__call__" and hasattr(
-        instance, "forward"
-    ):
+    if getattr(wrapped, "__name__", None) == "__call__":
         forward_attr = getattr(instance, "forward", None)
         if callable(forward_attr):
             target_callable = forward_attr
@@ -636,13 +636,12 @@ def _set_retrieval_invocation_documents(
 
     passages: Sequence[object] | None = None
     for attr_name in ("passages", "docs"):
-        if hasattr(result, attr_name):
-            attr_val = getattr(result, attr_name)
-            if isinstance(attr_val, Sequence) and not isinstance(
-                attr_val, (str, bytes)
-            ):
-                passages = cast(Sequence[object], attr_val)
-                break
+        attr_val = getattr(result, attr_name, None)
+        if isinstance(attr_val, Sequence) and not isinstance(
+            attr_val, (str, bytes)
+        ):
+            passages = cast(Sequence[object], attr_val)
+            break
     if passages is None:
         if isinstance(result, Sequence) and not isinstance(
             result, (str, bytes)
@@ -694,7 +693,7 @@ def _retrieve_forward(
 ) -> Callable[..., Any]:
     def traced_method(
         wrapped: Callable[..., Any],
-        instance: Any,
+        instance: _RetrieverInstance,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
