@@ -1,0 +1,205 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "content": "Answer this weather question briefly: What's the weather like in Seattle?",
+            "role": "user"
+          }
+        ],
+        "model": "gpt-4.1",
+        "max_completion_tokens": 100,
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '177'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.2.0
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 3.2.0
+      x-stainless-raw-response:
+      - 'true'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.15
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "content_filter_results": {
+                "defender_for_ai": {
+                  "detected": false,
+                  "filtered": false,
+                  "details": {}
+                },
+                "hate": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "protected_material_code": {
+                  "detected": false,
+                  "filtered": false
+                },
+                "protected_material_text": {
+                  "detected": false,
+                  "filtered": false
+                },
+                "self_harm": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "sexual": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "violence": {
+                  "filtered": false,
+                  "severity": "safe"
+                }
+              },
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "Seattle's weather is typically cool and cloudy, with a chance of rain. As of early summer, expect mild temperatures (60s\u201370s \u00b0F) and occasional sunny days. Check a local forecast for the latest conditions.",
+                "refusal": null,
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789507838,
+          "id": "chatcmpl-EOV1axDKQtoU9haVagJyiP0tLgYEk",
+          "model": "gpt-4.1-2025-04-14",
+          "object": "chat.completion",
+          "prompt_filter_results": [
+            {
+              "prompt_index": 0,
+              "content_filter_results": {
+                "defender_for_ai": {
+                  "detected": false,
+                  "filtered": false,
+                  "details": {}
+                },
+                "hate": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "jailbreak": {
+                  "detected": false,
+                  "filtered": false
+                },
+                "self_harm": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "sexual": {
+                  "filtered": false,
+                  "severity": "safe"
+                },
+                "violence": {
+                  "filtered": false,
+                  "severity": "safe"
+                }
+              }
+            }
+          ],
+          "routing": {
+            "serving_pipereplica": "d20260822223544-9f100e74-default-r0-dp0-default"
+          },
+          "service_tier": "default",
+          "system_fingerprint": "fp_861cf8a3da",
+          "usage": {
+            "completion_tokens": 46,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "latency_checkpoint": {
+              "engine_tbt_ms": 12,
+              "engine_ttft_ms": 39,
+              "engine_ttlt_ms": 594,
+              "pre_inference_ms": 204,
+              "service_tbt_ms": 12,
+              "service_ttft_ms": 597,
+              "service_ttlt_ms": 1136,
+              "user_visible_ttft_ms": 393
+            },
+            "prompt_tokens": 20,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 0
+            },
+            "total_tokens": 66
+          }
+        }
+    headers:
+      content-length:
+      - '1856'
+      content-type:
+      - application/json
+      date:
+      - Tue, 15 Sep 2026 21:30:39 GMT
+      skip-error-remapping:
+      - 'true'
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-abusepenalty-active:
+      - 'False'
+      x-ratelimit-key:
+      - gpt-4.1
+      x-ratelimit-limit-requests:
+      - '130'
+      x-ratelimit-limit-tokens:
+      - '130000'
+      x-ratelimit-remaining-requests:
+      - '129'
+      x-ratelimit-remaining-tokens:
+      - '129980'
+      x-ratelimit-renewalperiod-requests:
+      - '60'
+      x-ratelimit-renewalperiod-tokens:
+      - '60'
+      x-ratelimit-reset-requests:
+      - '0'
+      x-ratelimit-reset-tokens:
+      - '0'
+      x-request-id:
+      - a640ace2-8c0c-4ff7-8fcd-08d3ce5df557
+    status:
+      code: 200
+      message: OK
+version: 1
