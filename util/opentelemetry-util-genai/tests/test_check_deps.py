@@ -202,6 +202,151 @@ class TestCheckWorkspaceDependencies(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("exceeds current workspace version", errors[0])
 
+    def test_current_release_floor_without_dev_with_editable_passes(self):
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0, < 2"],
+            }
+        }
+        self.oldest_path.write_text(
+            "-e ../../util/opentelemetry-util-genai\n",
+            encoding="utf-8",
+        )
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            self.oldest_path,
+            self.repo_root,
+            self.workspace_packages,
+        )
+        self.assertEqual(errors, [])
+
+    def test_current_release_floor_without_dev_missing_editable_fails(self):
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0, < 2"],
+            }
+        }
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            None,
+            self.repo_root,
+            self.workspace_packages,
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("unreleased '1.2b0'", errors[0])
+        self.assertIn("missing a local/editable install", errors[0])
+
+    def test_release_preparation_with_editable_passes(self):
+        release_workspace = {
+            "opentelemetry-util-genai": (self.util_dir, "1.2b0"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0, < 2"],
+            }
+        }
+        self.oldest_path.write_text(
+            "-e ../../util/opentelemetry-util-genai\n",
+            encoding="utf-8",
+        )
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            self.oldest_path,
+            self.repo_root,
+            release_workspace,
+        )
+        self.assertEqual(errors, [])
+
+    def test_release_preparation_with_dev_floor_with_editable_passes(self):
+        release_workspace = {
+            "opentelemetry-util-genai": (self.util_dir, "1.2b0"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0.dev, < 2"],
+            }
+        }
+        self.oldest_path.write_text(
+            "-e ../../util/opentelemetry-util-genai\n",
+            encoding="utf-8",
+        )
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            self.oldest_path,
+            self.repo_root,
+            release_workspace,
+        )
+        self.assertEqual(errors, [])
+
+    def test_post_release_previous_floor_without_editable_passes(self):
+        post_release_workspace = {
+            "opentelemetry-util-genai": (self.util_dir, "1.3b0.dev"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0, < 2"],
+            }
+        }
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            None,
+            self.repo_root,
+            post_release_workspace,
+        )
+        self.assertEqual(errors, [])
+
+    def test_post_release_previous_floor_with_editable_fails(self):
+        post_release_workspace = {
+            "opentelemetry-util-genai": (self.util_dir, "1.3b0.dev"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0, < 2"],
+            }
+        }
+        self.oldest_path.write_text(
+            "-e ../../util/opentelemetry-util-genai\n",
+            encoding="utf-8",
+        )
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            self.oldest_path,
+            self.repo_root,
+            post_release_workspace,
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("released version on PyPI", errors[0])
+        self.assertIn("Remove the local/editable install", errors[0])
+
+    def test_exceeding_release_floor_fails(self):
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.3b0, < 2"],
+            }
+        }
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            None,
+            self.repo_root,
+            self.workspace_packages,
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("exceeds current workspace version", errors[0])
+
     def test_extraneous_editable_fails(self):
         pyproject = {
             "project": {

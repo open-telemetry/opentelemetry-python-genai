@@ -23,9 +23,9 @@
      - If a workspace dependency floor in pyproject.toml is from a previous release cycle,
        it resolves and tests from PyPI; it must NOT be installed from local paths in
        oldest requirements.
-     - If a workspace dependency floor matches the current unreleased workspace dev version,
+     - If a workspace dependency floor matches the current workspace release cycle,
        tests/requirements.oldest.txt must install it locally so tests can run against
-       the local development version.
+       the local development version while unreleased.
 
 3. Latest dependency pinning invariant:
    Target library dependencies in tests/requirements.latest.txt must have upper bounds or pins
@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +54,11 @@ if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
 
 from version_utils import get_version_file_path, get_version_from_file
+
+
+def to_release_version(v: Version) -> Version:
+    """Return the release version without the dev segment (e.g. 1.2b0.dev0 -> 1.2b0)."""
+    return Version(re.sub(r"\.dev\d*$", "", str(v)))
 
 
 def get_declared_requirements(pyproject: dict) -> list[Requirement]:
@@ -203,8 +209,11 @@ def check_workspace_dependencies(
             )
             continue
 
-        # Floor is from a previous cycle, published on PyPI (e.g. 1.0b0, 1.1b0, 1.1b0.dev)
-        if floor_version < current_version:
+        floor_release = to_release_version(floor_version)
+        current_release = to_release_version(current_version)
+
+        # Floor is from a previous cycle, published on PyPI (e.g. 1.0b0, 1.1b0)
+        if floor_release < current_release:
             if canonical_name in local_pkgs:
                 reported_locals.add(canonical_name)
                 errors.append(
@@ -212,8 +221,8 @@ def check_workspace_dependencies(
                     f"but tests/requirements.oldest.txt installs it locally with '{local_pkgs[canonical_name]}'. "
                     f"Remove the local/editable install so tests run against the declared floor from PyPI."
                 )
-        # Floor is the current unreleased workspace dev version (e.g. 1.2b0.dev)
-        elif floor_version == current_version:
+        # Floor matches the current workspace release cycle (e.g. 1.2b0 or 1.2b0.dev)
+        elif floor_release == current_release:
             if canonical_name not in local_pkgs:
                 errors.append(
                     f"{pkg_dir.name}: declared floor for '{req.name}' is unreleased '{lower_bound_str}', "
@@ -222,7 +231,7 @@ def check_workspace_dependencies(
                 )
             else:
                 valid_locals.add(canonical_name)
-        # Floor is higher than current workspace version
+        # Floor exceeds current workspace version
         else:
             errors.append(
                 f"{pkg_dir.name}: declared floor '{lower_bound_str}' for '{req.name}' exceeds "
@@ -233,7 +242,7 @@ def check_workspace_dependencies(
         if name not in valid_locals and name not in reported_locals:
             errors.append(
                 f"{pkg_dir.name}: '{line}' in tests/requirements.oldest.txt is not permitted. "
-                f"Local/editable installs in oldest requirements are only allowed for workspace dependencies declaring an unreleased .dev floor."
+                f"Local/editable installs in oldest requirements are only allowed for workspace dependencies declaring an unreleased floor."
             )
 
     return errors
