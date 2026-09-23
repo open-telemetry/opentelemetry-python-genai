@@ -15,6 +15,35 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.2b0 (2026-09-23)
+
+### Changed
+
+- Bump the minimum `opentelemetry-util-genai` version to 1.1b0, where
+  `Error.type` became the `error.type` string value.
+  ([#485](https://github.com/open-telemetry/opentelemetry-python-genai/pull/485))
+- Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
+  ([#593](https://github.com/open-telemetry/opentelemetry-python-genai/pull/593))
+- Record metrics `gen_ai.invoke_agent.duration` and
+  `gen_ai.execute_tool.duration` instead of `gen_ai.client.operation.duration`.
+  ([#616](https://github.com/open-telemetry/opentelemetry-python-genai/pull/616))
+
+### Fixed
+
+- Mark tool and agent span errors recorded on the agents-library Span.error
+  ([#485](https://github.com/open-telemetry/opentelemetry-python-genai/pull/485))
+- Record ``gen_ai.tool.call.arguments`` on ``execute_tool`` spans.
+  ([#588](https://github.com/open-telemetry/opentelemetry-python-genai/pull/588))
+- Emit telemetry under the `opentelemetry.instrumentation.genai.openai_agents`
+  instrumentation scope instead of `opentelemetry.util.genai.handler`
+  ([#632](https://github.com/open-telemetry/opentelemetry-python-genai/pull/632))
+- Do not record `gen_ai.provider.name` on tool execution metric attributes.
+  ([#710](https://github.com/open-telemetry/opentelemetry-python-genai/pull/710))
+- Record ``gen_ai.conversation.id`` from ``RunConfig.group_id`` on
+  ``invoke_workflow`` and ``invoke_agent`` spans, and propagate it to the
+  ``chat`` span emitted by the model SDK instrumentation.
+  ([#726](https://github.com/open-telemetry/opentelemetry-python-genai/pull/726))
+
 ## Version 1.1b0 (2026-08-20)
 
 ### Fixed

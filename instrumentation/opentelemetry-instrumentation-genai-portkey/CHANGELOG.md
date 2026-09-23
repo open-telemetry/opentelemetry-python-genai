@@ -14,3 +14,33 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 -->
 
 <!-- changelog start -->
+
+## Version 1.2b0 (2026-09-23)
+
+### Added
+
+- Add Portkey AI instrumentation
+  ([#465](https://github.com/open-telemetry/opentelemetry-python-genai/pull/465))
+- Add inference and streaming span instrumentation for Portkey
+  ([#466](https://github.com/open-telemetry/opentelemetry-python-genai/pull/466))
+- Record cache-write, cache-read, reasoning, and explicit text, image, and
+  audio token usage for chat and prompt completions, including streamed
+  responses.
+  ([#751](https://github.com/open-telemetry/opentelemetry-python-genai/pull/751))
+
+### Changed
+
+- Tool definitions are not emitted when content capture is disabled
+  ([#377](https://github.com/open-telemetry/opentelemetry-python-genai/pull/377))
+- Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
+  ([#575](https://github.com/open-telemetry/opentelemetry-python-genai/pull/575))
+
+### Fixed
+
+- Emit telemetry under the `opentelemetry.instrumentation.genai.portkey`
+  instrumentation scope instead of `opentelemetry.util.genai.handler`
+  ([#632](https://github.com/open-telemetry/opentelemetry-python-genai/pull/632))
+- Record failed Portkey invocations when cancellation raises a `BaseException`.
+  ([#656](https://github.com/open-telemetry/opentelemetry-python-genai/pull/656))
+- Coerce top_k request parameter to integer.
+  ([#707](https://github.com/open-telemetry/opentelemetry-python-genai/pull/707))

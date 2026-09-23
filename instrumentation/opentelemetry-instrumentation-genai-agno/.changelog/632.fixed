@@ -1,1 +1,0 @@
-Emit telemetry under the `opentelemetry.instrumentation.genai.agno` instrumentation scope instead of `opentelemetry.util.genai.handler`

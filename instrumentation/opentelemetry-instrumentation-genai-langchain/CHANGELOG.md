@@ -15,6 +15,81 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.2b0 (2026-09-23)
+
+### Added
+
+- (OpenInference Migration: LangChain) - Capture multimodal image content
+  (OpenAI ``image_url`` and Responses API ``input_image``, Anthropic ``image``,
+  and LangChain standard ``image`` blocks) as
+  ``BlobPart``/``UriPart``/``FilePart`` message parts.
+  ([#296](https://github.com/open-telemetry/opentelemetry-python-genai/pull/296))
+- Capture document relevance score on retrieval spans per OpenTelemetry GenAI
+  semantic conventions.
+  ([#670](https://github.com/open-telemetry/opentelemetry-python-genai/pull/670))
+- Record `cache_write_input_tokens` and modality token breakdown attributes
+  (`text`, `image`, `audio`) from LangChain usage metadata on
+  `InferenceInvocation`.
+  ([#671](https://github.com/open-telemetry/opentelemetry-python-genai/pull/671))
+- Capture request model from ls_model_name metadata on chat
+  ([#682](https://github.com/open-telemetry/opentelemetry-python-genai/pull/682))
+- Capture top_k - `gen_ai.request.top_k` and choice count -
+  `gen_ai.request.choice.count` on chat
+  ([#684](https://github.com/open-telemetry/opentelemetry-python-genai/pull/684))
+- Record finish_reasons from chat generation metadata.
+  ([#705](https://github.com/open-telemetry/opentelemetry-python-genai/pull/705))
+- Classify agent chains by name on on_chain_start
+  ([#766](https://github.com/open-telemetry/opentelemetry-python-genai/pull/766))
+
+### Changed
+
+- Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
+  ([#365](https://github.com/open-telemetry/opentelemetry-python-genai/pull/365))
+- Tool definitions are not emitted when content capture is disabled
+  ([#377](https://github.com/open-telemetry/opentelemetry-python-genai/pull/377))
+- Raised the opentelemetry-util-genai dependency floor to 1.2b0 for
+  ``GenAIInvocation.record_stream_chunk``
+  ([#482](https://github.com/open-telemetry/opentelemetry-python-genai/pull/482))
+- Populate name attribute on captured input and output messages when available.
+  ([#611](https://github.com/open-telemetry/opentelemetry-python-genai/pull/611))
+- Record metrics `gen_ai.invoke_agent.duration` and
+  `gen_ai.execute_tool.duration` instead of `gen_ai.client.operation.duration`,
+  and stop setting span attribute `gen_ai.agent.id` on internal agent spans.
+  ([#616](https://github.com/open-telemetry/opentelemetry-python-genai/pull/616))
+- Record modality token usage through the shared `InferenceInvocation` setters;
+  `extract_token_details` no longer returns modality keys.
+  ([#674](https://github.com/open-telemetry/opentelemetry-python-genai/pull/674))
+
+### Fixed
+
+- Emit invoke_agent spans for LangChain create_agent graph roots, including
+  nested agents, which get their own spans.
+  ([#391](https://github.com/open-telemetry/opentelemetry-python-genai/pull/391))
+- Populate ``gen_ai.conversation.id`` on model call and workflow spans,
+  resolved from the ``thread_id``, ``session_id`` or ``conversation_id``
+  metadata keys and inherited by nested runs.
+  ([#474](https://github.com/open-telemetry/opentelemetry-python-genai/pull/474))
+- Mark streamed calls with `gen_ai.request.stream` and record
+  `gen_ai.response.time_to_first_chunk` plus the streaming timing metrics,
+  which were never emitted for LangChain.
+  ([#482](https://github.com/open-telemetry/opentelemetry-python-genai/pull/482))
+- Record gen_ai.response.model on streamed spans
+  ([#505](https://github.com/open-telemetry/opentelemetry-python-genai/pull/505))
+- Resolve message roles by class so streaming chunk messages no longer report
+  their class name (``AIMessageChunk``) as the role
+  ([#506](https://github.com/open-telemetry/opentelemetry-python-genai/pull/506))
+- Record `gen_ai.tool.call.id` on failed `execute_tool` spans
+  ([#510](https://github.com/open-telemetry/opentelemetry-python-genai/pull/510))
+- Set `gen_ai.agent.name` on child `execute_tool` spans when running under an
+  enclosing `invoke_agent`
+  ([#512](https://github.com/open-telemetry/opentelemetry-python-genai/pull/512))
+- Emit telemetry under the `opentelemetry.instrumentation.genai.langchain`
+  instrumentation scope instead of `opentelemetry.util.genai.handler`
+  ([#632](https://github.com/open-telemetry/opentelemetry-python-genai/pull/632))
+- Propagate parent context to nested agent, tool, retrieval, and workflow spans
+  in async execution paths.
+  ([#758](https://github.com/open-telemetry/opentelemetry-python-genai/pull/758))
+
 ## Version 1.1b1 (2026-08-21)
 
 ### Changed

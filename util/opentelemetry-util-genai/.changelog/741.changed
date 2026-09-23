@@ -1,1 +1,0 @@
-Inline invocation span initialization into `GenAIInvocation.__init__`.

@@ -1,1 +1,0 @@
-Record failed OpenAI invocations when cancellation raises a `BaseException`.

@@ -15,6 +15,45 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.2b0 (2026-09-23)
+
+### Added
+
+- Capture Anthropic image and document inputs as GenAI ``BlobPart``,
+  ``UriPart``, ``FilePart``, and ``GenericPart`` message parts
+  ([#589](https://github.com/open-telemetry/opentelemetry-python-genai/pull/589))
+
+### Changed
+
+- Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
+  ([#365](https://github.com/open-telemetry/opentelemetry-python-genai/pull/365))
+
+### Fixed
+
+- preserve caller exceptions when closing Anthropic streaming responses
+  ([#397](https://github.com/open-telemetry/opentelemetry-python-genai/pull/397))
+- Capture Anthropic sampling parameters passed through ``extra_body``.
+  ([#480](https://github.com/open-telemetry/opentelemetry-python-genai/pull/480))
+- Emit telemetry under the `opentelemetry.instrumentation.genai.anthropic`
+  instrumentation scope instead of `opentelemetry.util.genai.handler`
+  ([#632](https://github.com/open-telemetry/opentelemetry-python-genai/pull/632))
+- Record ``gen_ai.tool.definitions`` from the ``tools`` request parameter.
+  ([#652](https://github.com/open-telemetry/opentelemetry-python-genai/pull/652))
+- Record response telemetry on ``messages.stream()`` when the stream is
+  consumed through ``text_stream``, ``get_final_message()``,
+  ``get_final_text()`` or ``until_done()``, which previously produced a span
+  with request attributes only.
+  ([#654](https://github.com/open-telemetry/opentelemetry-python-genai/pull/654))
+- Record failed Anthropic invocations when cancellation raises a
+  `BaseException`.
+  ([#656](https://github.com/open-telemetry/opentelemetry-python-genai/pull/656))
+- Fix streaming message accumulation with ``anthropic>=1.5.0`` and gracefully
+  suppress future accumulation on signature mismatches.
+  ([#672](https://github.com/open-telemetry/opentelemetry-python-genai/pull/672))
+- Represent Anthropic server tool calls and results with server tool message
+  parts.
+  ([#699](https://github.com/open-telemetry/opentelemetry-python-genai/pull/699))
+
 ## Version 1.1b1 (2026-08-21)
 
 ### Changed
