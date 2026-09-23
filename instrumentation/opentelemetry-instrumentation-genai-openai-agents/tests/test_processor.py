@@ -45,9 +45,15 @@ class _Span:
 class _Trace:
     """Minimal stand-in for agents-library Trace."""
 
-    def __init__(self, trace_id: str, name: str) -> None:
+    def __init__(
+        self,
+        trace_id: str,
+        name: str,
+        group_id: str | None = None,
+    ) -> None:
         self.trace_id = trace_id
         self.name = name
+        self.group_id = group_id
 
 
 def _build_handler() -> MagicMock:
@@ -61,7 +67,9 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
     trace = _Trace("trace-1", "Agent workflow")
 
     processor.on_trace_start(trace)
-    handler.workflow.assert_called_once_with(name="Agent workflow")
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", conversation_id=None
+    )
     workflow_invocation = handler.workflow.return_value
     assert (
         workflow_invocation.attributes["gen_ai.workflow.name"]
@@ -70,6 +78,19 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
 
     processor.on_trace_end(trace)
     workflow_invocation.stop.assert_called_once_with()
+
+
+def test_trace_group_id_is_passed_as_conversation_id() -> None:
+    handler = _build_handler()
+    handler.workflow.return_value = MagicMock(attributes={})
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow", group_id="chat-thread-42")
+
+    processor.on_trace_start(trace)
+
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", conversation_id="chat-thread-42"
+    )
 
 
 def test_agent_span_creates_invoke_local_agent() -> None:
