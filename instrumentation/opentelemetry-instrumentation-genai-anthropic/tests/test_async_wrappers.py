@@ -11,6 +11,10 @@ from opentelemetry.instrumentation.genai.anthropic.wrappers import (
     MessagesStreamManagerWrapper,
     MessagesStreamWrapper,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAIAttributes,
+)
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 
 def _make_invocation():
@@ -171,6 +175,63 @@ class _FakeAsyncResponse:
 
     async def aclose(self):
         self.aclose_calls += 1
+
+
+@pytest.mark.parametrize(
+    ("wrapper_type", "stream_type"),
+    [
+        (MessagesStreamWrapper, _FakeSyncStream),
+        (AsyncMessagesStreamWrapper, _FakeAsyncStream),
+    ],
+)
+def test_stream_wrapper_finalization_records_thinking_tokens(
+    wrapper_type,
+    stream_type,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+):
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        instrumentation_scope_name=(
+            "opentelemetry.instrumentation.genai.anthropic"
+        ),
+    )
+    invocation = handler.start_inference(
+        provider="anthropic",
+        request_model="claude-sonnet-4-20250514",
+    )
+    snapshot = SimpleNamespace(
+        id="msg_stream",
+        model="claude-sonnet-4-20250514",
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=20,
+            output_tokens_details=SimpleNamespace(thinking_tokens=12),
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        ),
+    )
+    wrapper = wrapper_type(
+        stream=stream_type(current_message_snapshot=snapshot),
+        invocation=invocation,
+        capture_content=False,
+    )
+
+    wrapper._stop()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert (
+        spans[0].attributes[
+            GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        ]
+        == 12
+    )
 
 
 def test_sync_stream_wrapper_exit_closes_without_exception():
