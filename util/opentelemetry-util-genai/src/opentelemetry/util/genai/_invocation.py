@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import asdict
 from types import TracebackType
@@ -158,6 +158,33 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """The OpenTelemetry Context containing this invocation's span."""
         return self._span_context
 
+    def suspend(self) -> None:
+        """Restore the context that was current before this invocation started.
+
+        Call this when handing control back to the caller while the invocation
+        is still running -- returning a stream the caller has not drained yet,
+        for example -- so unrelated caller work is not parented under this
+        invocation's span. Idempotent, and pairs with ``activate``.
+        """
+        token, self._context_token = self._context_token, None
+        if token is not None:
+            detach(token)
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        """Make this invocation's span the current span inside the block.
+
+        Restores the previous context on exit. A no-op once the invocation has finished.
+        """
+        if self._finished:
+            yield
+            return
+        token = attach(self.context)
+        try:
+            yield
+        finally:
+            detach(token)
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
         return self.metric_attributes
@@ -268,15 +295,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Apply finish telemetry and end the span. Finishes at most once."""
         if self._finished:
             return
-        # Clear up front so a nested or repeated finish is a no-op even if
+        # Set up front so a nested or repeated finish is a no-op even if
         # _apply_finish raises.
         self._finished = True
-        context_token, self._context_token = self._context_token, None
         try:
             self._apply_finish(error)
         finally:
-            if context_token is not None:
-                detach(context_token)
+            self.suspend()
             self.span.end()
 
     def stop(self) -> None:

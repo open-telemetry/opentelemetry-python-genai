@@ -1,0 +1,1 @@
+Add ``suspend()`` and ``activate()`` to GenAI invocations for handing context back to the caller while the invocation is still running, ``SyncToolStreamWrapper``/``AsyncToolStreamWrapper`` for streaming tool executions, and ``RetrievalDocument`` model.
