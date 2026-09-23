@@ -22,6 +22,10 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import Span, SpanKind, Tracer, set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
+from opentelemetry.util.genai._conversation_context import (
+    get_ambient_conversation_id,
+    with_conversation_id,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
@@ -76,6 +80,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         start_attributes: dict[str, AttributeValue] | None = None,
         context: Context | None = None,
         _attach_to_context: bool = True,
+        conversation_id: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
     ) -> None:
         self._tracer = tracer
@@ -97,6 +102,17 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             {} if metric_attributes is None else metric_attributes
         )
         """Additional attributes to set on metrics. Must be low cardinality. Not set on spans or events."""
+        self.conversation_id: str | None = (
+            conversation_id
+            if conversation_id is not None
+            else get_ambient_conversation_id(context)
+        )
+        """Emitted as ``gen_ai.conversation.id`` by the operations semconv
+        defines it on: inference, invoke_agent, invoke_workflow."""
+        if self.conversation_id:
+            context = with_conversation_id(
+                self.conversation_id, context=context
+            )
         self._start_attributes: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: operation_name,
             **(start_attributes or {}),

@@ -120,6 +120,19 @@ def test_tool_arguments_fallback_when_signature_unavailable() -> None:
     assert _extract_tool_arguments(tool, ("bar",), {}) is None
     assert _extract_tool_arguments(tool, ("bar",), {"foo": "baz"}) is None
 
+    # Callable without inspectable signature falls back similarly
+    class BuiltinTool:
+        func = dir
+
+    builtin_tool: Any = BuiltinTool()
+    assert _extract_tool_arguments(builtin_tool, (), {"foo": "bar"}) == {
+        "foo": "bar"
+    }
+    assert _extract_tool_arguments(builtin_tool, ("bar",), {}) is None
+    assert (
+        _extract_tool_arguments(builtin_tool, ("bar",), {"foo": "baz"}) is None
+    )
+
 
 @pytest.mark.anyio
 async def test_async_tool_execution(

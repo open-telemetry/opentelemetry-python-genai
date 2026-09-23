@@ -5,9 +5,8 @@
 
 from __future__ import annotations
 
-import inspect
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import copy, deepcopy
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
@@ -37,6 +36,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     TextPart,
 )
+from opentelemetry.util.genai.utils import bind_arguments
 
 if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
@@ -246,13 +246,10 @@ def _extract_tool_arguments(
 ) -> dict[str, Any] | None:
     func: Any = getattr(instance, "func", None)
     if func is not None and callable(func):
-        try:
-            sig = inspect.signature(func)
-            bound = sig.bind_partial(*args, **kwargs)
-            bound.apply_defaults()
-            return dict(bound.arguments)
-        except (TypeError, ValueError):
-            pass
+        bound = bind_arguments(func, args, kwargs, apply_defaults=True)
+        if args and bound == kwargs:
+            return None
+        return bound
 
     if kwargs and not args:
         return dict(kwargs)
@@ -409,29 +406,22 @@ def _react_aforward(
 
 
 def _extract_retrieval_query(
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    bound: Mapping[str, object],
 ) -> str | None:
-    if "query" in kwargs and kwargs["query"] is not None:
-        return str(kwargs["query"])
-    if args and args[0] is not None:
-        return str(args[0])
-    return None
+    val = bound.get("query")
+    return str(val) if val is not None else None
 
 
 def _extract_retrieval_k(
     instance: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    bound: Mapping[str, object],
 ) -> int | None:
-    k = kwargs.get("k")
-    if k is None and len(args) > 1:
-        k = args[1]
+    k = bound.get("k")
     if k is None and hasattr(instance, "k"):
         k = getattr(instance, "k", None)
     if k is not None:
         try:
-            return int(k)
+            return int(cast(Any, k))
         except (ValueError, TypeError):
             return None
     return None
@@ -442,6 +432,7 @@ def _start_retrieval_invocation(
     instance: Retrieve,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
 ) -> RetrievalInvocation:
     rm: Any = getattr(instance, "rm", None)
     if rm is None:
@@ -465,8 +456,9 @@ def _start_retrieval_invocation(
         else None,
     )
 
-    invocation.query_text = _extract_retrieval_query(args, kwargs)
-    invocation.top_k = _extract_retrieval_k(instance, args, kwargs)
+    bound = bind_arguments(wrapped, args, kwargs)
+    invocation.query_text = _extract_retrieval_query(bound)
+    invocation.top_k = _extract_retrieval_k(instance, bound)
     return invocation
 
 
@@ -506,7 +498,7 @@ def _retrieve_forward(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_retrieval_invocation(
-            handler, instance, args, kwargs
+            handler, instance, args, kwargs, wrapped
         )
         with invocation:
             result = wrapped(*args, **kwargs)

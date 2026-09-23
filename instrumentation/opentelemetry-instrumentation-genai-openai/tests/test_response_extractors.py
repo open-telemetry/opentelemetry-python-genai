@@ -1254,14 +1254,20 @@ def test_extract_conversation_id_ignores_unusable_values(
     )
 
 
-def test_apply_request_attributes_sets_conversation_id(loaded_module):
-    invocation = LLMInvocation(request_model="gpt-4o-mini")
-    loaded_module.apply_request_attributes(
-        invocation,
-        loaded_module.extract_params(conversation="conv_abc"),
-        False,
+def test_creation_kwargs_carry_conversation_id(loaded_module):
+    # Passed at construction so the invocation attaches it to its context,
+    # where nested spans can pick it up.
+    kwargs = loaded_module.get_inference_creation_kwargs(
+        loaded_module.extract_params(conversation="conv_abc"), None
     )
-    assert invocation.conversation_id == "conv_abc"
+    assert kwargs["conversation_id"] == "conv_abc"
+
+
+def test_creation_kwargs_omit_conversation_id_when_absent(loaded_module):
+    kwargs = loaded_module.get_inference_creation_kwargs(
+        loaded_module.extract_params(), None
+    )
+    assert "conversation_id" not in kwargs
 
 
 def test_extractors_handle_missing_genai_types_import(loaded_module):

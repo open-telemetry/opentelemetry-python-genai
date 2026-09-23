@@ -49,6 +49,7 @@ class WorkflowInvocation(GenAIInvocation):
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
         _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
@@ -65,12 +66,12 @@ class WorkflowInvocation(GenAIInvocation):
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
             start_attributes=start_attributes,
-            content_capturing_mode=content_capturing_mode,
             context=context,
+            conversation_id=conversation_id,
+            content_capturing_mode=content_capturing_mode,
             _attach_to_context=_attach_to_context,
         )
         self._name: str | None = name
-        self.conversation_id: str | None = None
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
 

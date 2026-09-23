@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import timeit
 from abc import ABCMeta, abstractmethod
@@ -282,10 +283,11 @@ class AsyncStreamWrapper(
 
         SDK streams (OpenAI's and Anthropic's ``AsyncStream``) expose an async
         ``close``; async generators -- what Google's async
-        ``generate_content_stream`` hands back -- expose ``aclose`` instead.
-        ``aclose`` is preferred for an object carrying both, because a pairing
-        of the two names is how objects with a *sync* ``close`` spell their
-        async one, and awaiting the sync one would raise.
+        ``generate_content_stream`` hands back -- expose ``aclose`` instead;
+        some async streams (such as ``aiobotocore``'s ``AioEventStream``)
+        expose a synchronous ``close``. ``aclose`` is preferred for an object
+        carrying both, because a pairing of the two names is how objects with a
+        *sync* ``close`` spell their async one.
 
         A stream exposing neither is left alone; there is nothing to close, and
         the caller's iteration has already ended.
@@ -295,13 +297,15 @@ class AsyncStreamWrapper(
             close = getattr(self._self_stream, "close", None)
         if close is None:
             return
-        await close()
+        res = close()
+        if inspect.isawaitable(res):
+            await res
 
     async def _close(self) -> None:
         """Close the stream and finalize telemetry.
 
-        Reached through whichever of ``close`` / ``aclose`` the wrapped stream
-        exposes; see ``__getattr__``.
+        Reached through ``aclose`` or an async ``close`` on the wrapped stream;
+        see ``__getattr__``.
         """
         try:
             await self._close_stream()
@@ -313,6 +317,35 @@ class AsyncStreamWrapper(
             )
             raise
         self._finalize_success()
+
+    async def _await_close(self, close_awaitable: Any) -> Any:
+        try:
+            res = await close_awaitable
+        except BaseException as error:
+            self._finalize_failure(error)
+            _logger.debug(
+                "GenAI stream close error during close",
+                exc_info=True,
+            )
+            raise
+        self._finalize_success()
+        return res
+
+    def _sync_close(self) -> Any:
+        """Close a stream exposing a synchronous ``close`` and finalize telemetry."""
+        try:
+            res = self._self_stream.close()
+        except BaseException as error:
+            self._finalize_failure(error)
+            _logger.debug(
+                "GenAI stream close error during close",
+                exc_info=True,
+            )
+            raise
+        if inspect.isawaitable(res):
+            return self._await_close(res)
+        self._finalize_success()
+        return res
 
     if TYPE_CHECKING:
         # Declared for type checkers only. Defining them for real would make
@@ -336,8 +369,12 @@ class AsyncStreamWrapper(
             # that shape (an ``AsyncStream`` has ``close``, an async generator
             # has ``aclose``).
             wrapped = object.__getattribute__(self, "__wrapped__")
-            if name in ("close", "aclose") and hasattr(wrapped, name):
+            if name == "aclose" and hasattr(wrapped, name):
                 return self._close
+            if name == "close" and hasattr(wrapped, name):
+                if inspect.iscoroutinefunction(getattr(wrapped, name)):
+                    return self._close
+                return self._sync_close
             return getattr(wrapped, name)
 
     def __aiter__(self):

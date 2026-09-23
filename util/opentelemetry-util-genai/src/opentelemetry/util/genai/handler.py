@@ -394,6 +394,7 @@ class TelemetryHandler:
         error_type_resolver: ErrorTypeResolver | None = None,
         context: Context | None = None,
         _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> InferenceInvocation:
         """Returns an Inference invocation. Starts span when called.
 
@@ -403,6 +404,9 @@ class TelemetryHandler:
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
         to finalize the span upon exiting. If not used as a ContextManager, the caller is
         responsible for calling `stop` or `fail` to finalize the span.
+
+        ``context`` parents the span and becomes the base of the invocation's
+        own context. ``conversation_id`` overrides the one inherited from it.
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
@@ -420,6 +424,7 @@ class TelemetryHandler:
             content_capturing_mode=self._content_capturing_mode,
             context=context,
             _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
         )
 
     def embedding(
@@ -623,6 +628,7 @@ class TelemetryHandler:
         agent_name: str | None = None,
         context: Context | None = None,
         _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> LocalAgentInvocation:
         """Returns an agent invocation (INTERNAL span kind). Starts span when called.
 
@@ -634,6 +640,9 @@ class TelemetryHandler:
         responsible for calling `stop` or `fail` to finalize the span.
 
         Use for agents running within the same process (e.g. LangChain, CrewAI).
+
+        ``context`` parents the span and becomes the base of the invocation's
+        own context. ``conversation_id`` overrides the one inherited from it.
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
@@ -647,6 +656,7 @@ class TelemetryHandler:
             content_capturing_mode=self._content_capturing_mode,
             context=context,
             _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
         )
 
     def invoke_remote_agent(
@@ -659,6 +669,7 @@ class TelemetryHandler:
         agent_name: str | None = None,
         context: Context | None = None,
         _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> RemoteAgentInvocation:
         """Returns an agent invocation (CLIENT span kind). Starts span when called.
 
@@ -670,6 +681,9 @@ class TelemetryHandler:
         responsible for calling `stop` or `fail` to finalize the span.
 
         Use for agents invoked over a remote service (e.g. OpenAI Assistants, AWS Bedrock).
+
+        ``context`` parents the span and becomes the base of the invocation's
+        own context. ``conversation_id`` overrides the one inherited from it.
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
@@ -686,6 +700,7 @@ class TelemetryHandler:
             content_capturing_mode=self._content_capturing_mode,
             context=context,
             _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
         )
 
     def workflow(
@@ -694,6 +709,7 @@ class TelemetryHandler:
         *,
         context: Context | None = None,
         _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> WorkflowInvocation:
         """Returns a Workflow invocation. Starts a span when called.
 
@@ -703,6 +719,9 @@ class TelemetryHandler:
         Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
         to finalize the span upon exiting. If not used as a ContextManager, the caller is
         responsible for calling `stop` or `fail` to finalize the span.
+
+        ``context`` parents the span and becomes the base of the invocation's
+        own context. ``conversation_id`` overrides the one inherited from it.
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
@@ -715,6 +734,7 @@ class TelemetryHandler:
             content_capturing_mode=self._content_capturing_mode,
             context=context,
             _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
         )
 
 
