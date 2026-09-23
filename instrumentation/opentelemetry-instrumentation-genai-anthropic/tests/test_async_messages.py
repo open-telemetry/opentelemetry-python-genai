@@ -21,7 +21,7 @@ except ImportError:
     from anthropic._response import AsyncAPIResponse as LegacyAPIResponse
 from anthropic._streaming import AsyncStream as AnthropicAsyncStream
 from anthropic.resources.messages import AsyncMessages as _AsyncMessages
-from anthropic.types import Message
+from anthropic.types import Message, Usage
 
 from opentelemetry.instrumentation.genai.anthropic import (
     AnthropicInstrumentor,
@@ -52,6 +52,10 @@ from .conftest import (
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
+_usage_fields = getattr(Usage, "model_fields", None)
+if _usage_fields is None:
+    _usage_fields = getattr(Usage, "__fields__", {})
+_has_output_tokens_details = "output_tokens_details" in _usage_fields
 
 
 async def _parse_raw_response(raw_response, **kwargs):
@@ -954,7 +958,7 @@ async def test_async_messages_create_captures_thinking_content(
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "What is 17*19? Think first."}]
 
-    await async_anthropic_client.messages.create(
+    response = await async_anthropic_client.messages.create(
         model=model,
         max_tokens=16000,
         messages=messages,
@@ -973,6 +977,16 @@ async def test_async_messages_create_captures_thinking_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    if _has_output_tokens_details:
+        assert response.usage.output_tokens_details is not None
+        thinking_tokens = response.usage.output_tokens_details.thinking_tokens
+        assert thinking_tokens > 0
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+            ]
+            == thinking_tokens
+        )
 
 
 @pytest.mark.asyncio

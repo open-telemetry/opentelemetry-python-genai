@@ -63,6 +63,10 @@ from .conftest import (
 _create_params = set(inspect.signature(_Messages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
+_usage_fields = getattr(Usage, "model_fields", None)
+if _usage_fields is None:
+    _usage_fields = getattr(Usage, "__fields__", {})
+_has_output_tokens_details = "output_tokens_details" in _usage_fields
 
 
 @pytest.mark.parametrize(
@@ -1423,7 +1427,7 @@ def test_sync_messages_create_captures_thinking_content(
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "What is 17*19? Think first."}]
 
-    anthropic_client.messages.create(
+    response = anthropic_client.messages.create(
         model=model,
         max_tokens=16000,
         messages=messages,
@@ -1442,6 +1446,16 @@ def test_sync_messages_create_captures_thinking_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    if _has_output_tokens_details:
+        assert response.usage.output_tokens_details is not None
+        thinking_tokens = response.usage.output_tokens_details.thinking_tokens
+        assert thinking_tokens > 0
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+            ]
+            == thinking_tokens
+        )
 
 
 @pytest.mark.vcr()
