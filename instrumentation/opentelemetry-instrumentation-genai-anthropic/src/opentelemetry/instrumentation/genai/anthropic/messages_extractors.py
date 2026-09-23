@@ -73,6 +73,7 @@ class MessageRequestParams:
 class UsageTokens:
     input_tokens: int | None = None
     output_tokens: int | None = None
+    thinking_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
 
@@ -85,6 +86,8 @@ def extract_usage_tokens(
 
     input_tokens = usage.input_tokens
     output_tokens = usage.output_tokens
+    output_tokens_details = getattr(usage, "output_tokens_details", None)
+    thinking_tokens = getattr(output_tokens_details, "thinking_tokens", None)
     cache_creation_input_tokens = usage.cache_creation_input_tokens
     cache_read_input_tokens = usage.cache_read_input_tokens
 
@@ -104,6 +107,7 @@ def extract_usage_tokens(
     return UsageTokens(
         input_tokens=total_input_tokens,
         output_tokens=output_tokens,
+        thinking_tokens=thinking_tokens,
         cache_creation_input_tokens=cache_creation_input_tokens,
         cache_read_input_tokens=cache_read_input_tokens,
     )
@@ -223,6 +227,7 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(message.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
+    invocation.thinking_tokens = tokens.thinking_tokens
     invocation.cache_write_input_tokens = tokens.cache_creation_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
