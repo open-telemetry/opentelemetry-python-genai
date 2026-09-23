@@ -132,18 +132,27 @@ class EmbeddingsScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
+        import numpy as np
         from dspy.retrievers.embeddings import EmbeddingsWithScores
 
-        emb_retriever = EmbeddingsWithScores.__new__(EmbeddingsWithScores)
-        emb_retriever.k = 1
-        emb_retriever.corpus = [
+        def fake_embedder(texts: list[str]) -> Any:
+            vecs = []
+            for t in texts:
+                if "OpenTelemetry" in t:
+                    vecs.append([1.0, 0.0])
+                else:
+                    vecs.append([0.0, 1.0])
+            return np.array(vecs, dtype=np.float32)
+
+        corpus = [
             "OpenTelemetry is an observability framework.",
             "DSPy is a declarative framework for language models.",
         ]
-        emb_retriever.search_fn = lambda query: (
-            ["OpenTelemetry is an observability framework."],
-            [0],
-            [0.98],
+        emb_retriever = EmbeddingsWithScores(
+            corpus=corpus,
+            embedder=fake_embedder,
+            k=1,
+            brute_force_threshold=10,
         )
         with instrument(
             DSPyInstrumentor(),
