@@ -468,14 +468,19 @@ def _extract_single_message(
 
 
 def extract_lm_input_messages(
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    bound: Mapping[str, object],
     capture_content: bool = True,
 ) -> list[InputMessage]:
-    """Extract InputMessage list from LM call arguments."""
-    request = kwargs.get("request")
-    if request is None and args and hasattr(args[0], "messages"):
-        request = args[0]
+    """Extract InputMessage list from bound LM call arguments."""
+    items_raw = bound.get("items") or bound.get("args")
+    items: Sequence[object] = items_raw if _is_sequence(items_raw) else ()
+
+    request = bound.get("request")
+    if request is None:
+        for candidate in (items[0] if items else None, bound.get("prompt")):
+            if candidate is not None and hasattr(candidate, "messages"):
+                request = candidate
+                break
 
     if request is not None and hasattr(request, "messages"):
         raw_req_msgs = getattr(request, "messages", None)
@@ -490,7 +495,7 @@ def extract_lm_input_messages(
             if msgs:
                 return msgs
 
-    messages = kwargs.get("messages")
+    messages = bound.get("messages")
     if _is_sequence(messages):
         msgs: list[InputMessage] = []
         for m in messages:
@@ -502,18 +507,18 @@ def extract_lm_input_messages(
         if msgs:
             return msgs
 
-    prompt = kwargs.get("prompt")
-    if prompt is None and args and isinstance(args[0], str):
-        prompt = args[0]
+    prompt = bound.get("prompt")
+    if prompt is None and items and isinstance(items[0], str):
+        prompt = items[0]
 
     if prompt is not None:
         return [
             InputMessage(role="user", parts=[TextPart(content=str(prompt))])
         ]
 
-    if args:
+    if items:
         msgs: list[InputMessage] = []
-        for a in args:
+        for a in items:
             extracted = _extract_single_message(
                 a, capture_content=capture_content
             )

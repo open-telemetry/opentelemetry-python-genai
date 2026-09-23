@@ -1064,3 +1064,52 @@ async def test_lm_concurrent_history_isolation(
     assert span2.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
     out2 = json.loads(span2.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
     assert out2[0]["parts"][0]["content"] == "Result for call-2"
+
+
+def test_lm_signature_binding_and_keyword_history(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def legacy_call(
+        self: Any,
+        prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> list[str]:
+        self.update_history(
+            entry={
+                "response_model": "gpt-4o-positional",
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            }
+        )
+        return ["Positional answer"]
+
+    monkeypatch.setattr(dspy.LM, "__call__", legacy_call)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        lm = FakeLM()
+        res = lm(
+            None,
+            [{"role": "user", "content": "Positional message"}],
+            temperature=0.3,
+        )
+
+    assert res == ["Positional answer"]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAI.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAI.GEN_AI_RESPONSE_MODEL] == "gpt-4o-positional"
+    assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 7
+    assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 3
+    input_msgs = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert input_msgs[0]["parts"][0]["content"] == "Positional message"

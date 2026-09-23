@@ -46,7 +46,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     TextPart,
 )
-from opentelemetry.util.genai.utils import bind_arguments
+from opentelemetry.util.genai.utils import bind_arguments, get_argument
 
 if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
@@ -286,6 +286,7 @@ def _start_lm_invocation(
     instance: LM,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
 ) -> InferenceInvocation:
     provider = resolve_provider(instance)
     request_model = resolve_request_model(instance)
@@ -319,7 +320,8 @@ def _start_lm_invocation(
         invocation.request_choice_count = choice_count
 
     if handler.should_capture_content():
-        invocation.input_messages = extract_lm_input_messages(args, kwargs)
+        bound = bind_arguments(wrapped, args, kwargs)
+        invocation.input_messages = extract_lm_input_messages(bound)
 
     return invocation
 
@@ -339,7 +341,7 @@ def _lm_update_history() -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        entry = args[0] if args else kwargs.get("entry")
+        entry = get_argument("entry", wrapped, args, kwargs)
         if entry is not None:
             _current_lm_history_entry.set(entry)
         return wrapped(*args, **kwargs)
@@ -446,7 +448,9 @@ def _lm_call(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation = _start_lm_invocation(handler, instance, args, kwargs)
+        invocation = _start_lm_invocation(
+            handler, instance, args, kwargs, wrapped
+        )
         # Isolate per-call history metadata from concurrent calls on the shared LM instance.
         token = _current_lm_history_entry.set(None)
         try:
@@ -474,7 +478,9 @@ def _lm_acall(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation = _start_lm_invocation(handler, instance, args, kwargs)
+        invocation = _start_lm_invocation(
+            handler, instance, args, kwargs, wrapped
+        )
         # Isolate per-call history metadata from concurrent calls on the shared LM instance.
         token = _current_lm_history_entry.set(None)
         try:
@@ -583,18 +589,39 @@ def _tool_acall(handler: TelemetryHandler) -> Callable[..., Any]:
     return traced_method
 
 
+def _extract_agent_inputs(
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Mapping[str, object]:
+    bound = bind_arguments(wrapped, args, kwargs)
+    input_args = bound.get("input_args")
+    if isinstance(input_args, Mapping):
+        return {
+            **{k: v for k, v in bound.items() if k != "input_args"},
+            **cast(Mapping[str, object], input_args),
+        }
+    return bound
+
+
 def _start_agent_invocation(
     handler: TelemetryHandler,
     instance: Module,
+    args: tuple[Any, ...],
     kwargs: dict[str, Any],
     agent_name: str,
+    wrapped: Callable[..., Any],
 ) -> LocalAgentInvocation:
     invocation = handler.invoke_local_agent(agent_name=agent_name)
-    if handler.should_capture_content() and kwargs:
-        content_str = extract_input_content(kwargs)
-        invocation.input_messages = [
-            InputMessage(role="user", parts=[TextPart(content=content_str)])
-        ]
+    if handler.should_capture_content():
+        agent_inputs = _extract_agent_inputs(wrapped, args, kwargs)
+        if agent_inputs:
+            content_str = extract_input_content(agent_inputs)
+            invocation.input_messages = [
+                InputMessage(
+                    role="user", parts=[TextPart(content=content_str)]
+                )
+            ]
 
     tools: Any = getattr(instance, "tools", None)
     invocation.tool_definitions = prepare_tool_definitions(tools)
@@ -628,7 +655,7 @@ def _react_forward(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_agent_invocation(
-            handler, instance, dict(kwargs), agent_name
+            handler, instance, args, kwargs, agent_name, wrapped
         )
         with invocation:
             result = wrapped(*args, **kwargs)
@@ -650,7 +677,7 @@ def _react_aforward(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_agent_invocation(
-            handler, instance, dict(kwargs), agent_name
+            handler, instance, args, kwargs, agent_name, wrapped
         )
         with invocation:
             result = await wrapped(*args, **kwargs)
