@@ -414,6 +414,72 @@ def test_colbertv2_direct_and_via_retrieve(
     assert retrieve_attrs.get(server_attributes.SERVER_PORT) == 8893
 
 
+def test_colbertv2_separate_port_malformed_url_and_error(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dspy.dsp.colbertv2 as colbert_mod
+
+    from opentelemetry.semconv.attributes import (
+        error_attributes,
+        server_attributes,
+    )
+
+    should_fail = False
+
+    def fake_request(url: str, query: str, k: int) -> list[Any]:
+        if should_fail:
+            raise ConnectionError("ColBERT server unreachable")
+        return [
+            {"long_text": f"Doc {i}", "pid": i, "score": 0.5} for i in range(k)
+        ]
+
+    monkeypatch.setattr(colbert_mod, "colbertv2_get_request", fake_request)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        # 1. Separate .url (without port) and .port attribute
+        colbert = dspy.ColBERTv2(url="http://colbert.local")
+        colbert.url = "http://colbert.local"
+        colbert.port = 8893
+        colbert("Separate port query", k=1)
+
+        # 2. Malformed URL does not raise from telemetry
+        colbert_malformed = dspy.ColBERTv2(url="http://[invalid-ipv6")
+        colbert_malformed.port = "9000"
+        colbert_malformed("Malformed url query", k=1)
+
+        # 3. Error path re-raises original exception and marks span as ERROR
+        should_fail = True
+        with pytest.raises(
+            ConnectionError, match="ColBERT server unreachable"
+        ):
+            colbert("Error query", k=1)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+
+    sep_attrs = spans[0].attributes or {}
+    assert sep_attrs.get(server_attributes.SERVER_ADDRESS) == "colbert.local"
+    assert sep_attrs.get(server_attributes.SERVER_PORT) == 8893
+
+    mal_attrs = spans[1].attributes or {}
+    assert mal_attrs.get(server_attributes.SERVER_ADDRESS) is None
+    assert mal_attrs.get(server_attributes.SERVER_PORT) == 9000
+
+    err_span = spans[2]
+    assert err_span.status.status_code == StatusCode.ERROR
+    err_attrs = err_span.attributes or {}
+    assert err_attrs.get(error_attributes.ERROR_TYPE) == "ConnectionError"
+
+
 def test_embeddings_and_embeddings_with_scores_retrieval(
     tracer_provider: TracerProvider,
     logger_provider: LoggerProvider,
@@ -423,7 +489,13 @@ def test_embeddings_and_embeddings_with_scores_retrieval(
     import numpy as np
     from dspy.retrievers.embeddings import EmbeddingsWithScores
 
+    from opentelemetry.semconv.attributes import error_attributes
+
+    should_fail = False
+
     def fake_embedder(texts: list[str]) -> np.ndarray:
+        if should_fail:
+            raise ValueError("Embedding computation failed")
         return np.array([[1.0, 0.0] for _ in texts], dtype=np.float32)
 
     corpus = ["First passage", "Second passage", "Third passage"]
@@ -453,8 +525,14 @@ def test_embeddings_and_embeddings_with_scores_retrieval(
         res_scores = emb_scores("Find scored passages")
         assert len(res_scores.passages) == 2
 
+        should_fail = True
+        with pytest.raises(ValueError, match="Embedding computation failed"):
+            emb("Failing embeddings query")
+        with pytest.raises(ValueError, match="Embedding computation failed"):
+            emb_scores("Failing scored embeddings query")
+
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
+    assert len(spans) == 4
 
     emb_attrs = spans[0].attributes or {}
     assert emb_attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
@@ -478,6 +556,11 @@ def test_embeddings_and_embeddings_with_scores_retrieval(
     assert scores_docs[0]["id"] is not None
     assert isinstance(scores_docs[0]["score"], float)
 
+    for err_span in (spans[2], spans[3]):
+        assert err_span.status.status_code == StatusCode.ERROR
+        err_attrs = err_span.attributes or {}
+        assert err_attrs.get(error_attributes.ERROR_TYPE) == "ValueError"
+
 
 def test_retrieve_subclass_overriding_forward(
     tracer_provider: TracerProvider,
@@ -485,6 +568,8 @@ def test_retrieve_subclass_overriding_forward(
     meter_provider: MeterProvider,
     span_exporter: InMemorySpanExporter,
 ) -> None:
+    from opentelemetry.semconv.attributes import error_attributes
+
     class CustomWeaviateLikeRM(dspy.Retrieve):
         def __init__(self, collection_name: str, k: int = 3) -> None:
             super().__init__(k=k)
@@ -496,6 +581,8 @@ def test_retrieve_subclass_overriding_forward(
             k: int | None = None,
             **kwargs: Any,
         ) -> dspy.Prediction:
+            if query_or_queries == "raise_error":
+                raise RuntimeError("Weaviate query error")
             eff_k = k if k is not None else self.k
             return dspy.Prediction(
                 passages=[f"Doc {i}" for i in range(eff_k)],
@@ -513,8 +600,11 @@ def test_retrieve_subclass_overriding_forward(
         res = rm("What is Weaviate?")
         assert len(res.passages) == 2
 
+        with pytest.raises(RuntimeError, match="Weaviate query error"):
+            rm("raise_error")
+
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
+    assert len(spans) == 2
     span = spans[0]
     assert span.name == "retrieval articles_v1"
     attrs = span.attributes or {}
@@ -526,6 +616,11 @@ def test_retrieve_subclass_overriding_forward(
         {"id": "weav-0", "score": None},
         {"id": "weav-1", "score": None},
     ]
+
+    err_span = spans[1]
+    assert err_span.status.status_code == StatusCode.ERROR
+    err_attrs = err_span.attributes or {}
+    assert err_attrs.get(error_attributes.ERROR_TYPE) == "RuntimeError"
 
 
 def test_retrieval_reentrancy_guard(

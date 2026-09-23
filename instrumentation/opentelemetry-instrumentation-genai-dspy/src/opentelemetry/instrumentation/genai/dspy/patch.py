@@ -514,14 +514,29 @@ def _extract_server_address_and_port(
     url: Any = getattr(instance, "url", None) or (
         getattr(rm, "url", None) if rm is not None else None
     )
-    if not isinstance(url, str) or not url:
-        return None, None
-    parsed = urllib.parse.urlparse(url if "://" in url else f"http://{url}")
-    try:
-        port = parsed.port
-    except ValueError:
-        port = None
-    return parsed.hostname, port
+    hostname: str | None = None
+    port: int | None = None
+    if isinstance(url, str) and url:
+        try:
+            parsed = urllib.parse.urlparse(
+                url if "://" in url else f"http://{url}"
+            )
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            pass
+
+    if port is None:
+        raw_port: Any = getattr(instance, "port", None)
+        if raw_port is None and rm is not None:
+            raw_port = getattr(rm, "port", None)
+        if raw_port is not None and not isinstance(raw_port, bool):
+            try:
+                port = int(raw_port)
+            except (ValueError, TypeError):
+                port = None
+
+    return hostname, port
 
 
 def _start_retrieval_invocation(
