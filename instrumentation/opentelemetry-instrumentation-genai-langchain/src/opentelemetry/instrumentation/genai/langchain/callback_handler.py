@@ -23,6 +23,7 @@ from opentelemetry.instrumentation.genai.langchain.agent_context import (
 )
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
+    _PromptContext,
 )
 from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     OperationName,
@@ -61,6 +62,7 @@ from opentelemetry.util.genai.types import (
     TextPart,
     ToolCallRequestPart,
 )
+from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
 
@@ -70,6 +72,135 @@ CONVERSATION_ID_METADATA_KEYS = (
     "session_id",
     "conversation_id",
 )
+
+_PROMPT_TEMPLATE_TYPES = {"ChatPromptTemplate", "PromptTemplate"}
+_INVALID_PROMPT_VALUE = object()
+
+
+def _prompt_template_type(serialized: Mapping[str, Any]) -> str | None:
+    serialized_id = serialized.get("id")
+    if not isinstance(serialized_id, Sequence) or isinstance(
+        serialized_id, str
+    ):
+        return None
+    serialized_id = cast(Sequence[object], serialized_id)
+    template_type = serialized_id[-1] if serialized_id else None
+    if not isinstance(template_type, str):
+        return None
+    return template_type if template_type in _PROMPT_TEMPLATE_TYPES else None
+
+
+def _string_sequence(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        return []
+    return [
+        item
+        for item in cast(Sequence[object], value)
+        if isinstance(item, str)
+    ]
+
+
+def _prompt_variable_value(value: object) -> object:
+    if isinstance(value, BaseMessage):
+        value = value.model_dump()
+    elif isinstance(value, Mapping):
+        value = cast(Mapping[object, object], value)
+        if value.get("type") == "not_implemented":
+            return _INVALID_PROMPT_VALUE
+        normalized_mapping: dict[object, object] = {}
+        for key, item in value.items():
+            normalized_item = _prompt_variable_value(item)
+            if normalized_item is _INVALID_PROMPT_VALUE:
+                return _INVALID_PROMPT_VALUE
+            normalized_mapping[key] = normalized_item
+        value = normalized_mapping
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        normalized_sequence: list[object] = []
+        for item in cast(Sequence[object], value):
+            normalized_item = _prompt_variable_value(item)
+            if normalized_item is _INVALID_PROMPT_VALUE:
+                return _INVALID_PROMPT_VALUE
+            normalized_sequence.append(normalized_item)
+        value = normalized_sequence
+    elif callable(value):
+        return _INVALID_PROMPT_VALUE
+
+    try:
+        gen_ai_json_dumps(value)
+    except (TypeError, ValueError, OverflowError):
+        return _INVALID_PROMPT_VALUE
+    return value
+
+
+def _extract_prompt_context(
+    serialized: Mapping[str, Any],
+    inputs: object,
+    metadata: Mapping[str, Any] | None,
+    *,
+    capture_variables: bool = True,
+) -> _PromptContext | None:
+    template_type = _prompt_template_type(serialized)
+    if template_type is None:
+        return None
+
+    raw_serialized_kwargs = serialized.get("kwargs")
+    if not isinstance(raw_serialized_kwargs, Mapping):
+        serialized_kwargs: Mapping[str, object] = {}
+    else:
+        serialized_kwargs = cast(
+            Mapping[str, object], raw_serialized_kwargs
+        )
+
+    name = (metadata or {}).get("prompt_name")
+    if not isinstance(name, str):
+        name = serialized_kwargs.get("name")
+    if not isinstance(name, str):
+        name = serialized.get("name")
+    if not isinstance(name, str) or name in _PROMPT_TEMPLATE_TYPES:
+        name = None
+
+    if not capture_variables:
+        return _PromptContext(name=name, variables={})
+
+    required_variables = _string_sequence(
+        serialized_kwargs.get("input_variables")
+    )
+    declared_variables = set(required_variables)
+    declared_variables.update(
+        _string_sequence(serialized_kwargs.get("optional_variables"))
+    )
+
+    partial_variables = serialized_kwargs.get("partial_variables")
+    if isinstance(partial_variables, Mapping):
+        partial_variables = cast(Mapping[object, object], partial_variables)
+        declared_variables.update(
+            key for key in partial_variables if isinstance(key, str)
+        )
+
+    if isinstance(inputs, Mapping):
+        runtime_variables: Mapping[object, object] = cast(
+            Mapping[object, object], inputs
+        )
+    elif len(required_variables) == 1:
+        runtime_variables = {required_variables[0]: inputs}
+    else:
+        runtime_variables = {}
+
+    effective_variables: dict[str, object] = {}
+    for source in (partial_variables, runtime_variables):
+        if not isinstance(source, Mapping):
+            continue
+        source = cast(Mapping[object, object], source)
+        for key, value in source.items():
+            if not isinstance(key, str) or key not in declared_variables:
+                continue
+            normalized_value = _prompt_variable_value(value)
+            if normalized_value is not _INVALID_PROMPT_VALUE:
+                effective_variables[key] = normalized_value
+
+    return _PromptContext(name=name, variables=effective_variables)
 
 
 def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
@@ -180,7 +311,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         inputs: dict[str, Any],
         *,
         run_id: UUID,
@@ -189,6 +320,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        serialized = serialized or {}
         parent_agent_name, ancestor_agent_names = self._find_agent_context(
             parent_run_id
         )
@@ -299,6 +431,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 run_id, parent_run_id, None
             )
 
+        if prompt_context := _extract_prompt_context(
+            serialized,
+            inputs,
+            metadata,
+            capture_variables=capture_content,
+        ):
+            self._invocation_manager.set_prompt_context(
+                run_id, prompt_context
+            )
+
     def on_chain_end(
         self,
         outputs: dict[str, Any],
@@ -307,6 +449,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
+        self._invocation_manager.publish_prompt_context(run_id)
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
             invocation, (WorkflowInvocation, LocalAgentInvocation)
@@ -351,6 +494,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        prompt_context = self._invocation_manager.consume_prompt_context(
+            parent_run_id
+        )
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -442,6 +588,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             context=parent_context,
             _attach_to_context=self._attach_to_context,
         )
+        if prompt_context is not None:
+            llm_invocation.prompt_name = prompt_context.name
+            llm_invocation.prompt_variables = prompt_context.variables
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p

@@ -15,6 +15,7 @@ from unittest import mock
 
 import pytest
 from langchain_core.documents import Document
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -35,11 +36,14 @@ from langchain_core.outputs import (
     ChatGenerationChunk,
     LLMResult,
 )
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda, RunnableParallel
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
     _extract_document_score,
+    _extract_prompt_context,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _legacy_function_call_request,
@@ -114,6 +118,127 @@ def _make_handler_with_retrieval():
 
 def _run_id():
     return uuid.uuid4()
+
+
+class TestExtractPromptContext:
+    @pytest.mark.parametrize(
+        "template_type", ["PromptTemplate", "ChatPromptTemplate"]
+    )
+    def test_extracts_name_and_declared_variables(
+        self, template_type: str
+    ) -> None:
+        context = _extract_prompt_context(
+            {
+                "id": ["langchain", "prompts", template_type],
+                "name": "weather",
+                "kwargs": {
+                    "input_variables": ["question"],
+                    "optional_variables": ["history"],
+                    "partial_variables": {"language": "French"},
+                },
+            },
+            {
+                "question": "Will it rain?",
+                "history": [HumanMessage(content="Earlier question")],
+                "unused": "ignored",
+            },
+            None,
+        )
+
+        assert context is not None
+        assert context.name == "weather"
+        assert context.variables == {
+            "question": "Will it rain?",
+            "history": [
+                HumanMessage(content="Earlier question").model_dump()
+            ],
+            "language": "French",
+        }
+
+    def test_name_precedence_and_generic_name_exclusion(self):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "name": "PromptTemplate",
+            "kwargs": {"name": "serialized-name"},
+        }
+
+        context = _extract_prompt_context(
+            serialized, {}, {"prompt_name": "metadata-name"}
+        )
+        assert context is not None
+        assert context.name == "metadata-name"
+
+        unnamed = _extract_prompt_context(
+            {**serialized, "kwargs": {}}, {}, None
+        )
+        assert unnamed is not None
+        assert unnamed.name is None
+
+    def test_runtime_values_override_partials_and_scalar_is_mapped(self):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "kwargs": {
+                "input_variables": ["question"],
+                "optional_variables": ["history"],
+                "partial_variables": {"language": "French"},
+            },
+        }
+
+        context = _extract_prompt_context(serialized, "runtime", None)
+
+        assert context is not None
+        assert context.variables == {
+            "question": "runtime",
+            "language": "French",
+        }
+
+    def test_preserves_none_as_json_null(self):
+        context = _extract_prompt_context(
+            {
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "kwargs": {"input_variables": ["value"]},
+            },
+            {"value": None},
+            None,
+        )
+
+        assert context is not None
+        assert context.variables == {"value": None}
+
+    def test_skips_unresolved_and_unserializable_values(self):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "kwargs": {
+                "partial_variables": {
+                    "callable": lambda: "value",
+                    "unresolved": {
+                        "lc": 1,
+                        "type": "not_implemented",
+                    },
+                },
+                "input_variables": ["unsupported"],
+            },
+        }
+
+        context = _extract_prompt_context(
+            serialized, {"unsupported": object()}, None
+        )
+
+        assert context is not None
+        assert context.variables == {}
+
+    def test_ignores_non_prompt_runs(self):
+        assert (
+            _extract_prompt_context(
+                {
+                    "id": ["langchain", "schema", "RunnableSequence"],
+                    "name": "PromptTemplate",
+                },
+                {"question": "ignored"},
+                {"prompt_name": "ignored"},
+            )
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +686,174 @@ class TestOnChatModelStartConversationId:
             context=parent_wf.context,
             _attach_to_context=True,
         )
+
+
+class TestPromptContextLifecycle:
+    @pytest.mark.parametrize("with_transform", [False, True])
+    def test_real_lcel_prompt_context_reaches_model(
+        self, with_transform: bool
+    ) -> None:
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        prompt = ChatPromptTemplate.from_messages(
+            [("human", "Hello {name}")]
+        ).model_copy(update={"name": "greeting"})
+        model = FakeListChatModel(responses=["Hello Ada"]).with_config(
+            metadata={"ls_model_name": "fake-model"}
+        )
+        if with_transform:
+            (prompt | RunnableLambda(lambda value: value) | model).invoke(
+                {"name": "Ada"}, config={"callbacks": [handler]}
+            )
+        else:
+            (prompt | model).invoke(
+                {"name": "Ada"}, config={"callbacks": [handler]}
+            )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+
+    def test_real_parallel_lcel_keeps_prompt_contexts_isolated(self) -> None:
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        invocations = [
+            mock.MagicMock(spec=InferenceInvocation),
+            mock.MagicMock(spec=InferenceInvocation),
+        ]
+        telemetry.inference.side_effect = invocations
+
+        def branch(prompt_name: str, response: str):
+            prompt = ChatPromptTemplate.from_messages(
+                [("human", "{value}")]
+            ).model_copy(update={"name": prompt_name})
+            model = FakeListChatModel(responses=[response]).with_config(
+                metadata={"ls_model_name": "fake-model"}
+            )
+            return prompt | model
+
+        chain = RunnableParallel(
+            first=branch("first-prompt", "first-response"),
+            second=branch("second-prompt", "second-response"),
+        )
+
+        chain.invoke({"value": "shared"}, config={"callbacks": [handler]})
+
+        contexts = {
+            (invocation.prompt_name, invocation.prompt_variables["value"])
+            for invocation in invocations
+        }
+        assert contexts == {
+            ("first-prompt", "shared"),
+            ("second-prompt", "shared"),
+        }
+
+    def test_successful_prompt_context_is_applied_to_next_model(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "greeting",
+                "kwargs": {"input_variables": ["name"]},
+            },
+            inputs={"name": "Ada"},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_end(
+            outputs={"text": "Hello Ada"}, run_id=prompt_id
+        )
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello Ada")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+        assert (
+            handler._invocation_manager.consume_prompt_context(sequence_id)
+            is None
+        )
+
+    def test_prompt_variables_are_not_processed_when_content_disabled(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = False
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "greeting",
+                "kwargs": {"input_variables": ["name"]},
+            },
+            inputs={"name": object()},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_end(outputs={}, run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {}
+
+    def test_failed_prompt_context_is_not_applied(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        telemetry.inference.return_value.prompt_name = None
+        telemetry.inference.return_value.prompt_variables = None
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "failed",
+                "kwargs": {"input_variables": ["value"]},
+            },
+            inputs={"value": "secret"},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_error(RuntimeError("format failed"), run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="unrelated")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name is None
+        assert invocation.prompt_variables is None
 
 
 class TestOnChainStartUnclassified:
