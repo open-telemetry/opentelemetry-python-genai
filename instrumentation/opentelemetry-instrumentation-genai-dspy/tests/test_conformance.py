@@ -22,7 +22,11 @@ from opentelemetry.test_util_genai.conformance import (
 
 from .conformance.react import ReActScenario
 from .conformance.react_v2 import ReActV2Scenario
-from .conformance.retrieve import RetrieveScenario
+from .conformance.retrieve import (
+    ColBERTv2Scenario,
+    EmbeddingsScenario,
+    RetrieveScenario,
+)
 from .conformance.tool import ToolScenario
 
 
@@ -32,6 +36,8 @@ from .conformance.tool import ToolScenario
         pytest.param(ReActScenario()),
         pytest.param(ReActV2Scenario()),
         pytest.param(RetrieveScenario()),
+        pytest.param(ColBERTv2Scenario()),
+        pytest.param(EmbeddingsScenario()),
         pytest.param(ToolScenario()),
     ],
     ids=lambda s: type(s).__name__,

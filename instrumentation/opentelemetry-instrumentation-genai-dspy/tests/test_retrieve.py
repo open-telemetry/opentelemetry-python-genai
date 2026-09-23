@@ -341,3 +341,188 @@ def test_retrieve_uninstrument(
 
     retrieve("Uninstrumented query")
     assert len(span_exporter.get_finished_spans()) == 0
+
+
+def test_colbertv2_direct_and_via_retrieve(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dspy.dsp.colbertv2 as colbert_mod
+
+    from opentelemetry.semconv.attributes import server_attributes
+
+    monkeypatch.setattr(
+        colbert_mod,
+        "colbertv2_get_request",
+        lambda url, query, k: [
+            {"long_text": f"Doc {i}", "pid": 100 + i, "score": 0.9 - 0.1 * i}
+            for i in range(k)
+        ],
+    )
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        colbert = dspy.ColBERTv2(url="http://colbert.local", port=8893)
+        res = colbert("ColBERT direct query", k=2)
+        assert len(res) == 2
+
+        # When ColBERTv2 is configured as dspy.settings.rm and invoked via dspy.Retrieve,
+        # only a single retrieval span should be emitted.
+        dspy.settings.configure(rm=colbert)
+        retrieve = dspy.Retrieve(k=2)
+        ret_res = retrieve("ColBERT via Retrieve")
+        assert len(ret_res.passages) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    direct_span = spans[0]
+    direct_attrs = direct_span.attributes or {}
+    assert direct_attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
+    assert (
+        direct_attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT)
+        == "ColBERT direct query"
+    )
+    assert direct_attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
+    assert (
+        direct_attrs.get(server_attributes.SERVER_ADDRESS) == "colbert.local"
+    )
+    assert direct_attrs.get(server_attributes.SERVER_PORT) == 8893
+    docs = json.loads(str(direct_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)))
+    assert docs == [
+        {"id": "100", "score": 0.9},
+        {"id": "101", "score": 0.8},
+    ]
+
+    retrieve_span = spans[1]
+    retrieve_attrs = retrieve_span.attributes or {}
+    assert (
+        retrieve_attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT)
+        == "ColBERT via Retrieve"
+    )
+    assert (
+        retrieve_attrs.get(server_attributes.SERVER_ADDRESS) == "colbert.local"
+    )
+    assert retrieve_attrs.get(server_attributes.SERVER_PORT) == 8893
+
+
+def test_embeddings_and_embeddings_with_scores_retrieval(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    import numpy as np
+    from dspy.retrievers.embeddings import EmbeddingsWithScores
+
+    def fake_embedder(texts: list[str]) -> np.ndarray:
+        return np.array([[1.0, 0.0] for _ in texts], dtype=np.float32)
+
+    corpus = ["First passage", "Second passage", "Third passage"]
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        emb = dspy.Embeddings(
+            corpus=corpus,
+            embedder=fake_embedder,
+            k=2,
+            brute_force_threshold=10,
+        )
+        res = emb("Find passages")
+        assert len(res.passages) == 2
+
+        emb_scores = EmbeddingsWithScores(
+            corpus=corpus,
+            embedder=fake_embedder,
+            k=2,
+            brute_force_threshold=10,
+        )
+        res_scores = emb_scores("Find scored passages")
+        assert len(res_scores.passages) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    emb_attrs = spans[0].attributes or {}
+    assert emb_attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
+    assert emb_attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "Find passages"
+    assert emb_attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
+    emb_docs = json.loads(str(emb_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)))
+    assert len(emb_docs) == 2
+    assert emb_docs[0]["id"] is not None
+    assert emb_docs[0]["score"] is None
+
+    scores_attrs = spans[1].attributes or {}
+    assert (
+        scores_attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT)
+        == "Find scored passages"
+    )
+    assert scores_attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
+    scores_docs = json.loads(
+        str(scores_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS))
+    )
+    assert len(scores_docs) == 2
+    assert scores_docs[0]["id"] is not None
+    assert isinstance(scores_docs[0]["score"], float)
+
+
+def test_retrieve_subclass_overriding_forward(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    class CustomWeaviateLikeRM(dspy.Retrieve):
+        def __init__(self, collection_name: str, k: int = 3) -> None:
+            super().__init__(k=k)
+            self._weaviate_collection_name = collection_name
+
+        def forward(
+            self,
+            query_or_queries: str | list[str],
+            k: int | None = None,
+            **kwargs: Any,
+        ) -> dspy.Prediction:
+            eff_k = k if k is not None else self.k
+            return dspy.Prediction(
+                passages=[f"Doc {i}" for i in range(eff_k)],
+                doc_ids=[f"weav-{i}" for i in range(eff_k)],
+            )
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        rm = CustomWeaviateLikeRM("articles_v1", k=2)
+        res = rm("What is Weaviate?")
+        assert len(res.passages) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "retrieval articles_v1"
+    attrs = span.attributes or {}
+    assert attrs.get(GenAI.GEN_AI_DATA_SOURCE_ID) == "articles_v1"
+    assert attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "What is Weaviate?"
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
+    docs = json.loads(str(attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)))
+    assert docs == [
+        {"id": "weav-0", "score": None},
+        {"id": "weav-1", "score": None},
+    ]
