@@ -1431,6 +1431,128 @@ class TestOnLlmEndToolCalls:
         assert len(assigned) == 1
         assert assigned[0].name == "tool_caller_bot"
 
+    def test_ollama_done_reason_preserves_tool_calls(self):
+        """ChatOllama reports its stop reason as `done_reason` and sets no
+        `finish_reason`/`stop_reason`. The tool-call parts must still be
+        recorded rather than dropped because the finish reason resolves to
+        `"error"`.
+        """
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+        telemetry.should_capture_content.return_value = True
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_ollama_1",
+            "args": {"city": "Seattle"},
+        }
+        # ChatOllama publishes the stop reason under `done_reason` only.
+        ai_msg = AIMessage(
+            content="", tool_calls=[tool_call], response_metadata={}
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"done_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequestPart)
+        assert part.name == "get_weather"
+        assert part.id == "call_ollama_1"
+        assert part.arguments == {"city": "Seattle"}
+        # done_reason must resolve finish_reason to "stop", not "error".
+        assert assigned[0].finish_reason == "stop"
+        assert llm_inv.finish_reasons == ["stop"]
+
+    def test_response_with_both_text_and_tool_calls_preserves_both(self):
+        """A response carrying both assistant text and tool calls must
+        keep both: gating only on tool calls previously dropped the text.
+        """
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+        telemetry.should_capture_content.return_value = True
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_1",
+            "args": {"city": "Seattle"},
+        }
+        ai_msg = AIMessage(
+            content="Checking the weather...",
+            tool_calls=[tool_call],
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 2
+        assert isinstance(assigned[0].parts[0], TextPart)
+        assert assigned[0].parts[0].content == "Checking the weather..."
+        assert isinstance(assigned[0].parts[1], ToolCallRequestPart)
+        assert assigned[0].parts[1].name == "get_weather"
+
+    def test_content_capture_disabled_skips_output_message_but_keeps_finish_reason(
+        self,
+    ):
+        """With content capture off, no output message is built (so an
+        image payload is never decoded), but finish reasons are still
+        recorded."""
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+        telemetry.should_capture_content.return_value = False
+
+        ai_msg = AIMessage(
+            content="Checking the weather...",
+            tool_calls=[
+                {"name": "get_weather", "id": "c1", "args": {"city": "X"}}
+            ],
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        # No output message recorded when capture is disabled ...
+        assert llm_inv.output_messages == []
+        # ... but the finish reason is still collected.
+        assert llm_inv.finish_reasons == ["tool_calls"]
+
+    def test_no_tool_calls_still_records_text(self):
+        """A response with no tool calls keeps recording its text content,
+        independent of the finish-reason spelling.
+        """
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="Sunny, 18C", response_metadata={})
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"done_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, TextPart)
+        assert part.content == "Sunny, 18C"
+
 
 # ---------------------------------------------------------------------------
 # on_tool_start
