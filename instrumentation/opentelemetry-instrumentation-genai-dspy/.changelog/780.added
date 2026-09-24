@@ -1,0 +1,1 @@
+Extend DSPy retrieval instrumentation to cover `dspy.ColBERTv2`, `dspy.Embeddings`, `EmbeddingsWithScores`, and `dspy.Retrieve` subclasses overriding `forward()`.
