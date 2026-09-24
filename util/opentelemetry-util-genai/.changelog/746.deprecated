@@ -1,1 +1,0 @@
-Deprecate `should_emit_event()`. Event emission is handled internally by telemetry handlers and invocations.

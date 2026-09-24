@@ -1,1 +1,0 @@
-Wrap programmatic completion hooks in safe wrapper to suppress exceptions.

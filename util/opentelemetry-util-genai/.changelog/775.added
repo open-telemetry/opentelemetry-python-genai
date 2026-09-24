@@ -1,1 +1,0 @@
-Add the shared RetrievalDocument model with optional id and score fields; retain legacy mapping support on retrieval invocations.
