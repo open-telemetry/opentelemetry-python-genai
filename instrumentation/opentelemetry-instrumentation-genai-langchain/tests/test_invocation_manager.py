@@ -261,6 +261,29 @@ def test_prompt_context_publishes_to_parent_and_is_consumed_once(
     assert invocation_manager.consume_prompt_context(parent_id) is None
 
 
+def test_most_recent_prompt_context_supersedes_earlier_context(
+    invocation_manager,
+):
+    parent_id = uuid.uuid4()
+    first_prompt_id = uuid.uuid4()
+    second_prompt_id = uuid.uuid4()
+    first_context = _PromptContext("first", {"value": "first"})
+    second_context = _PromptContext("second", {"value": "second"})
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(first_prompt_id, parent_id, None)
+    invocation_manager.add_invocation_state(second_prompt_id, parent_id, None)
+
+    invocation_manager.set_prompt_context(first_prompt_id, first_context)
+    invocation_manager.publish_prompt_context(first_prompt_id)
+    invocation_manager.set_prompt_context(second_prompt_id, second_context)
+    invocation_manager.publish_prompt_context(second_prompt_id)
+
+    assert (
+        invocation_manager.consume_prompt_context(parent_id) == second_context
+    )
+    assert invocation_manager.consume_prompt_context(parent_id) is None
+
+
 def test_prompt_context_is_consumed_from_nearest_ancestor(invocation_manager):
     root_id = uuid.uuid4()
     branch_id = uuid.uuid4()
