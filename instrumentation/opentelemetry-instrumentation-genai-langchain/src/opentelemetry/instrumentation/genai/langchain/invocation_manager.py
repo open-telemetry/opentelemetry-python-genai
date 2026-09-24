@@ -123,7 +123,9 @@ class _InvocationManager:
             if invocation_state is None:
                 return None
             if invocation_state.pending_prompt_contexts:
-                return invocation_state.pending_prompt_contexts.pop(0)
+                prompt_context = invocation_state.pending_prompt_contexts[-1]
+                invocation_state.pending_prompt_contexts.clear()
+                return prompt_context
             current_run_id = invocation_state.parent_run_id
         return None
 

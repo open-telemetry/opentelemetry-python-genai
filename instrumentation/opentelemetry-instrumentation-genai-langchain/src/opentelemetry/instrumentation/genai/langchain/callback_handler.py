@@ -488,9 +488,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        prompt_context = self._invocation_manager.consume_prompt_context(
-            parent_run_id
-        )
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -574,6 +571,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             input_messages = to_input_messages(flattened)
 
         parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
+        prompt_context = self._invocation_manager.consume_prompt_context(
             parent_run_id
         )
         llm_invocation = self._telemetry_handler.inference(

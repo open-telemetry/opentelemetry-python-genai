@@ -783,6 +783,48 @@ class TestPromptContextLifecycle:
             is None
         )
 
+    def test_unsupported_model_does_not_consume_prompt_context(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "greeting",
+                "kwargs": {"input_variables": ["name"]},
+            },
+            inputs={"name": "Ada"},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_end(outputs={"text": "Hello Ada"}, run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "UnsupportedModel"},
+            messages=[[HumanMessage(content="Hello Ada")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+        )
+
+        telemetry.inference.assert_not_called()
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello Ada")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+
     def test_prompt_variables_are_not_processed_when_content_disabled(self):
         handler, telemetry, _, _ = _make_handler()
         telemetry.should_capture_content.return_value = False
