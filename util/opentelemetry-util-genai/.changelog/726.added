@@ -1,1 +1,0 @@
-Add ``conversation_id`` and ``context`` arguments to the inference, agent and workflow factories on ``TelemetryHandler``; nested invocations inherit the conversation id.

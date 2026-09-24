@@ -1,1 +1,0 @@
-Add ``bind_arguments``, ``get_argument``, and ``get_signature`` utilities for signature-based parameter extraction.

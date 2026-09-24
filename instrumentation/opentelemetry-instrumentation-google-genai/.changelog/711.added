@@ -1,1 +1,0 @@
-Record `gen_ai.client.operation.time_to_first_chunk` and `gen_ai.client.operation.time_per_output_chunk` metrics on streamed responses.
