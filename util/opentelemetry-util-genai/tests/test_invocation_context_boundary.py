@@ -15,6 +15,7 @@
 import contextvars
 import logging
 from unittest import TestCase
+from unittest.mock import patch
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -55,3 +56,36 @@ class TestInvocationFinishedInAnotherContext(TestCase):
         self.assertEqual("invoke_workflow graph", spans[0].name)
         # The foreign reset is a no-op, and the test's context was never touched.
         self.assertIs(trace.get_current_span(), trace.INVALID_SPAN)
+
+
+class TestInvocationWithOpaqueContextToken(TestCase):
+    """A runtime context other than contextvars (``OTEL_PYTHON_CONTEXT``).
+
+    Its tokens have no ``var`` attribute, so ``suspend`` must hand them back to
+    ``opentelemetry.context.detach`` and still end the span.
+    """
+
+    def setUp(self):
+        self.span_exporter = InMemorySpanExporter()
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self.span_exporter)
+        )
+        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+
+    def test_stop_detaches_opaque_token_and_ends_span(self):
+        opaque_token = object()
+        with (
+            patch(
+                "opentelemetry.util.genai._invocation.attach",
+                return_value=opaque_token,
+            ),
+            patch("opentelemetry.util.genai._invocation.detach") as detach,
+        ):
+            invocation = self.handler.workflow(name="graph")
+            invocation.stop()
+
+        detach.assert_called_once_with(opaque_token)
+        spans = self.span_exporter.get_finished_spans()
+        self.assertEqual(1, len(spans))
+        self.assertEqual("invoke_workflow graph", spans[0].name)
