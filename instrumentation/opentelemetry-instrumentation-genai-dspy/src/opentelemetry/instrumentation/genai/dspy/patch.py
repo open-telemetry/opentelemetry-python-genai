@@ -229,17 +229,15 @@ def patch_dspy(handler: TelemetryHandler) -> None:
             _retrieve_forward(handler),
         )
 
-    embeddings_with_scores_cls = getattr(
-        sys.modules.get(_EMBEDDINGS_MODULE),
-        _EMBEDDINGS_WITH_SCORES_CLASS,
-        None,
-    )
-    if embeddings_with_scores_cls is not None:
+    try:
+        import_module(_EMBEDDINGS_MODULE)
         _wrap_function(
             _EMBEDDINGS_MODULE,
             f"{_EMBEDDINGS_WITH_SCORES_CLASS}.forward",
             _retrieve_forward(handler),
         )
+    except (ImportError, AttributeError):
+        pass
 
     _wrap_function(
         _REACT_MODULE,
@@ -489,6 +487,7 @@ def _extract_retrieval_query(
             if isinstance(item, str)
         ]
         if str_items:
+            # TODO: https://github.com/open-telemetry/semantic-conventions-genai/issues/539
             return ", ".join(str_items)
         return None
     return str(val)
@@ -553,7 +552,7 @@ def _start_retrieval_invocation(
     rm: _RetrieverInstance | Callable[..., Any] | None = getattr(
         instance, "rm", None
     )
-    if rm is None and type(instance) is dspy.Retrieve:
+    if rm is None and isinstance(instance, dspy.Retrieve):
         rm = getattr(dspy.settings, "rm", None)
 
     # DSPy retrieval models lack a uniform identifier schema, so inspect common index
@@ -601,7 +600,7 @@ def _start_retrieval_invocation(
 
 
 def _extract_doc_score(val: object) -> float | None:
-    if isinstance(val, (int, float, str)):
+    if isinstance(val, (int, float, str)) and not isinstance(val, bool):
         try:
             return float(val)
         except (ValueError, TypeError):

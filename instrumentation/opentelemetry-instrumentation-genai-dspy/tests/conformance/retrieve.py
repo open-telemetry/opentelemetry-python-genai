@@ -114,7 +114,7 @@ class ColBERTv2Scenario(Scenario):
                 colbert("What is OpenTelemetry?", k=2)
 
 
-class EmbeddingsScenario(Scenario):
+class EmbeddingsRetrievalScenario(Scenario):
     expected_spans = {"retrieval": 1}
     expected_metrics = ("gen_ai.client.operation.duration",)
     expected_violations = (

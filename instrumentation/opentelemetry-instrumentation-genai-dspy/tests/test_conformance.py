@@ -24,7 +24,7 @@ from .conformance.react import ReActScenario
 from .conformance.react_v2 import ReActV2Scenario
 from .conformance.retrieve import (
     ColBERTv2Scenario,
-    EmbeddingsScenario,
+    EmbeddingsRetrievalScenario,
     RetrieveScenario,
 )
 from .conformance.tool import ToolScenario
@@ -37,7 +37,7 @@ from .conformance.tool import ToolScenario
         pytest.param(ReActV2Scenario()),
         pytest.param(RetrieveScenario()),
         pytest.param(ColBERTv2Scenario()),
-        pytest.param(EmbeddingsScenario()),
+        pytest.param(EmbeddingsRetrievalScenario()),
         pytest.param(ToolScenario()),
     ],
     ids=lambda s: type(s).__name__,

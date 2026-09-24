@@ -15,6 +15,7 @@ import pytest
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.instrumentation.genai.dspy.patch import (
+    _extract_doc_score,
     _set_retrieval_invocation_documents,
 )
 from opentelemetry.sdk._logs import LoggerProvider
@@ -112,6 +113,15 @@ def test_retrieval_documents_do_not_stringify_passages() -> None:
     invocation = Mock(spec=RetrievalInvocation)
     _set_retrieval_invocation_documents(handler, invocation, [Passage()])
     assert invocation.documents == [RetrievalDocument()]
+
+
+def test_extract_doc_score_excludes_booleans() -> None:
+    assert _extract_doc_score(True) is None
+    assert _extract_doc_score(False) is None
+    assert _extract_doc_score(1) == 1.0
+    assert _extract_doc_score(0.85) == 0.85
+    assert _extract_doc_score("0.95") == 0.95
+    assert _extract_doc_score("invalid") is None
 
 
 def test_retrieve_forward_direct_call(
@@ -621,6 +631,36 @@ def test_retrieve_subclass_overriding_forward(
     assert err_span.status.status_code == StatusCode.ERROR
     err_attrs = err_span.attributes or {}
     assert err_attrs.get(error_attributes.ERROR_TYPE) == "RuntimeError"
+
+
+def test_retrieve_subclass_fallback_to_settings_rm(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    class MyCustomRetrieve(dspy.Retrieve):
+        pass
+
+    configured_rm = _DummyRM()
+    dspy.settings.configure(rm=configured_rm)
+
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        retriever = MyCustomRetrieve(k=2)
+        res = retriever("Subclass query")
+        assert len(res.passages) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes or {}
+    assert attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "Subclass query"
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
 
 
 def test_retrieval_reentrancy_guard(
