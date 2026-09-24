@@ -234,9 +234,7 @@ class TestExtractPromptContext:
         context = _extract_prompt_context(
             {
                 "id": ["langchain", "prompts", "PromptTemplate"],
-                "kwargs": {
-                    "input_variables": ["list_value", "mapping_value"]
-                },
+                "kwargs": {"input_variables": ["list_value", "mapping_value"]},
             },
             {
                 "list_value": cyclic_list,
