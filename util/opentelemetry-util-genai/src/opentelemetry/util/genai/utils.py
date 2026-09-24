@@ -6,6 +6,7 @@ import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
+from contextvars import ContextVar
 from functools import partial
 from typing import Any
 
@@ -93,16 +94,45 @@ def is_experimental_mode() -> bool:
     return True
 
 
+_EMIT_EVENT_DEFAULT: bool | None = None
+_EMIT_EVENT_CONTEXT_VAR: ContextVar[bool | None] = ContextVar(
+    "otel_genai_emit_event", default=None
+)
+
+
+def set_emit_event_default(value: bool | None) -> None:
+    """Set process-wide in-memory default for event emission."""
+    global _EMIT_EVENT_DEFAULT
+    _EMIT_EVENT_DEFAULT = value
+
+
+def get_emit_event_default() -> bool | None:
+    """Get process-wide in-memory default for event emission."""
+    return _EMIT_EVENT_DEFAULT
+
+
+def set_emit_event_context(value: bool | None):
+    """Set per-context in-memory override for event emission."""
+    return _EMIT_EVENT_CONTEXT_VAR.set(value)
+
+
+def reset_emit_event_context(token: Any) -> None:
+    """Reset per-context in-memory override for event emission."""
+    _EMIT_EVENT_CONTEXT_VAR.reset(token)
+
+
 def should_emit_event() -> bool:
     """Check if event emission is enabled.
 
     Returns True if event emission is enabled, False otherwise.
 
     If the environment variable OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is explicitly set,
-    its value takes precedence. Otherwise, the default value is determined by
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT:
-    - NO_CONTENT or SPAN_ONLY: defaults to False
-    - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
+    its value takes precedence. Otherwise, the value is determined by:
+    - Per-context override (ContextVar) if set
+    - In-memory global default if set
+    - Default based on OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT:
+      - NO_CONTENT or SPAN_ONLY: defaults to False
+      - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
     """
     # If explicitly set (and not empty), use the user's value (highest priority)
     if (
@@ -119,6 +149,16 @@ def should_emit_event() -> bool:
             envvar,
             OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
         )
+
+    # Check per-context override first
+    context_val = _EMIT_EVENT_CONTEXT_VAR.get()
+    if context_val is not None:
+        return context_val
+
+    # Check process-wide in-memory default
+    if _EMIT_EVENT_DEFAULT is not None:
+        return _EMIT_EVENT_DEFAULT
+
     # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
     return get_content_capturing_mode() in (
         ContentCapturingMode.EVENT_ONLY,
@@ -159,14 +199,10 @@ class _GenAiJsonEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-gen_ai_json_dump = partial(
-    json.dump, separators=(",", ":"), cls=_GenAiJsonEncoder
-)
+gen_ai_json_dump = partial(json.dump, separators=(",", ":"), cls=_GenAiJsonEncoder)
 """Should be used by GenAI instrumentations when serializing objects that may contain
 bytes, datetimes, etc. for GenAI observability."""
 
-gen_ai_json_dumps = partial(
-    json.dumps, separators=(",", ":"), cls=_GenAiJsonEncoder
-)
+gen_ai_json_dumps = partial(json.dumps, separators=(",", ":"), cls=_GenAiJsonEncoder)
 """Should be used by GenAI instrumentations when serializing objects that may contain
 bytes, datetimes, etc. for GenAI observability."""

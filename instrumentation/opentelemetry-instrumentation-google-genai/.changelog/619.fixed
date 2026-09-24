@@ -1,1 +1,1 @@
-Do not unconditionally set OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT during instrumentation.
+Do not mutate os.environ during instrumentation; enable event emission by default via in-memory default.

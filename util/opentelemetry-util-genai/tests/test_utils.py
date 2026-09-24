@@ -56,7 +56,11 @@ from opentelemetry.util.genai.utils import (
     decode_base64,
     gen_ai_json_dumps,
     get_content_capturing_mode,
+    get_emit_event_default,
     image_from_url,
+    reset_emit_event_context,
+    set_emit_event_context,
+    set_emit_event_default,
     should_capture_content_on_spans,
     should_emit_event,
 )
@@ -214,9 +218,7 @@ class TestShouldEmitEvent(unittest.TestCase):
             )
         self.assertEqual(len(cm.output), 1)
         self.assertIn("invalid_value is not a valid option for", cm.output[0])
-        self.assertIn(
-            "Must be one of true or false (case-insensitive)", cm.output[0]
-        )
+        self.assertIn("Must be one of true or false (case-insensitive)", cm.output[0])
 
     @patch.dict(
         os.environ,
@@ -237,6 +239,49 @@ class TestShouldEmitEvent(unittest.TestCase):
         self.assertEqual(len(cm.output), 1)
         self.assertIn("invalid_value is not a valid option for", cm.output[0])
 
+    def test_should_emit_event_respects_in_memory_default(self):
+        original = get_emit_event_default()
+        try:
+            with patch.dict(os.environ, {}, clear=True):
+                set_emit_event_default(True)
+                assert should_emit_event() is True
+                set_emit_event_default(False)
+                assert should_emit_event() is False
+        finally:
+            set_emit_event_default(original)
+
+    def test_should_emit_event_respects_context_override(self):
+        with patch.dict(os.environ, {}, clear=True):
+            token = set_emit_event_context(True)
+            try:
+                assert should_emit_event() is True
+            finally:
+                reset_emit_event_context(token)
+
+            token2 = set_emit_event_context(False)
+            try:
+                assert should_emit_event() is False
+            finally:
+                reset_emit_event_context(token2)
+
+    def test_should_emit_event_env_var_takes_precedence_over_in_memory_and_context(
+        self,
+    ):
+        original = get_emit_event_default()
+        try:
+            set_emit_event_default(True)
+            token = set_emit_event_context(True)
+            try:
+                with patch.dict(
+                    os.environ,
+                    {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"},
+                ):
+                    assert should_emit_event() is False
+            finally:
+                reset_emit_event_context(token)
+        finally:
+            set_emit_event_default(original)
+
 
 class TestShouldCaptureContent(unittest.TestCase):
     def test_should_capture_content_on_spans_against_various_env_var_combinations(
@@ -254,9 +299,7 @@ class TestShouldCaptureContent(unittest.TestCase):
                     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
                 },
             ):
-                assert (
-                    should_capture_content_on_spans() is span_content_enabled
-                )
+                assert should_capture_content_on_spans() is span_content_enabled
 
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
         for content_capture, expected_content_capturing in [
@@ -272,9 +315,7 @@ class TestShouldCaptureContent(unittest.TestCase):
                     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
                 },
             ):
-                assert (
-                    get_content_capturing_mode() == expected_content_capturing
-                )
+                assert get_content_capturing_mode() == expected_content_capturing
 
     @patch.dict(
         os.environ,
@@ -286,9 +327,7 @@ class TestShouldCaptureContent(unittest.TestCase):
         self,
     ):  # pylint: disable=no-self-use
         with self.assertLogs(level="WARNING") as cm:
-            assert (
-                get_content_capturing_mode() == ContentCapturingMode.NO_CONTENT
-            )
+            assert get_content_capturing_mode() == ContentCapturingMode.NO_CONTENT
         self.assertEqual(len(cm.output), 1)
         self.assertIn("INVALID_VALUE is not a valid option for ", cm.output[0])
 
@@ -297,9 +336,7 @@ class TestTelemetryHandler(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
-            SimpleSpanProcessor(self.span_exporter)
-        )
+        tracer_provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
         self.log_exporter = InMemoryLogRecordExporter()
         logger_provider = LoggerProvider()
         logger_provider.add_log_record_processor(
@@ -380,12 +417,8 @@ class TestTelemetryHandler(unittest.TestCase):
             },
         )
 
-        input_message = _get_single_message(
-            span_attrs, "gen_ai.input.messages"
-        )
-        output_message = _get_single_message(
-            span_attrs, "gen_ai.output.messages"
-        )
+        input_message = _get_single_message(span_attrs, "gen_ai.input.messages")
+        output_message = _get_single_message(span_attrs, "gen_ai.output.messages")
         _assert_text_message(input_message, "Human", "hello world")
         _assert_text_message(output_message, "AI", "hello back", "stop")
         self.assertEqual(invocation.attributes.get("custom_attr"), "value")
@@ -395,9 +428,7 @@ class TestTelemetryHandler(unittest.TestCase):
         self.assertIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
         span_system = json.loads(span_attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
         self.assertIsInstance(span_system, list)
-        self.assertEqual(
-            span_system[0]["content"], "You are a helpful assistant."
-        )
+        self.assertEqual(span_system[0]["content"], "You are a helpful assistant.")
         self.assertEqual(span_system[0]["type"], "text")
 
     @patch.dict(
@@ -465,9 +496,7 @@ class TestTelemetryHandler(unittest.TestCase):
                 return "AttributeCapturingSampler"
 
         sampler_provider = TracerProvider(sampler=AttributeCapturingSampler())
-        sampler_provider.add_span_processor(
-            SimpleSpanProcessor(self.span_exporter)
-        )
+        sampler_provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
 
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
@@ -480,15 +509,10 @@ class TestTelemetryHandler(unittest.TestCase):
         invocation.stop()
 
         assert captured_attributes[GenAI.GEN_AI_OPERATION_NAME] == "chat"
+        assert captured_attributes[GenAI.GEN_AI_REQUEST_MODEL] == "sampler-model"
+        assert captured_attributes[GenAI.GEN_AI_PROVIDER_NAME] == "test-provider"
         assert (
-            captured_attributes[GenAI.GEN_AI_REQUEST_MODEL] == "sampler-model"
-        )
-        assert (
-            captured_attributes[GenAI.GEN_AI_PROVIDER_NAME] == "test-provider"
-        )
-        assert (
-            captured_attributes[server_attributes.SERVER_ADDRESS]
-            == "api.example.com"
+            captured_attributes[server_attributes.SERVER_ADDRESS] == "api.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
 
@@ -507,10 +531,7 @@ class TestTelemetryHandler(unittest.TestCase):
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs[GenAI.GEN_AI_CONVERSATION_ID] == "conv-1"
-        assert (
-            GenAI.GEN_AI_CONVERSATION_ID
-            not in invocation._get_metric_attributes()
-        )
+        assert GenAI.GEN_AI_CONVERSATION_ID not in invocation._get_metric_attributes()
 
     def test_inference_omits_conversation_id_when_not_set(self):
         invocation = self.telemetry_handler.inference(
@@ -550,22 +571,16 @@ class TestTelemetryHandler(unittest.TestCase):
         sampler_provider = TracerProvider(
             sampler=ModelRejectingSampler(reject_models={"rejected-model"})
         )
-        sampler_provider.add_span_processor(
-            SimpleSpanProcessor(self.span_exporter)
-        )
+        sampler_provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
 
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
         # This invocation should be dropped
-        invocation = handler.inference(
-            "test-provider", request_model="rejected-model"
-        )
+        invocation = handler.inference("test-provider", request_model="rejected-model")
         invocation.stop()
 
         # This invocation should be recorded
-        invocation = handler.inference(
-            "test-provider", request_model="accepted-model"
-        )
+        invocation = handler.inference("test-provider", request_model="accepted-model")
         invocation.stop()
 
         spans = self.span_exporter.get_finished_spans()
@@ -593,9 +608,7 @@ class TestTelemetryHandler(unittest.TestCase):
                 return "AttributeCapturingSampler"
 
         sampler_provider = TracerProvider(sampler=AttributeCapturingSampler())
-        sampler_provider.add_span_processor(
-            SimpleSpanProcessor(self.span_exporter)
-        )
+        sampler_provider.add_span_processor(SimpleSpanProcessor(self.span_exporter))
         handler = TelemetryHandler(tracer_provider=sampler_provider)
 
         invocation = handler.embedding(
@@ -608,12 +621,9 @@ class TestTelemetryHandler(unittest.TestCase):
 
         assert captured_attributes[GenAI.GEN_AI_OPERATION_NAME] == "embeddings"
         assert captured_attributes[GenAI.GEN_AI_REQUEST_MODEL] == "embed-model"
+        assert captured_attributes[GenAI.GEN_AI_PROVIDER_NAME] == "test-provider"
         assert (
-            captured_attributes[GenAI.GEN_AI_PROVIDER_NAME] == "test-provider"
-        )
-        assert (
-            captured_attributes[server_attributes.SERVER_ADDRESS]
-            == "embed.example.com"
+            captured_attributes[server_attributes.SERVER_ADDRESS] == "embed.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 443
 
@@ -693,10 +703,7 @@ class TestTelemetryHandler(unittest.TestCase):
             instrumentation = getattr(span, "instrumentation_info", None)
 
         assert instrumentation is not None
-        assert (
-            getattr(instrumentation, "schema_url", None)
-            == Schemas.V1_37_0.value
-        )
+        assert getattr(instrumentation, "schema_url", None) == Schemas.V1_37_0.value
 
     @patch.dict(
         os.environ,
@@ -780,9 +787,7 @@ class TestTelemetryHandler(unittest.TestCase):
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
-        child_span = next(
-            s for s in spans if s.name == "embeddings embed-child-model"
-        )
+        child_span = next(s for s in spans if s.name == "embeddings embed-child-model")
         parent_span = next(
             s for s in spans if s.name == "embeddings embed-parent-model"
         )
@@ -817,9 +822,7 @@ class TestTelemetryHandler(unittest.TestCase):
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
-        child_span = next(
-            s for s in spans if s.name == "embeddings embed-child-model"
-        )
+        child_span = next(s for s in spans if s.name == "embeddings embed-child-model")
         parent_span = next(s for s in spans if s.name == "chat parent-model")
 
         assert child_span.context.trace_id == parent_span.context.trace_id
@@ -1094,9 +1097,7 @@ class TestMediaHelpers(unittest.TestCase):
         part = image_from_url("data:audio/mp3;base64,QUJD", modality="audio")
         self.assertIsInstance(part, BlobPart)
         self.assertEqual(part.modality, "audio")
-        uri_part = image_from_url(
-            "https://example.com/a.mp3", modality="audio"
-        )
+        uri_part = image_from_url("https://example.com/a.mp3", modality="audio")
         self.assertIsInstance(uri_part, UriPart)
         self.assertEqual(uri_part.modality, "audio")
 

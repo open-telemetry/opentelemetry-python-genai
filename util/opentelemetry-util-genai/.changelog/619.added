@@ -1,0 +1,1 @@
+Support in-memory and context variable defaults in should_emit_event() to allow instrumentations to configure event emission without mutating os.environ.

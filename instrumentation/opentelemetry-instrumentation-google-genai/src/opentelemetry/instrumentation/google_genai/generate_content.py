@@ -36,6 +36,10 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import (
+    get_emit_event_default,
+    set_emit_event_default,
+)
 from opentelemetry.util.types import AttributeValue
 
 from ._error_type import resolve_error_type
@@ -67,6 +71,7 @@ GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
 
 class _MethodsSnapshot:
     def __init__(self):
+        self._original_emit_event_default = get_emit_event_default()
         self._original_generate_content = Models.generate_content
         self._original_generate_content_code = Models.generate_content.__code__
         self._original_generate_content_stream = Models.generate_content_stream
@@ -101,9 +106,8 @@ class _MethodsSnapshot:
         return self._original_async_generate_content_stream
 
     def restore(self):
-        self._original_generate_content.__code__ = (
-            self._original_generate_content_code
-        )
+        set_emit_event_default(self._original_emit_event_default)
+        self._original_generate_content.__code__ = self._original_generate_content_code
         self._original_generate_content_stream.__code__ = (
             self._original_generate_content_stream_code
         )
@@ -168,14 +172,8 @@ def _determine_genai_system(models_object: Models | AsyncModels):
 def _model_dump_to_tool_definition(tool: Any) -> ToolDefinition:
     model_dump = tool.model_dump(exclude_none=True)
 
-    name = (
-        model_dump.get("name")
-        or getattr(tool, "name", None)
-        or type(tool).__name__
-    )
-    description = model_dump.get("description") or getattr(
-        tool, "description", None
-    )
+    name = model_dump.get("name") or getattr(tool, "name", None) or type(tool).__name__
+    description = model_dump.get("description") or getattr(tool, "description", None)
     parameters = model_dump.get("parameters") or model_dump.get("inputSchema")
     return FunctionToolDefinition(
         name=name,
@@ -220,9 +218,7 @@ def _tool_to_tool_definition(tool: Tool) -> list[ToolDefinition]:
                 FunctionToolDefinition(
                     name=getattr(fd, "name", type(fd).__name__),
                     description=getattr(fd, "description", None),
-                    parameters=_clean_parameters(
-                        getattr(fd, "parameters", None)
-                    ),
+                    parameters=_clean_parameters(getattr(fd, "parameters", None)),
                 )
             )
 
@@ -372,16 +368,12 @@ def _wrapped_config_with_tools(
             return GenerateContentConfig(), True
     if not config.tools:
         return config, False
-    config.tools = [
-        wrapped_tool(tool, telemetry_handler) for tool in config.tools
-    ]
+    config.tools = [wrapped_tool(tool, telemetry_handler) for tool in config.tools]
     return config, True
 
 
 def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
-    attrs = context_api.get_value(
-        GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY
-    )
+    attrs = context_api.get_value(GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY)
     return dict(attrs or {})
 
 
@@ -398,9 +390,7 @@ def _apply_response_attributes(
         if candidate.finish_reason:
             finish_reasons.append(candidate.finish_reason.value.lower())
     invocation.finish_reasons = finish_reasons
-    input_tokens = _get_response_property(
-        response, "usage_metadata.prompt_token_count"
-    )
+    input_tokens = _get_response_property(response, "usage_metadata.prompt_token_count")
     output_tokens = _get_response_property(
         response, "usage_metadata.candidates_token_count"
     )
@@ -420,20 +410,13 @@ def _apply_response_attributes(
         invocation.thinking_tokens = thinking_tokens
         # candidates_token_count excludes thoughts; output_tokens must be the
         # full output count including reasoning tokens.
-        invocation.output_tokens = (
-            invocation.output_tokens or 0
-        ) + thinking_tokens
+        invocation.output_tokens = (invocation.output_tokens or 0) + thinking_tokens
 
 
 def _maybe_get_tool_definitions(
     config: GenerateContentConfig,
 ) -> list[ToolDefinition]:
-    return [
-        de
-        for tool in config.tools or []
-        for de in _to_tool_definition(tool)
-        if de
-    ]
+    return [de for tool in config.tools or [] for de in _to_tool_definition(tool) if de]
 
 
 async def _maybe_get_tool_definitions_async(
@@ -485,9 +468,7 @@ def _create_instrumented_generate_content(
                     generate_content_config_key_allowlist,
                     invocation,
                 )
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
-                )
+                invocation.attributes.update(_get_extra_generate_content_attributes())
                 invocation.tool_definitions = _maybe_get_tool_definitions(
                     wrapped_config
                 )
@@ -511,17 +492,12 @@ def _create_instrumented_generate_content(
                         *_args,
                         **_kwargs,
                     )
-                    _apply_response_attributes(
-                        response, finish_reasons, invocation
-                    )
+                    _apply_response_attributes(response, finish_reasons, invocation)
                     if response.candidates:
                         candidates.extend(response.candidates)
                     return response
                 finally:
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
+                    if telemetry_handler.should_capture_content() and candidates:
                         invocation.output_messages = to_output_messages(
                             candidates=candidates
                         )
@@ -567,9 +543,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
         self._self_invocation.fail(error)
 
 
-class AsyncGenerateContentStreamWrapper(
-    AsyncStreamWrapper[GenerateContentResponse]
-):
+class AsyncGenerateContentStreamWrapper(AsyncStreamWrapper[GenerateContentResponse]):
     def __init__(
         self,
         stream: AsyncIterable[GenerateContentResponse],
@@ -644,12 +618,8 @@ def _create_instrumented_generate_content_stream(
                 generate_content_config_key_allowlist,
                 invocation,
             )
-            invocation.attributes.update(
-                _get_extra_generate_content_attributes()
-            )
-            invocation.tool_definitions = _maybe_get_tool_definitions(
-                wrapped_config
-            )
+            invocation.attributes.update(_get_extra_generate_content_attributes())
+            invocation.tool_definitions = _maybe_get_tool_definitions(wrapped_config)
 
             if telemetry_handler.should_capture_content():
                 invocation.input_messages = to_input_messages(
@@ -711,16 +681,14 @@ def _create_instrumented_async_generate_content(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             ) as invocation:
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
-                )
+                invocation.attributes.update(_get_extra_generate_content_attributes())
                 _apply_request_attributes(
                     wrapped_config,
                     generate_content_config_key_allowlist,
                     invocation,
                 )
-                invocation.tool_definitions = (
-                    await _maybe_get_tool_definitions_async(wrapped_config)
+                invocation.tool_definitions = await _maybe_get_tool_definitions_async(
+                    wrapped_config
                 )
 
                 if telemetry_handler.should_capture_content():
@@ -742,17 +710,12 @@ def _create_instrumented_async_generate_content(
                         *_args,
                         **_kwargs,
                     )
-                    _apply_response_attributes(
-                        response, finish_reasons, invocation
-                    )
+                    _apply_response_attributes(response, finish_reasons, invocation)
                     if response.candidates:
                         candidates.extend(response.candidates)
                     return response
                 finally:
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
+                    if telemetry_handler.should_capture_content() and candidates:
                         invocation.output_messages = to_output_messages(
                             candidates=candidates
                         )
@@ -794,16 +757,14 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             )
-            invocation.attributes.update(
-                _get_extra_generate_content_attributes()
-            )
+            invocation.attributes.update(_get_extra_generate_content_attributes())
             _apply_request_attributes(
                 wrapped_config,
                 generate_content_config_key_allowlist,
                 invocation,
             )
-            invocation.tool_definitions = (
-                await _maybe_get_tool_definitions_async(wrapped_config)
+            invocation.tool_definitions = await _maybe_get_tool_definitions_async(
+                wrapped_config
             )
 
             if telemetry_handler.should_capture_content():
@@ -843,6 +804,7 @@ def instrument_generate_content(
     generate_content_config_key_allowlist: AllowList,
 ) -> object:
     snapshot = _MethodsSnapshot()
+    set_emit_event_default(True)
     wrapped = wrap_function_wrapper(
         "google.genai.models",
         "Models.generate_content",

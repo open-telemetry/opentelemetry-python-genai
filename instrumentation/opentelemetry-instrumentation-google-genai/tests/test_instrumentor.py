@@ -50,17 +50,13 @@ def test_co_filename_on_wrapped_functions(
     ):
         for func in wrapped_functions:
             co_filename = func.__code__.co_filename.replace("\\", "/")
-            assert (
-                "opentelemetry/instrumentation/google_genai" in co_filename
-            ), (
+            assert "opentelemetry/instrumentation/google_genai" in co_filename, (
                 f"Expected opentelemetry/instrumentation/google_genai in {co_filename}"
             )
 
     for func in wrapped_functions:
         co_filename = func.__code__.co_filename.replace("\\", "/")
-        assert (
-            "opentelemetry/instrumentation/google_genai" not in co_filename
-        ), (
+        assert "opentelemetry/instrumentation/google_genai" not in co_filename, (
             f"Expected opentelemetry/instrumentation/google_genai removed from {co_filename} upon uninstrument"
         )
 
@@ -89,3 +85,43 @@ def test_instrument_preserves_explicit_emit_event_env(
         meter_provider=meter_provider,
     ):
         assert os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT) == "false"
+
+
+def test_instrument_enables_event_emission_by_default_without_env(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
+    from opentelemetry.util.genai.utils import (
+        get_emit_event_default,
+        should_emit_event,
+    )
+
+    monkeypatch.delenv(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, raising=False)
+    assert get_emit_event_default() is None
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        assert OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT not in os.environ
+        assert get_emit_event_default() is True
+        assert should_emit_event() is True
+
+    assert get_emit_event_default() is None
+    assert should_emit_event() is False
+
+
+def test_instrument_respects_explicit_false_emit_event(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
+    from opentelemetry.util.genai.utils import should_emit_event
+
+    monkeypatch.setenv(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "false")
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        assert os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT) == "false"
+        assert should_emit_event() is False
