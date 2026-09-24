@@ -40,7 +40,9 @@ class _InvocationState:
     ended: bool = False
     agent_name: str | None = None
     prompt_context: _PromptContext | None = None
-    pending_prompt_contexts: list[_PromptContext] = field(default_factory=list)
+    pending_prompt_contexts: list[_PromptContext] = field(
+        default_factory=lambda: list[_PromptContext]()
+    )
 
 
 class _InvocationManager:
