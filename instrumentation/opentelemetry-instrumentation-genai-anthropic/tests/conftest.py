@@ -181,7 +181,11 @@ def vcr_config():
         ],
         "decode_compressed_response": True,
         "before_record_response": scrub_response_headers(
-            ["anthropic-organization-id", "set-cookie"]
+            [
+                "anthropic-organization-id",
+                "anthropic-workspace-id",
+                "set-cookie",
+            ]
         ),
     }
 
