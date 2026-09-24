@@ -12,6 +12,7 @@ import functools
 import json
 import logging
 import sys
+import urllib.parse
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
+    from agno.models.base import MessageData, Model
+    from agno.models.message import Message
+    from agno.models.response import ModelResponse
     from agno.run.workflow import WorkflowRunOutput
     from agno.team import Team, TeamRunOutput
     from agno.tools.function import FunctionCall, FunctionExecutionResult
@@ -38,18 +42,26 @@ from wrapt import register_post_import_hook, wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.agno.stream import (
     AgnoAgentStreamWrapper,
+    AgnoModelStreamWrapper,
     AgnoWorkflowStreamWrapper,
     AsyncAgnoAgentStreamWrapper,
+    AsyncAgnoModelStreamWrapper,
     AsyncAgnoWorkflowStreamWrapper,
 )
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_model_finish_reasons,
     extract_session_id,
     extract_user_id,
     format_content,
+    format_model_input_messages,
+    format_model_output_message,
     format_retrieval_document,
+    has_model_output_content,
     prepare_tool_definitions,
     resolve_embedder_provider,
+    resolve_model_provider,
+    safe_float,
     safe_int,
     set_invocation_user_id,
 )
@@ -62,6 +74,7 @@ from opentelemetry.semconv._incubating.attributes.user_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -93,6 +106,8 @@ _AGNO_WORKFLOW_MODULE = "agno.workflow.workflow"
 _WORKFLOW_CLASS = "Workflow"
 _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
+_AGNO_MODELS_MODULE = "agno.models.base"
+_MODEL_CLASS = "Model"
 
 _ACTIVE_FOREGROUND_WORKFLOWS: contextvars.ContextVar[frozenset[int]] = (
     contextvars.ContextVar("_ACTIVE_FOREGROUND_WORKFLOWS", default=frozenset())
@@ -295,6 +310,30 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _knowledge_asearch(handler),
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._process_model_response",
+        _model_process_response(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}._aprocess_model_response",
+        _model_aprocess_response(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.process_response_stream",
+        _model_process_response_stream(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_MODELS_MODULE,
+        f"{_MODEL_CLASS}.aprocess_response_stream",
+        _model_aprocess_response_stream(handler),
+        current_generation,
+    )
 
     embedder_wrappers = _embedder_method_wrappers(handler)
     for mod_name, cls_name in _KNOWN_EMBEDDERS:
@@ -408,6 +447,19 @@ def unpatch_agent() -> None:
 
             for attr in ("search", "asearch"):
                 _safe_unwrap(agno.knowledge.knowledge.Knowledge, attr)
+        except ImportError:
+            pass
+    if _AGNO_MODELS_MODULE in sys.modules:
+        try:
+            import agno.models.base
+
+            for attr in (
+                "_process_model_response",
+                "_aprocess_model_response",
+                "process_response_stream",
+                "aprocess_response_stream",
+            ):
+                _safe_unwrap(agno.models.base.Model, attr)
         except ImportError:
             pass
 
@@ -1799,12 +1851,7 @@ def _start_retrieval_invocation(
     if max_results is None:
         max_results = instance.max_results
 
-    if isinstance(max_results, (int, float, str)):
-        try:
-            invocation.top_k = int(max_results)
-        except (ValueError, TypeError):
-            pass
-
+    invocation.top_k = safe_int(max_results)
     return invocation
 
 
@@ -1862,3 +1909,300 @@ def _knowledge_asearch(
         return result
 
     return cast(Callable[..., Any], traced_method)
+
+
+def _start_model_inference(
+    handler: TelemetryHandler,
+    instance: Model,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
+) -> tuple[
+    InferenceInvocation,
+    Message | None,
+    ModelResponse | MessageData | None,
+]:
+    """Start an InferenceInvocation for an Agno model response call."""
+    messages = cast(
+        "Sequence[Message] | None",
+        get_argument("messages", wrapped, args, kwargs),
+    )
+    assistant_message = cast(
+        "Message | None",
+        get_argument("assistant_message", wrapped, args, kwargs),
+    )
+    response_obj = cast(
+        "ModelResponse | MessageData | None",
+        get_argument("model_response", wrapped, args, kwargs)
+        or get_argument("stream_data", wrapped, args, kwargs),
+    )
+    tools = cast(
+        "Iterable[Any] | str | None",
+        get_argument("tools", wrapped, args, kwargs),
+    )
+    run_response = get_argument("run_response", wrapped, args, kwargs)
+
+    provider = resolve_model_provider(instance)
+    request_model = (
+        getattr(instance, "id", None)
+        or getattr(instance, "model", None)
+        or getattr(instance, "name", None)
+    )
+    server_address: str | None = None
+    server_port: int | None = None
+    base_url = getattr(instance, "base_url", None)
+    if base_url:
+        try:
+            parsed = urllib.parse.urlparse(str(base_url))
+            server_address = parsed.hostname
+            server_port = safe_int(parsed.port)
+        except Exception:
+            pass
+
+    session_id = extract_session_id(
+        instance=instance,
+        args=args,
+        kwargs=kwargs,
+        run_response=run_response,
+        wrapped=wrapped,
+    )
+    invocation = handler.inference(
+        provider,
+        request_model=str(request_model)
+        if request_model is not None
+        else None,
+        server_address=server_address,
+        server_port=server_port,
+        conversation_id=str(session_id) if session_id is not None else None,
+    )
+
+    invocation.temperature = safe_float(getattr(instance, "temperature", None))
+    invocation.top_p = safe_float(getattr(instance, "top_p", None))
+    invocation.top_k = safe_int(getattr(instance, "top_k", None))
+    invocation.max_tokens = safe_int(
+        getattr(instance, "max_tokens", None)
+        or getattr(instance, "max_completion_tokens", None)
+    )
+    invocation.frequency_penalty = safe_float(
+        getattr(instance, "frequency_penalty", None)
+    )
+    invocation.presence_penalty = safe_float(
+        getattr(instance, "presence_penalty", None)
+    )
+
+    stop = getattr(instance, "stop_sequences", None) or getattr(
+        instance, "stop", None
+    )
+    if isinstance(stop, str):
+        invocation.stop_sequences = [stop]
+    elif isinstance(stop, (list, tuple)):
+        stop_seqs = cast(Sequence[object], stop)
+        invocation.stop_sequences = [str(s) for s in stop_seqs]
+
+    invocation.seed = safe_int(getattr(instance, "seed", None))
+
+    if tools:
+        invocation.tool_definitions = prepare_tool_definitions(tools)
+
+    if invocation.should_capture_content and messages:
+        invocation.input_messages = format_model_input_messages(messages)
+
+    set_invocation_user_id(
+        invocation,
+        instance=instance,
+        args=args,
+        kwargs=kwargs,
+        run_response=run_response,
+        wrapped=wrapped,
+    )
+
+    return invocation, assistant_message, response_obj
+
+
+def _populate_model_response_telemetry(
+    invocation: InferenceInvocation,
+    assistant_message: Message | None,
+    model_response: ModelResponse | None,
+) -> None:
+    """Populate final response telemetry on an InferenceInvocation."""
+    provider_data = None
+    if assistant_message is not None:
+        provider_data = getattr(assistant_message, "provider_data", None)
+    if not provider_data and model_response is not None:
+        provider_data = getattr(model_response, "provider_data", None)
+
+    if isinstance(provider_data, dict):
+        provider_dict = cast(dict[str, Any], provider_data)
+        if "id" in provider_dict and not invocation.response_id:
+            invocation.response_id = str(cast(object, provider_dict["id"]))
+        if "model" in provider_dict and not invocation.response_model_name:
+            invocation.response_model_name = str(
+                cast(object, provider_dict["model"])
+            )
+
+    source_metrics = None
+    if assistant_message is not None:
+        source_metrics = getattr(assistant_message, "metrics", None)
+    if source_metrics is None and model_response is not None:
+        source_metrics = getattr(
+            model_response, "response_usage", model_response
+        )
+
+    invocation.input_tokens = safe_int(
+        getattr(source_metrics, "input_tokens", None)
+    )
+    invocation.output_tokens = safe_int(
+        getattr(source_metrics, "output_tokens", None)
+    )
+    invocation.cache_read_input_tokens = safe_int(
+        getattr(source_metrics, "cache_read_tokens", None)
+    )
+    invocation.cache_write_input_tokens = safe_int(
+        getattr(source_metrics, "cache_write_tokens", None)
+    )
+    invocation.thinking_tokens = safe_int(
+        getattr(source_metrics, "reasoning_tokens", None)
+    )
+
+    finish_reasons = extract_model_finish_reasons(
+        assistant_message, model_response
+    )
+    invocation.finish_reasons = finish_reasons
+
+    if invocation.should_capture_content:
+        if assistant_message is not None and has_model_output_content(
+            assistant_message
+        ):
+            invocation.output_messages = [
+                format_model_output_message(
+                    assistant_message,
+                    finish_reason=finish_reasons[0]
+                    if finish_reasons
+                    else "stop",
+                )
+            ]
+        elif model_response is not None and has_model_output_content(
+            model_response
+        ):
+            invocation.output_messages = [
+                format_model_output_message(
+                    model_response,
+                    finish_reason=finish_reasons[0]
+                    if finish_reasons
+                    else "stop",
+                )
+            ]
+
+
+def _model_process_response(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation, assistant_message, model_response = _start_model_inference(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+        _populate_model_response_telemetry(
+            invocation,
+            assistant_message=assistant_message,
+            model_response=cast("ModelResponse | None", model_response),
+        )
+        invocation.stop()
+        return result
+
+    return traced_method
+
+
+def _model_aprocess_response(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation, assistant_message, model_response = _start_model_inference(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        try:
+            result = await wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+        _populate_model_response_telemetry(
+            invocation,
+            assistant_message=assistant_message,
+            model_response=cast("ModelResponse | None", model_response),
+        )
+        invocation.stop()
+        return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
+def _model_process_response_stream(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation, assistant_message, stream_data = _start_model_inference(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        try:
+            stream = wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+        return AgnoModelStreamWrapper(
+            stream,
+            invocation=invocation,
+            assistant_message=assistant_message,
+            stream_data=cast("MessageData | None", stream_data),
+        )
+
+    return traced_method
+
+
+def _model_aprocess_response_stream(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Model,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation, assistant_message, stream_data = _start_model_inference(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        try:
+            stream = wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+        return AsyncAgnoModelStreamWrapper(
+            stream,
+            invocation=invocation,
+            assistant_message=assistant_message,
+            stream_data=cast("MessageData | None", stream_data),
+        )
+
+    return traced_method
