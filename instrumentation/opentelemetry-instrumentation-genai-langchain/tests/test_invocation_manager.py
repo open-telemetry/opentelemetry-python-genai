@@ -9,6 +9,7 @@ import pytest
 
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
+    _PromptContext,
 )
 from opentelemetry.util.genai.invocation import InferenceInvocation
 
@@ -242,3 +243,79 @@ def test_none_invocation_can_be_stored_and_retrieved(invocation_manager):
 
 def test_delete_nonexistent_run_id_does_not_raise(invocation_manager):
     invocation_manager.delete_invocation_state(uuid.uuid4())  # must not raise
+
+
+def test_prompt_context_publishes_to_parent_and_is_consumed_once(
+    invocation_manager,
+):
+    parent_id = uuid.uuid4()
+    prompt_id = uuid.uuid4()
+    context = _PromptContext("greeting", {"name": "Ada"})
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(prompt_id, parent_id, None)
+
+    invocation_manager.set_prompt_context(prompt_id, context)
+    invocation_manager.publish_prompt_context(prompt_id)
+
+    assert invocation_manager.consume_prompt_context(parent_id) == context
+    assert invocation_manager.consume_prompt_context(parent_id) is None
+
+
+def test_most_recent_prompt_context_supersedes_earlier_context(
+    invocation_manager,
+):
+    parent_id = uuid.uuid4()
+    first_prompt_id = uuid.uuid4()
+    second_prompt_id = uuid.uuid4()
+    first_context = _PromptContext("first", {"value": "first"})
+    second_context = _PromptContext("second", {"value": "second"})
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(first_prompt_id, parent_id, None)
+    invocation_manager.add_invocation_state(second_prompt_id, parent_id, None)
+
+    invocation_manager.set_prompt_context(first_prompt_id, first_context)
+    invocation_manager.publish_prompt_context(first_prompt_id)
+    invocation_manager.set_prompt_context(second_prompt_id, second_context)
+    invocation_manager.publish_prompt_context(second_prompt_id)
+
+    assert (
+        invocation_manager.consume_prompt_context(parent_id) == second_context
+    )
+    assert invocation_manager.consume_prompt_context(parent_id) is None
+
+
+def test_prompt_context_is_consumed_from_nearest_ancestor(invocation_manager):
+    root_id = uuid.uuid4()
+    branch_id = uuid.uuid4()
+    model_parent_id = uuid.uuid4()
+    root_context = _PromptContext("root", {})
+    branch_context = _PromptContext("branch", {})
+    invocation_manager.add_invocation_state(root_id, None, None)
+    invocation_manager.add_invocation_state(branch_id, root_id, None)
+    invocation_manager.add_invocation_state(model_parent_id, branch_id, None)
+    invocation_manager._invocations[root_id].pending_prompt_contexts.append(
+        root_context
+    )
+    invocation_manager._invocations[branch_id].pending_prompt_contexts.append(
+        branch_context
+    )
+
+    assert (
+        invocation_manager.consume_prompt_context(model_parent_id)
+        == branch_context
+    )
+    assert invocation_manager.consume_prompt_context(root_id) == root_context
+
+
+def test_unpublished_prompt_context_is_discarded_on_delete(invocation_manager):
+    parent_id = uuid.uuid4()
+    prompt_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(parent_id, None, None)
+    invocation_manager.add_invocation_state(prompt_id, parent_id, None)
+    invocation_manager.set_prompt_context(
+        prompt_id, _PromptContext("failed", {"value": "secret"})
+    )
+
+    invocation_manager.delete_invocation_state(prompt_id)
+
+    assert invocation_manager.consume_prompt_context(parent_id) is None
