@@ -143,8 +143,38 @@ def test_embeddings_with_batch_input(
         response,
     )
 
+    # Content capture is enabled, but embeddings do not record input content
+    recorded = str(dict(spans[0].attributes))
+    for text in input_texts:
+        assert text not in recorded
+    assert "gen_ai.input.messages" not in spans[0].attributes
+
     # Verify results contain the same number of embeddings as input texts
     assert len(response.data) == len(input_texts)
+
+
+def test_embeddings_event_only_records_no_input_content(
+    span_exporter, log_exporter, openai_client, instrument_event_only, vcr
+):
+    """Test that event-only content capture emits no events for embeddings"""
+    input_texts = [
+        "This is the first test string for embeddings",
+        "This is the second test string for embeddings",
+        "This is the third test string for embeddings",
+    ]
+
+    with vcr.use_cassette("test_embeddings_with_batch_input.yaml"):
+        openai_client.embeddings.create(
+            model=DEFAULT_EMBEDDING_MODEL,
+            input=input_texts,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    recorded = str(dict(spans[0].attributes))
+    for text in input_texts:
+        assert text not in recorded
+    assert len(log_exporter.get_finished_logs()) == 0
 
 
 def test_embeddings_with_encoding_format(
