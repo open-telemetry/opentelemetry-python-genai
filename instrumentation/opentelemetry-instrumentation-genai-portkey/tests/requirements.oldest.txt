@@ -22,7 +22,4 @@
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 #
 # There is no test-only dependency to pin: portkey-ai has none that isn't already provided by a
-# declared bound or by the shared test fixtures. The editable install below is not a pin.
-
-# Drop this once opentelemetry-util-genai 1.2b0 is published.
--e util/opentelemetry-util-genai
+# declared bound or by the shared test fixtures.
