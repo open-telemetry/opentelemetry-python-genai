@@ -21,6 +21,7 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.agent import AgentScenario
+from .conformance.embedding import EmbeddingScenario
 from .conformance.retrieval import RetrievalScenario
 from .conformance.workflow import WorkflowScenario
 from .conformance.workflow_streaming import WorkflowStreamingScenario
@@ -30,6 +31,7 @@ from .conformance.workflow_streaming import WorkflowStreamingScenario
     "scenario",
     [
         pytest.param(AgentScenario()),
+        pytest.param(EmbeddingScenario()),
         pytest.param(RetrievalScenario()),
         pytest.param(WorkflowScenario()),
         pytest.param(WorkflowStreamingScenario()),
