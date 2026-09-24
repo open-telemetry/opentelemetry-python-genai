@@ -98,29 +98,53 @@ def _string_sequence(value: object) -> list[str]:
     ]
 
 
-def _prompt_variable_value(value: object) -> object:
+def _prompt_variable_value(
+    value: object, active_container_ids: set[int] | None = None
+) -> object:
+    if active_container_ids is None:
+        active_container_ids = set()
+
     if isinstance(value, BaseMessage):
         value = value.model_dump()
     elif isinstance(value, Mapping):
         value = cast(Mapping[object, object], value)
         if value.get("type") == "not_implemented":
             return _INVALID_PROMPT_VALUE
+        container_id = id(value)
+        if container_id in active_container_ids:
+            return _INVALID_PROMPT_VALUE
+        active_container_ids.add(container_id)
         normalized_mapping: dict[object, object] = {}
-        for key, item in value.items():
-            normalized_item = _prompt_variable_value(item)
-            if normalized_item is _INVALID_PROMPT_VALUE:
-                return _INVALID_PROMPT_VALUE
-            normalized_mapping[key] = normalized_item
+        try:
+            for key, item in value.items():
+                normalized_item = _prompt_variable_value(
+                    item, active_container_ids
+                )
+                if normalized_item is _INVALID_PROMPT_VALUE:
+                    return _INVALID_PROMPT_VALUE
+                normalized_mapping[key] = normalized_item
+        finally:
+            active_container_ids.remove(container_id)
         value = normalized_mapping
     elif isinstance(value, Sequence) and not isinstance(
         value, (str, bytes, bytearray)
     ):
+        value = cast(Sequence[object], value)
+        container_id = id(value)
+        if container_id in active_container_ids:
+            return _INVALID_PROMPT_VALUE
+        active_container_ids.add(container_id)
         normalized_sequence: list[object] = []
-        for item in cast(Sequence[object], value):
-            normalized_item = _prompt_variable_value(item)
-            if normalized_item is _INVALID_PROMPT_VALUE:
-                return _INVALID_PROMPT_VALUE
-            normalized_sequence.append(normalized_item)
+        try:
+            for item in value:
+                normalized_item = _prompt_variable_value(
+                    item, active_container_ids
+                )
+                if normalized_item is _INVALID_PROMPT_VALUE:
+                    return _INVALID_PROMPT_VALUE
+                normalized_sequence.append(normalized_item)
+        finally:
+            active_container_ids.remove(container_id)
         value = normalized_sequence
     elif callable(value):
         return _INVALID_PROMPT_VALUE

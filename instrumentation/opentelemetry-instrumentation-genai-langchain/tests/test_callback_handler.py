@@ -225,6 +225,29 @@ class TestExtractPromptContext:
         assert context is not None
         assert context.variables == {}
 
+    def test_skips_cyclic_values(self):
+        cyclic_list = []
+        cyclic_list.append(cyclic_list)
+        cyclic_mapping = {}
+        cyclic_mapping["self"] = cyclic_mapping
+
+        context = _extract_prompt_context(
+            {
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "kwargs": {
+                    "input_variables": ["list_value", "mapping_value"]
+                },
+            },
+            {
+                "list_value": cyclic_list,
+                "mapping_value": cyclic_mapping,
+            },
+            None,
+        )
+
+        assert context is not None
+        assert context.variables == {}
+
     def test_ignores_non_prompt_runs(self):
         assert (
             _extract_prompt_context(
