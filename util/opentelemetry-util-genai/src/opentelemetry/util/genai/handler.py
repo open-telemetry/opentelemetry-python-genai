@@ -50,7 +50,11 @@ from opentelemetry.trace import (
     TracerProvider,
     get_tracer,
 )
-from opentelemetry.util.genai._inference_invocation import LLMInvocation
+from opentelemetry.util.genai._context import get_inference_context_data
+from opentelemetry.util.genai._inference_invocation import (
+    LLMInvocation,
+    SuppressedInferenceInvocation,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
@@ -189,7 +193,12 @@ class TelemetryHandler:
         Set remaining attributes (input_messages, temperature, etc.) on the
         returned invocation, then call invocation.stop() or invocation.fail().
         """
-        return InferenceInvocation(
+        invocation_cls: type[InferenceInvocation] = (
+            SuppressedInferenceInvocation
+            if get_inference_context_data() is not None
+            else InferenceInvocation
+        )
+        return invocation_cls(
             self._tracer,
             self._instruments,
             self._logger,
@@ -410,7 +419,12 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return InferenceInvocation(
+        invocation_cls: type[InferenceInvocation] = (
+            SuppressedInferenceInvocation
+            if get_inference_context_data() is not None
+            else InferenceInvocation
+        )
+        return invocation_cls(
             self._tracer,
             self._instruments,
             self._logger,
