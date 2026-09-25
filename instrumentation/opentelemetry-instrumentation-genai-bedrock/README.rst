@@ -13,6 +13,7 @@ Supported Operations
 * Synchronous and asynchronous streaming model invocation via the InvokeModelWithResponseStream API (``client.invoke_model_with_response_stream``)
 * Synchronous and asynchronous embeddings via the InvokeModel API (``client.invoke_model`` with embedding models such as Amazon Titan and Cohere)
 * Synchronous and asynchronous remote agent invocation via the Bedrock Agent Runtime API (``client.invoke_agent``)
+* Synchronous and asynchronous remote inline agent invocation via the Bedrock Agent Runtime API (``client.invoke_inline_agent``)
 * Synchronous and asynchronous Knowledge Base retrieval via the Bedrock Agent Runtime API (``client.retrieve``)
 * Synchronous and asynchronous Knowledge Base RetrieveAndGenerate via the Bedrock Agent Runtime API (``client.retrieve_and_generate``)
 * Synchronous and asynchronous streaming Knowledge Base RetrieveAndGenerateStream via the Bedrock Agent Runtime API (``client.retrieve_and_generate_stream``)
