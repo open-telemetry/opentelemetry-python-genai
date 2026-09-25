@@ -14,6 +14,7 @@
 
 import contextvars
 import logging
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -61,8 +62,9 @@ class TestInvocationFinishedInAnotherContext(TestCase):
 class TestInvocationWithOpaqueContextToken(TestCase):
     """A runtime context other than contextvars (``OTEL_PYTHON_CONTEXT``).
 
-    Its tokens have no ``var`` attribute, so ``suspend`` must hand them back to
-    ``opentelemetry.context.detach`` and still end the span.
+    Its tokens are not ``contextvars.Token`` instances, so ``suspend`` must hand
+    them back to ``opentelemetry.context.detach`` and still end the span, even
+    when the token happens to carry a ``var`` attribute of its own.
     """
 
     def setUp(self):
@@ -74,7 +76,12 @@ class TestInvocationWithOpaqueContextToken(TestCase):
         self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
 
     def test_stop_detaches_opaque_token_and_ends_span(self):
-        opaque_token = object()
+        self._assert_detached(object())
+
+    def test_stop_detaches_opaque_token_with_var_attribute(self):
+        self._assert_detached(SimpleNamespace(var=object()))
+
+    def _assert_detached(self, opaque_token):
         with (
             patch(
                 "opentelemetry.util.genai._invocation.attach",
