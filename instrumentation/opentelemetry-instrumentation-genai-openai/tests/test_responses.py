@@ -90,6 +90,8 @@ pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_API, reason="Responses API requires a newer openai SDK"
 )
 
+_HAS_RESPONSES_PARSE = HAS_RESPONSES_API and hasattr(_Responses, "parse")
+
 SYSTEM_INSTRUCTIONS = "You are a helpful assistant."
 EXPECTED_SYSTEM_INSTRUCTIONS = [
     {
@@ -1595,3 +1597,84 @@ def test_responses_create_event_only_no_content_in_span(
         logs[0].log_record.event_name
         == "gen_ai.client.inference.operation.details"
     )
+
+
+class _ParseCalendarEvent(BaseModel):
+    name: str
+    date: str
+    participants: list[str]
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_parse_basic(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    """Responses.parse() emits a GenAI span like create().
+
+    parse() is the structured-output helper. It does not delegate to the
+    instrumented create(), so it is wrapped separately (#659), but it maps to
+    the same inference operation as create() -- the request/response fields
+    are identical -- exactly as chat.completions.parse reuses the completions
+    create wrapper. The recorded response body is valid structured JSON so
+    the SDK can materialize the ``text_format`` model.
+    """
+    _skip_if_not_latest()
+
+    with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
+        response = openai_client.responses.parse(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            text_format=_ParseCalendarEvent,
+            stream=False,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+    assert (
+        span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
+        == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_parse_wrapping_lifecycle(
+    tracer_provider, logger_provider, meter_provider
+):
+    """instrument() wraps Responses.parse / AsyncResponses.parse and
+    uninstrument() restores them."""
+    from openai.resources.responses.responses import (  # pylint: disable=no-name-in-module
+        AsyncResponses,
+        Responses,
+    )
+
+    before_sync = Responses.parse
+    before_async = AsyncResponses.parse
+
+    instrumentor = OpenAIInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    assert hasattr(Responses.parse, "__wrapped__")
+    assert hasattr(AsyncResponses.parse, "__wrapped__")
+
+    instrumentor.uninstrument()
+    assert Responses.parse is before_sync
+    assert AsyncResponses.parse is before_async

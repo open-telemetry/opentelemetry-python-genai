@@ -103,9 +103,27 @@ def _is_parse_supported():
         return False
 
 
+def _is_responses_parse_supported():
+    """Check if parse() is available on the Responses class.
+
+    The Responses API structured-output helper ``parse()`` calls the SDK's
+    request path directly rather than delegating to the instrumented
+    ``Responses.create()``, so it must be wrapped separately (issue #659).
+    """
+    try:
+        from openai.resources.responses.responses import (  # pylint: disable=import-outside-toplevel
+            Responses,
+        )
+
+        return hasattr(Responses, "parse")
+    except ImportError:
+        return False
+
+
 class OpenAIInstrumentor(BaseInstrumentor):
     def __init__(self):
         self._parse_supported = False
+        self._responses_parse_supported = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -207,6 +225,25 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 async_responses_retrieve(handler),
             )
 
+            # parse() is the Responses API structured-output helper. Like
+            # chat.completions.parse it maps to the same inference operation
+            # as create() -- the telemetry-relevant request/response fields
+            # are identical and its ParsedResponse result is already handled
+            # by the create wrappers -- but it does not delegate to the
+            # instrumented create(), so it must be wrapped separately (#659).
+            self._responses_parse_supported = _is_responses_parse_supported()
+            if self._responses_parse_supported:
+                wrap_function_wrapper(
+                    "openai.resources.responses.responses",
+                    "Responses.parse",
+                    responses_create(handler),
+                )
+                wrap_function_wrapper(
+                    "openai.resources.responses.responses",
+                    "AsyncResponses.parse",
+                    async_responses_create(handler),
+                )
+
     def _uninstrument(self, **kwargs):
         import openai  # pylint: disable=import-outside-toplevel
 
@@ -225,6 +262,9 @@ class OpenAIInstrumentor(BaseInstrumentor):
             unwrap(responses_module.AsyncResponses, "stream")
             unwrap(responses_module.Responses, "retrieve")
             unwrap(responses_module.AsyncResponses, "retrieve")
+            if self._responses_parse_supported:
+                unwrap(responses_module.Responses, "parse")
+                unwrap(responses_module.AsyncResponses, "parse")
 
 
 def _get_responses_module():

@@ -1,0 +1,1 @@
+Instrument `Responses.parse` and `AsyncResponses.parse`, so structured-output calls emit GenAI spans like `Responses.create`.

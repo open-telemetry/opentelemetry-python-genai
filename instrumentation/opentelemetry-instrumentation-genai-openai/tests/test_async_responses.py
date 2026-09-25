@@ -91,6 +91,10 @@ pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_API, reason="Responses API requires a newer openai SDK"
 )
 
+_HAS_RESPONSES_PARSE = HAS_RESPONSES_API and hasattr(
+    _responses_module.AsyncResponses, "parse"
+)
+
 SYSTEM_INSTRUCTIONS = "You are a helpful assistant."
 EXPECTED_SYSTEM_INSTRUCTIONS = [
     {
@@ -1597,4 +1601,49 @@ async def test_async_responses_create_event_only_no_content_in_span(
     assert (
         logs[0].log_record.event_name
         == "gen_ai.client.inference.operation.details"
+    )
+
+
+class _AsyncParseCalendarEvent(BaseModel):
+    name: str
+    date: str
+    participants: list[str]
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="AsyncResponses.parse requires a newer openai SDK",
+)
+@pytest.mark.asyncio()
+async def test_async_responses_parse_basic(
+    span_exporter, async_openai_client, instrument_no_content, vcr
+):
+    """AsyncResponses.parse() emits a GenAI span like create() (#659)."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_parse_basic[content_mode0].yaml"
+    ):
+        response = await async_openai_client.responses.parse(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            text_format=_AsyncParseCalendarEvent,
+            stream=False,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+    assert (
+        span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
+        == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
