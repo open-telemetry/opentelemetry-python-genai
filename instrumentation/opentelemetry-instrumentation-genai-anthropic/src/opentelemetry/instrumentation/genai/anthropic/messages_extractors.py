@@ -200,7 +200,7 @@ def get_output_messages_from_message(
         OutputMessage(
             role=message.role,
             parts=parts,
-            finish_reason=finish_reason or "",
+            finish_reason=finish_reason,
         )
     ]
 
