@@ -1,1 +1,0 @@
-Use the shared RetrievalDocument model for retrieval results, with null IDs and scores for text-only passages, instead of capturing passage text.

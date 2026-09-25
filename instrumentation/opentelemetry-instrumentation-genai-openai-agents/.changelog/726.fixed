@@ -1,1 +1,0 @@
-Record ``gen_ai.conversation.id`` from ``RunConfig.group_id`` on ``invoke_workflow`` and ``invoke_agent`` spans, and propagate it to the ``chat`` span emitted by the model SDK instrumentation.
