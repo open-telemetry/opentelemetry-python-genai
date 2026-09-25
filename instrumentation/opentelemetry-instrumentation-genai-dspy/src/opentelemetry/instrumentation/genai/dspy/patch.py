@@ -558,6 +558,8 @@ def _start_embedding_invocation(
     provider, request_model = resolve_embedder_provider_and_model(instance)
 
     merged_kwargs: dict[str, object] = {}
+    # Embedder stores init kwargs in default_kwargs unlike other DSPy modules that use kwargs;
+    # both are supported with call-time kwargs taking highest precedence.
     init_kwargs: object = getattr(instance, "kwargs", None)
     if is_mapping(init_kwargs):
         merged_kwargs.update(init_kwargs)

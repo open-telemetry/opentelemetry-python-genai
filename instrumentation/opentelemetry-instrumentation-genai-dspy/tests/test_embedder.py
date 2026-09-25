@@ -33,41 +33,6 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 
 
-class _FallbackArray:
-    def __init__(self, data: list[Any]) -> None:
-        self._data = data
-        if data and isinstance(data[0], list):
-            self.shape: tuple[int, ...] = (len(data), len(data[0]))
-            self.size = len(data) * len(data[0])
-        else:
-            self.shape = (len(data),)
-            self.size = len(data)
-
-    def __getitem__(self, idx: int) -> Any:
-        item = self._data[idx]
-        return _FallbackArray(item) if isinstance(item, list) else item
-
-
-class _FallbackNP:
-    float32 = float
-
-    @staticmethod
-    def array(data: Any, dtype: Any = None) -> _FallbackArray:
-        if isinstance(data, _FallbackArray):
-            return data
-        return _FallbackArray(list(data))
-
-
-@pytest.fixture(autouse=True)
-def _ensure_embedder_np(monkeypatch: pytest.MonkeyPatch) -> None:
-    embedder_np = getattr(dspy.clients.embedding, "np", None)
-    try:
-        if embedder_np is None or getattr(embedder_np, "array", None) is None:
-            monkeypatch.setattr(dspy.clients.embedding, "np", _FallbackNP())
-    except (ImportError, AttributeError):
-        monkeypatch.setattr(dspy.clients.embedding, "np", _FallbackNP())
-
-
 def _custom_embed_fn(texts: list[str], **kwargs: Any) -> list[list[float]]:
     return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 

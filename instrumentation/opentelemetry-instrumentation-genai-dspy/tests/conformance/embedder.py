@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import dspy
+
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
@@ -16,31 +18,6 @@ from opentelemetry.test_util_genai.conformance import (
     Scenario,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
-
-
-class _FallbackArray:
-    def __init__(self, data: list[Any]) -> None:
-        self._data = data
-        if data and isinstance(data[0], list):
-            self.shape: tuple[int, ...] = (len(data), len(data[0]))
-            self.size = len(data) * len(data[0])
-        else:
-            self.shape = (len(data),)
-            self.size = len(data)
-
-    def __getitem__(self, idx: int) -> Any:
-        item = self._data[idx]
-        return _FallbackArray(item) if isinstance(item, list) else item
-
-
-class _FallbackNP:
-    float32 = float
-
-    @staticmethod
-    def array(data: Any, dtype: Any = None) -> _FallbackArray:
-        if isinstance(data, _FallbackArray):
-            return data
-        return _FallbackArray(list(data))
 
 
 def _dummy_embedder(texts: list[str], **kwargs: Any) -> list[list[float]]:
@@ -69,18 +46,6 @@ class EmbedderScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
-        import dspy.clients.embedding
-
-        embedder_np = getattr(dspy.clients.embedding, "np", None)
-        try:
-            if (
-                embedder_np is None
-                or getattr(embedder_np, "array", None) is None
-            ):
-                dspy.clients.embedding.np = _FallbackNP()
-        except (ImportError, AttributeError):
-            dspy.clients.embedding.np = _FallbackNP()
-
         with instrument(
             DSPyInstrumentor(),
             tracer_provider=tracer_provider,
