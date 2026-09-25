@@ -4,6 +4,7 @@
 # pylint: disable=abstract-class-instantiated
 
 import asyncio
+import gc
 import inspect
 import timeit
 from unittest.mock import MagicMock, patch
@@ -22,6 +23,7 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.stream import (
+    AbandonedStreamError,
     AsyncStreamManagerWrapper,
     AsyncStreamWrapper,
     AsyncToolStreamWrapper,
@@ -238,6 +240,77 @@ def test_sync_stream_wrapper_stop_iteration_does_not_double_finalize():
     assert not wrapper._self_failures
 
 
+def test_sync_stream_wrapper_finalizes_abandoned_stream():
+    failures = []
+
+    class _RecordingWrapper(_TestSyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    wrapper = _RecordingWrapper(_FakeSyncStream(chunks=["a", "b"]))
+    # A caller raising inside a bare ``for`` body reaches neither __exit__ nor
+    # close(), so only __del__ is left to end the span.
+    with pytest.raises(RuntimeError):
+        for _ in wrapper:
+            raise RuntimeError("caller error")
+
+    del wrapper
+    gc.collect()
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_sync_stream_wrapper_finalizes_stream_abandoned_by_break():
+    processed = []
+    failures = []
+
+    class _RecordingWrapper(_TestSyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    def consume_first_chunk():
+        wrapper = _RecordingWrapper(_FakeSyncStream(chunks=["a", "b", "c"]))
+        for chunk in wrapper:
+            processed.append(chunk)
+            break
+
+    consume_first_chunk()
+    gc.collect()
+
+    # Breaking leaves the remaining chunks unread, so the span is finalized
+    # with only what the caller actually consumed.
+    assert processed == ["a"]
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_sync_stream_wrapper_abandon_does_not_refinalize_drained_stream():
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(chunks=["a"]))
+    assert list(wrapper) == ["a"]
+    assert wrapper._self_stop_count == 1
+
+    wrapper.__del__()
+
+    assert wrapper._self_stop_count == 1
+    assert not wrapper._self_failures
+
+
+def test_sync_stream_wrapper_abandon_does_not_override_failure():
+    error = ValueError("stream broke")
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(error=error))
+
+    with pytest.raises(ValueError):
+        next(wrapper)
+
+    wrapper.__del__()
+
+    assert wrapper._self_failures == [error]
+    assert wrapper._self_stop_count == 0
+
+
 class _FakeAsyncStream:
     def __init__(self, chunks=None, error=None, close_error=None):
         self._chunks = list(chunks or [])
@@ -448,6 +521,71 @@ def test_async_stream_wrapper_stop_iteration_does_not_double_finalize():
 
         assert wrapper._self_stop_count == 1
         assert not wrapper._self_failures
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_finalizes_abandoned_stream():
+    failures = []
+
+    class _RecordingWrapper(_TestAsyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    async def exercise():
+        wrapper = _RecordingWrapper(_FakeAsyncStream(chunks=["a", "b"]))
+        # Neither __aexit__ nor close() runs when the caller raises inside a
+        # bare ``async for`` body, leaving __del__ to end the span.
+        with pytest.raises(RuntimeError):
+            async for _ in wrapper:
+                raise RuntimeError("caller error")
+
+    asyncio.run(exercise())
+    gc.collect()
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_async_stream_wrapper_finalizes_stream_abandoned_by_break():
+    processed = []
+    failures = []
+
+    class _RecordingWrapper(_TestAsyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    async def consume_first_chunk():
+        wrapper = _RecordingWrapper(_FakeAsyncStream(chunks=["a", "b", "c"]))
+        async for chunk in wrapper:
+            processed.append(chunk)
+            break
+
+    asyncio.run(consume_first_chunk())
+    gc.collect()
+
+    # Breaking leaves the remaining chunks unread, so the span is finalized
+    # with only what the caller actually consumed.
+    assert processed == ["a"]
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_async_stream_wrapper_abandon_does_not_override_failure():
+    error = ValueError("stream broke")
+
+    async def exercise():
+        wrapper = _TestAsyncStreamWrapper(_FakeAsyncStream(error=error))
+
+        with pytest.raises(ValueError):
+            await anext(wrapper)
+
+        wrapper.__del__()
+
+        assert wrapper._self_failures == [error]
+        assert wrapper._self_stop_count == 0
 
     asyncio.run(exercise())
 
@@ -1336,6 +1474,46 @@ def test_async_manager_wrapper_fails_invocation_when_exit_raises_before_enter():
         assert invocation.failures == [manager_error]
 
     asyncio.run(exercise())
+
+
+def test_abandoned_stream_records_error_status_and_type():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from opentelemetry.trace.status import StatusCode
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    handler = TelemetryHandler(tracer_provider=provider)
+
+    invocation = handler.inference(
+        provider="test-provider", request_model="test-model"
+    )
+    wrapper = _TestSyncStreamWrapper(
+        _FakeSyncStream(chunks=["a", "b"]), invocation=invocation
+    )
+    wrapper.__del__()
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "abandoned stream"
+    assert span.attributes.get("error.type") == "_OTHER"
+
+
+def test_abandoned_stream_catches_base_exception_in_del():
+    class _BaseExceptionOnErrorWrapper(_TestSyncStreamWrapper):
+        def _on_stream_error(self, error):
+            raise asyncio.CancelledError("cancelled during cleanup")
+
+    wrapper = _BaseExceptionOnErrorWrapper(_FakeSyncStream(chunks=["a"]))
+    # Must not raise out of __del__
+    wrapper.__del__()
 
 
 def test_sync_tool_stream_wrapper_lifecycle():

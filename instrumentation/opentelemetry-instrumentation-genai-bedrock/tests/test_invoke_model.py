@@ -16,6 +16,7 @@ from botocore.stub import Stubber
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_invoke_model_request,
     extract_invoke_model_response,
+    is_embedding_model,
 )
 from opentelemetry.semconv._incubating.attributes import (
     aws_attributes as AwsAttributes,
@@ -25,6 +26,9 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
+)
+from opentelemetry.semconv._incubating.metrics import (
+    gen_ai_metrics as GenAIMetrics,
 )
 from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
@@ -752,3 +756,375 @@ def test_invoke_model_cohere(
     assert (
         output_msgs[0]["parts"][0]["content"] == "Spring brings blossoms pink"
     )
+
+
+def test_is_embedding_model() -> None:
+    assert is_embedding_model("amazon.titan-embed-text-v1") is True
+    assert is_embedding_model("amazon.titan-embed-text-v2:0") is True
+    assert is_embedding_model("amazon.titan-embed-image-v1") is True
+    assert is_embedding_model("cohere.embed-english-v3") is True
+    assert is_embedding_model("cohere.embed-multilingual-v3") is True
+    assert is_embedding_model("twelvelabs.marengo-embed-2-6") is True
+    assert (
+        is_embedding_model(
+            "arn:aws:bedrock:us-east-1:123456789012:foundation-model/amazon.titan-embed-text-v1"
+        )
+        is True
+    )
+    assert is_embedding_model("us.amazon.titan-embed-text-v1") is True
+    assert is_embedding_model("AMAZON.TITAN-EMBED-TEXT-V1") is True
+    assert (
+        is_embedding_model("anthropic.claude-3-haiku-20240307-v1:0") is False
+    )
+    assert is_embedding_model("amazon.titan-text-express-v1") is False
+    assert is_embedding_model("meta.llama3-8b-instruct-v1:0") is False
+    assert is_embedding_model("") is False
+    assert is_embedding_model(None) is False
+
+
+def test_invoke_model_titan_embeddings(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    metric_reader,
+) -> None:
+    stubber = Stubber(bedrock_client)
+    request_body = {
+        "inputText": "This is the text to embed.",
+    }
+    response_body = {
+        "embedding": [0.1, 0.2, 0.3, 0.4],
+        "inputTextTokenCount": 7,
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+
+    stubber.add_response(
+        "invoke_model",
+        service_response={
+            "contentType": "application/json",
+            "body": StreamingBody(
+                io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+            ),
+            "ResponseMetadata": {
+                "HTTPHeaders": {
+                    "x-amzn-bedrock-input-token-count": "7",
+                }
+            },
+        },
+        expected_params={
+            "modelId": "amazon.titan-embed-text-v1",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        response = bedrock_client.invoke_model(
+            modelId="amazon.titan-embed-text-v1",
+            body=json.dumps(request_body),
+        )
+        assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "embeddings amazon.titan-embed-text-v1"
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == GenAIAttributes.GenAiOperationNameValues.EMBEDDINGS.value
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_PROVIDER_NAME]
+        == GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "amazon.titan-embed-text-v1"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] == 4
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 7
+
+    # Verify metrics
+    metrics = metric_reader.get_metrics_data().resource_metrics
+    assert len(metrics) == 1
+    metric_data = metrics[0].scope_metrics[0].metrics
+    duration_metric = next(
+        (
+            m
+            for m in metric_data
+            if m.name == GenAIMetrics.GEN_AI_CLIENT_OPERATION_DURATION
+        ),
+        None,
+    )
+    assert duration_metric is not None
+    token_metric = next(
+        (
+            m
+            for m in metric_data
+            if m.name == GenAIMetrics.GEN_AI_CLIENT_TOKEN_USAGE
+        ),
+        None,
+    )
+    assert token_metric is not None
+    assert any(
+        p.attributes.get(GenAIAttributes.GEN_AI_TOKEN_TYPE)
+        == GenAIAttributes.GenAiTokenTypeValues.INPUT.value
+        and p.sum == 7
+        for p in token_metric.data.data_points
+    )
+
+
+def test_invoke_model_titan_v2_embeddings_with_dimensions(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(bedrock_client)
+    request_body = {
+        "inputText": "Hello world",
+        "dimensions": 512,
+        "normalize": True,
+    }
+    response_body = {
+        "embedding": [0.0] * 512,
+        "inputTextTokenCount": 3,
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+
+    stubber.add_response(
+        "invoke_model",
+        service_response={
+            "contentType": "application/json",
+            "body": StreamingBody(
+                io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+            ),
+        },
+        expected_params={
+            "modelId": "amazon.titan-embed-text-v2:0",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        response = bedrock_client.invoke_model(
+            modelId="amazon.titan-embed-text-v2:0",
+            body=json.dumps(request_body),
+        )
+        assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "embeddings amazon.titan-embed-text-v2:0"
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == GenAIAttributes.GenAiOperationNameValues.EMBEDDINGS.value
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
+        == 512
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 3
+
+
+def test_invoke_model_cohere_embeddings(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(bedrock_client)
+    request_body = {
+        "texts": ["Hello", "World"],
+        "input_type": "search_document",
+        "embedding_types": ["float"],
+    }
+    response_body = {
+        "id": "emb_12345",
+        "embeddings": {"float": [[0.1, 0.2], [0.3, 0.4]]},
+        "meta": {
+            "billed_units": {
+                "input_tokens": 10,
+            }
+        },
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+
+    stubber.add_response(
+        "invoke_model",
+        service_response={
+            "contentType": "application/json",
+            "body": StreamingBody(
+                io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+            ),
+        },
+        expected_params={
+            "modelId": "cohere.embed-english-v3",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        response = bedrock_client.invoke_model(
+            modelId="cohere.embed-english-v3",
+            body=json.dumps(request_body),
+        )
+        assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "embeddings cohere.embed-english-v3"
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
+        == GenAIAttributes.GenAiOperationNameValues.EMBEDDINGS.value
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_ENCODING_FORMATS
+    ] == ("float",)
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] == 2
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
+
+
+@pytest.mark.parametrize(
+    "format_field,format_value",
+    [
+        ("embedding_types", []),
+        ("embedding_types", [None]),
+        ("encoding_format", ""),
+    ],
+)
+def test_invoke_model_embeddings_omits_empty_encoding_formats(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+    format_field,
+    format_value,
+) -> None:
+    stubber = Stubber(bedrock_client)
+    request_body = {
+        "texts": ["Hello"],
+        "input_type": "search_document",
+        format_field: format_value,
+    }
+    response_body = {
+        "id": "emb_12345",
+        "embeddings": {"float": [[0.1, 0.2]]},
+        "meta": {"billed_units": {"input_tokens": 10}},
+    }
+    raw_response_bytes = json.dumps(response_body).encode("utf-8")
+
+    stubber.add_response(
+        "invoke_model",
+        service_response={
+            "contentType": "application/json",
+            "body": StreamingBody(
+                io.BytesIO(raw_response_bytes), len(raw_response_bytes)
+            ),
+        },
+        expected_params={
+            "modelId": "cohere.embed-english-v3",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        response = bedrock_client.invoke_model(
+            modelId="cohere.embed-english-v3",
+            body=json.dumps(request_body),
+        )
+        assert response["body"].read() == raw_response_bytes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        GenAIAttributes.GEN_AI_REQUEST_ENCODING_FORMATS not in span.attributes
+    )
+    # The rest of the embedding attributes are still recorded.
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] == 2
+    )
+
+
+def test_invoke_model_embedding_error(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(bedrock_client)
+    request_body = {"inputText": "Hello"}
+
+    stubber.add_client_error(
+        "invoke_model",
+        service_error_code="ValidationException",
+        service_message="Invalid input",
+        expected_params={
+            "modelId": "amazon.titan-embed-text-v1",
+            "body": json.dumps(request_body),
+        },
+    )
+
+    with stubber:
+        with pytest.raises(ClientError):
+            bedrock_client.invoke_model(
+                modelId="amazon.titan-embed-text-v1",
+                body=json.dumps(request_body),
+            )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "embeddings amazon.titan-embed-text-v1"
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "botocore.errorfactory.ValidationException"
+    )
+
+
+def test_invoke_model_embedding_body_read_error(
+    bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    class _FailingRawStream(io.RawIOBase):
+        def read(self, size: int = -1) -> bytes:
+            raise ConnectionError("stream read failed")
+
+    stubber = Stubber(bedrock_client)
+    request_body = json.dumps({"inputText": "Hello"})
+    stubber.add_response(
+        "invoke_model",
+        {
+            "contentType": "application/json",
+            "body": StreamingBody(
+                raw_stream=_FailingRawStream(),
+                content_length=10,
+            ),
+        },
+        {
+            "modelId": "amazon.titan-embed-text-v1",
+            "body": request_body,
+        },
+    )
+
+    with stubber:
+        with pytest.raises(ConnectionError, match="stream read failed"):
+            bedrock_client.invoke_model(
+                modelId="amazon.titan-embed-text-v1",
+                body=request_body,
+            )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "embeddings amazon.titan-embed-text-v1"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
