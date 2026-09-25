@@ -24,6 +24,17 @@ See the module docstring in ``opentelemetry.util.genai.handler`` for usage examp
 including context manager and manual lifecycle patterns.
 
 
+Context Management and Propagation
+----------------------------------
+
+Invocation factory methods on ``TelemetryHandler`` (such as ``inference``, ``workflow``, ``tool``,
+``embedding``, ``retrieval``, and ``invoke_local_agent``) accept an optional ``context`` keyword argument
+to manage context:
+
+- ``context``: An explicit OpenTelemetry ``Context`` to parent the span. When omitted, the current
+  ambient context is used.
+
+
 Modalities
 ----------
 
@@ -50,6 +61,26 @@ modalities. Token setters continue to record only ``text``, ``image``, and
 ``Modality`` replaces the previous ``Literal`` type alias. Annotations that
 also accept raw strings should use ``Modality | str`` rather than ``Modality``
 alone. Custom modalities remain strings, not additional enum members.
+
+
+Retrieval Documents
+-------------------
+
+Set ``RetrievalInvocation.documents`` using
+``opentelemetry.util.genai.types.RetrievalDocument`` objects:
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import RetrievalDocument
+
+    with handler.retrieval(data_source_id="my-index") as invocation:
+        invocation.documents = [RetrievalDocument(id="doc-1", score=0.9)]
+
+The model contains only the optional ``id`` and ``score`` fields; unset
+fields serialize as JSON ``null``. Documents are recorded in
+``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT``
+content-capture mode. Passing dictionaries is deprecated, but existing
+dictionary payloads continue to serialize unchanged.
 
 
 Environment Variables

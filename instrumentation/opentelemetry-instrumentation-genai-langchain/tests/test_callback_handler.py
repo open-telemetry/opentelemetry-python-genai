@@ -38,7 +38,7 @@ from langchain_core.outputs import (
 
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
-    _document_to_dict,
+    _document_to_retrieval_document,
     _extract_document_score,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
@@ -64,6 +64,7 @@ from opentelemetry.util.genai.types import (
     FilePart,
     InputMessage,
     OutputMessage,
+    RetrievalDocument,
     TextPart,
     ToolCallRequestPart,
     UriPart,
@@ -149,7 +150,9 @@ class TestOnChainStartWorkflow:
             parent_run_id=None,
         )
 
-        telemetry.workflow.assert_called_once_with(name="MyLangGraph")
+        telemetry.workflow.assert_called_once_with(
+            name="MyLangGraph", context=None, _attach_to_context=True
+        )
 
     def test_workflow_name_overridden_by_metadata(self):
         handler, telemetry, _, _ = _make_handler()
@@ -163,7 +166,9 @@ class TestOnChainStartWorkflow:
             metadata={"workflow_name": "custom_workflow"},
         )
 
-        telemetry.workflow.assert_called_once_with(name="custom_workflow")
+        telemetry.workflow.assert_called_once_with(
+            name="custom_workflow", context=None, _attach_to_context=True
+        )
 
     def test_workflow_conversation_id_from_metadata(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -194,6 +199,33 @@ class TestOnChainStartWorkflow:
             handler._invocation_manager.get_invocation(run_id) is workflow_inv
         )
 
+    def test_child_agent_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, workflow_inv, _ = _make_handler()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=parent_id,
+            parent_run_id=None,
+        )
+        telemetry.invoke_local_agent.reset_mock()
+
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=child_id,
+            parent_run_id=parent_id,
+            metadata={"agent_name": "math_agent"},
+        )
+
+        telemetry.invoke_local_agent.assert_called_once_with(
+            agent_name="math_agent",
+            context=workflow_inv.context,
+            _attach_to_context=True,
+        )
+
 
 # ---------------------------------------------------------------------------
 # on_chain_start – INVOKE_AGENT
@@ -215,6 +247,8 @@ class TestOnChainStartAgent:
 
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
+            context=None,
+            _attach_to_context=True,
         )
         assert (
             handler._invocation_manager.get_agent_name(run_id) == "math_agent"
@@ -241,7 +275,9 @@ class TestOnChainStartAgent:
 
         telemetry.workflow.assert_not_called()
         telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="AgentExecutor"
+            agent_name="AgentExecutor",
+            context=None,
+            _attach_to_context=True,
         )
         assert agent_inv.conversation_id == "thread-abc"
         assert agent_inv.input_messages[0].parts[0].content == "Solve this"
@@ -500,6 +536,32 @@ class TestOnChatModelStartConversationId:
 
         assert telemetry.inference.return_value.conversation_id is None
 
+    def test_chat_model_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, _, _ = _make_handler()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="What is 3 * 4?")]],
+            run_id=child_id,
+            parent_run_id=parent_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        telemetry.inference.assert_called_once_with(
+            "openai",
+            request_model="gpt-4",
+            context=parent_wf.context,
+            _attach_to_context=True,
+        )
+
 
 class TestOnChainStartUnclassified:
     def test_unclassified_chain_registers_none_and_no_span(self):
@@ -662,7 +724,7 @@ class TestOnChainError:
 
 class TestAgentAncestryPublicBehavior:
     def test_named_child_under_workflow_opens_agent_layer(self):
-        handler, telemetry, _, _ = _make_handler()
+        handler, telemetry, workflow_inv, _ = _make_handler()
         workflow_id = _run_id()
         child_id = _run_id()
 
@@ -682,7 +744,9 @@ class TestAgentAncestryPublicBehavior:
         )
 
         telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="math_agent"
+            agent_name="math_agent",
+            context=workflow_inv.context,
+            _attach_to_context=True,
         )
 
 
@@ -1369,6 +1433,38 @@ class TestOnLlmEndToolCalls:
 
 
 # ---------------------------------------------------------------------------
+# on_tool_start
+# ---------------------------------------------------------------------------
+
+
+class TestOnToolStart:
+    def test_tool_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, _, _ = _make_handler()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_tool_start(
+            serialized={"name": "search"},
+            input_str="query",
+            run_id=child_id,
+            parent_run_id=parent_id,
+        )
+
+        telemetry.tool.assert_called_once_with(
+            name="search",
+            tool_type="function",
+            agent_name=None,
+            context=parent_wf.context,
+            _attach_to_context=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # on_retriever_start / on_retriever_end / on_retriever_error
 # ---------------------------------------------------------------------------
 
@@ -1427,7 +1523,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model=None
+            provider="Chroma",
+            request_model=None,
+            context=None,
+            _attach_to_context=True,
         )
 
     def test_provider_none_when_metadata_absent(self):
@@ -1441,7 +1540,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider=None, request_model=None
+            provider=None,
+            request_model=None,
+            context=None,
+            _attach_to_context=True,
         )
 
     def test_request_model_passed_from_ls_embedding_model(self):
@@ -1459,7 +1561,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model="text-embedding-3-small"
+            provider="Chroma",
+            request_model="text-embedding-3-small",
+            context=None,
+            _attach_to_context=True,
         )
 
     def test_request_model_none_when_ls_embedding_model_absent(self):
@@ -1474,7 +1579,10 @@ class TestOnRetrieverStart:
         )
 
         telemetry.retrieval.assert_called_once_with(
-            provider="Chroma", request_model=None
+            provider="Chroma",
+            request_model=None,
+            context=None,
+            _attach_to_context=True,
         )
 
     def test_registered_in_invocation_manager(self):
@@ -1492,6 +1600,31 @@ class TestOnRetrieverStart:
             handler._invocation_manager.get_invocation(run_id) is retrieval_inv
         )
 
+    def test_retriever_passes_parent_context_to_telemetry_handler(self):
+        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
+        parent_id = _run_id()
+        child_id = _run_id()
+
+        # register parent workflow in invocation manager
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_retriever_start(
+            serialized={},
+            query="q",
+            run_id=child_id,
+            parent_run_id=parent_id,
+        )
+
+        telemetry.retrieval.assert_called_once_with(
+            provider=None,
+            request_model=None,
+            context=parent_wf.context,
+            _attach_to_context=True,
+        )
+
 
 class TestOnRetrieverEnd:
     def test_invocation_stopped(self):
@@ -1503,7 +1636,7 @@ class TestOnRetrieverEnd:
 
         retrieval_inv.stop.assert_called_once()
 
-    def test_documents_set_from_page_content(self):
+    def test_documents_use_shared_model_without_content(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
         run_id = _run_id()
 
@@ -1516,10 +1649,8 @@ class TestOnRetrieverEnd:
         handler.on_retriever_end(documents=docs, run_id=run_id)
 
         assigned = retrieval_inv.documents
-        assert len(assigned) == 2
-        assert assigned[0]["content"] == "doc one"
-        assert "source" not in assigned[0]
-        assert assigned[1]["content"] == "doc two"
+        assert assigned == [RetrievalDocument(), RetrievalDocument()]
+        assert all(isinstance(doc, RetrievalDocument) for doc in assigned)
 
     def test_document_id_included_when_present(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1530,7 +1661,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[doc], run_id=run_id)
 
-        assert retrieval_inv.documents[0]["id"] == "doc-123"
+        assert retrieval_inv.documents[0].id == "doc-123"
 
     def test_document_id_none_when_absent(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1541,7 +1672,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[doc], run_id=run_id)
 
-        assert retrieval_inv.documents[0]["id"] is None
+        assert retrieval_inv.documents[0].id is None
 
     def test_state_cleaned_up_after_end(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1572,7 +1703,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=docs, run_id=run_id)
 
-        assert retrieval_inv.documents[0]["content"] == "visible"
+        assert retrieval_inv.documents == [RetrievalDocument()]
 
     def test_unknown_run_id_does_not_raise(self):
         handler, _, _ = _make_handler_with_retrieval()
@@ -1591,7 +1722,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
 
-        assert retrieval_inv.documents[0]["score"] == 0.85
+        assert retrieval_inv.documents[0].score == 0.85
 
     def test_document_score_from_metadata(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1604,7 +1735,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[doc], run_id=run_id)
 
-        assert retrieval_inv.documents[0]["score"] == 0.92
+        assert retrieval_inv.documents[0].score == 0.92
 
     def test_document_score_precedence(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1619,7 +1750,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
 
-        assert retrieval_inv.documents[0]["score"] == 0.9
+        assert retrieval_inv.documents[0].score == 0.9
 
     def test_document_score_fallback_to_metadata_when_attr_is_none(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1634,7 +1765,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
 
-        assert retrieval_inv.documents[0]["score"] == 0.77
+        assert retrieval_inv.documents[0].score == 0.77
 
     def test_document_score_zero_preserved(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1654,10 +1785,8 @@ class TestOnRetrieverEnd:
             documents=[DuckDoc(), doc_meta], run_id=run_id
         )
 
-        assert "score" in retrieval_inv.documents[0]
-        assert retrieval_inv.documents[0]["score"] == 0.0
-        assert "score" in retrieval_inv.documents[1]
-        assert retrieval_inv.documents[1]["score"] == 0
+        assert retrieval_inv.documents[0].score == 0.0
+        assert retrieval_inv.documents[1].score == 0
 
     @pytest.mark.parametrize(
         "invalid_score",
@@ -1672,7 +1801,7 @@ class TestOnRetrieverEnd:
         handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
         handler.on_retriever_end(documents=[doc], run_id=run_id)
 
-        assert "score" not in retrieval_inv.documents[0]
+        assert retrieval_inv.documents[0].score is None
 
     @pytest.mark.parametrize(
         "non_finite_score",
@@ -1704,7 +1833,7 @@ class TestOnRetrieverEnd:
         )
 
         for item in retrieval_inv.documents:
-            assert "score" not in item
+            assert item.score is None
 
     def test_document_score_plain_dict_and_duck_typed(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1755,38 +1884,14 @@ class TestOnRetrieverEnd:
             run_id=run_id,
         )
 
-        assigned = retrieval_inv.documents
-        assert len(assigned) == 6
-        assert assigned[0] == {
-            "content": "dict content 1",
-            "id": "dict-1",
-            "score": 0.88,
-        }
-        assert assigned[1] == {
-            "content": "dict content 2",
-            "id": None,
-            "score": 0.72,
-        }
-        assert assigned[2] == {
-            "content": "dict content fallback when page_content is None",
-            "id": "dict-3",
-            "score": 0.64,
-        }
-        assert assigned[3] == {
-            "content": "duck content",
-            "id": "duck-1",
-            "score": 0.95,
-        }
-        assert assigned[4] == {
-            "content": "duck content fallback",
-            "id": "duck-2",
-            "score": 0.81,
-        }
-        assert assigned[5] == {
-            "content": "duck content fallback when page_content is None",
-            "id": "duck-3",
-            "score": 0.55,
-        }
+        assert retrieval_inv.documents == [
+            RetrievalDocument(id="dict-1", score=0.88),
+            RetrievalDocument(score=0.72),
+            RetrievalDocument(id="dict-3", score=0.64),
+            RetrievalDocument(id="duck-1", score=0.95),
+            RetrievalDocument(id="duck-2", score=0.81),
+            RetrievalDocument(id="duck-3", score=0.55),
+        ]
 
     def test_document_score_non_mapping_metadata(self):
         handler, _, retrieval_inv = _make_handler_with_retrieval()
@@ -1817,7 +1922,7 @@ class TestOnRetrieverEnd:
         )
 
         for item in retrieval_inv.documents:
-            assert "score" not in item
+            assert item.score is None
 
 
 class TestExtractDocumentScore:
@@ -1950,62 +2055,78 @@ class TestExtractDocumentScore:
         assert _extract_document_score({"metadata": "str"}) is None
 
 
-class TestDocumentToDict:
-    def test_document_with_page_content_and_score(self):
+class TestDocumentToRetrievalDocument:
+    def test_document_with_id_and_score(self):
         doc = Document(
             page_content="doc content", id="d1", metadata={"score": 0.85}
         )
-        assert _document_to_dict(doc) == {
-            "content": "doc content",
-            "id": "d1",
-            "score": 0.85,
-        }
+        assert _document_to_retrieval_document(doc) == RetrievalDocument(
+            id="d1", score=0.85
+        )
 
-    def test_duck_typed_with_content_fallback_missing_page_content(self):
+    def test_duck_typed_content_is_ignored(self):
         class DuckNoPageContent:
             content = "fallback content"
             id = "d2"
             score = 0.9
 
-        assert _document_to_dict(DuckNoPageContent()) == {
-            "content": "fallback content",
-            "id": "d2",
-            "score": 0.9,
-        }
+        assert _document_to_retrieval_document(
+            DuckNoPageContent()
+        ) == RetrievalDocument(id="d2", score=0.9)
 
-    def test_duck_typed_with_content_fallback_none_page_content(self):
+    def test_duck_typed_none_page_content_is_ignored(self):
         class DuckNonePageContent:
             page_content = None
             content = "fallback content when page_content is None"
             id = "d3"
             score = 0.75
 
-        assert _document_to_dict(DuckNonePageContent()) == {
-            "content": "fallback content when page_content is None",
-            "id": "d3",
-            "score": 0.75,
-        }
+        assert _document_to_retrieval_document(
+            DuckNonePageContent()
+        ) == RetrievalDocument(id="d3", score=0.75)
 
-    def test_mapping_with_content_fallback_missing_page_content(self):
+    def test_mapping_content_is_ignored(self):
         doc_map = {"content": "mapping fallback", "id": "m1", "score": 0.8}
-        assert _document_to_dict(doc_map) == {
-            "content": "mapping fallback",
-            "id": "m1",
-            "score": 0.8,
-        }
+        assert _document_to_retrieval_document(doc_map) == RetrievalDocument(
+            id="m1", score=0.8
+        )
 
-    def test_mapping_with_content_fallback_none_page_content(self):
+    def test_mapping_none_page_content_is_ignored(self):
         doc_map = {
             "page_content": None,
             "content": "mapping fallback when page_content is None",
             "id": "m2",
             "score": 0.7,
         }
-        assert _document_to_dict(doc_map) == {
-            "content": "mapping fallback when page_content is None",
-            "id": "m2",
-            "score": 0.7,
-        }
+        assert _document_to_retrieval_document(doc_map) == RetrievalDocument(
+            id="m2", score=0.7
+        )
+
+    def test_does_not_access_document_content(self) -> None:
+        class LazyDocument:
+            id = "lazy"
+            score = 0.0
+
+            @property
+            def page_content(self) -> str:
+                raise AssertionError("document content must not be read")
+
+            @property
+            def content(self) -> str:
+                raise AssertionError("document content must not be read")
+
+        assert _document_to_retrieval_document(
+            LazyDocument()
+        ) == RetrievalDocument(id="lazy", score=0.0)
+
+    @pytest.mark.parametrize(
+        "doc_id", [None, 42, True, ["doc"], {"id": "doc"}]
+    )
+    def test_non_string_ids_are_not_recorded(self, doc_id: object) -> None:
+        assert (
+            _document_to_retrieval_document({"id": doc_id})
+            == RetrievalDocument()
+        )
 
     def test_non_finite_scores_omitted(self):
         doc_nan = Document(page_content="c", metadata={"score": math.nan})
@@ -2014,9 +2135,11 @@ class TestDocumentToDict:
             page_content="c", metadata={"score": float("-inf")}
         )
 
-        assert _document_to_dict(doc_nan) == {"content": "c", "id": None}
-        assert _document_to_dict(doc_inf) == {"content": "c", "id": None}
-        assert _document_to_dict(doc_neginf) == {"content": "c", "id": None}
+        assert _document_to_retrieval_document(doc_nan) == RetrievalDocument()
+        assert _document_to_retrieval_document(doc_inf) == RetrievalDocument()
+        assert (
+            _document_to_retrieval_document(doc_neginf) == RetrievalDocument()
+        )
 
 
 class TestOnRetrieverError:
@@ -3318,3 +3441,80 @@ def test_on_chat_model_start_preserves_message_name():
 
     assert len(llm_inv.input_messages) == 1
     assert llm_inv.input_messages[0].name == "Alice"
+
+
+def test_explicit_attach_to_context_false():
+    telemetry = mock.MagicMock()
+    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
+    telemetry.workflow.return_value = workflow_inv
+
+    handler = OpenTelemetryLangChainCallbackHandler(
+        telemetry, _attach_to_context=False
+    )
+    run_id = _run_id()
+
+    handler.on_chain_start(
+        serialized={"name": "LangGraph", "id": ["langgraph"]},
+        inputs={},
+        run_id=run_id,
+        parent_run_id=None,
+    )
+
+    telemetry.workflow.assert_called_once_with(
+        name="LangGraph", context=None, _attach_to_context=False
+    )
+
+
+def test_sync_defaults_attach_to_context_true():
+    telemetry = mock.MagicMock()
+    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
+    telemetry.workflow.return_value = workflow_inv
+
+    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
+    run_id = _run_id()
+
+    handler.on_chain_start(
+        serialized={"name": "LangGraph", "id": ["langgraph"]},
+        inputs={},
+        run_id=run_id,
+        parent_run_id=None,
+    )
+
+    telemetry.workflow.assert_called_once_with(
+        name="LangGraph", context=None, _attach_to_context=True
+    )
+
+
+def test_instrumentor_routes_sync_and_async_callback_managers():
+    from langchain_core.callbacks.manager import (
+        AsyncCallbackManager,
+        CallbackManager,
+    )
+
+    from opentelemetry.instrumentation.genai.langchain import (
+        LangChainInstrumentor,
+    )
+
+    LangChainInstrumentor().instrument()
+    try:
+        cm = CallbackManager([])
+        sync_handlers = [
+            h
+            for h in cm.handlers
+            if isinstance(h, OpenTelemetryLangChainCallbackHandler)
+        ]
+        assert len(sync_handlers) == 1
+        assert sync_handlers[0]._attach_to_context is True
+        assert sync_handlers[0].run_inline is False
+
+        acm = AsyncCallbackManager([])
+        async_handlers = [
+            h
+            for h in acm.handlers
+            if isinstance(h, OpenTelemetryLangChainCallbackHandler)
+        ]
+        assert len(async_handlers) == 1
+        assert async_handlers[0]._attach_to_context is False
+        assert async_handlers[0].run_inline is False
+    finally:
+        LangChainInstrumentor().uninstrument()

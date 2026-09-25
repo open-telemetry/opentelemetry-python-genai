@@ -17,7 +17,7 @@ application:
   agent name, id, description, and conversation/session id when available.
 * **Tool spans** for tool calls made during a run.
 * **Retrieval spans** for retriever invocations, capturing the query and retrieved
-  documents (including id, content, and relevance scores when available).
+  document IDs and relevance scores when available.
 
 The spans nest to reflect the graph, so a single graph invocation produces a
 workflow span with the agent, tool, and model calls it triggered as children.
@@ -102,11 +102,14 @@ Retrieval Spans and Document Scores
 -----------------------------------
 
 When invoking LangChain retrievers (e.g., vectorstores, knowledge bases, or contextual compression retrievers),
-retrieval spans are recorded with the query and retrieved document metadata.
+retrieval spans are recorded with the query and retrieved document IDs and scores.
 
 When message content capture is enabled (``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY``
 or ``SPAN_AND_EVENT``), the retrieved documents are serialized into the
-``gen_ai.retrieval.documents`` span attribute as a JSON array of objects with ``id`` and ``content``.
+``gen_ai.retrieval.documents`` span attribute using the shared ``RetrievalDocument``
+model, as a JSON array of objects with only ``id`` and ``score``.
+Document text (previously recorded as ``content``) and metadata are not captured.
+Query text capture is unchanged.
 
 When available, relevance and similarity scores are captured in each document object under ``score``:
 
@@ -117,7 +120,8 @@ When available, relevance and similarity scores are captured in each document ob
 * **Duck-typed / custom documents**: extracted from a top-level ``score`` attribute or mapping key.
 
 If a document has no score, or if the score is non-numeric or non-finite (``NaN``, ``Infinity``),
-the ``score`` key is omitted to ensure RFC 8259 JSON compliance.
+``score`` is recorded as JSON ``null`` to ensure RFC 8259 JSON compliance.
+Missing document IDs are also recorded as ``null``.
 
 Configuration
 -------------
@@ -133,6 +137,12 @@ Prompts and completions can instead be uploaded to external storage via a comple
 programmatically, which takes precedence over the environment variable::
 
     LangChainInstrumentor().instrument(completion_hook=my_hook)
+
+Known Limitations
+-----------------
+
+Context propagation to nested calls (such as auto-instrumented HTTP clients
+or database queries within tools) is not supported when using LangChain async API.
 
 References
 ----------

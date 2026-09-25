@@ -63,6 +63,7 @@ class AgentInvocation(GenAIInvocation, ABC):
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
+        _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
@@ -89,6 +90,7 @@ class AgentInvocation(GenAIInvocation, ABC):
             context=context,
             conversation_id=conversation_id,
             content_capturing_mode=content_capturing_mode,
+            _attach_to_context=_attach_to_context,
         )
         self._request_model: str | None = request_model
         self._agent_name: str | None = agent_name
@@ -213,6 +215,7 @@ class LocalAgentInvocation(AgentInvocation):
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
+        _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
         super().__init__(
@@ -225,6 +228,7 @@ class LocalAgentInvocation(AgentInvocation):
             agent_name=agent_name,
             content_capturing_mode=content_capturing_mode,
             context=context,
+            _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
 
@@ -272,6 +276,7 @@ class RemoteAgentInvocation(AgentInvocation):
         agent_name: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
+        _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
         start_attributes: dict[str, AttributeValue] = {
@@ -296,6 +301,7 @@ class RemoteAgentInvocation(AgentInvocation):
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
             context=context,
+            _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
         self._provider: str = provider

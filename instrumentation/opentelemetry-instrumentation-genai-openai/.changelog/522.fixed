@@ -1,1 +1,0 @@
-Stop consuming generator message ``content`` while capturing input messages, which left the wrapped request with no content at all. Capture a ``file`` part's inline base64 ``file_data`` and take its media type from ``filename``.

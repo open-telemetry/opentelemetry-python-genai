@@ -394,7 +394,9 @@ def test_agent_named_runnable_is_an_agent() -> None:
     ).invoke("value", {"callbacks": [handler]})
 
     telemetry.invoke_local_agent.assert_called_once_with(
-        agent_name="SupportAgentRunner"
+        agent_name="SupportAgentRunner",
+        context=None,
+        _attach_to_context=True,
     )
 
 
@@ -691,14 +693,26 @@ async def test_async_root_agent(span_exporter, start_instrumentation) -> None:
     assert span.parent is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The LangChain async callback path does not propagate the context "
-        "token attached at span start, so spans are emitted without parentage. "
-        "Pre-existing behavior, not introduced by this change."
-    ),
-)
+@pytest.mark.asyncio
+async def test_async_root_agent_parents_to_ambient_span(
+    span_exporter, tracer_provider, start_instrumentation
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("ambient") as ambient_span:
+        await create_agent(
+            FakeModel(responses=[AIMessage(content="done")]),
+            [noop],
+            name="async_root",
+        ).ainvoke({"messages": [("user", "hi")]})
+
+    span = _span_named(
+        span_exporter.get_finished_spans(), "invoke_agent async_root"
+    )
+    assert span.parent is not None
+    assert span.parent.span_id == ambient_span.get_span_context().span_id
+    assert span.context.trace_id == ambient_span.get_span_context().trace_id
+
+
 @pytest.mark.asyncio
 async def test_async_nested_agent(
     span_exporter, start_instrumentation
@@ -765,6 +779,104 @@ async def test_concurrent_async_agents_have_distinct_roots(
     second_span = _span_named(spans, "invoke_agent second_agent")
     assert first_span.parent is None
     assert second_span.parent is None
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+@pytest.mark.asyncio
+async def test_async_agent_with_tool_and_chat_parenting(
+    span_exporter, start_instrumentation
+) -> None:
+    agent = create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "noop", "args": {}, "id": "tc1"}],
+                ),
+                AIMessage(content="finished"),
+            ]
+        ),
+        [noop],
+        name="workflow_agent",
+    )
+    await agent.ainvoke(
+        {"messages": [("user", "go")]},
+        config={"metadata": {"ls_model_name": "fake-model"}},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _root_span_named(spans, "invoke_agent workflow_agent")
+    tool_span = _span_named(spans, "execute_tool noop")
+    chat_spans = [s for s in spans if s.name == "chat fake-model"]
+
+    assert agent_span.parent is None
+    _assert_parent(tool_span, agent_span)
+    assert len(chat_spans) == 2
+    for chat_span in chat_spans:
+        _assert_parent(chat_span, agent_span)
+    assert len({s.context.trace_id for s in spans}) == 1
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+def test_sync_workflow_calls_async_agent(
+    span_exporter, start_instrumentation
+) -> None:
+    async_agent = create_agent(
+        FakeModel(responses=[AIMessage(content="async done")]),
+        [noop],
+        name="async_agent",
+    )
+
+    def sync_parent_fn(x: Any, config: RunnableConfig) -> Any:
+        return asyncio.run(
+            async_agent.ainvoke({"messages": [("user", "go")]}, config)
+        )
+
+    parent = RunnableLambda(sync_parent_fn).with_config(run_name="sync_parent")
+    parent.invoke({"value": 1})
+
+    spans = span_exporter.get_finished_spans()
+    parent_span = _root_span_named(spans, "invoke_workflow sync_parent")
+    child_span = _span_named(spans, "invoke_agent async_agent")
+    assert parent_span.parent is None
+    _assert_parent(child_span, parent_span)
+    assert child_span.context.trace_id == parent_span.context.trace_id
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+@pytest.mark.asyncio
+async def test_async_workflow_calls_sync_agent(
+    span_exporter, start_instrumentation
+) -> None:
+    sync_agent = create_agent(
+        FakeModel(responses=[AIMessage(content="sync done")]),
+        [noop],
+        name="sync_agent",
+    )
+
+    async def async_parent_fn(x: Any, config: RunnableConfig) -> Any:
+        return sync_agent.invoke({"messages": [("user", "go")]}, config)
+
+    parent = RunnableLambda(async_parent_fn).with_config(
+        run_name="async_parent"
+    )
+    await parent.ainvoke({"value": 1})
+
+    spans = span_exporter.get_finished_spans()
+    parent_span = _root_span_named(spans, "invoke_workflow async_parent")
+    child_span = _span_named(spans, "invoke_agent sync_agent")
+    assert parent_span.parent is None
+    _assert_parent(child_span, parent_span)
+    assert child_span.context.trace_id == parent_span.context.trace_id
 
 
 def test_announced_root_bypasses_inherited_middleware_name(

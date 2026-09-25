@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -34,6 +35,8 @@ class EmbeddingInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
@@ -59,6 +62,8 @@ class EmbeddingInvocation(GenAIInvocation):
             span_kind=SpanKind.CLIENT,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
         )
         # e.g., azure.ai.openai, openai, aws.bedrock
         self._provider: str = provider

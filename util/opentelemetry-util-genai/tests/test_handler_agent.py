@@ -41,11 +41,11 @@ from opentelemetry.util.genai.types import (
 class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-public-methods
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
-        self.handler = TelemetryHandler(tracer_provider=tracer_provider)
+        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
 
     def test_start_stop_creates_span(self):
         invocation = self.handler.invoke_local_agent(
@@ -348,6 +348,58 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
 
         assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
 
+    def test_agent_with_explicit_context(self):
+        parent_inv = self.handler.invoke_local_agent(agent_name="parent_agent")
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.handler.invoke_local_agent(
+                agent_name="child_agent", context=parent_inv.context
+            )
+            child_inv.stop()
+
+        spans = self.span_exporter.get_finished_spans()
+        child_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_AGENT_NAME) == "child_agent"
+        )
+        parent_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_AGENT_NAME) == "parent_agent"
+        )
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert (
+            child_span.parent.span_id
+            != ambient_span.get_span_context().span_id
+        )
+        assert child_span.context.trace_id == parent_span.context.trace_id
+
+    def test_agent_with_attach_to_context_false(self):
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.handler.invoke_local_agent(
+                agent_name="detached_agent", _attach_to_context=False
+            )
+            assert get_current_span() == ambient_span
+            inv.stop()
+            assert get_current_span() == ambient_span
+
+        spans = self.span_exporter.get_finished_spans()
+        detached_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_AGENT_NAME) == "detached_agent"
+        )
+        assert detached_span.parent is not None
+        assert (
+            detached_span.parent.span_id
+            == ambient_span.get_span_context().span_id
+        )
+
 
 class TestAgentInvocationContent(unittest.TestCase):
     def setUp(self):
@@ -478,11 +530,11 @@ class TestAgentInvocationContent(unittest.TestCase):
 class TestRemoteAgentInvocation(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
-        self.handler = TelemetryHandler(tracer_provider=tracer_provider)
+        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
 
     def test_span_kind_client(self):
         invocation = self.handler.invoke_remote_agent("openai")
@@ -658,6 +710,64 @@ class TestRemoteAgentInvocation(unittest.TestCase):
             == "agent.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 8080
+
+    def test_remote_agent_with_explicit_context(self):
+        parent_inv = self.handler.invoke_remote_agent(
+            "test-provider", agent_name="parent_remote"
+        )
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.handler.invoke_remote_agent(
+                "test-provider",
+                agent_name="child_remote",
+                context=parent_inv.context,
+            )
+            child_inv.stop()
+
+        spans = self.span_exporter.get_finished_spans()
+        child_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_AGENT_NAME) == "child_remote"
+        )
+        parent_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_AGENT_NAME) == "parent_remote"
+        )
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert (
+            child_span.parent.span_id
+            != ambient_span.get_span_context().span_id
+        )
+        assert child_span.context.trace_id == parent_span.context.trace_id
+
+    def test_remote_agent_with_attach_to_context_false(self):
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.handler.invoke_remote_agent(
+                "test-provider",
+                agent_name="detached_remote",
+                _attach_to_context=False,
+            )
+            assert get_current_span() == ambient_span
+            inv.stop()
+            assert get_current_span() == ambient_span
+
+        spans = self.span_exporter.get_finished_spans()
+        detached_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_AGENT_NAME) == "detached_remote"
+        )
+        assert detached_span.parent is not None
+        assert (
+            detached_span.parent.span_id
+            == ambient_span.get_span_context().span_id
+        )
 
 
 class TestAgentInvocationMetrics(TestBase):

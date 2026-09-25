@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -15,6 +16,7 @@ from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     gen_ai_json_dumps,
@@ -57,6 +59,8 @@ class RetrievalInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.retrieval() instead of calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.RETRIEVAL.value
@@ -83,6 +87,8 @@ class RetrievalInvocation(GenAIInvocation):
             span_kind=SpanKind.CLIENT,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
         )
         self._data_source_id: str | None = data_source_id
         self._provider: str | None = provider
@@ -91,7 +97,14 @@ class RetrievalInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.top_k: int | None = None
         self.query_text: str | None = None
-        self.documents: Sequence[Mapping[str, Any]] | None = None
+        self.documents: (
+            Sequence[RetrievalDocument | Mapping[str, object]] | None
+        ) = None
+        """Retrieved document models, captured only in span content modes.
+
+        Passing mappings is deprecated; use ``RetrievalDocument`` instead.
+        Legacy mappings are still serialized unchanged.
+        """
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         # data_source_id intentionally excluded — high cardinality

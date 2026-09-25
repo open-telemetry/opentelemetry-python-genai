@@ -350,6 +350,18 @@ class OutputMessage:
     name: str | None = None
 
 
+@dataclass()
+class RetrievalDocument:
+    """Represents a document retrieved from a vector database or search system.
+
+    Mirrors the `GenAI retrieval Python model - RetrievalDocument
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    id: str | None = None
+    score: float | None = None
+
+
 # Callback an instrumentor may supply to derive the error.type attribute from a
 # provider exception.
 # Returns None to fall back to the exception's fully qualified type name.

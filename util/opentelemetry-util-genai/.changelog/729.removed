@@ -1,1 +1,0 @@
-Remove agent_id and agent_version start-time parameters from invoke_remote_agent; set them on the returned invocation instead.

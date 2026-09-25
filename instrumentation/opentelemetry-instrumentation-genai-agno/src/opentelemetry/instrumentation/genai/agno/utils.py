@@ -8,12 +8,30 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Iterable
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+
+if TYPE_CHECKING:
+    from agno.knowledge.document.base import Document
 
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
+    RetrievalDocument,
     ToolDefinition,
 )
+
+
+def format_retrieval_document(doc: Document) -> RetrievalDocument:
+    """Format an Agno Document into a RetrievalDocument."""
+    score: float | None = None
+    if doc.reranking_score is not None:
+        try:
+            score = float(doc.reranking_score)
+        except (ValueError, TypeError):
+            pass
+    return RetrievalDocument(
+        id=str(doc.id) if doc.id is not None else None,
+        score=score,
+    )
 
 
 @runtime_checkable

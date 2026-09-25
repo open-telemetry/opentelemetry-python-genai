@@ -99,6 +99,7 @@ class InferenceInvocation(GenAIInvocation):
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         context: Context | None = None,
+        _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
         operation_name = (
@@ -129,6 +130,7 @@ class InferenceInvocation(GenAIInvocation):
             context=context,
             conversation_id=conversation_id,
             content_capturing_mode=content_capturing_mode,
+            _attach_to_context=_attach_to_context,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model

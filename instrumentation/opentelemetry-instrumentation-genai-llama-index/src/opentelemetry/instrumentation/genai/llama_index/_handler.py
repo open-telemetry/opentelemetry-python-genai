@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import contextvars
 import inspect
+import logging
+import math
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
@@ -61,6 +63,7 @@ from opentelemetry.util.genai.types import (
     Modality,
     OutputMessage,
     ReasoningPart,
+    RetrievalDocument,
     Role,
     SystemInstructionPart,
     TextPart,
@@ -68,6 +71,8 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+
+_logger = logging.getLogger(__name__)
 
 _ToolExecutionAttributes = tuple[str, str | None]
 _AGENT_TOOL_ATTRIBUTES: ContextVar[
@@ -327,25 +332,27 @@ def _retrieval_top_k(retriever: BaseRetriever) -> int | None:
 
 def _retrieval_documents(
     result: object,
-) -> list[dict[str, Any]] | None:
+) -> list[RetrievalDocument] | None:
     """Convert retrieved LlamaIndex nodes to semconv document objects."""
     if not isinstance(result, Sequence):
         return None
     candidates = cast(Sequence[object], result)
-    documents: list[dict[str, Any]] = []
+    documents: list[RetrievalDocument] = []
     for candidate in candidates:
         if not isinstance(candidate, NodeWithScore):
             continue
         try:
-            document: dict[str, Any] = {
-                "id": candidate.node_id,
-                "content": candidate.node.get_content(),
-            }
-            if candidate.score is not None:
-                document["score"] = candidate.score
-            documents.append(document)
+            document_id = candidate.node_id
+            score = candidate.score
+            if score is not None and not math.isfinite(score):
+                score = None
         except BaseException:
+            _logger.warning(
+                "Failed to extract retrieval document attributes",
+                exc_info=True,
+            )
             continue
+        documents.append(RetrievalDocument(id=document_id, score=score))
     # Preserve [] for a genuine empty result, but omit the attribute when a
     # non-empty result could not be converted into semantic-convention docs.
     if documents:

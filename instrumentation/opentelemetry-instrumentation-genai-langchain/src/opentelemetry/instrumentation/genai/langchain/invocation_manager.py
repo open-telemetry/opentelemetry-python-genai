@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 from uuid import UUID
 
+from opentelemetry.context import Context
 from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
     LocalAgentInvocation,
@@ -34,9 +35,7 @@ class _InvocationState:
 
 
 class _InvocationManager:
-    def __init__(
-        self,
-    ) -> None:
+    def __init__(self) -> None:
         # Map from run_id -> _InvocationState, to keep track of invocations and parent/child relationships
         # TODO: TTL cache to avoid memory leaks in long-running processes.
         self._invocations: dict[UUID, _InvocationState] = {}
@@ -71,6 +70,15 @@ class _InvocationManager:
     def get_parent_run_id(self, run_id: UUID) -> UUID | None:
         invocation_state = self._invocations.get(run_id)
         return invocation_state.parent_run_id if invocation_state else None
+
+    def get_parent_context(self, parent_run_id: UUID | None) -> Context | None:
+        current = parent_run_id
+        while current is not None:
+            invocation = self.get_invocation(current)
+            if invocation is not None:
+                return invocation.context
+            current = self.get_parent_run_id(current)
+        return None
 
     def delete_invocation_state(self, run_id: UUID) -> None:
         invocation_state = self._invocations.get(run_id)

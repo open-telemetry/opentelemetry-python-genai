@@ -8,11 +8,15 @@ from __future__ import annotations
 import copy
 import json
 from typing import Any
+from unittest.mock import Mock
 
 import dspy
 import pytest
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
+from opentelemetry.instrumentation.genai.dspy.patch import (
+    _set_retrieval_invocation_documents,
+)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
@@ -25,6 +29,9 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import RetrievalInvocation
+from opentelemetry.util.genai.types import RetrievalDocument
 
 _GEN_AI_RETRIEVAL_TOP_K = "gen_ai.retrieval.top_k"
 
@@ -49,11 +56,13 @@ class _DummyRM:
         return [_DummyPassage(f"Passage {i} for {query}") for i in range(k)]
 
 
+@pytest.mark.parametrize("k", [0, 1, 3])
 def test_sync_retrieve_execution(
     tracer_provider: TracerProvider,
     logger_provider: LoggerProvider,
     meter_provider: MeterProvider,
     span_exporter: InMemorySpanExporter,
+    k: int,
 ) -> None:
     rm = _DummyRM()
     dspy.settings.configure(rm=rm)
@@ -65,9 +74,9 @@ def test_sync_retrieve_execution(
         meter_provider=meter_provider,
         content_capture="SPAN_ONLY",
     ):
-        retrieve = dspy.Retrieve(k=3)
+        retrieve = dspy.Retrieve(k=k)
         res = retrieve("What is OpenTelemetry?")
-        assert len(res.passages) == 3
+        assert len(res.passages) == k
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -77,7 +86,7 @@ def test_sync_retrieve_execution(
     assert span.status.status_code == StatusCode.UNSET
     attrs = span.attributes or {}
     assert attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
-    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 3
+    assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == k
     assert isinstance(attrs.get(_GEN_AI_RETRIEVAL_TOP_K), int)
     assert (
         attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT)
@@ -87,10 +96,22 @@ def test_sync_retrieve_execution(
     docs_attr = attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert isinstance(docs_attr, str)
     docs = json.loads(docs_attr)
-    assert len(docs) == 3
-    assert docs[0] == {"content": "Passage 0 for What is OpenTelemetry?"}
-    assert docs[1] == {"content": "Passage 1 for What is OpenTelemetry?"}
-    assert docs[2] == {"content": "Passage 2 for What is OpenTelemetry?"}
+    assert docs == [{"id": None, "score": None}] * k
+    assert res.passages == [
+        f"Passage {i} for What is OpenTelemetry?" for i in range(k)
+    ]
+
+
+def test_retrieval_documents_do_not_stringify_passages() -> None:
+    class Passage:
+        def __str__(self) -> str:
+            raise AssertionError("passage text must not be read")
+
+    handler = Mock(spec=TelemetryHandler)
+    handler.should_capture_content.return_value = True
+    invocation = Mock(spec=RetrievalInvocation)
+    _set_retrieval_invocation_documents(handler, invocation, [Passage()])
+    assert invocation.documents == [RetrievalDocument()]
 
 
 def test_retrieve_forward_direct_call(

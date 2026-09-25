@@ -56,6 +56,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    RetrievalDocument,
     Role,
     TextPart,
     ToolCallRequestPart,
@@ -142,32 +143,18 @@ def _extract_document_score(doc: Any) -> float | int | None:
     return None
 
 
-def _document_to_dict(doc: Any) -> dict[str, Any]:
-    """Convert a Document, duck-typed document object, or Mapping to a dict.
-
-    Extracts content (checking page_content first, then content), id,
-    and conditionally score if present and numeric.
-    """
+def _document_to_retrieval_document(doc: object) -> RetrievalDocument:
+    """Extract only the standard document ID and relevance score."""
     if isinstance(doc, Mapping):
-        doc_map = cast(Mapping[str, Any], doc)
-        content = doc_map.get("page_content")
-        if content is None:
-            content = doc_map.get("content")
+        doc_map = cast(Mapping[str, object], doc)
         doc_id = doc_map.get("id")
     else:
-        content = getattr(doc, "page_content", None)
-        if content is None:
-            content = getattr(doc, "content", None)
         doc_id = getattr(doc, "id", None)
 
-    doc_dict: dict[str, Any] = {
-        "content": content,
-        "id": doc_id,
-    }
-    score = _extract_document_score(doc)
-    if score is not None:
-        doc_dict["score"] = score
-    return doc_dict
+    return RetrievalDocument(
+        id=doc_id if isinstance(doc_id, str) else None,
+        score=_extract_document_score(doc),
+    )
 
 
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
@@ -175,10 +162,21 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     A callback handler for LangChain that uses OpenTelemetry to create spans for LLM calls and chains, tools etc,. in future.
     """
 
-    def __init__(self, telemetry_handler: TelemetryHandler) -> None:
+    def __init__(
+        self,
+        telemetry_handler: TelemetryHandler,
+        *,
+        _attach_to_context: bool = True,
+        invocation_manager: _InvocationManager | None = None,
+    ) -> None:
         super().__init__()
         self._telemetry_handler = telemetry_handler
-        self._invocation_manager = _InvocationManager()
+        self._attach_to_context = _attach_to_context
+        self._invocation_manager = (
+            invocation_manager
+            if invocation_manager is not None
+            else _InvocationManager()
+        )
 
     def on_chain_start(
         self,
@@ -209,6 +207,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             agent_announcement is not None,
             ancestor_agent_names,
         )
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
         conversation_id = _conversation_id(metadata)
         capture_content = self._telemetry_handler.should_capture_content()
         if operation == OperationName.INVOKE_WORKFLOW:
@@ -217,7 +218,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 metadata.get("workflow_name") if metadata else None
             )
             workflow = self._telemetry_handler.workflow(
-                name=workflow_name_override or workflow_name
+                name=workflow_name_override or workflow_name,
+                context=parent_context,
+                _attach_to_context=self._attach_to_context,
             )
             workflow.conversation_id = conversation_id
             if capture_content:
@@ -250,6 +253,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 ):
                     agent = self._telemetry_handler.invoke_local_agent(
                         agent_name=suggested_agent_name,
+                        context=parent_context,
+                        _attach_to_context=self._attach_to_context,
                     )
                     agent.conversation_id = conversation_id
                     if capture_content:
@@ -274,6 +279,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
                     agent_name=None,
+                    context=parent_context,
+                    _attach_to_context=self._attach_to_context,
                 )
                 agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
@@ -426,9 +433,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if self._telemetry_handler.should_capture_content():
             input_messages = to_input_messages(flattened)
 
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
         llm_invocation = self._telemetry_handler.inference(
             provider,
             request_model=request_model,
+            context=parent_context,
+            _attach_to_context=self._attach_to_context,
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
@@ -729,11 +741,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             except (json.JSONDecodeError, ValueError):
                 arguments = input_str
         agent_name, _ = self._find_agent_context(parent_run_id)
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
 
         tool_invocation = self._telemetry_handler.tool(
             name=name,
             tool_type="function",
             agent_name=agent_name,
+            context=parent_context,
+            _attach_to_context=self._attach_to_context,
         )
         tool_invocation.tool_description = description
         tool_invocation.arguments = arguments
@@ -790,8 +807,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         meta = metadata or {}
         provider = meta.get("ls_vector_store_provider") or None
         request_model = meta.get("ls_embedding_model") or None
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
         retrieval = self._telemetry_handler.retrieval(
-            provider=provider, request_model=request_model
+            provider=provider,
+            request_model=request_model,
+            context=parent_context,
+            _attach_to_context=self._attach_to_context,
         )
         retrieval.query_text = query
         self._invocation_manager.add_invocation_state(
@@ -815,7 +838,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         if self._telemetry_handler.should_capture_content():
             invocation.documents = [
-                _document_to_dict(doc) for doc in documents
+                _document_to_retrieval_document(doc) for doc in documents
             ]
         invocation.stop()
         self._invocation_manager.delete_invocation_state(run_id)
