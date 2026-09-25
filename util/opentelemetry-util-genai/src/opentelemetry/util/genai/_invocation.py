@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import timeit
 from abc import abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
@@ -46,6 +47,8 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
 )
 from opentelemetry.util.types import AttributeValue
+
+_logger = logging.getLogger(__name__)
 
 _GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 
@@ -124,7 +127,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             context=context,
         )
         self._span_context: Context = set_span_in_context(self.span, context)
-        self._context_token: ContextToken | None = (
+        # ``attach`` is typed as returning a contextvars token, but a runtime
+        # context selected with OTEL_PYTHON_CONTEXT hands out its own token
+        # type, so the token is held as ``object`` and narrowed in ``suspend``.
+        self._context_token: object | None = (
             attach(self._span_context) if _attach_to_context else None
         )
         self._monotonic_start_s: float = timeit.default_timer()
@@ -167,8 +173,25 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         invocation's span. Idempotent, and pairs with ``activate``.
         """
         token, self._context_token = self._context_token, None
-        if token is not None:
-            detach(token)
+        if token is None:
+            return
+        if not isinstance(token, Token):
+            # Only the runtime context that issued a foreign token knows how
+            # to restore it.
+            detach(cast(ContextToken, token))
+            return
+        context_token = cast(ContextToken, token)
+        # Same reset the contextvars runtime does, without the ERROR log that
+        # ``opentelemetry.context.detach`` emits for a token from another context
+        # (an invocation finished in a different task). That context is not ours
+        # to restore, so a foreign token is a no-op.
+        try:
+            context_token.var.reset(context_token)
+        except ValueError:
+            _logger.debug(
+                "Invocation finished in a different context than it started in;"
+                " leaving that context untouched."
+            )
 
     @contextmanager
     def activate(self) -> Iterator[None]:
