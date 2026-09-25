@@ -106,6 +106,13 @@ autodoc_default_options = {
     "member-order": "bysource",
 }
 
+# OTel's recursive aliases must resolve in their defining module, not in
+# each documented function's globals.
+autodoc_type_aliases = {
+    "AttributeValue": "opentelemetry.util.types.AttributeValue",
+    "AnyValue": "opentelemetry.util.types.AnyValue",
+}
+
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for

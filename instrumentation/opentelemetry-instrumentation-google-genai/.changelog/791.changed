@@ -1,0 +1,1 @@
+Record tool-call arguments as bound parameter dictionaries serialized by the shared GenAI utility instead of custom code.function.parameters entries.

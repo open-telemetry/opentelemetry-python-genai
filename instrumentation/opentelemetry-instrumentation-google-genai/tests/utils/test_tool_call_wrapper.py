@@ -1,17 +1,27 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import asyncio
+import functools
 import json
 import unittest
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from unittest.mock import patch
 
+import pytest
 from google.genai import types as genai_types
 
 from opentelemetry._logs import get_logger_provider
 from opentelemetry.instrumentation.google_genai import tool_call_wrapper
 from opentelemetry.metrics import get_meter_provider
-from opentelemetry.trace import get_tracer_provider
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.semconv.attributes import error_attributes as Error
+from opentelemetry.trace import StatusCode, get_tracer_provider
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from ..common import otel_mocker
@@ -156,33 +166,15 @@ class TestCase(unittest.TestCase):
         self.otel.assert_has_span_named("execute_tool somefunction")
         span = self.otel.get_span_named("execute_tool somefunction")
         arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
-        self.assertEqual(
-            arguments["code.function.parameters.primitive_int.type"], "int"
-        )
         self.assertEqual(span.attributes["gen_ai.tool.name"], "somefunction")
         self.assertEqual(
-            arguments["code.function.parameters.primitive_int.value"], 12345
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.dict_arg.type"], "dict"
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.dict_arg.value"],
-            {"key": "value"},
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.list_arg.type"], "list"
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.list_arg.value"], [1, 2, 3]
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.heterogenous_list_arg.type"],
-            "list",
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.heterogenous_list_arg.value"],
-            [123, "abc"],
+            arguments,
+            {
+                "primitive_int": 12345,
+                "dict_arg": {"key": "value"},
+                "list_arg": [1, 2, 3],
+                "heterogenous_list_arg": [123, "abc"],
+            },
         )
 
     @patch.dict(
@@ -234,16 +226,7 @@ class TestCase(unittest.TestCase):
         span = self.otel.get_span_named("execute_tool weather")
         arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
         self.assertEqual(
-            arguments["code.function.parameters.city.type"], "str"
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.city.value"], "Boston"
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.units.type"], "str"
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.units.value"], "celsius"
+            arguments, {"kwargs": {"city": "Boston", "units": "celsius"}}
         )
 
     @patch.dict(
@@ -260,13 +243,217 @@ class TestCase(unittest.TestCase):
         wrapped(10, 20)
         span = self.otel.get_span_named("execute_tool calculate")
         arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
-        self.assertEqual(
-            arguments["code.function.parameters.args.type"], "int"
+        self.assertEqual(arguments, {"args": [10, 20]})
+
+
+@pytest.fixture(params=["sync", "async"])
+def invoke_tool(
+    request, monkeypatch, tracer_provider, logger_provider, meter_provider
+) -> Callable[..., Awaitable[object]]:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+
+    async def invoke(
+        function: Callable[..., object], *args: object, **kwargs: object
+    ) -> object:
+        handler = TelemetryHandler(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
         )
-        self.assertEqual(arguments["code.function.parameters.args.value"], 10)
-        self.assertEqual(
-            arguments["code.function.parameters.args[1].type"], "int"
-        )
-        self.assertEqual(
-            arguments["code.function.parameters.args[1].value"], 20
-        )
+        if request.param == "async":
+
+            @functools.wraps(function)
+            async def async_function(
+                *args: object, **kwargs: object
+            ) -> object:
+                return function(*args, **kwargs)
+
+            wrapped = tool_call_wrapper.wrapped_tool(async_function, handler)
+            return await wrapped(*args, **kwargs)
+        wrapped = tool_call_wrapper.wrapped_tool(function, handler)
+        return wrapped(*args, **kwargs)
+
+    return invoke
+
+
+@pytest.mark.parametrize(
+    "args, kwargs, expected",
+    [
+        (
+            ("Boston",),
+            {},
+            {"city": "Boston"},
+        ),
+        (
+            ("Boston", 1, "extra"),
+            {"units": "celsius", "options": {"rain": True}, "limit": None},
+            {
+                "city": "Boston",
+                "extra": [1, "extra"],
+                "units": "celsius",
+                "kwargs": {"options": {"rain": True}, "limit": None},
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bound_arguments(
+    invoke_tool, span_exporter, args, kwargs, expected
+) -> None:
+    result = {"forecast": "sunny"}
+
+    def weather(
+        city: str,
+        /,
+        *extra: object,
+        units: str = "fahrenheit",
+        **kwargs: object,
+    ) -> dict[str, str]:
+        return result
+
+    assert await invoke_tool(weather, *args, **kwargs) is result
+    (span,) = span_exporter.get_finished_spans()
+    raw = span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]
+    assert type(raw) is str
+    assert json.loads(raw) == expected
+    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT]) == result
+    assert span.status.status_code == StatusCode.UNSET
+
+
+@pytest.mark.asyncio
+async def test_empty_arguments(invoke_tool, span_exporter) -> None:
+    def tool(default: str = "not explicitly passed") -> str:
+        return default
+
+    assert await invoke_tool(tool) == "not explicitly passed"
+    (span,) = span_exporter.get_finished_spans()
+    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {}
+
+
+@pytest.mark.asyncio
+async def test_arguments_use_shared_serializer(
+    invoke_tool, span_exporter
+) -> None:
+    @dataclass
+    class Request:
+        city: str
+        data: bytes
+
+    request = Request(city="Boston", data=b"abc")
+
+    def tool(request_arg: Request) -> str:
+        assert request_arg is request
+        request_arg.city = "Seattle"
+        return "sunny"
+
+    assert await invoke_tool(tool, request) == "sunny"
+    assert request.city == "Seattle"
+    (span,) = span_exporter.get_finished_spans()
+    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
+        "request_arg": {"city": "Boston", "data": "YWJj"}
+    }
+
+
+@pytest.mark.parametrize(
+    "error_type, expected_error_type",
+    [
+        (ValueError, "ValueError"),
+        (asyncio.CancelledError, "asyncio.exceptions.CancelledError"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_arguments_captured_when_tool_fails(
+    invoke_tool,
+    span_exporter,
+    error_type: type[BaseException],
+    expected_error_type: str,
+) -> None:
+    error = error_type("tool failed")
+
+    def tool(city: str) -> None:
+        raise error
+
+    with pytest.raises(error_type) as caught:
+        await invoke_tool(tool, city="Boston")
+    assert caught.value is error
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[Error.ERROR_TYPE] == expected_error_type
+    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
+        "city": "Boston"
+    }
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in span.attributes
+
+
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.asyncio
+async def test_arguments_preserve_call_time_values(
+    invoke_tool, span_exporter, fails: bool
+) -> None:
+    argument = {"items": ["original input"]}
+    error = ValueError("tool failed")
+
+    def tool(payload: dict[str, list[str]]) -> str:
+        assert payload is argument
+        payload["items"].clear()
+        payload["new"] = ["added by tool"]
+        if fails:
+            raise error
+        return "done"
+
+    if fails:
+        with pytest.raises(ValueError) as caught:
+            await invoke_tool(tool, argument)
+        assert caught.value is error
+    else:
+        assert await invoke_tool(tool, argument) == "done"
+    assert argument == {"items": [], "new": ["added by tool"]}
+    (span,) = span_exporter.get_finished_spans()
+    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
+        "payload": {"items": ["original input"]}
+    }
+
+
+@pytest.mark.asyncio
+async def test_argument_copy_failure_does_not_prevent_tool_execution(
+    invoke_tool, span_exporter, caplog
+) -> None:
+    class NonCopyable:
+        def __deepcopy__(self, memo: dict[int, object]) -> NonCopyable:
+            raise RuntimeError("cannot copy")
+
+    argument = NonCopyable()
+
+    def tool(value: NonCopyable) -> str:
+        assert value is argument
+        return "done"
+
+    assert await invoke_tool(tool, argument) == "done"
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in span.attributes
+    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT]) == "done"
+    assert "Failed to snapshot tool arguments" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_arguments_not_bound_when_capture_disabled(
+    invoke_tool, span_exporter, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "NO_CONTENT"
+    )
+    argument = object()
+
+    def tool(value: object) -> object:
+        return value
+
+    with patch.object(
+        tool_call_wrapper, "bind_arguments", side_effect=AssertionError
+    ):
+        assert await invoke_tool(tool, argument) is argument
+    (span,) = span_exporter.get_finished_spans()
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in span.attributes
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in span.attributes
