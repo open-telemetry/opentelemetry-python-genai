@@ -127,7 +127,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             context=context,
         )
         self._span_context: Context = set_span_in_context(self.span, context)
-        self._context_token: ContextToken | None = (
+        # ``attach`` is typed as returning a contextvars token, but a runtime
+        # context selected with OTEL_PYTHON_CONTEXT hands out its own token
+        # type, so the token is held as ``object`` and narrowed in ``suspend``.
+        self._context_token: object | None = (
             attach(self._span_context) if _attach_to_context else None
         )
         self._monotonic_start_s: float = timeit.default_timer()
@@ -172,18 +175,18 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         token, self._context_token = self._context_token, None
         if token is None:
             return
-        # ``attach`` is typed as returning a contextvars token, but a runtime
-        # context selected with OTEL_PYTHON_CONTEXT hands out its own token
-        # type; only that backend knows how to restore it.
-        if not isinstance(token, Token):  # pyright: ignore[reportUnnecessaryIsInstance]
-            detach(token)
+        if not isinstance(token, Token):
+            # Only the runtime context that issued a foreign token knows how
+            # to restore it.
+            detach(cast(ContextToken, token))
             return
+        context_token = cast(ContextToken, token)
         # Same reset the contextvars runtime does, without the ERROR log that
         # ``opentelemetry.context.detach`` emits for a token from another context
         # (an invocation finished in a different task). That context is not ours
         # to restore, so a foreign token is a no-op.
         try:
-            token.var.reset(token)
+            context_token.var.reset(context_token)
         except ValueError:
             _logger.debug(
                 "Invocation finished in a different context than it started in;"
