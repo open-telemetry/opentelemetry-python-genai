@@ -1,0 +1,1 @@
+Add support for Bedrock Agent Runtime (invoke_agent and retrieve) in synchronous and asynchronous calls.
