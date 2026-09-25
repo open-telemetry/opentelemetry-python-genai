@@ -6,3 +6,6 @@
 
 # Drop this once opentelemetry-util-genai 1.2b0 is published.
 -e util/opentelemetry-util-genai
+
+# DSPy Embedder requires numpy when called (dspy.clients.embedding.np).
+numpy>=1.26.0
