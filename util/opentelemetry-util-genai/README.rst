@@ -110,6 +110,53 @@ message content (as dictionaries instead of JSON strings). Note that when using 
 or ``SPAN_AND_EVENT``, the ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable defaults
 to ``true``, so events will be emitted automatically unless explicitly set to ``false``.
 
+Native log enablement
+^^^^^^^^^^^^^^^^^^^^^
+
+On SDKs that provide ``Logger.enabled``, inference event export also honors native
+log enablement. The check uses the invocation's context and event name. Disabling
+export does not disable spans, metrics, or completion hooks. Hooks still receive
+the event record when the content-capture configuration requests one.
+
+For example, pass your log exporter to this processor to suppress inference events:
+
+.. code-block:: python
+
+    from opentelemetry._logs import SeverityNumber
+    from opentelemetry.context import Context
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+
+    class DropInferenceEvents(BatchLogRecordProcessor):
+        def enabled(
+            self,
+            *,
+            context: Context | None = None,
+            instrumentation_scope: InstrumentationScope | None = None,
+            severity_number: SeverityNumber | None = None,
+            event_name: str | None = None,
+        ) -> bool:
+            return (
+                event_name != "gen_ai.client.inference.operation.details"
+                and super().enabled(
+                    context=context,
+                    instrumentation_scope=instrumentation_scope,
+                    severity_number=severity_number,
+                    event_name=event_name,
+                )
+            )
+
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(DropInferenceEvents(exporter))
+
+Pass this provider as ``logger_provider`` when configuring instrumentation. If the
+provider has several processors, each must disable the event: the SDK considers it
+enabled when any processor accepts it.
+
+``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=false`` still disables these events.
+SDKs without ``Logger.enabled`` retain the existing environment-variable behavior.
+
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^
 

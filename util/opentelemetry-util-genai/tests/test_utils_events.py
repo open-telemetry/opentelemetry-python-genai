@@ -4,9 +4,9 @@
 import json
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs import Logger, LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
     SimpleLogRecordProcessor,
@@ -280,6 +280,67 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         # Check no event was emitted
         logs = self.log_exporter.get_finished_logs()
         self.assertEqual(len(logs), 0)
+
+    @unittest.skipUnless(
+        hasattr(Logger, "enabled"),
+        "The installed SDK has no log enablement API",
+    )
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_logger_enablement_filters_events_without_skipping_completion(
+        self,
+    ) -> None:
+        queries: list[dict[str, object]] = []
+
+        class DisabledProcessor(SimpleLogRecordProcessor):
+            def enabled(self, **kwargs: object) -> bool:
+                queries.append(kwargs)
+                return False
+
+        for error in (None, ValueError("inference failed")):
+            with self.subTest(error=error):
+                queries.clear()
+                self.log_exporter.clear()
+                self.span_exporter.clear()
+                logger_provider = LoggerProvider()
+                logger_provider.add_log_record_processor(
+                    DisabledProcessor(self.log_exporter)
+                )
+                self.addCleanup(logger_provider.shutdown)
+                hook = Mock()
+                handler = TelemetryHandler(
+                    tracer_provider=self.tracer_provider,
+                    logger_provider=logger_provider,
+                    completion_hook=hook,
+                )
+                invocation = handler.inference(
+                    provider="test-provider", request_model="filtered-model"
+                )
+                invocation.input_messages = [_create_input_message("query")]
+                if error is None:
+                    invocation.stop()
+                else:
+                    invocation.fail(error)
+
+                self.assertEqual(len(self.log_exporter.get_finished_logs()), 0)
+                self.assertEqual(
+                    len(self.span_exporter.get_finished_spans()), 1
+                )
+                self.assertEqual(len(queries), 1)
+                self.assertEqual(queries[0]["context"], invocation.context)
+                self.assertEqual(
+                    queries[0]["event_name"],
+                    "gen_ai.client.inference.operation.details",
+                )
+                hook.on_completion.assert_called_once()
+                self.assertIsNotNone(
+                    hook.on_completion.call_args.kwargs["log_record"]
+                )
 
     @patch.dict(
         os.environ,
