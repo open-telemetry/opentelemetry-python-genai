@@ -34,6 +34,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     _message_name,
     _normalize_role,
     extract_token_details,
+    extract_usage_tokens,
     is_stream_end_marker,
     make_input_message,
     make_last_output_message,
@@ -55,6 +56,8 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
+    Modality,
+    ModalityTokens,
     OutputMessage,
     RetrievalDocument,
     Role,
@@ -81,6 +84,58 @@ def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
         if conversation_id:
             return str(conversation_id)
     return None
+
+
+def _usage_metadata_candidates(
+    chat_generation: Any,
+    llm_output: Any,
+) -> list[Mapping[str, Any]]:
+    candidates: list[Mapping[str, Any]] = []
+    message = getattr(chat_generation, "message", None)
+    usage_metadata = _usage_mapping(getattr(message, "usage_metadata", None))
+    if usage_metadata is not None:
+        candidates.append(usage_metadata)
+
+    generation_info = _usage_mapping(
+        getattr(chat_generation, "generation_info", None)
+    )
+    if generation_info is not None:
+        usage_metadata = _usage_mapping(generation_info.get("usage_metadata"))
+        if usage_metadata is not None:
+            candidates.append(usage_metadata)
+
+    llm_output_mapping = _usage_mapping(llm_output)
+    if llm_output_mapping is not None:
+        for key in ("token_usage", "usage"):
+            usage_metadata = _usage_mapping(llm_output_mapping.get(key))
+            if usage_metadata is not None:
+                candidates.append(usage_metadata)
+
+    return candidates
+
+
+def _usage_mapping(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return cast(Mapping[str, Any], value)
+    return None
+
+
+def _contains_supported_modality_tokens(
+    entries: ModalityTokens | None,
+) -> bool:
+    supported_modalities = {
+        Modality.TEXT.value,
+        Modality.IMAGE.value,
+        Modality.AUDIO.value,
+    }
+    return entries is not None and any(
+        str(getattr(modality, "value", modality)).lower()
+        in supported_modalities
+        and isinstance(token_count, int)
+        and not isinstance(token_count, bool)
+        and token_count >= 0
+        for modality, token_count in entries
+    )
 
 
 def _extract_document_score(doc: Any) -> float | int | None:
@@ -504,6 +559,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         served_model: str | None = None
         generation_model: str | None = None
         generation_response_id: str | None = None
+        llm_output = getattr(response, "llm_output", None)
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
                 message = chat_generation.message
@@ -624,25 +680,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     finish_reasons.append(finish_reason)
 
                     # Get token usage if available
-                    if chat_generation.message.usage_metadata:
-                        usage_metadata = chat_generation.message.usage_metadata
-                        input_tokens = usage_metadata.get("input_tokens", 0)
-                        if not isinstance(input_tokens, int) or isinstance(
-                            input_tokens, bool
-                        ):
-                            input_tokens = 0
-                        llm_invocation.input_tokens = input_tokens
-
-                        output_tokens = usage_metadata.get("output_tokens", 0)
-                        if not isinstance(output_tokens, int) or isinstance(
-                            output_tokens, bool
-                        ):
-                            output_tokens = 0
+                    has_input_tokens = False
+                    has_output_tokens = False
+                    input_modality_tokens = None
+                    output_modality_tokens = None
+                    for usage_metadata in _usage_metadata_candidates(
+                        chat_generation,
+                        llm_output,
+                    ):
+                        input_tokens, output_tokens = extract_usage_tokens(
+                            usage_metadata
+                        )
+                        if input_tokens is not None and not has_input_tokens:
+                            llm_invocation.input_tokens = input_tokens
+                            has_input_tokens = True
+                        if output_tokens is not None and not has_output_tokens:
+                            llm_invocation.output_tokens = output_tokens
+                            has_output_tokens = True
 
                         # Cache, reasoning, and modality token break-downs
-                        token_details = extract_token_details(
-                            cast(dict[str, Any], usage_metadata)
-                        )
+                        token_details = extract_token_details(usage_metadata)
                         if (
                             cache_write := token_details.get(
                                 "cache_write_input_tokens"
@@ -664,25 +721,39 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         ) is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
 
-                        llm_invocation.set_input_tokens(
-                            modality_tokens(
-                                usage_metadata, "input_token_details"
-                            )
+                        candidate_input_modalities = modality_tokens(
+                            usage_metadata, "input_token_details"
                         )
-                        llm_invocation.set_output_tokens(
-                            modality_tokens(
-                                usage_metadata, "output_token_details"
+                        if (
+                            input_modality_tokens is None
+                            and _contains_supported_modality_tokens(
+                                candidate_input_modalities
                             )
-                        )
+                        ):
+                            input_modality_tokens = candidate_input_modalities
 
-                        llm_invocation.output_tokens = output_tokens
+                        candidate_output_modalities = modality_tokens(
+                            usage_metadata, "output_token_details"
+                        )
+                        if (
+                            output_modality_tokens is None
+                            and _contains_supported_modality_tokens(
+                                candidate_output_modalities
+                            )
+                        ):
+                            output_modality_tokens = (
+                                candidate_output_modalities
+                            )
+
+                    llm_invocation.set_input_tokens(input_modality_tokens)
+                    llm_invocation.set_output_tokens(output_modality_tokens)
 
         llm_invocation.output_messages = output_messages
         if finish_reasons:
             llm_invocation.finish_reasons = finish_reasons
 
         response_model, response_id = resolve_response_model_and_id(
-            llm_output=getattr(response, "llm_output", None),
+            llm_output=llm_output,
             served_model=served_model,
             generation_model=generation_model,
             generation_response_id=generation_response_id,
