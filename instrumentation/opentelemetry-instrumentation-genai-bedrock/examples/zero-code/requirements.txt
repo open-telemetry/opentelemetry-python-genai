@@ -1,4 +1,4 @@
-boto3>=1.43.101
+boto3>=1.43.103
 opentelemetry-sdk~=1.44.0
 opentelemetry-distro~=0.64b0
 opentelemetry-instrumentation-genai-bedrock
