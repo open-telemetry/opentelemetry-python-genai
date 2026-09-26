@@ -17,6 +17,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     ReasoningPart,
     Role,
@@ -145,7 +146,7 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         return BlobPart(
             content=content_bytes,
             mime_type=f"image/{fmt}",
-            modality="image",
+            modality=Modality.IMAGE,
         )
     if block_type == "image":
         source = block.get("source")
@@ -157,13 +158,13 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
                     return BlobPart(
                         content=decoded,
                         mime_type=media_type,
-                        modality="image",
+                        modality=Modality.IMAGE,
                     )
             elif "bytes" in source:
                 return BlobPart(
                     content=source.get("bytes", b""),
                     mime_type=source.get("media_type", "image/jpeg"),
-                    modality="image",
+                    modality=Modality.IMAGE,
                 )
 
     # 4. Document block
@@ -176,7 +177,7 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         return BlobPart(
             content=content_bytes,
             mime_type=mime_type,
-            modality="document",
+            modality=Modality.DOCUMENT,
         )
     if block_type == "document":
         source = block.get("source")
@@ -188,13 +189,13 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
                     return BlobPart(
                         content=decoded,
                         mime_type=media_type,
-                        modality="document",
+                        modality=Modality.DOCUMENT,
                     )
             elif "bytes" in source:
                 return BlobPart(
                     content=source.get("bytes", b""),
                     mime_type=source.get("media_type", "application/pdf"),
-                    modality="document",
+                    modality=Modality.DOCUMENT,
                 )
 
     # 5. Tool use (Converse toolUse or Anthropic tool_use)
@@ -307,7 +308,7 @@ def extract_converse_request(
         invocation.top_p = inf_config.get("topP")
         invocation.max_tokens = inf_config.get("maxTokens")
         invocation.stop_sequences = inf_config.get("stopSequences")
-        invocation.top_k = _safe_float(
+        invocation.top_k = _safe_int(
             _first_not_none(inf_config.get("topK"), inf_config.get("top_k"))
         )
         invocation.seed = inf_config.get("seed")
@@ -322,7 +323,7 @@ def extract_converse_request(
             add_inf.get("top_k") if _is_dict(add_inf) else None,
             invocation.top_k,
         )
-        invocation.top_k = _safe_float(top_k_val)
+        invocation.top_k = _safe_int(top_k_val)
         if "seed" in add_fields:
             invocation.seed = add_fields.get("seed")
 
@@ -496,7 +497,7 @@ def extract_invoke_model_request(
     )
 
     # Top K
-    invocation.top_k = _safe_float(
+    invocation.top_k = _safe_int(
         _first_not_none(
             body.get("top_k"),
             body.get("topK"),

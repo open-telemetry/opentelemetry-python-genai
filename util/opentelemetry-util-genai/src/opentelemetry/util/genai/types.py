@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
@@ -154,7 +154,33 @@ class CompactionPart:
     type: Literal["compaction"] = "compaction"
 
 
-Modality = Literal["image", "video", "audio", "document"]
+class Modality(str, Enum):
+    """Well-known content and token modalities.
+
+    Based on the `GenAI messages Python models - Modality
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    Token setters record only ``TEXT``, ``IMAGE``, and ``AUDIO``; other
+    modalities are ignored. Message parts accept all members and plain
+    strings for provider-specific modalities.
+    """
+
+    TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    DOCUMENT = "document"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+ModalityTokens: TypeAlias = Iterable[tuple[Modality | str, int | None]]
+"""A per-modality token breakdown, as ``(modality, token count)`` pairs.
+
+The modality may be a plain string or an enum member carrying one as its
+``value``, so a provider SDK's own enum can be passed straight through.
+Token setters record only text, image, and audio; other modalities are ignored.
+"""
 
 
 @dataclass()
@@ -322,6 +348,18 @@ class OutputMessage:
     finish_reason: str | FinishReason | None = None
     """Deprecated. Report finish reasons in ``gen_ai.response.finish_reasons`` instead."""
     name: str | None = None
+
+
+@dataclass()
+class RetrievalDocument:
+    """Represents a document retrieved from a vector database or search system.
+
+    Mirrors the `GenAI retrieval Python model - RetrievalDocument
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    id: str | None = None
+    score: float | None = None
 
 
 # Callback an instrumentor may supply to derive the error.type attribute from a

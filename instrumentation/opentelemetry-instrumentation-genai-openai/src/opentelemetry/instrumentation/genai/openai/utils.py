@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+import mimetypes
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,11 +23,13 @@ from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.types import (
+    BlobPart,
     FilePart,
     FinishReason,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     Role,
     TextPart,
@@ -34,7 +37,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponsePart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import image_from_url
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -189,17 +192,107 @@ def get_value(v: Any):
     return None
 
 
-def _is_text_part(content: Any) -> bool:
-    return isinstance(content, str) or (
-        isinstance(content, Iterable)
-        and all(isinstance(part, str) for part in content)
+# OpenAI accepts "wav" and "mp3" for input_audio. "audio/mp3" is not a
+# registered media type - the payload is MPEG audio.
+_AUDIO_MIME_TYPES = {"wav": "audio/wav", "mp3": "audio/mpeg"}
+
+
+def _audio_to_part(input_audio: Any) -> MessagePart | None:
+    """Build a blob part for an ``input_audio`` descriptor."""
+    if input_audio is None:
+        return None
+    data = get_property_value(input_audio, "data")
+    if not isinstance(data, str):
+        return None
+    decoded = decode_base64(data)
+    if decoded is None:
+        # Malformed payload: recording garbage bytes would be worse than
+        # dropping the part.
+        return None
+    audio_format = get_property_value(input_audio, "format")
+    return BlobPart(
+        mime_type=_AUDIO_MIME_TYPES.get(audio_format)
+        if isinstance(audio_format, str)
+        else None,
+        modality=Modality.AUDIO,
+        content=decoded,
     )
+
+
+def _document_to_part(file_obj: Any) -> MessagePart | None:
+    """Build a part for a file descriptor: a reference when the file is
+    hosted by OpenAI (``file_id``), a blob when it is uploaded inline
+    (``file_data``)."""
+    if file_obj is None:
+        return None
+    # The SDK carries no media type, but `filename` is what it sends for an
+    # inline upload, and an uploaded file keeps its name.
+    filename = get_property_value(file_obj, "filename")
+    mime_type = (
+        mimetypes.guess_type(filename)[0]
+        if isinstance(filename, str) and filename
+        else None
+    )
+    file_id = get_property_value(file_obj, "file_id")
+    if isinstance(file_id, str) and file_id:
+        return FilePart(
+            mime_type=mime_type, modality=Modality.DOCUMENT, file_id=file_id
+        )
+    file_data = get_property_value(file_obj, "file_data")
+    if not isinstance(file_data, str) or not file_data:
+        return None
+    if file_data.startswith("data:"):
+        # Same data: URL shape as an inline image, so the mime type comes
+        # from the URL header rather than from the filename.
+        return image_from_url(file_data, modality=Modality.DOCUMENT)
+    # `file_data` is documented as plain base64.
+    content = decode_base64(file_data)
+    if content is None:
+        # Malformed payload: recording garbage bytes would be worse than
+        # dropping the part.
+        return None
+    return BlobPart(
+        mime_type=mime_type, modality=Modality.DOCUMENT, content=content
+    )
+
+
+def _tool_response_to_data(value: Any) -> Any:
+    """Reduce a tool result payload to data the GenAI attributes can carry.
+
+    A caller hands back whatever its tool produced, which may include SDK
+    models. Those are flattened via ``model_dump()``; anything that is neither
+    plain data nor a model is dropped rather than guessed at, so recording a
+    tool result never raises into the instrumented call.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _tool_response_to_data(model_dump())
+    if isinstance(value, Mapping):
+        return {
+            str(key): _tool_response_to_data(item)
+            for key, item in value.items()
+        }
+    # Bytes are a Sequence, but iterating them into a list of ints is not a
+    # useful reading of a tool result.
+    if isinstance(value, Sequence) and not isinstance(
+        value, (bytes, bytearray)
+    ):
+        return [_tool_response_to_data(item) for item in value]
+    return None
 
 
 def _content_to_parts(content: Any) -> list[MessagePart]:
     if isinstance(content, str):
         return [TextPart(content=content)]
-    if not isinstance(content, Iterable) or isinstance(content, Mapping):
+    # Only a materialized sequence is walked. The SDK accepts any iterable
+    # for `content` and consumes it itself, so iterating a generator here -
+    # this runs before the wrapped call - would drain the caller's input and
+    # leave the request with no content at all.
+    if not isinstance(content, Sequence) or isinstance(
+        content, (bytes, bytearray)
+    ):
         return []
 
     parts: list[MessagePart] = []
@@ -216,6 +309,32 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
             if isinstance(text, str):
                 parts.append(TextPart(content=text))
             continue
+
+        if part_type == "input_audio":
+            audio_part = _audio_to_part(
+                get_property_value(item, "input_audio")
+            )
+            if audio_part is not None:
+                parts.append(audio_part)
+            continue
+
+        if part_type in ("file", "input_file"):
+            # Chat Completions nests the descriptor under "file"; the
+            # Responses API carries the same fields on the part itself.
+            file_part = _document_to_part(
+                get_property_value(item, "file") or item
+            )
+            if file_part is not None:
+                parts.append(file_part)
+            continue
+
+        if part_type == "refusal":
+            # The refusal string is the message's user-visible text.
+            refusal = get_property_value(item, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
+            continue
+
         if part_type not in ("image_url", "input_image"):
             continue
 
@@ -233,7 +352,7 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
             parts.append(
                 FilePart(
                     mime_type=None,
-                    modality="image",
+                    modality=Modality.IMAGE,
                     file_id=file_id,
                 )
             )
@@ -254,11 +373,19 @@ def _prepare_input_messages(messages) -> list[InputMessage]:
             if tool_calls:
                 parts += extract_tool_calls_new(tool_calls)
             parts += _content_to_parts(content)
+            # A refused turn replayed as history carries content=None and
+            # the text in `refusal`, same as a fresh completion does.
+            refusal = get_property_value(message, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
 
         elif role == Role.TOOL.value:
             tool_call_id = get_property_value(message, "tool_call_id")
             parts.append(
-                ToolCallResponsePart(id=tool_call_id, response=content)
+                ToolCallResponsePart(
+                    id=tool_call_id,
+                    response=_tool_response_to_data(content),
+                )
             )
 
         else:
@@ -337,8 +464,12 @@ def _prepare_output_messages(choices) -> list[OutputMessage]:
             if tool_calls:
                 parts += extract_tool_calls_new(tool_calls)
             content = get_property_value(choice.message, "content")
-            if _is_text_part(content):
-                parts.append(TextPart(content=str(content)))
+            parts += _content_to_parts(content)
+            # A refused completion carries content=None and puts the text
+            # in its own `refusal` field.
+            refusal = get_property_value(choice.message, "refusal")
+            if isinstance(refusal, str):
+                parts.append(TextPart(content=refusal))
 
             message = OutputMessage(
                 finish_reason=map_finish_reason(choice.finish_reason),

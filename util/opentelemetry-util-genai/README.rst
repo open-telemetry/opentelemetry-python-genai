@@ -24,6 +24,65 @@ See the module docstring in ``opentelemetry.util.genai.handler`` for usage examp
 including context manager and manual lifecycle patterns.
 
 
+Context Management and Propagation
+----------------------------------
+
+Invocation factory methods on ``TelemetryHandler`` (such as ``inference``, ``workflow``, ``tool``,
+``embedding``, ``retrieval``, and ``invoke_local_agent``) accept an optional ``context`` keyword argument
+to manage context:
+
+- ``context``: An explicit OpenTelemetry ``Context`` to parent the span. When omitted, the current
+  ambient context is used.
+
+
+Modalities
+----------
+
+``opentelemetry.util.genai.types.Modality`` provides string enum members
+``TEXT``, ``IMAGE``, ``VIDEO``, ``AUDIO``, and ``DOCUMENT``. Use these constants
+when constructing ``BlobPart``, ``FilePart``, and ``UriPart`` or passing
+modality/token-count pairs to the inference invocation's token setters:
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import Modality, UriPart
+
+    image = UriPart(
+        mime_type="image/png",
+        modality=Modality.IMAGE,
+        uri="https://example.com/image.png",
+    )
+
+Members serialize and format as their string values, such as ``"image"``.
+Message parts continue to accept plain strings, including provider-specific
+modalities. Token setters continue to record only ``text``, ``image``, and
+``audio``; other modalities are ignored.
+
+``Modality`` replaces the previous ``Literal`` type alias. Annotations that
+also accept raw strings should use ``Modality | str`` rather than ``Modality``
+alone. Custom modalities remain strings, not additional enum members.
+
+
+Retrieval Documents
+-------------------
+
+Set ``RetrievalInvocation.documents`` using
+``opentelemetry.util.genai.types.RetrievalDocument`` objects:
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import RetrievalDocument
+
+    with handler.retrieval(data_source_id="my-index") as invocation:
+        invocation.documents = [RetrievalDocument(id="doc-1", score=0.9)]
+
+The model contains only the optional ``id`` and ``score`` fields; unset
+fields serialize as JSON ``null``. Documents are recorded in
+``gen_ai.retrieval.documents`` only in ``SPAN_ONLY`` or ``SPAN_AND_EVENT``
+content-capture mode. Passing dictionaries is deprecated, but existing
+dictionary payloads continue to serialize unchanged.
+
+
 Environment Variables
 ---------------------
 

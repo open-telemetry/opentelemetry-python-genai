@@ -28,7 +28,8 @@ API
 from collections.abc import Callable, Collection
 from typing import Any
 
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import BaseCallbackManager
+from langchain_core.callbacks.manager import AsyncCallbackManager
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.langchain.agent_context import (
@@ -38,11 +39,15 @@ from opentelemetry.instrumentation.genai.langchain.agent_context import (
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
+from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
+    _InvocationManager,
+)
 from opentelemetry.instrumentation.genai.langchain.package import _instruments
+from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.completion_hook import load_completion_hook
-from opentelemetry.util.genai.handler import get_telemetry_handler
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 
 class LangChainInstrumentor(BaseInstrumentor):
@@ -68,21 +73,31 @@ class LangChainInstrumentor(BaseInstrumentor):
         meter_provider = kwargs.get("meter_provider")
         logger_provider = kwargs.get("logger_provider")
 
-        telemetry_handler = get_telemetry_handler(
+        telemetry_handler = TelemetryHandler(
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=kwargs.get("completion_hook")
             or load_completion_hook(),
+            instrumentation_scope_name=__package__,
+            instrumentation_scope_version=__version__,
         )
-        otel_callback_handler = OpenTelemetryLangChainCallbackHandler(
+        invocation_manager = _InvocationManager()
+        sync_handler = OpenTelemetryLangChainCallbackHandler(
             telemetry_handler=telemetry_handler,
+            _attach_to_context=True,
+            invocation_manager=invocation_manager,
+        )
+        async_handler = OpenTelemetryLangChainCallbackHandler(
+            telemetry_handler=telemetry_handler,
+            _attach_to_context=False,
+            invocation_manager=invocation_manager,
         )
 
         wrap_function_wrapper(
             "langchain_core.callbacks",
             "BaseCallbackManager.__init__",
-            _BaseCallbackManagerInitWrapper(otel_callback_handler),
+            _BaseCallbackManagerInitWrapper(sync_handler, async_handler),
         )
         self._instrument_agent_entry_points()
 
@@ -112,14 +127,6 @@ class LangChainInstrumentor(BaseInstrumentor):
                 unwrap(langgraph.pregel.Pregel, method)
         except (ImportError, AttributeError):
             pass
-        # Clear the TelemetryHandler singleton so the next instrument() uses
-        # the provided tracer_provider/meter_provider/logger_provider instead
-        # of reusing the previous handler.
-        if (
-            getattr(get_telemetry_handler, "_default_handler", None)
-            is not None
-        ):
-            delattr(get_telemetry_handler, "_default_handler")
 
 
 class _BaseCallbackManagerInitWrapper:
@@ -128,21 +135,44 @@ class _BaseCallbackManagerInitWrapper:
     """
 
     def __init__(
-        self, callback_handler: OpenTelemetryLangChainCallbackHandler
+        self,
+        sync_handler: OpenTelemetryLangChainCallbackHandler,
+        async_handler: OpenTelemetryLangChainCallbackHandler,
     ):
-        self._otel_handler = callback_handler
+        self._sync_handler = sync_handler
+        self._async_handler = async_handler
 
     def __call__(
         self,
         wrapped: Callable[..., None],
-        instance: BaseCallbackHandler,
+        instance: BaseCallbackManager,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ):
         wrapped(*args, **kwargs)
-        # Ensure our OTel callback is present if not already.
-        for handler in instance.inheritable_handlers:  # type: ignore
-            if isinstance(handler, type(self._otel_handler)):
-                break
-        else:
-            instance.add_handler(self._otel_handler, inherit=True)  # type: ignore
+        target_handler = (
+            self._async_handler
+            if isinstance(instance, AsyncCallbackManager)
+            else self._sync_handler
+        )
+        other_handler = (
+            self._sync_handler
+            if isinstance(instance, AsyncCallbackManager)
+            else self._async_handler
+        )
+        if other_handler in instance.handlers:
+            instance.handlers = [
+                target_handler if h is other_handler else h
+                for h in instance.handlers
+            ]
+        if other_handler in instance.inheritable_handlers:
+            instance.inheritable_handlers = [
+                target_handler if h is other_handler else h
+                for h in instance.inheritable_handlers
+            ]
+        if target_handler not in instance.inheritable_handlers:
+            for handler in instance.inheritable_handlers:
+                if isinstance(handler, OpenTelemetryLangChainCallbackHandler):
+                    break
+            else:
+                instance.add_handler(target_handler, inherit=True)

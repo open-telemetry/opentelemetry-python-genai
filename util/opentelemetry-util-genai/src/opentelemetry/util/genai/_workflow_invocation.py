@@ -7,6 +7,7 @@ import timeit
 from dataclasses import asdict
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -46,9 +47,16 @@ class WorkflowInvocation(GenAIInvocation):
         name: str | None,
         *,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> None:
         """Use handler.workflow(name) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
+        start_attributes: dict[str, AttributeValue] = (
+            {GenAI.GEN_AI_WORKFLOW_NAME: name} if name is not None else {}
+        )
+
         super().__init__(
             tracer,
             instruments,
@@ -57,22 +65,15 @@ class WorkflowInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            start_attributes=start_attributes,
+            context=context,
+            conversation_id=conversation_id,
             content_capturing_mode=content_capturing_mode,
+            _attach_to_context=_attach_to_context,
         )
         self._name: str | None = name
-        self.conversation_id: str | None = None
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
-        self._start(self._get_start_attributes())
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-        }
-        if self._name is not None:
-            attrs[GenAI.GEN_AI_WORKFLOW_NAME] = self._name
-        return attrs
 
     def _get_messages_for_span(self) -> dict[str, AttributeValue]:
         if not self._should_capture_content_on_span:

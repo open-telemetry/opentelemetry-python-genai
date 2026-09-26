@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import UUID
@@ -37,6 +38,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     is_stream_end_marker,
     make_input_message,
     make_last_output_message,
+    modality_tokens,
     normalize_provider,
     prepare_tool_definitions,
     resolve_response_model_and_id,
@@ -45,8 +47,8 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
+    LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
@@ -54,7 +56,10 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
+    Modality,
+    ModalityTokens,
     OutputMessage,
+    RetrievalDocument,
     Role,
     TextPart,
     ToolCallRequestPart,
@@ -115,15 +120,118 @@ def _usage_mapping(value: Any) -> Mapping[str, Any] | None:
     return None
 
 
+def _contains_supported_modality_tokens(
+    entries: ModalityTokens | None,
+) -> bool:
+    supported_modalities = {
+        Modality.TEXT.value,
+        Modality.IMAGE.value,
+        Modality.AUDIO.value,
+    }
+    return entries is not None and any(
+        str(getattr(modality, "value", modality)).lower()
+        in supported_modalities
+        and isinstance(token_count, int)
+        and not isinstance(token_count, bool)
+        and token_count >= 0
+        for modality, token_count in entries
+    )
+
+
+def _extract_document_score(doc: Any) -> float | int | None:
+    """Extract relevance score polymorphically from a Document or Mapping.
+
+    Retrieval scores are grounded in standard LangChain retrievers:
+    - Direct knowledge base and vector retrievers (e.g. AmazonKnowledgeBasesRetriever,
+      TavilySearchAPIRetriever) attach confidence/similarity scores to
+      ``doc.metadata["score"]``.
+    - Contextual compression retrievers wrapping rerankers (e.g. CohereRerank via
+      ContextualCompressionRetriever) populate ``doc.metadata["relevance_score"]``.
+    - Custom or duck-typed documents may provide a top-level ``score`` (or
+      ``relevance_score``) attribute or key.
+
+    Non-finite floats (NaN, +/-Inf) and boolean values are filtered out to ensure
+    valid RFC 8259 JSON serialization in gen_ai.retrieval.documents.
+    """
+    score: Any = None
+    if isinstance(doc, Mapping):
+        doc_map = cast(Mapping[str, Any], doc)
+        score = doc_map.get("score")
+        if score is None:
+            score = doc_map.get("relevance_score")
+        if score is None:
+            metadata = doc_map.get("metadata")
+            if isinstance(metadata, Mapping):
+                meta_map = cast(Mapping[str, Any], metadata)
+                score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
+            elif metadata is not None:
+                score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
+    else:
+        score = getattr(doc, "score", None)
+        if score is None:
+            score = getattr(doc, "relevance_score", None)
+        if score is None:
+            metadata = getattr(doc, "metadata", None)
+            if isinstance(metadata, Mapping):
+                meta_map = cast(Mapping[str, Any], metadata)
+                score = meta_map.get("score")
+                if score is None:
+                    score = meta_map.get("relevance_score")
+            elif metadata is not None:
+                score = getattr(metadata, "score", None)
+                if score is None:
+                    score = getattr(metadata, "relevance_score", None)
+
+    if (
+        score is not None
+        and not isinstance(score, bool)
+        and isinstance(score, (int, float))
+    ):
+        if isinstance(score, float) and not math.isfinite(score):
+            return None
+        return score
+
+    return None
+
+
+def _document_to_retrieval_document(doc: object) -> RetrievalDocument:
+    """Extract only the standard document ID and relevance score."""
+    if isinstance(doc, Mapping):
+        doc_map = cast(Mapping[str, object], doc)
+        doc_id = doc_map.get("id")
+    else:
+        doc_id = getattr(doc, "id", None)
+
+    return RetrievalDocument(
+        id=doc_id if isinstance(doc_id, str) else None,
+        score=_extract_document_score(doc),
+    )
+
+
 class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     """
     A callback handler for LangChain that uses OpenTelemetry to create spans for LLM calls and chains, tools etc,. in future.
     """
 
-    def __init__(self, telemetry_handler: TelemetryHandler) -> None:
+    def __init__(
+        self,
+        telemetry_handler: TelemetryHandler,
+        *,
+        _attach_to_context: bool = True,
+        invocation_manager: _InvocationManager | None = None,
+    ) -> None:
         super().__init__()
         self._telemetry_handler = telemetry_handler
-        self._invocation_manager = _InvocationManager()
+        self._attach_to_context = _attach_to_context
+        self._invocation_manager = (
+            invocation_manager
+            if invocation_manager is not None
+            else _InvocationManager()
+        )
 
     def on_chain_start(
         self,
@@ -136,7 +244,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        parent_agent, ancestor_agent_names = self._find_agent_context(
+        parent_agent_name, ancestor_agent_names = self._find_agent_context(
             parent_run_id
         )
         # A claimed announcement is proof this run is a create_agent root, which
@@ -154,6 +262,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             agent_announcement is not None,
             ancestor_agent_names,
         )
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
         conversation_id = _conversation_id(metadata)
         capture_content = self._telemetry_handler.should_capture_content()
         if operation == OperationName.INVOKE_WORKFLOW:
@@ -162,7 +273,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 metadata.get("workflow_name") if metadata else None
             )
             workflow = self._telemetry_handler.workflow(
-                name=workflow_name_override or workflow_name
+                name=workflow_name_override or workflow_name,
+                context=parent_context,
+                _attach_to_context=self._attach_to_context,
             )
             workflow.conversation_id = conversation_id
             if capture_content:
@@ -181,40 +294,37 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 agent_announcement is not None,
             )
             # find if there is an agent already
-            agent_invocation = parent_agent
-            agent_invocation_name = (
-                agent_invocation.agent_name if agent_invocation else None
-            )
             if suggested_agent_name:
                 suggested_agent_name_lower = suggested_agent_name.lower()
-                agent_invocation_name_lower = (
-                    agent_invocation_name.lower()
-                    if agent_invocation_name
-                    else None
+                parent_agent_name_lower = (
+                    parent_agent_name.lower() if parent_agent_name else None
                 )
                 # An announced create_agent root always opens its own layer. For
                 # non-announced runs, suppress a repeated metadata name matching the
                 # enclosing agent - that repetition is inherited config, not a new agent.
                 if (
                     agent_announcement is not None
-                    or suggested_agent_name_lower
-                    != agent_invocation_name_lower
+                    or suggested_agent_name_lower != parent_agent_name_lower
                 ):
                     agent = self._telemetry_handler.invoke_local_agent(
                         agent_name=suggested_agent_name,
+                        context=parent_context,
+                        _attach_to_context=self._attach_to_context,
                     )
                     agent.conversation_id = conversation_id
                     if capture_content:
                         agent.input_messages = make_input_message(inputs)
 
                     if metadata:
-                        agent.agent_id = metadata.get("agent_id")
                         agent.agent_description = metadata.get(
                             "agent_description"
                         )
 
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, agent
+                        run_id,
+                        parent_run_id,
+                        agent,
+                        agent_name=suggested_agent_name,
                     )
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
@@ -224,6 +334,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
                     agent_name=None,
+                    context=parent_context,
+                    _attach_to_context=self._attach_to_context,
                 )
                 agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
@@ -252,7 +364,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
-            invocation, (WorkflowInvocation, AgentInvocation)
+            invocation, (WorkflowInvocation, LocalAgentInvocation)
         ):
             # If the invocation does not exist, we cannot set attributes or end it
             self._invocation_manager.delete_invocation_state(run_id)
@@ -262,9 +374,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             invocation.output_messages = make_last_output_message(outputs)
 
         invocation.stop()
-
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id)
+        self._invocation_manager.delete_invocation_state(run_id)
 
     def on_chain_error(
         self,
@@ -276,15 +386,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> Any:
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
-            invocation, (WorkflowInvocation, AgentInvocation)
+            invocation, (WorkflowInvocation, LocalAgentInvocation)
         ):
             # If the invocation does not exist, we cannot set attributes or end it
             self._invocation_manager.delete_invocation_state(run_id)
             return
 
         invocation.fail(error)
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_chat_model_start(
         self,
@@ -319,6 +428,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 request_model = str(model)
                 break
 
+        if request_model is None and metadata:
+            if model := metadata.get("ls_model_name"):
+                request_model = str(model)
+
         # Skip telemetry for unsupported request models
         if request_model is None:
             return
@@ -326,6 +439,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         request_model = request_model.removeprefix("models/")
 
         # Initialize variables with default values to avoid "possibly unbound" errors
+        request_choice_count = None
+        top_k = None
         top_p = None
         frequency_penalty = None
         presence_penalty = None
@@ -335,6 +450,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         max_tokens = None
 
         if params is not None:
+            request_choice_count = params.get("n")
+            top_k = params.get("top_k")
             top_p = params.get("top_p")
             frequency_penalty = params.get("frequency_penalty")
             presence_penalty = params.get("presence_penalty")
@@ -371,13 +488,20 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if self._telemetry_handler.should_capture_content():
             input_messages = to_input_messages(flattened)
 
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
         llm_invocation = self._telemetry_handler.inference(
             provider,
             request_model=request_model,
+            context=parent_context,
+            _attach_to_context=self._attach_to_context,
         )
         llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
+        llm_invocation.top_k = top_k
+        llm_invocation.request_choice_count = request_choice_count
         llm_invocation.frequency_penalty = frequency_penalty
         llm_invocation.presence_penalty = presence_penalty
         llm_invocation.stop_sequences = stop_sequences
@@ -431,6 +555,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         output_messages: list[OutputMessage] = []
+        finish_reasons: list[str] = []
         served_model: str | None = None
         generation_model: str | None = None
         generation_response_id: str | None = None
@@ -452,17 +577,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                 # Resolve finish_reason from generation_info or response
                 # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
-                # (snake_case); older versions used ``stopReason``. Empty
-                # values are filtered out by util-genai when emitting
-                # ``gen_ai.response.finish_reasons``.
-                finish_reason = ""
+                # (snake_case); older versions used ``stopReason``.
+                finish_reason: str | None = None
                 generation_info = getattr(
                     chat_generation, "generation_info", None
                 )
                 if generation_info is not None:
-                    finish_reason = generation_info.get(
-                        "finish_reason", "unknown"
-                    )
+                    finish_reason = generation_info.get("finish_reason")
 
                 if chat_generation.message:
                     # Responses API (RAPI) may include the served model in the
@@ -490,9 +611,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                     served_model = str(value)
                                     break
 
-                    # Get finish reason if generation_info is None above
+                    # Get finish reason if not found in generation_info above
                     if (
-                        generation_info is None
+                        not finish_reason
                         and chat_generation.message.response_metadata
                     ):
                         finish_reason = (
@@ -500,9 +621,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                 "stopReason"
                             )
                             or chat_generation.message.response_metadata.get(
-                                "stop_reason", "unknown"
+                                "stop_reason"
                             )
                         )
+                    finish_reason = finish_reason or "error"
 
                     name_str = _message_name(chat_generation.message)
 
@@ -555,10 +677,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             name=name_str,
                         )
                     output_messages.append(output_message)
+                    finish_reasons.append(finish_reason)
 
                     # Get token usage if available
                     has_input_tokens = False
                     has_output_tokens = False
+                    input_modality_tokens = None
+                    output_modality_tokens = None
                     for usage_metadata in _usage_metadata_candidates(
                         chat_generation,
                         llm_output,
@@ -596,37 +721,36 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         ) is not None:
                             llm_invocation.thinking_tokens = reasoning_tokens
 
+                        candidate_input_modalities = modality_tokens(
+                            usage_metadata, "input_token_details"
+                        )
                         if (
-                            text_in := token_details.get("text_input_tokens")
-                        ) is not None:
-                            llm_invocation.text_input_tokens = text_in
-                        if (
-                            image_in := token_details.get("image_input_tokens")
-                        ) is not None:
-                            llm_invocation.image_input_tokens = image_in
-                        if (
-                            audio_in := token_details.get("audio_input_tokens")
-                        ) is not None:
-                            llm_invocation.audio_input_tokens = audio_in
+                            input_modality_tokens is None
+                            and _contains_supported_modality_tokens(
+                                candidate_input_modalities
+                            )
+                        ):
+                            input_modality_tokens = candidate_input_modalities
 
+                        candidate_output_modalities = modality_tokens(
+                            usage_metadata, "output_token_details"
+                        )
                         if (
-                            text_out := token_details.get("text_output_tokens")
-                        ) is not None:
-                            llm_invocation.text_output_tokens = text_out
-                        if (
-                            image_out := token_details.get(
-                                "image_output_tokens"
+                            output_modality_tokens is None
+                            and _contains_supported_modality_tokens(
+                                candidate_output_modalities
                             )
-                        ) is not None:
-                            llm_invocation.image_output_tokens = image_out
-                        if (
-                            audio_out := token_details.get(
-                                "audio_output_tokens"
+                        ):
+                            output_modality_tokens = (
+                                candidate_output_modalities
                             )
-                        ) is not None:
-                            llm_invocation.audio_output_tokens = audio_out
+
+                    llm_invocation.set_input_tokens(input_modality_tokens)
+                    llm_invocation.set_output_tokens(output_modality_tokens)
 
         llm_invocation.output_messages = output_messages
+        if finish_reasons:
+            llm_invocation.finish_reasons = finish_reasons
 
         response_model, response_id = resolve_response_model_and_id(
             llm_output=llm_output,
@@ -640,8 +764,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             llm_invocation.response_id = response_id
 
         llm_invocation.stop()
-        if not llm_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_llm_error(
         self,
@@ -660,8 +783,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         llm_invocation.fail(error)
-        if not llm_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_tool_start(
         self,
@@ -689,13 +811,17 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 arguments = json.loads(input_str)
             except (json.JSONDecodeError, ValueError):
                 arguments = input_str
-        nearest_agent, _ = self._find_agent_context(parent_run_id)
-        agent_name = nearest_agent.agent_name if nearest_agent else None
+        agent_name, _ = self._find_agent_context(parent_run_id)
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
 
         tool_invocation = self._telemetry_handler.tool(
             name=name,
             tool_type="function",
             agent_name=agent_name,
+            context=parent_context,
+            _attach_to_context=self._attach_to_context,
         )
         tool_invocation.tool_description = description
         tool_invocation.arguments = arguments
@@ -722,8 +848,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             tool_invocation.tool_call_id = end_tool_call_id
         tool_invocation.tool_result = getattr(output, "content", None)
         tool_invocation.stop()
-        if not tool_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_tool_error(
         self,
@@ -737,8 +862,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if not isinstance(tool_invocation, ToolInvocation):
             return
         tool_invocation.fail(error)
-        if not tool_invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def on_retriever_start(
         self,
@@ -754,8 +878,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         meta = metadata or {}
         provider = meta.get("ls_vector_store_provider") or None
         request_model = meta.get("ls_embedding_model") or None
+        parent_context = self._invocation_manager.get_parent_context(
+            parent_run_id
+        )
         retrieval = self._telemetry_handler.retrieval(
-            provider=provider, request_model=request_model
+            provider=provider,
+            request_model=request_model,
+            context=parent_context,
+            _attach_to_context=self._attach_to_context,
         )
         retrieval.query_text = query
         self._invocation_manager.add_invocation_state(
@@ -779,15 +909,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         if self._telemetry_handler.should_capture_content():
             invocation.documents = [
-                {
-                    "content": doc.page_content,
-                    "id": doc.id,
-                }
-                for doc in documents
+                _document_to_retrieval_document(doc) for doc in documents
             ]
         invocation.stop()
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id)
+        self._invocation_manager.delete_invocation_state(run_id)
 
     def on_retriever_error(
         self,
@@ -805,23 +930,25 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             return
 
         invocation.fail(error)
-        if not invocation.span.is_recording():
-            self._invocation_manager.delete_invocation_state(run_id=run_id)
+        self._invocation_manager.delete_invocation_state(run_id=run_id)
 
     def _find_agent_context(
         self, run_id: UUID | None
-    ) -> tuple[AgentInvocation | None, set[str]]:
+    ) -> tuple[str | None, set[str]]:
         current = run_id
         visited: set[UUID] = set()
-        nearest_agent: AgentInvocation | None = None
+        nearest_agent_name: str | None = None
+        found_nearest_agent = False
         ancestor_agent_names: set[str] = set()
         while current is not None and current not in visited:
             visited.add(current)
             entity = self._invocation_manager.get_invocation(current)
-            if isinstance(entity, AgentInvocation):
-                if nearest_agent is None:
-                    nearest_agent = entity
-                if entity.agent_name:
-                    ancestor_agent_names.add(entity.agent_name.lower())
+            if isinstance(entity, LocalAgentInvocation):
+                agent_name = self._invocation_manager.get_agent_name(current)
+                if not found_nearest_agent:
+                    nearest_agent_name = agent_name
+                    found_nearest_agent = True
+                if agent_name:
+                    ancestor_agent_names.add(agent_name.lower())
             current = self._invocation_manager.get_parent_run_id(current)
-        return nearest_agent, ancestor_agent_names
+        return nearest_agent_name, ancestor_agent_names

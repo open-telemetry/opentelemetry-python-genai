@@ -6,6 +6,7 @@ from __future__ import annotations
 import timeit
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -67,6 +68,8 @@ class ToolInvocation(GenAIInvocation):
         tool_call_id: str | None = None,
         tool_description: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.tool(name) instead of calling this directly.
 
@@ -76,6 +79,14 @@ class ToolInvocation(GenAIInvocation):
             ``invocation.tool_description`` on the returned invocation instead.
         """
         _operation_name = GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_TOOL_NAME, name),
+                (GenAI.GEN_AI_TOOL_TYPE, tool_type),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -84,6 +95,9 @@ class ToolInvocation(GenAIInvocation):
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
+            start_attributes=start_attributes,
+            context=context,
+            _attach_to_context=_attach_to_context,
             content_capturing_mode=content_capturing_mode,
         )
         self._name: str = name
@@ -97,7 +111,6 @@ class ToolInvocation(GenAIInvocation):
         self.tool_description: str | None = tool_description
         self._tool_type: str | None = tool_type
         self._agent_name: str | None = agent_name
-        self._start(self._get_start_attributes())
 
     @property
     def should_capture_content_on_span(self) -> bool:
@@ -107,17 +120,6 @@ class ToolInvocation(GenAIInvocation):
             Use :attr:`should_capture_content` instead.
         """
         return self._should_capture_content_on_span
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        optional_attrs = (
-            (GenAI.GEN_AI_TOOL_NAME, self._name),
-            (GenAI.GEN_AI_TOOL_TYPE, self._tool_type),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {

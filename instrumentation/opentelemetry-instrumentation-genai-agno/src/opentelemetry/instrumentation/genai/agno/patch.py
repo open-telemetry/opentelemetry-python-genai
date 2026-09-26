@@ -3,21 +3,33 @@
 
 """Patching functions for Agno instrumentation."""
 
+# pylint: disable=import-outside-toplevel
+
 from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+import sys
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Sequence,
+)
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
+    from agno.knowledge.document.base import Document
+    from agno.knowledge.knowledge import Knowledge
     from agno.run.workflow import WorkflowRunOutput
     from agno.team import TeamRunOutput
+    from agno.tools.function import FunctionCall, FunctionExecutionResult
 
     AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
 
-from wrapt import wrap_function_wrapper
+from wrapt import register_post_import_hook, wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.agno.stream import (
     AgnoAgentStreamWrapper,
@@ -28,6 +40,7 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     format_content,
+    format_retrieval_document,
     prepare_tool_definitions,
 )
 from opentelemetry.instrumentation.utils import unwrap
@@ -36,9 +49,14 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
+    LocalAgentInvocation,
+    RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
+)
+from opentelemetry.util.genai.stream import (
+    AsyncToolStreamWrapper,
+    SyncToolStreamWrapper,
 )
 from opentelemetry.util.genai.types import (
     Error,
@@ -47,6 +65,7 @@ from opentelemetry.util.genai.types import (
     Role,
     TextPart,
 )
+from opentelemetry.util.genai.utils import get_argument
 
 logger = logging.getLogger(__name__)
 
@@ -58,92 +77,163 @@ _AGNO_TOOLS_MODULE = "agno.tools.function"
 _FUNCTION_CALL_CLASS = "FunctionCall"
 _AGNO_WORKFLOW_MODULE = "agno.workflow.workflow"
 _WORKFLOW_CLASS = "Workflow"
+_AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
+_KNOWLEDGE_CLASS = "Knowledge"
+
+
+# wrapt has no unregister API for post-import hooks; monotonic generations
+# invalidate deferred hooks registered during prior instrumentation cycles.
+_instrumentation_generation: int = 0
+_is_instrumented: bool = False
+
+
+def _safe_wrap_function(
+    target_module: str,
+    target_name: str,
+    wrapper: Callable[..., Any],
+    generation: int,
+) -> None:
+    """Safely wrap a method if it exists, deferring if module is not yet imported."""
+
+    def _apply(mod: Any) -> None:
+        if not _is_instrumented or _instrumentation_generation != generation:
+            return
+        try:
+            parts = target_name.split(".")
+            curr = mod
+            for part in parts:
+                curr = getattr(curr, part)
+        except AttributeError:
+            # Target class or method may not exist across all supported Agno versions.
+            return
+        if hasattr(curr, "__wrapped__"):
+            return
+        wrap_function_wrapper(mod, target_name, wrapper)
+
+    if target_module in sys.modules:
+        _apply(sys.modules[target_module])
+        return
+
+    # Defer wrapping to avoid eagerly importing submodules with heavy or optional dependencies.
+    register_post_import_hook(_apply, target_module)
 
 
 def patch_agent(handler: TelemetryHandler) -> None:
     """Apply patches to Agno class methods."""
-    wrap_function_wrapper(
+    global _instrumentation_generation, _is_instrumented
+    _instrumentation_generation += 1
+    _is_instrumented = True
+    current_generation = _instrumentation_generation
+
+    _safe_wrap_function(
         _AGNO_MODULE,
         f"{_AGENT_CLASS}.run",
         _agent_run(handler),
+        current_generation,
     )
-    wrap_function_wrapper(
+    _safe_wrap_function(
         _AGNO_MODULE,
         f"{_AGENT_CLASS}.arun",
         _agent_arun(handler),
+        current_generation,
     )
-    try:
-        wrap_function_wrapper(
-            _AGNO_TEAM_MODULE,
-            f"{_TEAM_CLASS}.run",
-            _agent_run(handler),
-        )
-        wrap_function_wrapper(
-            _AGNO_TEAM_MODULE,
-            f"{_TEAM_CLASS}.arun",
-            _agent_arun(handler),
-        )
-    except (ImportError, AttributeError):
-        pass
-    try:
-        wrap_function_wrapper(
-            _AGNO_TOOLS_MODULE,
-            f"{_FUNCTION_CALL_CLASS}.execute",
-            _tool_call_execute(handler),
-        )
-        wrap_function_wrapper(
-            _AGNO_TOOLS_MODULE,
-            f"{_FUNCTION_CALL_CLASS}.aexecute",
-            _tool_call_aexecute(handler),
-        )
-    except (ImportError, AttributeError):
-        pass
-    try:
-        wrap_function_wrapper(
-            _AGNO_WORKFLOW_MODULE,
-            f"{_WORKFLOW_CLASS}.run",
-            _workflow_run(handler),
-        )
-        wrap_function_wrapper(
-            _AGNO_WORKFLOW_MODULE,
-            f"{_WORKFLOW_CLASS}.arun",
-            _workflow_arun(handler),
-        )
-    except (ImportError, AttributeError):
-        pass
+    _safe_wrap_function(
+        _AGNO_TEAM_MODULE,
+        f"{_TEAM_CLASS}.run",
+        _agent_run(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_TEAM_MODULE,
+        f"{_TEAM_CLASS}.arun",
+        _agent_arun(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_TOOLS_MODULE,
+        f"{_FUNCTION_CALL_CLASS}.execute",
+        _tool_call_execute(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_TOOLS_MODULE,
+        f"{_FUNCTION_CALL_CLASS}.aexecute",
+        _tool_call_aexecute(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_WORKFLOW_MODULE,
+        f"{_WORKFLOW_CLASS}.run",
+        _workflow_run(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_WORKFLOW_MODULE,
+        f"{_WORKFLOW_CLASS}.arun",
+        _workflow_arun(handler),
+        current_generation,
+    )
+    # Knowledge.retrieve and aretrieve delegate to search and asearch, so wrapping
+    # search/asearch avoids duplicate spans.
+    _safe_wrap_function(
+        _AGNO_KNOWLEDGE_MODULE,
+        f"{_KNOWLEDGE_CLASS}.search",
+        _knowledge_search(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_KNOWLEDGE_MODULE,
+        f"{_KNOWLEDGE_CLASS}.asearch",
+        _knowledge_asearch(handler),
+        current_generation,
+    )
 
 
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
-    try:
-        import agno.agent  # pylint: disable=import-outside-toplevel
+    global _instrumentation_generation, _is_instrumented
+    _instrumentation_generation += 1
+    _is_instrumented = False
+    if _AGNO_MODULE in sys.modules:
+        try:
+            import agno.agent
 
-        unwrap(agno.agent.Agent, "run")
-        unwrap(agno.agent.Agent, "arun")
-    except (ImportError, AttributeError):
-        pass
-    try:
-        import agno.team  # pylint: disable=import-outside-toplevel
+            unwrap(agno.agent.Agent, "run")
+            unwrap(agno.agent.Agent, "arun")
+        except (ImportError, AttributeError):
+            pass
+    if _AGNO_TEAM_MODULE in sys.modules:
+        try:
+            import agno.team
 
-        unwrap(agno.team.Team, "run")
-        unwrap(agno.team.Team, "arun")
-    except (ImportError, AttributeError):
-        pass
-    try:
-        import agno.tools.function  # pylint: disable=import-outside-toplevel
+            unwrap(agno.team.Team, "run")
+            unwrap(agno.team.Team, "arun")
+        except (ImportError, AttributeError):
+            pass
+    if _AGNO_TOOLS_MODULE in sys.modules:
+        try:
+            import agno.tools.function
 
-        unwrap(agno.tools.function.FunctionCall, "execute")
-        unwrap(agno.tools.function.FunctionCall, "aexecute")
-    except (ImportError, AttributeError):
-        pass
-    # Workflow depends on optional packages (like fastapi), may fail to import.
-    try:
-        import agno.workflow.workflow  # pylint: disable=import-outside-toplevel
+            unwrap(agno.tools.function.FunctionCall, "execute")
+            unwrap(agno.tools.function.FunctionCall, "aexecute")
+        except (ImportError, AttributeError):
+            pass
+    if _AGNO_WORKFLOW_MODULE in sys.modules:
+        try:
+            import agno.workflow.workflow
 
-        unwrap(agno.workflow.workflow.Workflow, "run")
-        unwrap(agno.workflow.workflow.Workflow, "arun")
-    except (ImportError, AttributeError):
-        pass
+            unwrap(agno.workflow.workflow.Workflow, "run")
+            unwrap(agno.workflow.workflow.Workflow, "arun")
+        except (ImportError, AttributeError):
+            pass
+    if _AGNO_KNOWLEDGE_MODULE in sys.modules:
+        try:
+            import agno.knowledge.knowledge
+
+            unwrap(agno.knowledge.knowledge.Knowledge, "search")
+            unwrap(agno.knowledge.knowledge.Knowledge, "asearch")
+        except (ImportError, AttributeError):
+            pass
 
 
 def _extract_input_content(input_val: Any) -> str:
@@ -173,42 +263,47 @@ def _extract_arguments_str(args_val: Any) -> str:
 
 def _set_tool_invocation_input(
     invocation: ToolInvocation,
-    instance: Any,
-    capture_content: bool,
+    instance: FunctionCall,
 ) -> None:
-    if capture_content:
-        arguments = getattr(instance, "arguments", None)
+    if invocation.should_capture_content:
+        arguments = instance.arguments
         if arguments is not None:
             invocation.arguments = _extract_arguments_str(arguments)
 
 
+def _fail_tool_invocation(
+    invocation: ToolInvocation,
+    result: FunctionExecutionResult,
+) -> None:
+    error = result.error
+    invocation.fail(
+        Error(
+            type=ErrorTypeValues.OTHER.value,
+            message=str(error) if error else None,
+        )
+    )
+
+
 def _set_tool_invocation_output(
     invocation: ToolInvocation,
-    result: Any,
-    capture_content: bool,
+    result: FunctionExecutionResult,
 ) -> None:
-    if getattr(result, "status", None) == "failure":
-        error = getattr(result, "error", None)
-        invocation.fail(
-            Error(
-                type=ErrorTypeValues.OTHER.value,
-                message=str(error) if error else None,
-            )
-        )
+    if result.status == "failure":
         return
-    if capture_content and result is not None:
+    if invocation.should_capture_content:
         invocation.tool_result = _extract_output_content(result)
 
 
 def _set_invocation_input(
-    invocation: AgentInvocation | WorkflowInvocation,
+    invocation: LocalAgentInvocation | WorkflowInvocation,
     instance: Any,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     capture_content: bool,
+    wrapped: Callable[..., Any],
 ) -> None:
-    if capture_content and (args or "input" in kwargs):
-        input_val = args[0] if args else kwargs.get("input")
+    if capture_content:
+        input_val = get_argument("input", wrapped, args, kwargs)
         if input_val is not None:
             content_str = _extract_input_content(input_val)
             invocation.input_messages = [
@@ -225,7 +320,7 @@ def _extract_finish_reason(result: object) -> str:
 
 
 def _set_invocation_output(
-    invocation: AgentInvocation | WorkflowInvocation,
+    invocation: LocalAgentInvocation | WorkflowInvocation,
     result: object | None,
     capture_content: bool,
 ) -> None:
@@ -249,10 +344,31 @@ def _start_agent_invocation(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     capture_content: bool,
-) -> AgentInvocation:
+    wrapped: Callable[..., Any],
+) -> LocalAgentInvocation:
     agent_name = getattr(instance, "name", None)
-    invocation = handler.invoke_local_agent(agent_name=agent_name)
-    _set_invocation_input(invocation, instance, args, kwargs, capture_content)
+    model_obj = get_argument("model", wrapped, args, kwargs) or getattr(
+        instance, "model", None
+    )
+    request_model = None
+    if model_obj is not None:
+        request_model = (
+            getattr(model_obj, "id", None)
+            or getattr(model_obj, "name", None)
+            or (model_obj if isinstance(model_obj, str) else None)
+        )
+
+    invocation = handler.invoke_local_agent(
+        agent_name=str(agent_name) if agent_name else None,
+        request_model=str(request_model) if request_model else None,
+    )
+    description = getattr(instance, "description", None)
+    if description:
+        invocation.agent_description = str(description)
+
+    _set_invocation_input(
+        invocation, instance, args, kwargs, capture_content, wrapped
+    )
     invocation.tool_definitions = prepare_tool_definitions(
         getattr(instance, "tools", None)
     )
@@ -261,13 +377,12 @@ def _start_agent_invocation(
 
 def _start_tool_invocation(
     handler: TelemetryHandler,
-    instance: Any,
-    capture_content: bool,
+    instance: FunctionCall,
 ) -> ToolInvocation:
-    function_obj = getattr(instance, "function", None)
+    function_obj = instance.function
     tool_name = getattr(function_obj, "name", None) or "tool"
     tool_desc = getattr(function_obj, "description", None)
-    tool_call_id = getattr(instance, "call_id", None)
+    tool_call_id = instance.call_id
 
     invocation = handler.tool(
         name=str(tool_name),
@@ -277,7 +392,7 @@ def _start_tool_invocation(
         invocation.tool_call_id = str(tool_call_id)
     if tool_desc:
         invocation.tool_description = str(tool_desc)
-    _set_tool_invocation_input(invocation, instance, capture_content)
+    _set_tool_invocation_input(invocation, instance)
     return invocation
 
 
@@ -293,7 +408,7 @@ def _agent_run(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_agent_invocation(
-            handler, instance, args, kwargs, capture_content
+            handler, instance, args, kwargs, capture_content, wrapped=wrapped
         )
         try:
             result = wrapped(*args, **kwargs)
@@ -326,14 +441,24 @@ def _agent_arun(
             result = wrapped(*args, **kwargs)
         except Exception as error:
             invocation = _start_agent_invocation(
-                handler, instance, args, kwargs, capture_content
+                handler,
+                instance,
+                args,
+                kwargs,
+                capture_content,
+                wrapped=wrapped,
             )
             invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
             invocation = _start_agent_invocation(
-                handler, instance, args, kwargs, capture_content
+                handler,
+                instance,
+                args,
+                kwargs,
+                capture_content,
+                wrapped=wrapped,
             )
             return AsyncAgnoAgentStreamWrapper(
                 result, invocation, capture_content
@@ -344,7 +469,12 @@ def _agent_arun(
             @functools.wraps(wrapped)
             async def _await_result() -> object:
                 invocation = _start_agent_invocation(
-                    handler, instance, args, kwargs, capture_content
+                    handler,
+                    instance,
+                    args,
+                    kwargs,
+                    capture_content,
+                    wrapped=wrapped,
                 )
                 try:
                     awaitable = cast(Awaitable[object], result)
@@ -365,7 +495,7 @@ def _agent_arun(
             return _await_result()
 
         invocation = _start_agent_invocation(
-            handler, instance, args, kwargs, capture_content
+            handler, instance, args, kwargs, capture_content, wrapped=wrapped
         )
         _set_invocation_output(invocation, result, capture_content)
         invocation.stop()
@@ -374,23 +504,50 @@ def _agent_arun(
     return traced_method
 
 
+def _handle_tool_result(
+    invocation: ToolInvocation,
+    instance: FunctionCall,
+    result: FunctionExecutionResult,
+) -> FunctionExecutionResult:
+    if result.status == "failure":
+        _fail_tool_invocation(invocation, result)
+        return result
+
+    tool_res = result.result
+    wrapped_stream: Any = None
+    if isinstance(tool_res, AsyncIterator):
+        wrapped_stream = AsyncToolStreamWrapper(
+            cast(Any, tool_res), invocation
+        )
+    elif isinstance(tool_res, Iterator):
+        wrapped_stream = SyncToolStreamWrapper(cast(Any, tool_res), invocation)
+
+    if wrapped_stream is not None:
+        result.result = wrapped_stream
+        instance.result = wrapped_stream
+        return result
+
+    _set_tool_invocation_output(invocation, result)
+    invocation.stop()
+    return result
+
+
 def _tool_call_execute(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
-    capture_content = handler.should_capture_content()
-
     def traced_method(
-        wrapped: Callable[..., Any],
-        instance: Any,
+        wrapped: Callable[..., FunctionExecutionResult],
+        instance: FunctionCall,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Any:
-        with _start_tool_invocation(
-            handler, instance, capture_content
-        ) as invocation:
+    ) -> FunctionExecutionResult:
+        invocation = _start_tool_invocation(handler, instance)
+        try:
             result = wrapped(*args, **kwargs)
-            _set_tool_invocation_output(invocation, result, capture_content)
-            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        return _handle_tool_result(invocation, instance, result)
 
     return traced_method
 
@@ -398,20 +555,19 @@ def _tool_call_execute(
 def _tool_call_aexecute(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
-    capture_content = handler.should_capture_content()
-
     async def traced_method(
-        wrapped: Callable[..., Awaitable[Any]],
-        instance: Any,
+        wrapped: Callable[..., Awaitable[FunctionExecutionResult]],
+        instance: FunctionCall,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Any:
-        with _start_tool_invocation(
-            handler, instance, capture_content
-        ) as invocation:
+    ) -> FunctionExecutionResult:
+        invocation = _start_tool_invocation(handler, instance)
+        try:
             result = await wrapped(*args, **kwargs)
-            _set_tool_invocation_output(invocation, result, capture_content)
-            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        return _handle_tool_result(invocation, instance, result)
 
     return cast(Callable[..., Any], traced_method)
 
@@ -422,10 +578,13 @@ def _start_workflow_invocation(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     capture_content: bool,
+    wrapped: Callable[..., Any],
 ) -> WorkflowInvocation:
     workflow_name = getattr(instance, "name", None)
     invocation = handler.workflow(name=workflow_name)
-    _set_invocation_input(invocation, instance, args, kwargs, capture_content)
+    _set_invocation_input(
+        invocation, instance, args, kwargs, capture_content, wrapped
+    )
     return invocation
 
 
@@ -441,7 +600,7 @@ def _workflow_run(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_workflow_invocation(
-            handler, instance, args, kwargs, capture_content
+            handler, instance, args, kwargs, capture_content, wrapped=wrapped
         )
         try:
             result = wrapped(*args, **kwargs)
@@ -476,14 +635,24 @@ def _workflow_arun(
             result = wrapped(*args, **kwargs)
         except Exception as error:
             invocation = _start_workflow_invocation(
-                handler, instance, args, kwargs, capture_content
+                handler,
+                instance,
+                args,
+                kwargs,
+                capture_content,
+                wrapped=wrapped,
             )
             invocation.fail(error)
             raise
 
         if isinstance(result, AsyncIterator):
             invocation = _start_workflow_invocation(
-                handler, instance, args, kwargs, capture_content
+                handler,
+                instance,
+                args,
+                kwargs,
+                capture_content,
+                wrapped=wrapped,
             )
             return AsyncAgnoWorkflowStreamWrapper(
                 result, invocation, capture_content
@@ -494,7 +663,12 @@ def _workflow_arun(
             @functools.wraps(wrapped)
             async def _await_result() -> object:
                 invocation = _start_workflow_invocation(
-                    handler, instance, args, kwargs, capture_content
+                    handler,
+                    instance,
+                    args,
+                    kwargs,
+                    capture_content,
+                    wrapped=wrapped,
                 )
                 try:
                     awaitable = cast(Awaitable[object], result)
@@ -515,10 +689,134 @@ def _workflow_arun(
             return _await_result()
 
         invocation = _start_workflow_invocation(
-            handler, instance, args, kwargs, capture_content
+            handler, instance, args, kwargs, capture_content, wrapped=wrapped
         )
         _set_invocation_output(invocation, result, capture_content)
         invocation.stop()
         return result
 
     return traced_method
+
+
+def _start_retrieval_invocation(
+    handler: TelemetryHandler,
+    instance: Knowledge,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
+) -> RetrievalInvocation:
+    vector_db = instance.vector_db
+    data_source_id = (
+        instance.name
+        or (
+            getattr(vector_db, "name", None) if vector_db is not None else None
+        )
+        or (
+            getattr(vector_db, "collection", None)
+            if vector_db is not None
+            else None
+        )
+        or (
+            getattr(vector_db, "table_name", None)
+            if vector_db is not None
+            else None
+        )
+    )
+    provider = None
+    if vector_db is not None:
+        provider = (
+            getattr(vector_db, "provider", None)
+            or vector_db.__class__.__name__.lower()
+        )
+
+    embedder = (
+        getattr(vector_db, "embedder", None) if vector_db is not None else None
+    )
+    request_model = None
+    if embedder is not None:
+        request_model = getattr(embedder, "id", None) or getattr(
+            embedder, "model", None
+        )
+
+    invocation = handler.retrieval(
+        data_source_id=str(data_source_id)
+        if data_source_id is not None
+        else None,
+        provider=str(provider).lower() if provider is not None else None,
+        request_model=str(request_model)
+        if request_model is not None
+        else None,
+    )
+
+    if invocation.should_capture_content:
+        query = get_argument("query", wrapped, args, kwargs)
+        if query is not None:
+            invocation.query_text = str(query)
+
+    max_results = get_argument("max_results", wrapped, args, kwargs)
+    if max_results is None:
+        max_results = instance.max_results
+
+    if isinstance(max_results, (int, float, str)):
+        try:
+            invocation.top_k = int(max_results)
+        except (ValueError, TypeError):
+            pass
+
+    return invocation
+
+
+def _knowledge_search(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Sequence[Document] | None],
+        instance: Knowledge,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_retrieval_invocation(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+        if invocation.should_capture_content and result is not None:
+            invocation.documents = [
+                format_retrieval_document(doc) for doc in result
+            ]
+        invocation.stop()
+        return result
+
+    return traced_method
+
+
+def _knowledge_asearch(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Sequence[Document] | None]],
+        instance: Knowledge,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_retrieval_invocation(
+            handler, instance, args, kwargs, wrapped=wrapped
+        )
+        try:
+            result = await wrapped(*args, **kwargs)
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+
+        if invocation.should_capture_content and result is not None:
+            invocation.documents = [
+                format_retrieval_document(doc) for doc in result
+            ]
+        invocation.stop()
+        return result
+
+    return cast(Callable[..., Any], traced_method)

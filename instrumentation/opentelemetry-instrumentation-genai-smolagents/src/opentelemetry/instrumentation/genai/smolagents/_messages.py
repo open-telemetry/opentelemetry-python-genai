@@ -30,6 +30,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     Role,
     TextPart,
@@ -119,7 +120,9 @@ def _image_blob(image: Image | str) -> BlobPart | None:
     if decoded is None:
         return None
     content, mime_type = decoded
-    return BlobPart(mime_type=mime_type, modality="image", content=content)
+    return BlobPart(
+        mime_type=mime_type, modality=Modality.IMAGE, content=content
+    )
 
 
 def _image_part_from_element(
@@ -130,7 +133,7 @@ def _image_part_from_element(
         image_url = element.get("image_url")
         url = image_url.get("url") if isinstance(image_url, dict) else None
         if isinstance(url, str) and url:
-            return UriPart(mime_type=None, modality="image", uri=url)
+            return UriPart(mime_type=None, modality=Modality.IMAGE, uri=url)
         return None
     if content_type == "image":
         image = element.get("image")

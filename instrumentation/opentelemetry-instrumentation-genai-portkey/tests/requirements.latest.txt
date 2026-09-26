@@ -38,7 +38,7 @@
 # the newest supported version of external dependencies.
 
 portkey-ai==2.3.4
-wrapt>=1.14.0
+wrapt>=2.4.1
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-portkey

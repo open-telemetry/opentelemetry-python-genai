@@ -76,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-build.yml
+    uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
@@ -112,7 +112,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-finalize.yml
+    uses: $/.github/workflows/_release-finalize.yml
     with:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
@@ -133,7 +133,7 @@ jobs:
           persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the post-release branch
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Bump repository version to next dev version
         run: uv run ./scripts/version_utils.py bump --dev

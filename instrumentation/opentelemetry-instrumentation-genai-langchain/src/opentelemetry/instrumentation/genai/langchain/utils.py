@@ -29,6 +29,8 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
+    ModalityTokens,
     OutputMessage,
     ReasoningPart,
     Role,
@@ -114,7 +116,7 @@ def _blob_from_base64(data: Any, mime_type: Any) -> MessagePart | None:
         return None
     return BlobPart(
         mime_type=mime_type if isinstance(mime_type, str) else None,
-        modality="image",
+        modality=Modality.IMAGE,
         content=decoded,
     )
 
@@ -125,7 +127,7 @@ def _file_from_id(file_id: Any, mime_type: Any) -> MessagePart | None:
         return None
     return FilePart(
         mime_type=mime_type if isinstance(mime_type, str) else None,
-        modality="image",
+        modality=Modality.IMAGE,
         file_id=file_id,
     )
 
@@ -624,7 +626,7 @@ def _get_positive_int(values: Mapping[str, Any], key: str) -> int | None:
 
 
 def extract_token_details(usage_metadata: Mapping[str, Any]) -> dict[str, int]:
-    """Extract cache, reasoning, and modality token break-downs from LangChain usage metadata."""
+    """Extract cache and reasoning token break-downs from LangChain usage metadata."""
 
     token_details: dict[str, int] = {}
     raw_input_details = usage_metadata.get("input_token_details")
@@ -662,22 +664,6 @@ def extract_token_details(usage_metadata: Mapping[str, Any]) -> dict[str, int]:
         reasoning := _get_positive_int(output_details, "reasoning")
     ) is not None:
         token_details["reasoning_tokens"] = reasoning
-
-    # Input modality breakdowns
-    if (text_in := _get_positive_int(input_details, "text")) is not None:
-        token_details["text_input_tokens"] = text_in
-    if (image_in := _get_positive_int(input_details, "image")) is not None:
-        token_details["image_input_tokens"] = image_in
-    if (audio_in := _get_positive_int(input_details, "audio")) is not None:
-        token_details["audio_input_tokens"] = audio_in
-
-    # Output modality breakdowns
-    if (text_out := _get_positive_int(output_details, "text")) is not None:
-        token_details["text_output_tokens"] = text_out
-    if (image_out := _get_positive_int(output_details, "image")) is not None:
-        token_details["image_output_tokens"] = image_out
-    if (audio_out := _get_positive_int(output_details, "audio")) is not None:
-        token_details["audio_output_tokens"] = audio_out
 
     return token_details
 
@@ -718,3 +704,18 @@ def _first_int_value(*values: Any) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool):
             return value
     return None
+
+
+def modality_tokens(
+    usage_metadata: Mapping[str, Any], key: str
+) -> ModalityTokens | None:
+    """Read one of LangChain's ``*_token_details`` maps as modality pairs.
+
+    Returns ``None`` when the key is absent or not a mapping, so the caller
+    leaves any previously recorded breakdown alone. Non-modality keys such as
+    ``cache_read`` and ``reasoning`` are dropped downstream.
+    """
+    details = usage_metadata.get(key)
+    if not isinstance(details, Mapping):
+        return None
+    return list(cast("Mapping[str, int | None]", details).items())

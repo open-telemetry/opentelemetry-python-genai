@@ -19,6 +19,7 @@ from ._raw_response import ParsableResponse
 from .utils import (
     _content_to_parts,
     _openai_response_format_to_output_type,
+    _tool_response_to_data,
     get_property_value,
     get_served_model,
     get_server_address_and_port,
@@ -26,6 +27,7 @@ from .utils import (
 
 if TYPE_CHECKING:
     from openai.types.responses.response import Response
+    from openai.types.responses.response_output_item import ResponseOutputItem
     from openai.types.responses.response_usage import ResponseUsage
     from openai.types.responses.tool_param import ToolParam
 
@@ -62,6 +64,17 @@ except ImportError:
     ResponseReasoningItem = None
     ResponseUsage = None
 
+# `custom_tool_call` arrived in openai 1.99.2, later than the rest of the
+# Responses types, so a shared import block would disable all of them on the
+# versions in between.
+try:
+    from openai.types.responses.response_custom_tool_call import (
+        ResponseCustomToolCall,
+    )
+except ImportError:
+    ResponseCustomToolCall = None
+
+
 try:
     from opentelemetry.util.genai.types import (
         Error,
@@ -71,7 +84,10 @@ try:
         OutputMessage,
         ReasoningPart,
         Role,
+        ServerToolCallPart,
+        ServerToolCallResponsePart,
         TextPart,
+        ToolCallResponsePart,
     )
     from opentelemetry.util.genai.types import (
         ToolCallRequestPart as ToolCall,
@@ -84,8 +100,11 @@ except ImportError:
     OutputMessage = None
     ReasoningPart = None
     Role = None
+    ServerToolCallPart = None
+    ServerToolCallResponsePart = None
     TextPart = None
     ToolCall = None
+    ToolCallResponsePart = None
 
 
 @dataclass
@@ -223,6 +242,101 @@ def get_system_instruction(instructions: str | None) -> list[TextPart]:
     return [TextPart(content=instructions)]
 
 
+def _parse_tool_call_arguments(arguments: str | None) -> object:
+    if arguments is None:
+        return None
+
+    try:
+        return json.loads(arguments)
+    except (TypeError, ValueError):
+        return arguments
+
+
+def _get_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _get_call_id(item: object) -> str | None:
+    """Return the pairing id; ``id`` covers a provider omitting ``call_id``."""
+    return _get_str(_get_field(item, "call_id")) or _get_str(
+        _get_field(item, "id")
+    )
+
+
+# Client-side tool calls, by the field holding the call's arguments. A custom
+# tool takes free-form text where a function takes a JSON arguments string.
+_TOOL_CALL_ARGUMENT_FIELDS = {
+    "function_call": "arguments",
+    "custom_tool_call": "input",
+}
+_TOOL_OUTPUT_TYPES = frozenset(
+    {"function_call_output", "custom_tool_call_output"}
+)
+
+
+def _get_input_message(item: object) -> InputMessage | None:
+    """Convert one input item; a tool-call turn is flat, not a message."""
+    if InputMessage is None or Role is None:
+        return None
+
+    item_type = _get_field(item, "type")
+
+    if item_type in _TOOL_CALL_ARGUMENT_FIELDS and ToolCall is not None:
+        raw = _get_field(item, _TOOL_CALL_ARGUMENT_FIELDS[item_type])
+        return InputMessage(
+            role=Role.ASSISTANT.value,
+            parts=[
+                ToolCall(
+                    id=_get_call_id(item),
+                    name=_get_str(_get_field(item, "name")) or "",
+                    arguments=(
+                        _parse_tool_call_arguments(raw)
+                        if item_type == "function_call"
+                        and isinstance(raw, str)
+                        else _tool_response_to_data(raw)
+                    ),
+                )
+            ],
+        )
+
+    if item_type in _TOOL_OUTPUT_TYPES and ToolCallResponsePart is not None:
+        return InputMessage(
+            role=Role.TOOL.value,
+            parts=[
+                ToolCallResponsePart(
+                    id=_get_call_id(item),
+                    response=_tool_response_to_data(
+                        _get_field(item, "output")
+                    ),
+                )
+            ],
+        )
+
+    role = _get_field(item, "role")
+    if not isinstance(role, str):
+        return None
+    parts = _content_to_parts(_get_field(item, "content"))
+    if not parts:
+        return None
+    name = _get_field(item, "name")
+    return InputMessage(
+        role=role,
+        parts=parts,
+        name=str(name) if name is not None else None,
+    )
+
+
+def _is_tool_call_turn(message: InputMessage | OutputMessage) -> bool:
+    """Whether a message is an assistant turn holding only tool calls."""
+    return (
+        ToolCall is not None
+        and Role is not None
+        and message.role == Role.ASSISTANT.value
+        and bool(message.parts)
+        and all(isinstance(part, ToolCall) for part in message.parts)
+    )
+
+
 def get_input_messages(
     input_value: str | Sequence[object] | None,
 ) -> list[InputMessage]:
@@ -238,17 +352,18 @@ def get_input_messages(
 
     messages: list[InputMessage] = []
     for item in _get_sequence(input_value):
-        role = _get_field(item, "role")
-        if not isinstance(role, str):
+        message = _get_input_message(item)
+        if message is None:
             continue
-
-        name = _get_field(item, "name")
-        name_str = str(name) if name is not None else None
-        parts = _content_to_parts(_get_field(item, "content"))
-        if parts:
-            messages.append(
-                InputMessage(role=role, parts=parts, name=name_str)
-            )
+        # Parallel tool calls are one turn that the flat item list splits up.
+        if (
+            messages
+            and _is_tool_call_turn(message)
+            and _is_tool_call_turn(messages[-1])
+        ):
+            messages[-1].parts.extend(message.parts)
+            continue
+        messages.append(message)
 
     return messages
 
@@ -270,16 +385,6 @@ def _extract_output_parts(content_blocks: Sequence[object]) -> list[TextPart]:
     return parts
 
 
-def _parse_tool_call_arguments(arguments: str | None) -> object:
-    if arguments is None:
-        return None
-
-    try:
-        return json.loads(arguments)
-    except (TypeError, ValueError):
-        return arguments
-
-
 def _extract_reasoning_parts(
     item: ResponseReasoningItem,
 ) -> list[ReasoningPart]:
@@ -296,6 +401,97 @@ def _extract_reasoning_parts(
         ):
             parts.append(ReasoningPart(content=block.text))
     return parts
+
+
+_SERVER_TOOL_NAMES = {
+    "code_interpreter_call": "code_interpreter",
+    "file_search_call": "file_search",
+    "image_generation_call": "image_generation",
+    "mcp_call": "mcp",
+    "mcp_list_tools": "mcp_list_tools",
+    "tool_search_call": "tool_search",
+    "web_search_call": "web_search",
+}
+
+_SERVER_TOOL_RESPONSE_NAMES = {
+    "tool_search_output": "tool_search",
+}
+
+
+def _extract_server_tool_part(
+    item: ResponseOutputItem,
+) -> tuple[ServerToolCallPart | ServerToolCallResponsePart, str] | None:
+    if ServerToolCallPart is None or ServerToolCallResponsePart is None:
+        return None
+
+    item_type = item.type
+    tool_name = _SERVER_TOOL_NAMES.get(item_type)
+    response_name = _SERVER_TOOL_RESPONSE_NAMES.get(item_type)
+    if tool_name is None and response_name is None:
+        return None
+    if (
+        item_type
+        in (
+            "tool_search_call",
+            "tool_search_output",
+        )
+        and item.execution != "server"
+    ):
+        return None
+
+    finish_reason = _server_tool_finish_reason(item)
+    if finish_reason is None:
+        return None
+
+    payload = item.model_dump(exclude_none=True, mode="json")
+
+    item_id = payload.pop("id", None)
+    call_id = payload.pop("call_id", None)
+    part_id = call_id if isinstance(call_id, str) else item_id
+    payload.pop("type", None)
+    name = payload.pop("name", None)
+    canonical_name = tool_name or response_name
+    if canonical_name is None:
+        return None
+    payload["type"] = canonical_name
+    if response_name is not None:
+        return (
+            ServerToolCallResponsePart(
+                server_tool_call_response=payload,
+                id=call_id if isinstance(call_id, str) else None,
+            ),
+            finish_reason,
+        )
+    return (
+        ServerToolCallPart(
+            name=name if isinstance(name, str) else canonical_name,
+            server_tool_call=payload,
+            id=part_id if isinstance(part_id, str) else None,
+        ),
+        finish_reason,
+    )
+
+
+def _server_tool_finish_reason(item: ResponseOutputItem) -> str | None:
+    match item.type:
+        case "mcp_list_tools":
+            return "error" if item.error else "stop"
+        case (
+            "code_interpreter_call"
+            | "file_search_call"
+            | "image_generation_call"
+            | "mcp_call"
+            | "tool_search_call"
+            | "tool_search_output"
+            | "web_search_call"
+        ):
+            return (
+                _finish_reason_from_status(item.status)
+                if item.status is not None
+                else None
+            )
+        case _:
+            return None
 
 
 # `incomplete_details.reason` values that map onto a cross-provider finish
@@ -374,6 +570,59 @@ def get_tool_definitions_from_response(
     return get_tool_definitions(response.tools)
 
 
+# Empty when the SDK predates these types, which makes every check below False.
+_TOOL_CALL_MODELS = tuple(
+    model
+    for model in (ResponseFunctionToolCall, ResponseCustomToolCall)
+    if model is not None
+)
+
+
+def _is_tool_call_item(item: object) -> bool:
+    """Whether a response output item is a client-side tool call."""
+    return bool(_TOOL_CALL_MODELS) and isinstance(item, _TOOL_CALL_MODELS)
+
+
+def _tool_call_arguments(item: object) -> object:
+    """A function's ``arguments`` is a JSON string; a custom tool's ``input`` is text."""
+    arguments = getattr(item, "arguments", None)
+    if isinstance(arguments, str):
+        return _parse_tool_call_arguments(arguments)
+    return _tool_response_to_data(getattr(item, "input", None))
+
+
+_TERMINAL_TOOL_CALL_STATUSES = frozenset({"completed", "incomplete"})
+
+
+def _tool_call_is_terminal(item: object) -> bool:
+    """Whether a tool-call output item finished.
+
+    ``status`` is undeclared on ``custom_tool_call``, so treat its absence as
+    terminal rather than skipping the item.
+    """
+    status = getattr(item, "status", None)
+    return status is None or status in _TERMINAL_TOOL_CALL_STATUSES
+
+
+_MERGEABLE_OUTPUT_PARTS = tuple(
+    part for part in (TextPart, ToolCall) if part is not None
+)
+_MERGEABLE_FINISH_REASONS = frozenset({"stop", "tool_call"})
+
+
+def _absorbs_tool_call(message: OutputMessage) -> bool:
+    """Whether a tool call from the same generation belongs on this message."""
+    return (
+        bool(_MERGEABLE_OUTPUT_PARTS)
+        and Role is not None
+        and message.role == Role.ASSISTANT.value
+        and message.finish_reason in _MERGEABLE_FINISH_REASONS
+        and all(
+            isinstance(part, _MERGEABLE_OUTPUT_PARTS) for part in message.parts
+        )
+    )
+
+
 def _response_types_available() -> bool:
     return (
         Response is not None
@@ -410,25 +659,24 @@ def get_output_messages_from_response(
             )
             continue
 
-        if isinstance(item, ResponseFunctionToolCall):
-            if ToolCall is None or item.status not in {
-                "completed",
-                "incomplete",
-            }:
+        if _is_tool_call_item(item):
+            if ToolCall is None or not _tool_call_is_terminal(item):
+                continue
+
+            part = ToolCall(
+                id=item.call_id if item.call_id else item.id,
+                name=item.name,
+                arguments=_tool_call_arguments(item),
+            )
+            if messages and _absorbs_tool_call(messages[-1]):
+                messages[-1].parts.append(part)
+                messages[-1].finish_reason = "tool_call"
                 continue
 
             messages.append(
                 OutputMessage(
                     role=Role.ASSISTANT.value,
-                    parts=[
-                        ToolCall(
-                            id=item.call_id if item.call_id else item.id,
-                            name=item.name,
-                            arguments=_parse_tool_call_arguments(
-                                item.arguments
-                            ),
-                        )
-                    ],
+                    parts=[part],
                     finish_reason="tool_call",
                 )
             )
@@ -448,6 +696,17 @@ def get_output_messages_from_response(
                         finish_reason=finish_reason,
                     )
                 )
+            continue
+
+        if server_tool := _extract_server_tool_part(item):
+            server_tool_part, finish_reason = server_tool
+            messages.append(
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[server_tool_part],
+                    finish_reason=finish_reason,
+                )
+            )
 
     return messages
 
@@ -473,10 +732,7 @@ def extract_finish_reasons(response: Response | None) -> list[str]:
 
     finish_reasons: list[str] = []
     for item in response.output:
-        if isinstance(item, ResponseFunctionToolCall) and item.status in {
-            "completed",
-            "incomplete",
-        }:
+        if _is_tool_call_item(item) and _tool_call_is_terminal(item):
             finish_reasons.append("tool_calls")
             continue
 
@@ -526,6 +782,8 @@ def get_inference_creation_kwargs(
         creation_kwargs["server_address"] = address
     if port is not None:
         creation_kwargs["server_port"] = port
+    if params.conversation_id is not None:
+        creation_kwargs["conversation_id"] = params.conversation_id
     return creation_kwargs
 
 
@@ -555,7 +813,6 @@ def apply_request_attributes(
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
-    invocation.conversation_id = params.conversation_id
     invocation.temperature = params.temperature
     invocation.top_p = params.top_p
     invocation.max_tokens = params.max_output_tokens

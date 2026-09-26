@@ -1,0 +1,127 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": "Write a short guide on space exploration.",
+        "model": "gemini-3.8-flash",
+        "background": true
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '98'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.23.0 gl-python/3.14.2
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |-
+        {
+          "id": "v1_ChdQeS13YXZYTkE4VFhqTWNQa0lxb3lBWRIXUHktd2F2WE5BOFRYak1jUGtJcW95QVk",
+          "status": "in_progress",
+          "created": "2026-09-20T19:08:47Z",
+          "updated": "2026-09-20T19:08:47Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-3.8-flash"
+        }
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '244'
+      content-type:
+      - application/json
+      date:
+      - Sun, 20 Sep 2026 19:08:47 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=722
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: ''
+    headers:
+      accept:
+      - text/event-stream
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.23.0 gl-python/3.14.2
+    method: GET
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions/v1_ChdQeS13YXZYTkE4VFhqTWNQa0lxb3lBWRIXUHktd2F2WE5BOFRYak1jUGtJcW95QVk?stream=true
+  response:
+    body:
+      string: |+
+        event: interaction.created
+        data: {"interaction":{"id":"v1_ChdQeS13YXZYTkE4VFhqTWNQa0lxb3lBWRIXUHktd2F2WE5BOFRYak1jUGtJcW95QVk","status":"in_progress","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.created"}
+
+        event: interaction.status_update
+        data: {"interaction_id":"v1_ChdQeS13YXZYTkE4VFhqTWNQa0lxb3lBWRIXUHktd2F2WE5BOFRYak1jUGtJcW95QVk","status":"in_progress","event_type":"interaction.status_update"}
+
+        event: error
+        data: {"error":{"message":"The model is currently experiencing high demand, spikes in demand are usually temporary. Please try again later.","code":"service_unavailable"},"event_type":"error"}
+
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '641'
+      content-type:
+      - text/event-stream
+      date:
+      - Sun, 20 Sep 2026 19:08:47 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=231
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

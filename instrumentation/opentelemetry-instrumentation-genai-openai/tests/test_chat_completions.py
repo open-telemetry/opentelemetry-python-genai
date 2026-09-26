@@ -39,11 +39,17 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES,
+    AUDIO_AND_FILE_PROMPT,
     CACHEABLE_MESSAGES,
     DEFAULT_MODEL,
     EXPECTED_TOOL_DEFINITIONS,
     MULTIMODAL_EXPECTED_INPUT_MESSAGES,
     MULTIMODAL_PROMPT,
+    REASONING_MODEL,
+    REASONING_PROMPT,
+    REFUSAL_PROMPT,
+    REFUSAL_TEXT,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
     WEATHER_TOOL_EXPECTED_INPUT_MESSAGES,
@@ -52,6 +58,7 @@ from .test_utils import (
     assert_cache_attributes,
     assert_message_in_logs,
     assert_messages_attribute,
+    assert_reasoning_attributes,
     format_simple_expected_output_message,
     get_current_weather_tool_definition,
 )
@@ -83,6 +90,7 @@ def test_chat_completion_with_content(
         response.usage.completion_tokens,
     )
     assert_cache_attributes(spans[0], response.usage)
+    assert_reasoning_attributes(spans[0], response.usage)
 
     if latest_experimental_enabled:
         assert_messages_attribute(
@@ -175,6 +183,26 @@ def test_chat_completion_streaming_reports_cached_tokens(
     )
 
 
+def test_chat_completion_reports_reasoning_tokens(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    with vcr.use_cassette("test_chat_completion_reasoning_tokens.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=REASONING_PROMPT,
+            model=REASONING_MODEL,
+            stream=False,
+            extra_body={
+                "max_completion_tokens": 1024,
+                "reasoning_effort": "medium",
+            },
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert_reasoning_attributes(
+        spans[0], response.usage, require_reasoning=True
+    )
+
+
 def test_chat_completion_captures_multimodal_input(
     span_exporter, openai_client, instrument_with_content, vcr
 ):
@@ -188,6 +216,47 @@ def test_chat_completion_captures_multimodal_input(
     assert_messages_attribute(
         span.attributes["gen_ai.input.messages"],
         MULTIMODAL_EXPECTED_INPUT_MESSAGES,
+    )
+
+
+def test_chat_completion_captures_audio_and_file_input(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # input_audio and file parts were dropped: audio becomes a blob with
+    # the media type its format maps to, a file either a reference
+    # (file_id) or a document blob (inline file_data).
+    with vcr.use_cassette("test_chat_completion_audio_and_file_input.yaml"):
+        openai_client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=AUDIO_AND_FILE_PROMPT,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.input.messages"],
+        AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES,
+    )
+
+
+def test_chat_completion_captures_refusal_output(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    # A refused completion carries content=None and the text in its own
+    # `refusal` field, which used to leave the output message empty.
+    with vcr.use_cassette("test_chat_completion_refusal.yaml"):
+        response = openai_client.chat.completions.create(
+            messages=REFUSAL_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=False,
+        )
+
+    assert response.choices[0].message.content is None
+    assert response.choices[0].message.refusal == REFUSAL_TEXT
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_messages_attribute(
+        span.attributes["gen_ai.output.messages"],
+        format_simple_expected_output_message(REFUSAL_TEXT),
     )
 
 
@@ -874,6 +943,48 @@ def test_chat_completion_with_raw_response_streaming_read_without_parse(
     assert spans[0].end_time is not None
 
 
+def test_abandoned_streaming_response_still_emits_span(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """Sync counterpart of the async abandoned-stream case."""
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        with openai_client.chat.completions.with_streaming_response.create(
+            messages=USER_ONLY_PROMPT,
+            model=DEFAULT_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+        ) as raw_response:
+            for _chunk in raw_response.parse():
+                break
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.end_time is not None
+    assert span.attributes["gen_ai.response.id"]
+
+
+def test_streaming_response_exception_in_block_still_emits_span(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """A caller exception inside the block also abandons the stream."""
+    with vcr.use_cassette(
+        "test_chat_completion_with_raw_response_streaming.yaml"
+    ):
+        with pytest.raises(ValueError):
+            with openai_client.chat.completions.with_streaming_response.create(
+                messages=USER_ONLY_PROMPT,
+                model=DEFAULT_MODEL,
+                stream=True,
+                stream_options={"include_usage": True},
+            ) as raw_response:
+                for _chunk in raw_response.parse():
+                    raise ValueError("caller blew up")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.end_time is not None
+
+
 def test_chat_completion_tool_calls_with_content(
     span_exporter, log_exporter, openai_client, instrument_with_content, vcr
 ):
@@ -977,7 +1088,8 @@ def chat_completion_tool_call(
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
         if not expect_content:
-            pass
+            assert "gen_ai.tool.definitions" not in spans[0].attributes
+            assert "gen_ai.tool.definitions" not in spans[1].attributes
         else:
             # first call
             assert_messages_attribute(
@@ -1231,6 +1343,7 @@ def test_chat_completion_streaming(
         response_stream_usage.completion_tokens,
     )
     assert_cache_attributes(spans[0], response_stream_usage)
+    assert_reasoning_attributes(spans[0], response_stream_usage)
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
@@ -1261,6 +1374,32 @@ def test_chat_completion_streaming(
         assert_message_in_logs(
             logs[1], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+def test_chat_completion_streaming_reports_reasoning_tokens(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    usage = None
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_reasoning_tokens.yaml"
+    ):
+        response = openai_client.chat.completions.create(
+            messages=REASONING_PROMPT,
+            model=REASONING_MODEL,
+            stream=True,
+            stream_options={"include_usage": True},
+            extra_body={
+                "max_completion_tokens": 1024,
+                "reasoning_effort": "medium",
+            },
+        )
+        for chunk in response:
+            if getattr(chunk, "usage", None) is not None:
+                usage = chunk.usage
+
+    assert usage is not None
+    spans = span_exporter.get_finished_spans()
+    assert_reasoning_attributes(spans[0], usage, require_reasoning=True)
 
 
 def test_chat_completion_streaming_captures_multimodal_input(

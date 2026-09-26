@@ -30,7 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
+    LocalAgentInvocation,
     ToolInvocation,
     WorkflowInvocation,
 )
@@ -94,22 +94,14 @@ def test_uninstrument_restores_pregel_when_prebuilt_is_missing(
 def _handler() -> tuple[OpenTelemetryLangChainCallbackHandler, mock.MagicMock]:
     telemetry = mock.MagicMock()
     workflow = mock.MagicMock(spec=WorkflowInvocation)
-    workflow.span = mock.MagicMock()
-    workflow.span.is_recording.return_value = False
     telemetry.workflow.return_value = workflow
 
     def make_agent(*args: Any, **kwargs: Any) -> mock.MagicMock:
-        invocation = mock.MagicMock(spec=AgentInvocation)
-        invocation.agent_name = kwargs.get("agent_name")
-        invocation.span = mock.MagicMock()
-        invocation.span.is_recording.return_value = False
-        return invocation
+        return mock.MagicMock(spec=LocalAgentInvocation)
 
     telemetry.invoke_local_agent.side_effect = make_agent
 
     tool_invocation = mock.MagicMock(spec=ToolInvocation)
-    tool_invocation.span = mock.MagicMock()
-    tool_invocation.span.is_recording.return_value = False
     telemetry.tool.return_value = tool_invocation
     return OpenTelemetryLangChainCallbackHandler(telemetry), telemetry
 
@@ -395,6 +387,19 @@ def test_ordinary_runnable_is_not_an_agent() -> None:
     telemetry.invoke_local_agent.assert_not_called()
 
 
+def test_agent_named_runnable_is_an_agent() -> None:
+    handler, telemetry = _handler()
+    RunnableLambda(lambda value: value).with_config(
+        run_name="SupportAgentRunner"
+    ).invoke("value", {"callbacks": [handler]})
+
+    telemetry.invoke_local_agent.assert_called_once_with(
+        agent_name="SupportAgentRunner",
+        context=None,
+        _attach_to_context=True,
+    )
+
+
 def test_plain_state_graph_is_not_an_agent() -> None:
     handler, telemetry = _handler()
     builder = StateGraph(dict[str, int])
@@ -417,6 +422,22 @@ def test_plain_state_graph_with_agent_node_is_not_an_agent() -> None:
     )
 
     telemetry.invoke_local_agent.assert_not_called()
+
+
+def test_agent_named_runnable_inside_other_langgraph_node_is_agent() -> None:
+    handler, telemetry = _handler()
+    runnable = RunnableLambda(
+        lambda state: {"value": state["value"] + 1}
+    ).with_config(run_name="SupportAgentRunner")
+    builder = StateGraph(dict[str, int])
+    builder.add_node("model", runnable)
+    builder.add_edge(START, "model")
+    builder.add_edge("model", END)
+    builder.compile(name="support_pipeline").invoke(
+        {"value": 1}, {"callbacks": [handler]}
+    )
+
+    assert _agent_names(telemetry) == ["SupportAgentRunner"]
 
 
 def _span_named(spans: list[Any], name: str) -> Any:
@@ -547,6 +568,55 @@ def test_nested_named_agent_uses_its_declared_name(
     _assert_parent(inner_span, tool_span)
 
 
+def test_unnamed_inner_agent_does_not_leak_outer_agent_name_to_its_tools(
+    span_exporter, start_instrumentation
+) -> None:
+    @tool
+    def lookup() -> str:
+        """A tool inside the inner agent."""
+        return "data"
+
+    inner = create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "lookup", "args": {}, "id": "c1"}],
+                ),
+                AIMessage(content="inner done"),
+            ]
+        ),
+        [lookup],
+    )
+
+    @tool
+    def delegate(config: RunnableConfig) -> str:
+        """Delegate to the inner agent."""
+        result = inner.invoke({"messages": [("user", "work")]}, config)
+        return str(result["messages"][-1].content)
+
+    create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "delegate", "args": {}, "id": "c2"}],
+                ),
+                AIMessage(content="outer done"),
+            ]
+        ),
+        [delegate],
+        name="outer_agent",
+    ).invoke({"messages": [("user", "start")]})
+
+    spans = span_exporter.get_finished_spans()
+    inner_tool_span = _span_named(spans, "execute_tool lookup")
+    outer_tool_span = _span_named(spans, "execute_tool delegate")
+
+    assert outer_tool_span.attributes.get("gen_ai.agent.name") == "outer_agent"
+    assert "gen_ai.agent.name" not in inner_tool_span.attributes
+
+
 def test_three_level_agents_resolve_names_against_all_ancestors(
     span_exporter, start_instrumentation
 ) -> None:
@@ -623,14 +693,26 @@ async def test_async_root_agent(span_exporter, start_instrumentation) -> None:
     assert span.parent is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The LangChain async callback path does not propagate the context "
-        "token attached at span start, so spans are emitted without parentage. "
-        "Pre-existing behavior, not introduced by this change."
-    ),
-)
+@pytest.mark.asyncio
+async def test_async_root_agent_parents_to_ambient_span(
+    span_exporter, tracer_provider, start_instrumentation
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("ambient") as ambient_span:
+        await create_agent(
+            FakeModel(responses=[AIMessage(content="done")]),
+            [noop],
+            name="async_root",
+        ).ainvoke({"messages": [("user", "hi")]})
+
+    span = _span_named(
+        span_exporter.get_finished_spans(), "invoke_agent async_root"
+    )
+    assert span.parent is not None
+    assert span.parent.span_id == ambient_span.get_span_context().span_id
+    assert span.context.trace_id == ambient_span.get_span_context().trace_id
+
+
 @pytest.mark.asyncio
 async def test_async_nested_agent(
     span_exporter, start_instrumentation
@@ -697,6 +779,104 @@ async def test_concurrent_async_agents_have_distinct_roots(
     second_span = _span_named(spans, "invoke_agent second_agent")
     assert first_span.parent is None
     assert second_span.parent is None
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+@pytest.mark.asyncio
+async def test_async_agent_with_tool_and_chat_parenting(
+    span_exporter, start_instrumentation
+) -> None:
+    agent = create_agent(
+        FakeModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "noop", "args": {}, "id": "tc1"}],
+                ),
+                AIMessage(content="finished"),
+            ]
+        ),
+        [noop],
+        name="workflow_agent",
+    )
+    await agent.ainvoke(
+        {"messages": [("user", "go")]},
+        config={"metadata": {"ls_model_name": "fake-model"}},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _root_span_named(spans, "invoke_agent workflow_agent")
+    tool_span = _span_named(spans, "execute_tool noop")
+    chat_spans = [s for s in spans if s.name == "chat fake-model"]
+
+    assert agent_span.parent is None
+    _assert_parent(tool_span, agent_span)
+    assert len(chat_spans) == 2
+    for chat_span in chat_spans:
+        _assert_parent(chat_span, agent_span)
+    assert len({s.context.trace_id for s in spans}) == 1
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+def test_sync_workflow_calls_async_agent(
+    span_exporter, start_instrumentation
+) -> None:
+    async_agent = create_agent(
+        FakeModel(responses=[AIMessage(content="async done")]),
+        [noop],
+        name="async_agent",
+    )
+
+    def sync_parent_fn(x: Any, config: RunnableConfig) -> Any:
+        return asyncio.run(
+            async_agent.ainvoke({"messages": [("user", "go")]}, config)
+        )
+
+    parent = RunnableLambda(sync_parent_fn).with_config(run_name="sync_parent")
+    parent.invoke({"value": 1})
+
+    spans = span_exporter.get_finished_spans()
+    parent_span = _root_span_named(spans, "invoke_workflow sync_parent")
+    child_span = _span_named(spans, "invoke_agent async_agent")
+    assert parent_span.parent is None
+    _assert_parent(child_span, parent_span)
+    assert child_span.context.trace_id == parent_span.context.trace_id
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="LangGraph async context propagation requires Python 3.11+",
+)
+@pytest.mark.asyncio
+async def test_async_workflow_calls_sync_agent(
+    span_exporter, start_instrumentation
+) -> None:
+    sync_agent = create_agent(
+        FakeModel(responses=[AIMessage(content="sync done")]),
+        [noop],
+        name="sync_agent",
+    )
+
+    async def async_parent_fn(x: Any, config: RunnableConfig) -> Any:
+        return sync_agent.invoke({"messages": [("user", "go")]}, config)
+
+    parent = RunnableLambda(async_parent_fn).with_config(
+        run_name="async_parent"
+    )
+    await parent.ainvoke({"value": 1})
+
+    spans = span_exporter.get_finished_spans()
+    parent_span = _root_span_named(spans, "invoke_workflow async_parent")
+    child_span = _span_named(spans, "invoke_agent sync_agent")
+    assert parent_span.parent is None
+    _assert_parent(child_span, parent_span)
+    assert child_span.context.trace_id == parent_span.context.trace_id
 
 
 def test_announced_root_bypasses_inherited_middleware_name(

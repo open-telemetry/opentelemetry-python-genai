@@ -396,9 +396,8 @@ def test_request_parameters_recorded(
     (span,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
     assert attr(span, GenAI.GEN_AI_REQUEST_TEMPERATURE) == 0.5
     assert attr(span, GenAI.GEN_AI_REQUEST_TOP_P) == 0.9
-    # top_k is a float attribute in the spec even though callers pass an int.
-    assert attr(span, GenAI.GEN_AI_REQUEST_TOP_K) == 40.0
-    assert isinstance(attr(span, GenAI.GEN_AI_REQUEST_TOP_K), float)
+    assert attr(span, GenAI.GEN_AI_REQUEST_TOP_K) == 40
+    assert isinstance(attr(span, GenAI.GEN_AI_REQUEST_TOP_K), int)
     assert attr(span, GenAI.GEN_AI_REQUEST_FREQUENCY_PENALTY) == 0.25
     assert attr(span, GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY) == 1.0
     assert attr(span, GenAI.GEN_AI_REQUEST_MAX_TOKENS) == 256

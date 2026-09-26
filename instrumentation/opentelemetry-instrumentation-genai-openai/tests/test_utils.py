@@ -5,6 +5,7 @@
 
 import base64
 import json
+from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any
 
@@ -42,6 +43,7 @@ _REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+REASONING_MODEL = "gpt-5.1"
 FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
 # TODO: use the semconv constants once these attributes are released in
 # opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
@@ -63,6 +65,15 @@ CACHEABLE_MESSAGES = [
     {"role": "user", "content": "Reply with OK only."},
 ]
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
+REASONING_PROMPT = [
+    {
+        "role": "user",
+        "content": (
+            "A farmer has 17 sheep and all but 9 run away. "
+            "How many sheep remain? Explain your reasoning."
+        ),
+    }
+]
 USER_ONLY_EXPECTED_INPUT_MESSAGES = [
     {
         "role": "user",
@@ -75,6 +86,66 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
         "name": None,
     }
 ]
+# Canonical base64, so the payloads round-trip unchanged through the span
+# attribute (the GenAI JSON encoder re-encodes blob bytes).
+_WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
+_PDF_B64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
+AUDIO_AND_FILE_PROMPT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the clip and the documents"},
+            {
+                "type": "input_audio",
+                "input_audio": {"data": _WAV_B64, "format": "wav"},
+            },
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {
+                "type": "file",
+                "file": {
+                    "filename": "spec.pdf",
+                    "file_data": f"data:application/pdf;base64,{_PDF_B64}",
+                },
+            },
+        ],
+    }
+]
+AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [
+            {
+                "type": "text",
+                "content": "Summarize the clip and the documents",
+            },
+            {
+                "type": "blob",
+                "mime_type": "audio/wav",
+                "modality": "audio",
+                "content": _WAV_B64,
+            },
+            {
+                "type": "file",
+                "mime_type": None,
+                "modality": "document",
+                "file_id": "file-123",
+            },
+            {
+                "type": "blob",
+                "mime_type": "application/pdf",
+                "modality": "document",
+                "content": _PDF_B64,
+            },
+        ],
+        "name": None,
+    }
+]
+
+REFUSAL_PROMPT = [
+    {"role": "user", "content": "Tell me how to do something disallowed."}
+]
+REFUSAL_TEXT = "I'm sorry, I can't help with that."
+
 MULTIMODAL_PROMPT = [
     {
         "role": "user",
@@ -266,6 +337,26 @@ def test_chat_content_parts_drop_malformed_image_and_keep_text():
     assert parts == [TextPart(content="Keep this")]
 
 
+def test_prepare_input_messages_captures_assistant_refusal():
+    # A refused turn replayed as chat history carries content=None, so the
+    # message used to be dropped for having no parts.
+    messages = [
+        {"role": "user", "content": "disallowed request"},
+        {
+            "role": "assistant",
+            "content": None,
+            "refusal": "I cannot help with that.",
+        },
+    ]
+
+    input_messages = _prepare_input_messages(messages)
+
+    assert len(input_messages) == 2
+    assert input_messages[1].parts == [
+        TextPart(content="I cannot help with that.")
+    ]
+
+
 def test_prepare_input_messages_drops_messages_without_parts():
     messages = _prepare_input_messages(
         [
@@ -376,7 +467,6 @@ def assert_fetch_response_attributes(
     response_model: str | None = None,
     response_status: str | None = None,
     finish_reasons: tuple | None = None,
-    request_stream: bool | None = None,
     stream_cursor: str | None = None,
     response_service_tier: str | None = None,
     server_address: str = "api.openai.com",
@@ -409,6 +499,7 @@ def assert_fetch_response_attributes(
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
     assert GenAIAttributes.GEN_AI_REQUEST_MODEL not in span.attributes
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in span.attributes
 
     _assert_optional_attribute(
         span, GenAIAttributes.GEN_AI_RESPONSE_MODEL, response_model
@@ -416,9 +507,6 @@ def assert_fetch_response_attributes(
     _assert_optional_attribute(span, GEN_AI_RESPONSE_STATUS, response_status)
     _assert_optional_attribute(
         span, GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons
-    )
-    _assert_optional_attribute(
-        span, GenAIAttributes.GEN_AI_REQUEST_STREAM, request_stream
     )
     _assert_optional_attribute(
         span, GEN_AI_REQUEST_STREAM_CURSOR, stream_cursor
@@ -459,6 +547,134 @@ def get_current_weather_tool_definition():
             },
         },
     }
+
+
+TOOL_CALL_ID = "call_90uO5LcGP5vTBTCrjyhYtWsA"
+TOOL_LOOP_PROMPT = "What's the weather in Seattle right now?"
+TOOL_LOOP_OUTPUT = '{"temperature": 14, "unit": "C", "conditions": "rain"}'
+
+
+def get_responses_tool_loop_input():
+    """The input a caller replays on the turn after a tool call.
+
+    Responses API input is a flat item list: the assistant's tool call and the
+    tool result are siblings of the user message, not nested inside it.
+    """
+    return [
+        {"role": "user", "content": TOOL_LOOP_PROMPT},
+        {
+            "type": "function_call",
+            "id": "fc_0bedf6e1ffba28050069e2f402203c8196b45065342d00ed17",
+            "call_id": TOOL_CALL_ID,
+            "name": "get_current_weather",
+            "arguments": '{"location":"Seattle, WA"}',
+            "status": "completed",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": TOOL_CALL_ID,
+            "output": TOOL_LOOP_OUTPUT,
+        },
+    ]
+
+
+EXPECTED_TOOL_LOOP_INPUT_MESSAGES = [
+    {
+        "role": "user",
+        "parts": [{"type": "text", "content": TOOL_LOOP_PROMPT}],
+        "name": None,
+    },
+    {
+        "role": "assistant",
+        "parts": [
+            {
+                "type": "tool_call",
+                "id": TOOL_CALL_ID,
+                "name": "get_current_weather",
+                "arguments": {"location": "Seattle, WA"},
+            }
+        ],
+        "name": None,
+    },
+    {
+        "role": "tool",
+        "parts": [
+            {
+                "type": "tool_call_response",
+                "id": TOOL_CALL_ID,
+                "response": TOOL_LOOP_OUTPUT,
+            }
+        ],
+        "name": None,
+    },
+]
+
+CUSTOM_TOOL_MODEL = "gpt-5-mini"
+CUSTOM_TOOL_CALL_ID = "call_d4JQwp4PqjmpNV4fiBLCvack"
+CUSTOM_TOOL_INPUT = "SELECT COUNT(*) AS count FROM users;\n"
+CUSTOM_TOOL_OUTPUT = "42 rows"
+
+
+def get_responses_custom_tool_definition():
+    return {
+        "type": "custom",
+        "name": "run_sql",
+        "description": "Run a read-only SQL query and return rows.",
+    }
+
+
+def get_responses_custom_tool_loop_input():
+    """The input a caller replays after a custom-tool call, as recorded."""
+    return [
+        {
+            "id": "rs_021487c99c6b4d6f006a9e6ccb6af887d0b12a2253b8e3e3f8",
+            "summary": [],
+            "type": "reasoning",
+            "content": [],
+            "encrypted_content": "gAAAAABqnmzMN9RqmH9jGxjmoJdoO3La",
+        },
+        {
+            "call_id": CUSTOM_TOOL_CALL_ID,
+            "input": CUSTOM_TOOL_INPUT,
+            "name": "run_sql",
+            "type": "custom_tool_call",
+            "id": "ctc_021487c99c6b4d6f006a9e6ccc0f2c87d09587d31dc59b609c",
+            "status": "completed",
+        },
+        {
+            "type": "custom_tool_call_output",
+            "call_id": CUSTOM_TOOL_CALL_ID,
+            "output": CUSTOM_TOOL_OUTPUT,
+        },
+    ]
+
+
+EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [
+    {
+        "role": "assistant",
+        "parts": [
+            {
+                "type": "tool_call",
+                "id": CUSTOM_TOOL_CALL_ID,
+                "name": "run_sql",
+                # Free-form text, so recorded verbatim rather than JSON-parsed.
+                "arguments": CUSTOM_TOOL_INPUT,
+            }
+        ],
+        "name": None,
+    },
+    {
+        "role": "tool",
+        "parts": [
+            {
+                "type": "tool_call_response",
+                "id": CUSTOM_TOOL_CALL_ID,
+                "response": CUSTOM_TOOL_OUTPUT,
+            }
+        ],
+        "name": None,
+    },
+]
 
 
 def get_responses_weather_tool_definition():
@@ -596,6 +812,27 @@ def assert_cache_attributes(span, usage, require_cache_read=False):
         )
 
 
+def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning_tokens = get_property_value(details, "reasoning_tokens")
+    if require_reasoning:
+        assert type(reasoning_tokens) is int
+        assert reasoning_tokens > 0
+
+    if not reasoning_tokens:
+        assert (
+            GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+            not in span.attributes
+        )
+    else:
+        emitted = span.attributes[
+            GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        ]
+        assert emitted == reasoning_tokens
+        if require_reasoning:
+            assert type(emitted) is int
+
+
 def assert_message_in_logs(log, event_name, expected_content, parent_span):
     assert log.log_record.event_name == event_name
     assert (
@@ -641,3 +878,30 @@ def assert_embedding_attributes(
         assert span.attributes["gen_ai.embeddings.dimension.count"] == len(
             response.data[0].embedding
         )
+
+
+def test_prepare_input_messages_reduces_tool_content_to_data():
+    """A tool result may hold SDK models, which the span serializer rejects."""
+    from pydantic import BaseModel
+
+    from opentelemetry.instrumentation.genai.openai.utils import (
+        _prepare_input_messages,
+    )
+    from opentelemetry.util.genai.utils import gen_ai_json_dumps
+
+    class Part(BaseModel):
+        text: str
+
+    (message,) = _prepare_input_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [Part(text="shipped")],
+            }
+        ]
+    )
+
+    (serialized,) = json.loads(gen_ai_json_dumps([asdict(message)]))
+    (item,) = serialized["parts"][0]["response"]
+    assert item["text"] == "shipped"

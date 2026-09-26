@@ -22,6 +22,8 @@ from opentelemetry.test_util_genai.conformance import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 
+from ..interactions.util import create_request_parameters
+
 
 class InferenceScenario(Scenario):
     expected_spans = {"interactions.create": 1}
@@ -55,9 +57,11 @@ class InferenceScenario(Scenario):
                 client = Client(
                     api_key="test_google_genai_api_key", vertexai=False
                 )
+                parameters, _ = create_request_parameters()
                 client.interactions.create(
                     model="gemini-2.5-flash",
                     input="Hello, how can you help me today?",
+                    **parameters,
                 )
 
     def validate(self, report: LiveCheckReport) -> None:
@@ -76,3 +80,14 @@ class InferenceScenario(Scenario):
             "['v1_ChdMaWM4YXF2ekNMQ1k5TW9QLUpHZ3dBYxIXTGljOGFxdnpDTENZOU1vUC1KR2d3QWM'] "
             f"but saw {response_ids}"
         )
+        attributes = {
+            attr["name"]: attr["value"]
+            for entry in report["samples"]
+            if "span" in entry
+            for attr in entry["span"]["attributes"]
+        }
+        _, expected_attributes = create_request_parameters()
+        for name, expected in expected_attributes.items():
+            actual = attributes[name]
+            assert actual == expected, name
+            assert type(actual) is type(expected), name

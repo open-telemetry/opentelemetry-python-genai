@@ -37,9 +37,11 @@
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 
-llama-index-core~=0.14.24
-llama-index-llms-openai
-wrapt==2.2.2
+llama-index-core~=0.14.25
+llama-index-workflows~=2.24.1
+llama-index-instrumentation~=0.6.0
+llama-index-llms-openai~=0.8.1
+wrapt==2.4.1
 -e instrumentation/opentelemetry-instrumentation-genai-openai
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 

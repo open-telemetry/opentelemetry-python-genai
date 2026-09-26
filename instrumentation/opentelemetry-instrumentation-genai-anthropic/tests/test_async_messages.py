@@ -44,6 +44,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
+from .conftest import (
+    assert_multimodal_input,
+    multimodal_input_message,
+)
+
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
@@ -81,6 +86,30 @@ def _load_span_messages(span, attribute):
     parsed = json.loads(value)
     assert isinstance(parsed, list)
     return parsed
+
+
+_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get weather by city",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+def _assert_weather_tool_definitions(span):
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather by city",
+            "parameters": _WEATHER_TOOL["input_schema"],
+        }
+    ]
 
 
 class _AsyncErrorInjectingStreamDelegate:
@@ -219,6 +248,27 @@ async def test_async_messages_create_captures_content(
     assert input_messages[0]["parts"][0]["type"] == "text"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"][0]["type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_captures_multimodal_content(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_async_messages_create_captures_multimodal_content.yaml"
+    ):
+        await async_anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
 
 
 @pytest.mark.asyncio
@@ -431,6 +481,31 @@ async def test_async_messages_create_streaming_captures_content(
 
 
 @pytest.mark.asyncio
+async def test_async_messages_create_streaming_captures_multimodal_content(
+    span_exporter,
+    async_anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_async_messages_create_streaming_captures_multimodal_content.yaml"
+    ):
+        stream = await async_anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+            stream=True,
+        )
+        async with stream:
+            async for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
+
+
+@pytest.mark.asyncio
 @pytest.mark.vcr()
 async def test_async_messages_create_streaming_iteration(
     span_exporter, async_anthropic_client, instrument_no_content
@@ -478,6 +553,35 @@ async def test_async_messages_create_streaming_delegates_response_attribute(
     assert stream.response.status_code == 200
     assert stream.response.headers.get("request-id") is not None
     await stream.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+async def test_async_messages_stream_records_tool_definitions(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """``stream`` builds its invocation lazily -- it must still see ``tools``.
+
+    Replays the plain ``test_async_messages_stream`` cassette: tool definitions
+    come from the request, so the recorded response does not matter.
+    """
+    async with async_anthropic_client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
 
 
 @pytest.mark.asyncio
@@ -739,17 +843,7 @@ async def test_async_messages_create_captures_tool_use_content(
         model=model,
         max_tokens=256,
         messages=messages,
-        tools=[
-            {
-                "name": "get_weather",
-                "description": "Get weather by city",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ],
+        tools=[_WEATHER_TOOL],
         tool_choice={"type": "tool", "name": "get_weather"},
     )
 
@@ -765,6 +859,86 @@ async def test_async_messages_create_captures_tool_use_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    _assert_weather_tool_definitions(span)
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_tools_generator_reaches_the_sdk(
+    span_exporter, instrument_with_content
+):
+    """Async counterpart: a one-shot ``tools`` iterator must reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    try:
+        await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[
+                {"role": "user", "content": "What is the weather in SF?"}
+            ],
+            tools=(tool for tool in [_WEATHER_TOOL]),
+        )
+    finally:
+        await client.close()
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_create_captures_tool_use_content")
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+async def test_async_messages_create_omits_tool_definitions_without_content(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """Tool definitions are content: they stay off when capture is off."""
+    await async_anthropic_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+        tool_choice={"type": "tool", "name": "get_weather"},
+    )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
 
 
 @pytest.mark.asyncio
@@ -2093,3 +2267,180 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
     assert first_stops == [True]
     assert second_stops == [True]
     assert http_response.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_text_stream_records_response(
+    span_exporter, async_anthropic_client, instrument_with_content
+):
+    """``stream.text_stream`` records the response the same as event iteration."""
+    model = "claude-haiku-4-5"
+
+    text = ""
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        async for chunk in stream.text_stream:
+            text += chunk
+
+    assert text == "Hello."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01N2EGWxw2zHUcjTjToMivN6"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "claude-haiku-4-5-20251001"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hello."}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_get_final_message_records_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """``get_final_message()`` drains the SDK's iterator and still records."""
+    model = "claude-haiku-4-5"
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        message = await stream.get_final_message()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == message.model
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS
+    ] == expected_input_tokens(message.usage)
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS]
+        == message.usage.output_tokens
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        normalize_stop_reason(message.stop_reason),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_get_final_text_records_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """``get_final_text()`` drains the SDK's iterator and still records."""
+    model = "claude-haiku-4-5"
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        text = await stream.get_final_text()
+
+    assert text == "Hello."
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01N2EGWxw2zHUcjTjToMivN6"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "claude-haiku-4-5-20251001"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_until_done_records_response(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """``until_done()`` drains the SDK's iterator and still records."""
+    model = "claude-haiku-4-5"
+
+    async with async_anthropic_client.messages.stream(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Say hello in one word."}],
+    ) as stream:
+        await stream.until_done()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
+        == "msg_01N2EGWxw2zHUcjTjToMivN6"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL]
+        == "claude-haiku-4-5-20251001"
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_text_stream_user_exception(
+    span_exporter, async_anthropic_client, instrument_no_content
+):
+    """A caller error while reading ``text_stream`` propagates and is recorded."""
+    model = "claude-haiku-4-5"
+
+    with pytest.raises(ValueError, match="caller failed"):
+        async with async_anthropic_client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+        ) as stream:
+            async for _ in stream.text_stream:
+                raise ValueError("caller failed")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
