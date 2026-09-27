@@ -396,6 +396,7 @@ def test_agent_named_runnable_is_an_agent() -> None:
     telemetry.invoke_local_agent.assert_called_once_with(
         agent_name="SupportAgentRunner",
         context=None,
+        conversation_id=None,
         _attach_to_context=True,
     )
 

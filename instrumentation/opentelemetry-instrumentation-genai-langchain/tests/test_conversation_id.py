@@ -6,7 +6,8 @@
 LangChain merges a run's config metadata into every descendant run, so each
 callback below the one the application configured receives the conversation
 key in its own ``metadata``. These tests build real multi-span trees the way
-LangChain delivers them and assert the resulting span attributes.
+LangChain delivers them and also omit selected child metadata to verify OTel
+context inheritance.
 
 semconv defines ``gen_ai.conversation.id`` on chat, invoke_agent, and
 invoke_workflow spans only, so execute_tool and retrieval spans must not carry
@@ -22,6 +23,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
+from opentelemetry.instrumentation.genai.langchain import agent_context
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
@@ -122,6 +124,24 @@ class TestWorkflowTree:
         assert spans["invoke_workflow"].attributes[_CONVERSATION_ID] == "t1"
         assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
 
+    def test_workflow_passes_id_to_child_through_context(self):
+        """A child that does not read LangChain metadata still inherits the id."""
+        handler, span_exporter = _make_handler()
+        workflow_run_id, chat_run_id = uuid4(), uuid4()
+
+        handler.on_chain_start(
+            serialized=_LANGGRAPH_SERIALIZED,
+            inputs={},
+            run_id=workflow_run_id,
+            parent_run_id=None,
+            metadata=dict(_MERGED),
+        )
+        _run_chat(handler, run_id=chat_run_id, parent_run_id=workflow_run_id)
+        handler.on_chain_end(outputs={}, run_id=workflow_run_id)
+
+        spans = _spans_by_operation(span_exporter)
+        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
+
 
 class TestAgentTree:
     def test_agent_and_nested_chat_both_carry_id(self):
@@ -140,6 +160,53 @@ class TestAgentTree:
             run_id=chat_run_id,
             parent_run_id=agent_run_id,
             metadata=dict(_MERGED),
+        )
+        handler.on_chain_end(outputs={}, run_id=agent_run_id)
+
+        spans = _spans_by_operation(span_exporter)
+        assert spans["invoke_agent"].attributes[_CONVERSATION_ID] == "t1"
+        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
+
+    def test_agent_passes_id_to_child_through_context(self):
+        """A child that does not read LangChain metadata still inherits the id."""
+        handler, span_exporter = _make_handler()
+        agent_run_id, chat_run_id = uuid4(), uuid4()
+
+        handler.on_chain_start(
+            serialized={"name": "math_agent"},
+            inputs={},
+            run_id=agent_run_id,
+            parent_run_id=None,
+            metadata={"agent_name": "math_agent", **_MERGED},
+        )
+        _run_chat(handler, run_id=chat_run_id, parent_run_id=agent_run_id)
+        handler.on_chain_end(outputs={}, run_id=agent_run_id)
+
+        spans = _spans_by_operation(span_exporter)
+        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
+
+    def test_unnamed_announced_agent_carries_id(self):
+        """An unnamed create_agent propagates its id through OTel context."""
+        handler, span_exporter = _make_handler()
+        agent_run_id, chat_run_id = uuid4(), uuid4()
+
+        token = agent_context._pending.set(
+            (agent_context._PendingAgent(name=None),)
+        )
+        try:
+            handler.on_chain_start(
+                serialized=_LANGGRAPH_SERIALIZED,
+                inputs={},
+                run_id=agent_run_id,
+                parent_run_id=None,
+                metadata=dict(_MERGED),
+            )
+        finally:
+            agent_context._pending.reset(token)
+        _run_chat(
+            handler,
+            run_id=chat_run_id,
+            parent_run_id=agent_run_id,
         )
         handler.on_chain_end(outputs={}, run_id=agent_run_id)
 
@@ -170,7 +237,6 @@ class TestAgentTree:
             handler,
             run_id=chat_run_id,
             parent_run_id=tool_run_id,
-            metadata=dict(_MERGED),
         )
         handler.on_tool_end(
             output=AIMessage(content="12"),
@@ -209,7 +275,6 @@ class TestAgentTree:
             handler,
             run_id=chat_run_id,
             parent_run_id=retriever_run_id,
-            metadata=dict(_MERGED),
         )
         handler.on_retriever_end(
             documents=[Document(page_content="12")],
