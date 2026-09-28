@@ -724,3 +724,91 @@ async def test_real_sdk_stream_normalization(
                         assert result.id == "test-id"
     assert len(requests) == 1
     assert _parameter_attributes(span_exporter) == {"gen_ai.request.seed": 0}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("shape", ["kwargs", "request-dict", "request-model"])
+@pytest.mark.asyncio
+async def test_previous_interaction_id(
+    instrumented: None,
+    sdk: _SDK,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+    streaming: bool,
+    shape: str,
+) -> None:
+    params = _request(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hello",
+            "previous_interaction_id": "v1_previous",
+            "stream": streaming,
+        },
+        shape,
+    )
+    client = Client(api_key="test-key", vertexai=False)
+    result = (
+        await client.aio.interactions.create(**params)
+        if asynchronous
+        else client.interactions.create(**params)
+    )
+    if streaming:
+        if asynchronous:
+            _ = [chunk async for chunk in result]
+        else:
+            _ = list(result)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes is not None
+    value = span.attributes["gen_ai.request.previous_response.id"]
+    assert value == "v1_previous"
+    assert type(value) is str
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_previous_interaction_id_on_agent_invocation(
+    instrumented: None,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+) -> None:
+    params = {
+        "agent": "deep-research",
+        "input": "hello",
+        "previous_interaction_id": "v1_previous",
+    }
+    client = Client(api_key="test-key", vertexai=False)
+    if asynchronous:
+        await client.aio.interactions.create(**params)
+    else:
+        client.interactions.create(**params)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert span.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert (
+        span.attributes["gen_ai.request.previous_response.id"] == "v1_previous"
+    )
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("value", [None, "", 123, ["v1_previous"]])
+@pytest.mark.asyncio
+async def test_absent_or_invalid_previous_interaction_id_is_not_recorded(
+    instrumented: None,
+    span_exporter: InMemorySpanExporter,
+    asynchronous: bool,
+    value: object,
+) -> None:
+    params = {
+        "model": "gemini-2.5-flash",
+        "input": "hello",
+        "previous_interaction_id": value,
+    }
+    client = Client(api_key="test-key", vertexai=False)
+    if asynchronous:
+        await client.aio.interactions.create(**params)
+    else:
+        client.interactions.create(**params)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert "gen_ai.request.previous_response.id" not in span.attributes
