@@ -813,7 +813,9 @@ def assert_cache_attributes(span, usage, require_cache_read=False):
 
 
 def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
-    details = getattr(usage, "completion_tokens_details", None)
+    details = getattr(usage, "output_tokens_details", None) or getattr(
+        usage, "completion_tokens_details", None
+    )
     reasoning_tokens = get_property_value(details, "reasoning_tokens")
     if require_reasoning:
         assert type(reasoning_tokens) is int
