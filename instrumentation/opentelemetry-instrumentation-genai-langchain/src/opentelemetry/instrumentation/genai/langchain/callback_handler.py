@@ -11,7 +11,7 @@ from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.outputs import (
     ChatGenerationChunk,
     GenerationChunk,
@@ -372,6 +372,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if (model := (metadata or {}).get(model_tag)) is not None:
                 request_model = str(model)
                 break
+            serialized_kwargs = serialized.get("kwargs") or {}
+            if (model := serialized_kwargs.get(model_tag)) is not None:
+                request_model = str(model)
+                break
 
         if request_model is None and metadata:
             if model := metadata.get("ls_model_name"):
@@ -464,6 +468,27 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             invocation=llm_invocation,
         )
 
+    def on_llm_start(
+        self,
+        serialized: dict[str, Any],
+        prompts: list[str],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.on_chat_model_start(
+            serialized,
+            [[HumanMessage(content=prompt)] for prompt in prompts],
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            **kwargs,
+        )
+
     def on_llm_new_token(
         self,
         token: str | list[str | dict[str, Any]],
@@ -506,8 +531,33 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         generation_response_id: str | None = None
         for generation in getattr(response, "generations", []):
             for chat_generation in generation:
-                message = chat_generation.message
+                generation_info = getattr(
+                    chat_generation, "generation_info", None
+                )
+                finish_reason = (
+                    generation_info.get("finish_reason")
+                    if generation_info is not None
+                    else None
+                )
+                message = getattr(chat_generation, "message", None)
                 if message is None:
+                    output_messages.append(
+                        OutputMessage(
+                            role=Role.ASSISTANT.value,
+                            parts=cast(
+                                list[MessagePart],
+                                [
+                                    TextPart(
+                                        content=chat_generation.text,
+                                        type="text",
+                                    )
+                                ],
+                            ),
+                            finish_reason=finish_reason,
+                        )
+                    )
+                    if finish_reason is not None:
+                        finish_reasons.append(finish_reason)
                     continue
 
                 if generation_model is None or generation_response_id is None:
@@ -522,13 +572,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 # Resolve finish_reason from generation_info or response
                 # metadata. Modern langchain-aws (>= 0.2) emits ``stop_reason``
                 # (snake_case); older versions used ``stopReason``.
-                finish_reason: str | None = None
-                generation_info = getattr(
-                    chat_generation, "generation_info", None
-                )
-                if generation_info is not None:
-                    finish_reason = generation_info.get("finish_reason")
-
                 if chat_generation.message:
                     # Responses API (RAPI) may include the served model in the
                     # response headers, which accurately returns the served
