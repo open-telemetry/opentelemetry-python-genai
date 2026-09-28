@@ -606,8 +606,12 @@ class TestOnLlmStart:
         )
         assert llm_invocation.conversation_id == "conversation-1"
         assert llm_invocation.input_messages == [
-            InputMessage(role="user", parts=[TextPart(content="First prompt")]),
-            InputMessage(role="user", parts=[TextPart(content="Second prompt")]),
+            InputMessage(
+                role="user", parts=[TextPart(content="First prompt")]
+            ),
+            InputMessage(
+                role="user", parts=[TextPart(content="Second prompt")]
+            ),
         ]
         assert llm_invocation.temperature == 0.25
         assert llm_invocation.max_tokens == 32
