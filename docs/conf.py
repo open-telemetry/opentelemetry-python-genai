@@ -114,6 +114,11 @@ autodoc_default_options = {
     "show-inheritance": True,
     "member-order": "bysource",
 }
+autodoc_type_aliases = {
+    # opentelemetry.util.types.AttributeValue in opentelemetry-api >= 1.45.0
+    # references AnyValue via a string forward ref (`Sequence["AnyValue"]`).
+    "AnyValue": "opentelemetry.util.types.AnyValue",
+}
 
 # -- Options for HTML output -------------------------------------------------
 
