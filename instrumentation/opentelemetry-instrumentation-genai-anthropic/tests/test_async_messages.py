@@ -52,6 +52,7 @@ from .conftest import (
 _create_params = set(inspect.signature(_AsyncMessages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
+# Pydantic 2 exposes model fields via model_fields; Pydantic 1 uses __fields__.
 _usage_fields = getattr(Usage, "model_fields", None)
 if _usage_fields is None:
     _usage_fields = getattr(Usage, "__fields__", {})
