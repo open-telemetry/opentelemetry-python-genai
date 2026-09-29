@@ -13,10 +13,19 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
+import builtins
 import os
 import sys
 from os import listdir
 from os.path import isdir, join
+
+import opentelemetry.util.types
+
+# opentelemetry-api >= 1.45 defines AttributeValue = AnyValue = ... | Sequence["AnyValue"] | Mapping[str, "AnyValue"].
+# When sphinx-autodoc-typehints evaluates type annotations in modules that import AttributeValue,
+# it looks up "AnyValue" in the module globals or builtins. Injecting AnyValue into builtins allows
+# forward reference evaluation to resolve cleanly across all documented modules.
+builtins.AnyValue = getattr(opentelemetry.util.types, "AnyValue", None)
 
 source_dirs = []
 
