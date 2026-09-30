@@ -1,0 +1,1 @@
+Add the `_execution_context()` hook on `SyncStreamWrapper`/`AsyncStreamWrapper` to scope each stream read and cleanup, including generator `send`/`throw` and `asend`/`athrow`.

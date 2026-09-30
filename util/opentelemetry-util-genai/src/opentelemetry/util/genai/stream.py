@@ -122,9 +122,10 @@ class SyncStreamWrapper(
 
     Subclass this when wrapping a provider SDK stream that is consumed with
     normal iteration. The subclass should pass the SDK stream to
-    ``super().__init__(stream)`` and implement the three telemetry hooks:
-    ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for successful
-    finalization, and ``_on_stream_error`` for failure finalization.
+    ``super().__init__(stream)`` and implement the four telemetry hooks:
+    ``_execution_context`` for the context active around each read and
+    cleanup, ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
+    successful finalization, and ``_on_stream_error`` for failure finalization.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -247,9 +248,10 @@ class AsyncStreamWrapper(
 
     Subclass this when wrapping a provider SDK stream that is consumed with
     async iteration. The subclass should pass the SDK stream to
-    ``super().__init__(stream)`` and implement the three telemetry hooks:
-    ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for successful
-    finalization, and ``_on_stream_error`` for failure finalization.
+    ``super().__init__(stream)`` and implement the four telemetry hooks:
+    ``_execution_context`` for the context active around each read and
+    cleanup, ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
+    successful finalization, and ``_on_stream_error`` for failure finalization.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
