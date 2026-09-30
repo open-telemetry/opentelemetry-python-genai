@@ -9,7 +9,7 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
-from inspect import signature
+from inspect import BoundArguments, Signature, signature
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -24,7 +24,13 @@ from opentelemetry.util.genai.stream import (
     SyncStreamWrapper,
 )
 
-__all__ = ["_astart_run", "_start_run", "_wrap_run", "_wrap_stream"]
+__all__ = [
+    "_astart_run",
+    "_start_run",
+    "_wrap_call",
+    "_wrap_run",
+    "_wrap_stream",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -154,6 +160,21 @@ class _AsyncContextStream(AsyncStreamWrapper[Any]):
         self._self_scope.finish(error)
 
 
+def _bind_config_run(
+    parameters: Signature,
+    invocations: _InvocationManager,
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[_RunScope, BoundArguments]:
+    bound = parameters.bind(instance, *args, **kwargs)
+    config = dict(bound.arguments.get("config") or {})
+    run_id = config.get("run_id") or uuid4()
+    config["run_id"] = run_id
+    bound.arguments["config"] = config
+    return _RunScope(run_id, invocations), bound
+
+
 def _wrap_stream(
     original: Callable[..., Any],
     invocations: _InvocationManager,
@@ -168,17 +189,50 @@ def _wrap_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        bound = parameters.bind(instance, *args, **kwargs)
-        config = dict(bound.arguments.get("config") or {})
-        run_id = config.get("run_id") or uuid4()
-        config["run_id"] = run_id
-        bound.arguments["config"] = config
+        scope, bound = _bind_config_run(
+            parameters, invocations, instance, args, kwargs
+        )
         stream = wrapped(*bound.args[1:], **bound.kwargs)
-        scope = _RunScope(run_id, invocations)
         cls = _AsyncContextStream if asynchronous else _SyncContextStream
         return cls(stream, scope)
 
     return wrapper
+
+
+def _wrap_call(
+    original: Callable[..., Any],
+    invocations: _InvocationManager,
+    asynchronous: bool,
+) -> Callable[..., Any]:
+    parameters = signature(original)
+
+    @wraps(original)
+    def sync(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        scope, bound = _bind_config_run(
+            parameters, invocations, instance, args, kwargs
+        )
+        with scope.activate():
+            return wrapped(*bound.args[1:], **bound.kwargs)
+
+    @wraps(original)
+    async def asynchronous_call(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        scope, bound = _bind_config_run(
+            parameters, invocations, instance, args, kwargs
+        )
+        with scope.activate():
+            return await wrapped(*bound.args[1:], **bound.kwargs)
+
+    return asynchronous_call if asynchronous else sync
 
 
 def _wrap_run(

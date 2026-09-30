@@ -624,6 +624,8 @@ def test_uninstrument_restores_execution_methods(
         (BaseRetriever, "ainvoke"),
         (BaseChatModel, "stream"),
         (BaseChatModel, "astream"),
+        (Runnable, "_call_with_config"),
+        (Runnable, "_acall_with_config"),
         (Runnable, "_transform_stream_with_config"),
         (Runnable, "_atransform_stream_with_config"),
         (CallbackManager, "on_chain_start"),

@@ -18,6 +18,7 @@ from opentelemetry.context import attach, detach
 from opentelemetry.instrumentation.genai.langchain._run_context import (
     _astart_run,
     _start_run,
+    _wrap_call,
     _wrap_run,
     _wrap_stream,
 )
@@ -39,8 +40,6 @@ _METHODS = (
         "BaseChatModel",
         "_agenerate_with_cache",
     ),
-    ("langchain_core.runnables.base", "RunnableLambda", "_invoke"),
-    ("langchain_core.runnables.base", "RunnableLambda", "_ainvoke"),
 )
 
 
@@ -159,6 +158,24 @@ class _ExecutionContext:
                     ),
                 )
                 self._patched.append((cls, method))
+
+        # These helpers start the chain run themselves, so the run id is chosen
+        # up front for _started to match.
+        cls = getattr(
+            import_module("langchain_core.runnables.base"), "Runnable"
+        )
+        for method, asynchronous in (
+            ("_call_with_config", False),
+            ("_acall_with_config", True),
+        ):
+            wrap_function_wrapper(
+                cls,
+                method,
+                _wrap_call(
+                    getattr(cls, method), self._invocations, asynchronous
+                ),
+            )
+            self._patched.append((cls, method))
 
         for class_name, wrapper in (
             ("CallbackManager", _start_run),

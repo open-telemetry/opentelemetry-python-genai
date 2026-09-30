@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langchain_core.tools import BaseTool
 
 from opentelemetry import context
@@ -211,4 +212,58 @@ async def test_custom_execution_task_cancellation(
         execution.attributes[error_attributes.ERROR_TYPE]
         == "asyncio.exceptions.CancelledError"
     )
+    _assert_no_runs()
+
+
+class _HttpRunnable(Runnable[str, str]):
+    """A Runnable built on the documented ``_call_with_config`` helpers."""
+
+    def __init__(self, clients: Any) -> None:
+        self._clients = clients
+
+    def invoke(
+        self, input: str, config: RunnableConfig | None = None, **kwargs: Any
+    ) -> str:
+        return self._call_with_config(self._call, input, config, **kwargs)
+
+    async def ainvoke(
+        self, input: str, config: RunnableConfig | None = None, **kwargs: Any
+    ) -> str:
+        return await self._acall_with_config(
+            self._acall, input, config, **kwargs
+        )
+
+    def _call(self, text: str) -> str:
+        self._clients.http.get("https://example.test/runnable")
+        return text
+
+    async def _acall(self, text: str) -> str:
+        await self._clients.ahttp.get("https://example.test/runnable")
+        return text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async", "stream", "astream"])
+async def test_custom_runnable_in_sequence_correlates_http(
+    clients: Any, span_exporter: Any, mode: str
+) -> None:
+    chain = _HttpRunnable(clients) | RunnableLambda(clients.infer)
+    before = context.get_current()
+    if mode == "sync":
+        result = chain.invoke("hello")
+    elif mode == "async":
+        result = await chain.ainvoke("hello")
+    elif mode == "stream":
+        result = "".join(chain.stream("hello"))
+    else:
+        result = "".join([chunk async for chunk in chain.astream("hello")])
+    assert result == "answer"
+    assert context.get_current() is before
+    (workflow,) = _spans(span_exporter, _LC_SCOPE)
+    assert workflow.name == "invoke_workflow RunnableSequence"
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    runnable_http, provider_http = _spans(span_exporter, _HTTP_SCOPE)
+    _child(runnable_http, workflow)
+    _child(inference, workflow)
+    _child(provider_http, inference)
     _assert_no_runs()
