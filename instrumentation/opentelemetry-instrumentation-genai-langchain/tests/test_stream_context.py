@@ -7,9 +7,10 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from types import AsyncGeneratorType, GeneratorType
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.runnables import RunnableGenerator, RunnableLambda
 from langchain_openai import ChatOpenAI
@@ -100,6 +101,53 @@ async def test_chat_stream_is_lazy_and_restores_consumer_context(
     _child(inference, model_span)
     _child(http, inference)
     assert consumer_http.parent == root.get_span_context()
+    _assert_no_runs()
+
+
+class _RunIdRecorder(BaseCallbackHandler):
+    def __init__(self) -> None:
+        self.run_ids: list[UUID] = []
+
+    def on_chat_model_start(
+        self, *args: Any, run_id: UUID, **kwargs: Any
+    ) -> None:
+        self.run_ids.append(run_id)
+
+    def on_chain_start(self, *args: Any, run_id: UUID, **kwargs: Any) -> None:
+        self.run_ids.append(run_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("kind", ["model", "lambda"])
+async def test_stream_reads_config_on_first_advancement(
+    clients, span_exporter, asynchronous: bool, kind: str
+) -> None:
+    runnable = (
+        _model(clients)
+        if kind == "model"
+        else RunnableLambda(lambda text: [text], afunc=None)
+    )
+    recorder = _RunIdRecorder()
+    config: dict[str, Any] = {"run_id": uuid4(), "callbacks": [recorder]}
+    stream = (
+        runnable.astream("hello", config=config)
+        if asynchronous
+        else runnable.stream("hello", config=config)
+    )
+    # Nothing ran yet, so a caller may still edit the config it passed.
+    assert clients.requests == []
+    late_run_id = uuid4()
+    config["run_id"] = late_run_id
+    if asynchronous:
+        assert [chunk async for chunk in stream]
+    else:
+        assert list(stream)
+    assert recorder.run_ids == [late_run_id]
+    (span,) = _spans(span_exporter, _LC_SCOPE)
+    assert span.name.startswith(
+        "chat " if kind == "model" else "invoke_workflow "
+    )
     _assert_no_runs()
 
 

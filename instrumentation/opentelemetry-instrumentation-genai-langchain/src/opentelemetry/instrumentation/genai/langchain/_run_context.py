@@ -4,12 +4,18 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterator,
+)
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
-from inspect import BoundArguments, Signature, signature
+from inspect import BoundArguments, signature
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -38,10 +44,11 @@ _logger = logging.getLogger(__name__)
 class _RunScope:
     def __init__(
         self,
-        run_id: UUID,
+        run_id: UUID | None,
         invocations: _InvocationManager,
         on_error: Callable[..., None] | None = None,
     ) -> None:
+        # None until a deferred stream chooses its run id on the first read.
         self.run_id = run_id
         self.invocations = invocations
         self.context: Context | None = None
@@ -57,6 +64,8 @@ class _RunScope:
             yield
 
     def finish(self, error: BaseException | None = None) -> None:
+        if self.run_id is None:
+            return
         invocation = self.invocations.get_invocation(self.run_id)
         try:
             if invocation is not None:
@@ -162,19 +171,29 @@ class _AsyncContextStream(AsyncStreamWrapper[Any]):
         self._self_scope.finish(error)
 
 
-def _bind_config_run(
-    parameters: Signature,
-    invocations: _InvocationManager,
-    instance: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> tuple[_RunScope, BoundArguments]:
-    bound = parameters.bind(instance, *args, **kwargs)
+def _config_run(bound: BoundArguments, scope: _RunScope) -> BoundArguments:
     config = dict(bound.arguments.get("config") or {})
-    run_id = config.get("run_id") or uuid4()
-    config["run_id"] = run_id
+    scope.run_id = config.get("run_id") or uuid4()
+    config["run_id"] = scope.run_id
     bound.arguments["config"] = config
-    return _RunScope(run_id, invocations), bound
+    return bound
+
+
+def _deferred(start: Callable[[], Iterator[Any]]) -> Generator[Any, Any, None]:
+    yield from start()
+
+
+async def _adeferred(
+    start: Callable[[], AsyncIterator[Any]],
+) -> AsyncGenerator[Any, None]:
+    stream = start()
+    try:
+        async for chunk in stream:
+            yield chunk
+    finally:
+        close = getattr(stream, "aclose", None)
+        if close is not None:
+            await close()
 
 
 def _wrap_stream(
@@ -191,12 +210,22 @@ def _wrap_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        scope, bound = _bind_config_run(
-            parameters, invocations, instance, args, kwargs
-        )
-        stream = wrapped(*bound.args[1:], **bound.kwargs)
-        cls = _AsyncContextStream if asynchronous else _SyncContextStream
-        return cls(stream, scope)
+        scope = _RunScope(None, invocations)
+        bound = parameters.bind(instance, *args, **kwargs)
+
+        def start() -> Any:
+            # A generator reads its config on the first advancement; keep
+            # that so the caller may still edit the config until then.
+            _config_run(bound, scope)
+            return wrapped(*bound.args[1:], **bound.kwargs)
+
+        stream: Any = _adeferred(start) if asynchronous else _deferred(start)
+        # Keep the SDK's name on the generator the caller sees.
+        stream.__qualname__ = original.__qualname__
+        stream.__name__ = original.__name__
+        if asynchronous:
+            return _AsyncContextStream(stream, scope)
+        return _SyncContextStream(stream, scope)
 
     return wrapper
 
@@ -215,9 +244,8 @@ def _wrap_call(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        scope, bound = _bind_config_run(
-            parameters, invocations, instance, args, kwargs
-        )
+        scope = _RunScope(None, invocations)
+        bound = _config_run(parameters.bind(instance, *args, **kwargs), scope)
         with scope.activate():
             return wrapped(*bound.args[1:], **bound.kwargs)
 
@@ -228,9 +256,8 @@ def _wrap_call(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        scope, bound = _bind_config_run(
-            parameters, invocations, instance, args, kwargs
-        )
+        scope = _RunScope(None, invocations)
+        bound = _config_run(parameters.bind(instance, *args, **kwargs), scope)
         with scope.activate():
             return await wrapped(*bound.args[1:], **bound.kwargs)
 
