@@ -163,12 +163,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         self,
         telemetry_handler: TelemetryHandler,
         *,
-        _attach_to_context: bool = True,
         invocation_manager: _InvocationManager | None = None,
     ) -> None:
         super().__init__()
         self._telemetry_handler = telemetry_handler
-        self._attach_to_context = _attach_to_context
         self._invocation_manager = (
             invocation_manager
             if invocation_manager is not None
@@ -218,7 +216,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 name=workflow_name_override or workflow_name,
                 context=parent_context,
                 conversation_id=conversation_id,
-                _attach_to_context=self._attach_to_context,
+                _attach_to_context=False,
             )
             if capture_content:
                 workflow.input_messages = make_input_message(inputs)
@@ -252,7 +250,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent_name=suggested_agent_name,
                         context=parent_context,
                         conversation_id=conversation_id,
-                        _attach_to_context=self._attach_to_context,
+                        _attach_to_context=False,
                     )
                     if capture_content:
                         agent.input_messages = make_input_message(inputs)
@@ -278,7 +276,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     agent_name=None,
                     context=parent_context,
                     conversation_id=conversation_id,
-                    _attach_to_context=self._attach_to_context,
+                    _attach_to_context=False,
                 )
                 agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
@@ -439,7 +437,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             request_model=request_model,
             context=parent_context,
             conversation_id=_conversation_id(metadata),
-            _attach_to_context=self._attach_to_context,
+            _attach_to_context=False,
         )
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
@@ -726,7 +724,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             tool_type="function",
             agent_name=agent_name,
             context=parent_context,
-            _attach_to_context=self._attach_to_context,
+            _attach_to_context=False,
         )
         tool_invocation.tool_description = description
         tool_invocation.arguments = arguments
@@ -790,7 +788,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             provider=provider,
             request_model=request_model,
             context=parent_context,
-            _attach_to_context=self._attach_to_context,
+            _attach_to_context=False,
         )
         retrieval.query_text = query
         self._invocation_manager.add_invocation_state(
