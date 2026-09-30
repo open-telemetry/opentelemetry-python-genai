@@ -207,6 +207,57 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(spans[0].status.status_code, StatusCode.ERROR)
 
+    def test_workflow_with_explicit_context(self) -> None:
+        parent_inv = self.handler.workflow("parent")
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.handler.workflow(
+                "child", context=parent_inv.context
+            )
+            child_inv.stop()
+
+        spans = self._get_finished_spans()
+        child_span = next(
+            s for s in spans if s.name == "invoke_workflow child"
+        )
+        parent_span = next(
+            s for s in spans if s.name == "invoke_workflow parent"
+        )
+        self.assertEqual(
+            child_span.parent.span_id, parent_span.context.span_id
+        )
+        self.assertNotEqual(
+            child_span.parent.span_id, ambient_span.get_span_context().span_id
+        )
+        self.assertEqual(
+            child_span.context.trace_id, parent_span.context.trace_id
+        )
+
+    def test_finish_in_different_async_context_with_attach_to_context_false(
+        self,
+    ) -> None:
+        import asyncio
+        import logging
+
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.handler.workflow("async_wf", _attach_to_context=False)
+            self.assertEqual(get_current_span(), ambient_span)
+
+            async def _finish_in_other_task():
+                inv.stop()
+
+            with patch.object(
+                logging.getLogger("opentelemetry.context"), "exception"
+            ) as mock_logger_exc:
+                asyncio.run(_finish_in_other_task())
+                mock_logger_exc.assert_not_called()
+
+            self.assertEqual(get_current_span(), ambient_span)
+
 
 class TelemetryHandlerWorkflowContextManagerTest(_WorkflowTestBase):
     # ------------------------------------------------------------------

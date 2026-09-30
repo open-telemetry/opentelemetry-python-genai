@@ -17,6 +17,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     ReasoningPart,
     Role,
@@ -145,7 +146,7 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         return BlobPart(
             content=content_bytes,
             mime_type=f"image/{fmt}",
-            modality="image",
+            modality=Modality.IMAGE,
         )
     if block_type == "image":
         source = block.get("source")
@@ -157,13 +158,13 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
                     return BlobPart(
                         content=decoded,
                         mime_type=media_type,
-                        modality="image",
+                        modality=Modality.IMAGE,
                     )
             elif "bytes" in source:
                 return BlobPart(
                     content=source.get("bytes", b""),
                     mime_type=source.get("media_type", "image/jpeg"),
-                    modality="image",
+                    modality=Modality.IMAGE,
                 )
 
     # 4. Document block
@@ -176,7 +177,7 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         return BlobPart(
             content=content_bytes,
             mime_type=mime_type,
-            modality="document",
+            modality=Modality.DOCUMENT,
         )
     if block_type == "document":
         source = block.get("source")
@@ -188,13 +189,13 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
                     return BlobPart(
                         content=decoded,
                         mime_type=media_type,
-                        modality="document",
+                        modality=Modality.DOCUMENT,
                     )
             elif "bytes" in source:
                 return BlobPart(
                     content=source.get("bytes", b""),
                     mime_type=source.get("media_type", "application/pdf"),
-                    modality="document",
+                    modality=Modality.DOCUMENT,
                 )
 
     # 5. Tool use (Converse toolUse or Anthropic tool_use)

@@ -45,9 +45,15 @@ class _Span:
 class _Trace:
     """Minimal stand-in for agents-library Trace."""
 
-    def __init__(self, trace_id: str, name: str) -> None:
+    def __init__(
+        self,
+        trace_id: str,
+        name: str,
+        group_id: str | None = None,
+    ) -> None:
         self.trace_id = trace_id
         self.name = name
+        self.group_id = group_id
 
 
 def _build_handler() -> MagicMock:
@@ -61,7 +67,9 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
     trace = _Trace("trace-1", "Agent workflow")
 
     processor.on_trace_start(trace)
-    handler.workflow.assert_called_once_with(name="Agent workflow")
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", conversation_id=None
+    )
     workflow_invocation = handler.workflow.return_value
     assert (
         workflow_invocation.attributes["gen_ai.workflow.name"]
@@ -70,6 +78,19 @@ def test_trace_start_end_creates_and_stops_workflow() -> None:
 
     processor.on_trace_end(trace)
     workflow_invocation.stop.assert_called_once_with()
+
+
+def test_trace_group_id_is_passed_as_conversation_id() -> None:
+    handler = _build_handler()
+    handler.workflow.return_value = MagicMock(attributes={})
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow", group_id="chat-thread-42")
+
+    processor.on_trace_start(trace)
+
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", conversation_id="chat-thread-42"
+    )
 
 
 def test_agent_span_creates_invoke_local_agent() -> None:
@@ -121,10 +142,14 @@ def test_function_span_creates_tool_invocation() -> None:
 
 def test_function_span_skips_content_when_capture_disabled() -> None:
     handler = _build_handler()
+    original_arguments = object()
+    original_result = object()
     handler.tool.return_value = MagicMock(
         spec=ToolInvocation,
         metric_attributes={},
         should_capture_content=False,
+        arguments=original_arguments,
+        tool_result=original_result,
     )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(FunctionSpanData(name="get_weather", input=None, output=None))
@@ -135,12 +160,8 @@ def test_function_span_skips_content_when_capture_disabled() -> None:
     processor.on_span_end(span)
 
     tool_invocation = handler.tool.return_value
-    # A spec'd mock rejects reads of attributes nothing assigned, so these
-    # assert the processor skipped the serialization work entirely.
-    with pytest.raises(AttributeError):
-        _ = tool_invocation.arguments
-    with pytest.raises(AttributeError):
-        _ = tool_invocation.tool_result
+    assert tool_invocation.arguments is original_arguments
+    assert tool_invocation.tool_result is original_result
     tool_invocation.stop.assert_called_once_with()
 
 

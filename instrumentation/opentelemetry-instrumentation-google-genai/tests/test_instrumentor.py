@@ -35,6 +35,8 @@ def test_co_filename_on_wrapped_functions(
         wrapped_functions += [
             InteractionsResource.create,
             AsyncInteractionsResource.create,
+            InteractionsResource.get,
+            AsyncInteractionsResource.get,
         ]
 
     with instrument(

@@ -250,8 +250,7 @@ def test_content_not_captured_by_default(
     attributes = span_exporter.get_finished_spans()[0].attributes
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attributes
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
-    # Tool definitions are not message content and are always recorded.
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS in attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in attributes
 
 
 def test_explicit_empty_tools_omits_tool_definitions(

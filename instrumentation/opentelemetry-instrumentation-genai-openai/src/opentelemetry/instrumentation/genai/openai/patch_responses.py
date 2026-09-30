@@ -11,6 +11,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import FetchResponseInvocation
+from opentelemetry.util.genai.utils import get_argument
 
 from ._raw_response import wrap_stream_result
 from .response_extractors import (
@@ -191,10 +192,12 @@ def async_responses_create(
 
 
 def _get_retrieve_response_id(
-    args: tuple[Any, ...], kwargs: dict[str, Any]
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> str | None:
     """Return the ``response_id`` a ``responses.retrieve`` call was made with."""
-    response_id = args[0] if args else kwargs.get("response_id")
+    response_id = get_argument("response_id", wrapped, args, kwargs)
     return response_id if isinstance(response_id, str) else None
 
 
@@ -252,7 +255,7 @@ def responses_retrieve(
         ResponseStreamResult,
         FetchResponseStreamWrapper[Any],
     ]:
-        response_id = _get_retrieve_response_id(args, kwargs)
+        response_id = _get_retrieve_response_id(wrapped, args, kwargs)
         if response_id is None:
             # gen_ai.response.id is required on a fetch_response span and the
             # SDK rejects the call without it, so leave it untraced.
@@ -325,7 +328,7 @@ def async_responses_retrieve(
         AsyncResponseStreamResult,
         AsyncFetchResponseStreamWrapper[Any],
     ]:
-        response_id = _get_retrieve_response_id(args, kwargs)
+        response_id = _get_retrieve_response_id(wrapped, args, kwargs)
         if response_id is None:
             # gen_ai.response.id is required on a fetch_response span and the
             # SDK rejects the call without it, so leave it untraced.

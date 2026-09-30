@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
@@ -19,6 +19,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     Role,
     Text,
@@ -376,11 +377,75 @@ def set_response_properties(
                 cast(Iterable[Any], choices)
             )
 
-    usage = get_property_value(result, "usage")
-    if usage is not None:
-        prompt_tokens = get_property_value(usage, "prompt_tokens")
-        if prompt_tokens is not None:
-            invocation.input_tokens = int(prompt_tokens)
-        completion_tokens = get_property_value(usage, "completion_tokens")
-        if completion_tokens is not None:
-            invocation.output_tokens = int(completion_tokens)
+    set_usage_properties(invocation, get_property_value(result, "usage"))
+
+
+def _get_token_count(usage: object, name: str) -> int | None:
+    value = get_property_value(usage, name)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _modality_tokens(
+    details: object, previous: tuple[tuple[Modality, int | None], ...]
+) -> Iterator[tuple[Modality, int | None]]:
+    for modality, previous_count in previous:
+        count = _get_token_count(details, f"{modality.value}_tokens")
+        yield modality, previous_count if count is None else count
+
+
+def set_usage_properties(
+    invocation: InferenceInvocation, usage: object
+) -> None:
+    """Apply a usage snapshot without clearing counts omitted by later chunks."""
+    if usage is None:
+        return
+
+    prompt_tokens = _get_token_count(usage, "prompt_tokens")
+    if prompt_tokens is not None:
+        invocation.input_tokens = prompt_tokens
+    completion_tokens = _get_token_count(usage, "completion_tokens")
+    if completion_tokens is not None:
+        invocation.output_tokens = completion_tokens
+
+    input_details = get_property_value(usage, "prompt_tokens_details")
+    output_details = get_property_value(usage, "completion_tokens_details")
+    reasoning_tokens = _get_token_count(output_details, "reasoning_tokens")
+    if reasoning_tokens is not None:
+        invocation.thinking_tokens = reasoning_tokens
+
+    cache_write = _get_token_count(input_details, "cache_write_tokens")
+    if cache_write is None:
+        cache_write = _get_token_count(usage, "cache_creation_input_tokens")
+    if cache_write is not None:
+        invocation.cache_write_input_tokens = cache_write
+
+    cache_read = _get_token_count(input_details, "cached_tokens")
+    if cache_read is None:
+        cache_read = _get_token_count(usage, "cache_read_input_tokens")
+    if cache_read is not None:
+        invocation.cache_read_input_tokens = cache_read
+
+    if input_details is not None:
+        invocation.set_input_tokens(
+            _modality_tokens(
+                input_details,
+                (
+                    (Modality.TEXT, invocation.text_input_tokens),
+                    (Modality.IMAGE, invocation.image_input_tokens),
+                    (Modality.AUDIO, invocation.audio_input_tokens),
+                ),
+            )
+        )
+    if output_details is not None:
+        invocation.set_output_tokens(
+            _modality_tokens(
+                output_details,
+                (
+                    (Modality.TEXT, invocation.text_output_tokens),
+                    (Modality.IMAGE, invocation.image_output_tokens),
+                    (Modality.AUDIO, invocation.audio_output_tokens),
+                ),
+            )
+        )

@@ -77,6 +77,34 @@ def test_agent_run_stream_spans(
     )
     assert output_messages is not None
     assert "chunk 1 chunk 2" in output_messages
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "mock-model"
+    )
+
+
+def test_agent_run_stream_does_not_extract_model_from_chunk(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that model from stream chunks is not used as a fallback."""
+    from agno.agent import RunOutput
+
+    agent = Agent(name="test-stream-model-agent", model=MockModel(id=None))
+
+    def fake_stream(*args, **kwargs):
+        yield RunOutput(content="chunk 1", model="streamed-chunk-model")
+        yield RunOutput(content="chunk 2", model="streamed-chunk-model")
+
+    with _patch_agent_stream(fake_stream):
+        stream = agent.run("hello stream", stream=True)
+        chunks = list(stream)
+        assert len(chunks) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_REQUEST_MODEL not in span.attributes
 
 
 def test_agent_run_stream_content_capture_disabled(

@@ -21,6 +21,8 @@ Please treat the telemetry produced by these methods as experimental.
 The ``interactions`` API currently does not support automatic function calling, so no ``execute_tool`` spans
 are generated.
 
+``interactions.get`` emits a ``fetch_response`` span. A fetch performs no inference, so the token
+counts carried by the fetched interaction describe its original generation and are not recorded.
 
 Installation
 ------------
@@ -46,7 +48,7 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content`` and ``interactions.create`` operations.
+When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create`` and ``interactions.get`` operations.
 You can also optionally capture prompts and responses as log events.
 
 Make sure to configure OpenTelemetry tracing, logging, and metrics to capture all telemetry emitted by the instrumentation.
@@ -114,6 +116,7 @@ captured using the following environment variables:
 
 If both variables are set, the includes list is applied first, then the
 excludes list filters the result further.
+
 
 Uninstrument
 ************

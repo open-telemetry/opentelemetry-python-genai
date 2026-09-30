@@ -27,6 +27,7 @@ from opentelemetry.util.genai.types import (
     FilePart,
     GenericPart,
     MessagePart,
+    Modality,
     ReasoningPart,
     ServerToolCallPart,
     ServerToolCallResponsePart,
@@ -104,7 +105,9 @@ def normalize_finish_reason(stop_reason: str | None) -> str | None:
     return normalized or stop_reason
 
 
-def _extract_base64_blob(source: object, modality: str) -> MessagePart | None:
+def _extract_base64_blob(
+    source: object, modality: Modality | str
+) -> MessagePart | None:
     """Convert an Anthropic base64 source to a GenAI message part.
 
     String data becomes a ``BlobPart``; file-backed data is represented as a
@@ -136,18 +139,18 @@ def _extract_image_source(source: object) -> MessagePart | None:
     source_dict = cast(dict[str, object], source)
     source_type = source_dict.get("type")
     if source_type == "base64":
-        return _extract_base64_blob(source_dict, "image")
+        return _extract_base64_blob(source_dict, Modality.IMAGE)
     if source_type == "url":
         url = source_dict.get("url")
         if isinstance(url, str) and url:
             return image_from_url(url)
     if source_type == "file":
-        return _extract_file_source(source_dict, "image")
+        return _extract_file_source(source_dict, Modality.IMAGE)
     return None
 
 
 def _extract_file_source(
-    source: Mapping[str, object], modality: str
+    source: Mapping[str, object], modality: Modality | str
 ) -> FilePart | None:
     file_id = source.get("file_id")
     if not isinstance(file_id, str) or not file_id:
@@ -162,7 +165,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
     source_dict = cast(dict[str, object], source)
     source_type = source_dict.get("type")
     if source_type == "base64":
-        part = _extract_base64_blob(source_dict, "document")
+        part = _extract_base64_blob(source_dict, Modality.DOCUMENT)
         return [part] if part is not None else []
     if source_type == "url":
         url = source_dict.get("url")
@@ -173,7 +176,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
                     mime_type=media_type
                     if isinstance(media_type, str)
                     else None,
-                    modality="document",
+                    modality=Modality.DOCUMENT,
                     uri=url,
                 )
             ]
@@ -187,7 +190,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
                     mime_type=media_type
                     if isinstance(media_type, str)
                     else "text/plain",
-                    modality="document",
+                    modality=Modality.DOCUMENT,
                     content=data.encode(),
                 )
             ]
@@ -203,7 +206,7 @@ def _extract_document_source(source: object) -> list[MessagePart]:
                 cast("Iterable[ContentBlock | ContentBlockParam]", content)
             )
     if source_type == "file":
-        part = _extract_file_source(source_dict, "document")
+        part = _extract_file_source(source_dict, Modality.DOCUMENT)
         return [part] if part is not None else []
     return []
 

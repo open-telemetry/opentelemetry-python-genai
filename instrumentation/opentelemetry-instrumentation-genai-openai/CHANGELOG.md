@@ -15,6 +15,70 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.2b0 (2026-09-24)
+
+### Added
+
+- Capture OpenAI multimodal image content (`image_url` and Responses API
+  `input_image`) as `BlobPart`, `UriPart`, or `FilePart` message parts.
+  ([#540](https://github.com/open-telemetry/opentelemetry-python-genai/pull/540))
+- Record `cache_write_input_tokens` from response usage.
+  ([#613](https://github.com/open-telemetry/opentelemetry-python-genai/pull/613))
+- Capture cached prompt tokens - `gen_ai.usage.cache_read.input_tokens` on chat
+  completions
+  ([#662](https://github.com/open-telemetry/opentelemetry-python-genai/pull/662))
+- Capture reasoning tokens - `gen_ai.usage.reasoning.output_tokens` on chat
+  completions
+  ([#680](https://github.com/open-telemetry/opentelemetry-python-genai/pull/680))
+
+### Changed
+
+- Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
+  ([#365](https://github.com/open-telemetry/opentelemetry-python-genai/pull/365))
+- Tool definitions are not emitted when content capture is disabled
+  ([#377](https://github.com/open-telemetry/opentelemetry-python-genai/pull/377))
+- Populate name attribute on captured input messages when available.
+  ([#611](https://github.com/open-telemetry/opentelemetry-python-genai/pull/611))
+
+### Fixed
+
+- Capture the remaining OpenAI content parts: ``input_audio`` as an audio blob,
+  ``file``/``input_file`` as a document reference or blob, and ``refusal`` as
+  text; record a completion refusal in ``gen_ai.output.messages``.
+  ([#358](https://github.com/open-telemetry/opentelemetry-python-genai/pull/358))
+- Stop consuming generator message ``content`` while capturing input messages,
+  which left the wrapped request with no content at all. Capture a ``file``
+  part's inline base64 ``file_data`` and take its media type from ``filename``.
+  ([#522](https://github.com/open-telemetry/opentelemetry-python-genai/pull/522))
+- Record response telemetry for ``with_streaming_response`` calls on the async
+  client, whose ``parse()`` returns a coroutine, and end the span for a parsed
+  stream the caller abandons.
+  ([#610](https://github.com/open-telemetry/opentelemetry-python-genai/pull/610))
+- Record `gen_ai.tool.definitions` on Responses API `create` and `stream`
+  spans.
+  ([#625](https://github.com/open-telemetry/opentelemetry-python-genai/pull/625))
+- Record `gen_ai.conversation.id` from the Responses API `conversation` request
+  parameter.
+  ([#631](https://github.com/open-telemetry/opentelemetry-python-genai/pull/631))
+- Emit telemetry under the `opentelemetry.instrumentation.genai.openai`
+  instrumentation scope instead of `opentelemetry.util.genai.handler`
+  ([#632](https://github.com/open-telemetry/opentelemetry-python-genai/pull/632))
+- Record `function_call`, `custom_tool_call` and their output items on
+  Responses API spans, so a turn that follows a tool call keeps its tool-loop
+  history in `gen_ai.input.messages`.
+  ([#650](https://github.com/open-telemetry/opentelemetry-python-genai/pull/650))
+- Record failed OpenAI invocations when cancellation raises a `BaseException`.
+  ([#656](https://github.com/open-telemetry/opentelemetry-python-genai/pull/656))
+- Capture provider-executed Responses API tools in output messages.
+  ([#700](https://github.com/open-telemetry/opentelemetry-python-genai/pull/700))
+- Do not record `gen_ai.embeddings.dimension.count` on metrics.
+  ([#708](https://github.com/open-telemetry/opentelemetry-python-genai/pull/708))
+- Do not record `gen_ai.request.stream` on `fetch_response` spans.
+  ([#709](https://github.com/open-telemetry/opentelemetry-python-genai/pull/709))
+- Keep the ``gen_ai.conversation.id`` inherited from an enclosing agent
+  framework when a Responses request carries no ``conversation`` parameter
+  ([#726](https://github.com/open-telemetry/opentelemetry-python-genai/pull/726))
+
 ## Version 1.1b0 (2026-08-20)
 
 ### Added

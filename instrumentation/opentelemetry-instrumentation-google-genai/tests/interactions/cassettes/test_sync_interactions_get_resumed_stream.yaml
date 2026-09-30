@@ -1,0 +1,225 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": "Write a short guide on space exploration.",
+        "model": "gemini-3.8-flash",
+        "background": true
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '98'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.23.0 gl-python/3.14.2
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |-
+        {
+          "id": "v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs",
+          "status": "in_progress",
+          "created": "2026-09-20T19:14:48Z",
+          "updated": "2026-09-20T19:14:48Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-3.8-flash"
+        }
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '244'
+      content-type:
+      - application/json
+      date:
+      - Sun, 20 Sep 2026 19:14:48 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=604
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: ''
+    headers:
+      accept:
+      - text/event-stream
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.23.0 gl-python/3.14.2
+    method: GET
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions/v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs?stream=true
+  response:
+    body:
+      string: |+
+        event: interaction.created
+        data: {"interaction":{"id":"v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs","status":"in_progress","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.created"}
+
+        event: interaction.status_update
+        data: {"interaction_id":"v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs","status":"in_progress","event_type":"interaction.status_update"}
+
+        event: step.start
+        data: {"index":0,"step":{"type":"thought"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":0,"delta":{"signature":"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","type":"thought_signature"},"event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":0,"event_type":"step.stop"}
+
+        event: step.start
+        data: {"index":1,"step":{"type":"model_output"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"text":"# The Pocket Guide to Space Exploration: Past, Present, and Future\n\nSpace exploration is humanity’s quest to discover the secrets of the cosmos, push the boundaries of technology, and answer the ultimate question: *Are we alone?* \n\nHere is a short guide to how we got here, what’s happening today, and where we are heading next.\n\n---\n\n## 1. How It Started: The Space Race (1950s–1970s)\nModern space exploration began as a geopolitical rivalry between the United States and the Soviet Union during the Cold War. \n\n* **1957 (Sputnik 1):** The Soviet Union launched the first artificial satellite, kicking off the Space Age.\n* **1961 (Yuri Gagarin):** The Soviet cosmonaut became the first human to orbit Earth.\n* **1969 (Apollo 11):** NASA landed the first humans—Neil Armstrong and Buzz Aldrin—on the Moon, fulfilling President John F. Kennedy's ambitious challenge.\n\n---\n\n## 2. Where We Are Now: Robots, Telescopes, and Commercial Space\nToday, exploration is less about national prestige and more about science, international cooperation, and private enterprise.\n\n* **Living in Space:** The **International Space Station (ISS)** has been continuously occupied by humans since 2000, serving as a laboratory for biology, physics, and medicine.\n* **Robotic Precursors:** Before humans go, machines lead the way. Rovers like NASA’s *Perseverance* are currently searching for signs of ancient life on Mars, while probes have visited every planet in the solar system.\n* **Eyes on the Deep Cosmos:** Space telescopes like **Hubble** and the **James Webb Space Telescope (JWST)** look back billions of years into the universe's past, imaging the birth of the earliest stars and analyzing the atmospheres of distant exoplanets.\n* **The Commercial Boom:** Private companies—most notably SpaceX—have revolutionized the industry with reusable rockets, significantly lowering the cost of reaching orbit.\n\n---\n\n## 3. The Next Frontiers: What Lies Ahead\nHumanity is on the brink of becoming a multi-planetary species. The main goals for the next few decades include:\n\n* **Returning to the Moon (NASA’s Artemis Program):** Rather than short visits, the goal is to build a permanent, sustainable base on the lunar south pole to test systems for deep-space survival.\n* **Human Missions to Mars:** Targeted for the late 2030s or 2040s, a round-trip human mission to the Red Planet will test human endurance, requiring roughly 6 to 9 months of travel each way.\n* **Searching for Alien Life:** Upcoming missions will target the icy moons of Jupiter (Europa) and Saturn (Enceladus), which harbor liquid oceans beneath their surfaces and could support microbial life.\n* **Space Mining:** Harvesting resources—like water from the Moon for rocket fuel or rare metals from asteroids—could support an off-Earth economy.\n\n---\n\n## 4. Why It Matters\nA common critique is: *Why spend money in space when we have problems on Earth?* The answers are practical:\n\n1. **Everyday Tech:** Space research gave us GPS, scratch-resistant lenses, advanced water purification, smoke detectors, and modern solar panels.\n2. **Protecting Earth:** Studying other planets (like the runaway greenhouse effect on Venus) helps us understand our own climate. Furthermore, space programs monitor near-Earth asteroids that could pose an impact hazard.\n3. **The \"Overview Effect\":** Astronauts frequently report that seeing Earth from space—a fragile blue marble without borders—inspires a deep commitment to protecting our home planet.\n\n---\n\n## Final Thought\nSpace exploration is still in its infancy. In the grand timeline of human history, we have only just stepped out onto the cosmic porch. The rest of the universe is still waiting to be explored.","type":"text"},"event_id":"v1_MV90ZXh0XzM5","event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":1,"event_type":"step.stop"}
+
+        event: interaction.completed
+        data: {"interaction":{"id":"v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs","status":"completed","usage":{"total_tokens":1657,"total_input_tokens":9,"input_tokens_by_modality":[{"modality":"text","tokens":9}],"total_cached_tokens":0,"total_output_tokens":840,"total_tool_use_tokens":0,"total_thought_tokens":808,"raw_prompt_token":40,"model_invocation_token_counts":[{"prompt_tokens_details":[{"modality":"text","tokens":40}],"candidates_tokens_details":[{"modality":"text","tokens":844}],"thoughts_tokens_details":[{"modality":"text","tokens":808}]}],"non_grounding_model_invocation_token_counts":[{"prompt_tokens_details":[{"modality":"text","tokens":40}],"candidates_tokens_details":[{"modality":"text","tokens":844}],"thoughts_tokens_details":[{"modality":"text","tokens":808}]}]},"created":"2026-09-20T19:14:48Z","updated":"2026-09-20T19:14:48Z","service_tier":"standard","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.completed"}
+
+        event: done
+        data: [DONE]
+
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '10783'
+      content-type:
+      - text/event-stream
+      date:
+      - Sun, 20 Sep 2026 19:14:49 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=186
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: ''
+    headers:
+      accept:
+      - text/event-stream
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.23.0 gl-python/3.14.2
+    method: GET
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions/v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs?last_event_id=v1_MV90ZXh0XzM5&stream=true
+  response:
+    body:
+      string: |+
+        event: step.stop
+        data: {"index":1,"event_type":"step.stop"}
+
+        event: step.start
+        data: {"index":2,"step":{"type":"thought"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":2,"delta":{"signature":"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","type":"thought_signature"},"event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":2,"event_type":"step.stop"}
+
+        event: step.start
+        data: {"index":3,"step":{"type":"model_output"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":3,"delta":{"text":"# The Pocket Guide to Space Exploration: Past, Present, and Future\n\nSpace exploration is humanity’s quest to discover the secrets of the cosmos, push the boundaries of technology, and answer the ultimate question: *Are we alone?* \n\nHere is a short guide to how we got here, what’s happening today, and where we are heading next.\n\n---\n\n## 1. How It Started: The Space Race (1950s–1970s)\nModern space exploration began as a geopolitical rivalry between the United States and the Soviet Union during the Cold War. \n\n* **1957 (Sputnik 1):** The Soviet Union launched the first artificial satellite, kicking off the Space Age.\n* **1961 (Yuri Gagarin):** The Soviet cosmonaut became the first human to orbit Earth.\n* **1969 (Apollo 11):** NASA landed the first humans—Neil Armstrong and Buzz Aldrin—on the Moon, fulfilling President John F. Kennedy's ambitious challenge.\n\n---\n\n## 2. Where We Are Now: Robots, Telescopes, and Commercial Space\nToday, exploration is less about national prestige and more about science, international cooperation, and private enterprise.\n\n* **Living in Space:** The **International Space Station (ISS)** has been continuously occupied by humans since 2000, serving as a laboratory for biology, physics, and medicine.\n* **Robotic Precursors:** Before humans go, machines lead the way. Rovers like NASA’s *Perseverance* are currently searching for signs of ancient life on Mars, while probes have visited every planet in the solar system.\n* **Eyes on the Deep Cosmos:** Space telescopes like **Hubble** and the **James Webb Space Telescope (JWST)** look back billions of years into the universe's past, imaging the birth of the earliest stars and analyzing the atmospheres of distant exoplanets.\n* **The Commercial Boom:** Private companies—most notably SpaceX—have revolutionized the industry with reusable rockets, significantly lowering the cost of reaching orbit.\n\n---\n\n## 3. The Next Frontiers: What Lies Ahead\nHumanity is on the brink of becoming a multi-planetary species. The main goals for the next few decades include:\n\n* **Returning to the Moon (NASA’s Artemis Program):** Rather than short visits, the goal is to build a permanent, sustainable base on the lunar south pole to test systems for deep-space survival.\n* **Human Missions to Mars:** Targeted for the late 2030s or 2040s, a round-trip human mission to the Red Planet will test human endurance, requiring roughly 6 to 9 months of travel each way.\n* **Searching for Alien Life:** Upcoming missions will target the icy moons of Jupiter (Europa) and Saturn (Enceladus), which harbor liquid oceans beneath their surfaces and could support microbial life.\n* **Space Mining:** Harvesting resources—like water from the Moon for rocket fuel or rare metals from asteroids—could support an off-Earth economy.\n\n---\n\n## 4. Why It Matters\nA common critique is: *Why spend money in space when we have problems on Earth?* The answers are practical:\n\n1. **Everyday Tech:** Space research gave us GPS, scratch-resistant lenses, advanced water purification, smoke detectors, and modern solar panels.\n2. **Protecting Earth:** Studying other planets (like the runaway greenhouse effect on Venus) helps us understand our own climate. Furthermore, space programs monitor near-Earth asteroids that could pose an impact hazard.\n3. **The \"Overview Effect\":** Astronauts frequently report that seeing Earth from space—a fragile blue marble without borders—inspires a deep commitment to protecting our home planet.\n\n---\n\n## Final Thought\nSpace exploration is still in its infancy. In the grand timeline of human history, we have only just stepped out onto the cosmic porch. The rest of the universe is still waiting to be explored.","type":"text"},"event_id":"v1_M190ZXh0XzM5","event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":3,"event_type":"step.stop"}
+
+        event: interaction.completed
+        data: {"interaction":{"id":"v1_ChdxREN3YXU2V0hPX3VfdU1QcTVHZGlBaxIXcURDd2F1NldIT191X3VNUHE1R2RpQWs","status":"completed","usage":{"total_tokens":1657,"total_input_tokens":9,"input_tokens_by_modality":[{"modality":"text","tokens":9}],"total_cached_tokens":0,"total_output_tokens":840,"total_tool_use_tokens":0,"total_thought_tokens":808,"raw_prompt_token":40,"model_invocation_token_counts":[{"prompt_tokens_details":[{"modality":"text","tokens":40}],"candidates_tokens_details":[{"modality":"text","tokens":844}],"thoughts_tokens_details":[{"modality":"text","tokens":808}]}],"non_grounding_model_invocation_token_counts":[{"prompt_tokens_details":[{"modality":"text","tokens":40}],"candidates_tokens_details":[{"modality":"text","tokens":844}],"thoughts_tokens_details":[{"modality":"text","tokens":808}]}]},"created":"2026-09-20T19:14:48Z","updated":"2026-09-20T19:14:48Z","service_tier":"standard","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.completed"}
+
+        event: done
+        data: [DONE]
+
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '10410'
+      content-type:
+      - text/event-stream
+      date:
+      - Sun, 20 Sep 2026 19:15:35 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=30846
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1
