@@ -7,7 +7,7 @@ import asyncio
 import inspect
 import timeit
 from collections.abc import AsyncGenerator, Generator, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -1752,3 +1752,109 @@ async def test_async_execution_scope_includes_asend_athrow_and_close(
     assert closed == [True]
     assert wrapper._self_stop_count == (0 if failure else 1)
     assert not hasattr(ScopedWrapper(_FakeAsyncStream()), "asend")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_sync_manager_exit_runs_inside_stream_execution_scope(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    exits: list[bool] = []
+    error = RuntimeError("exit failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestSyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    class ScopedManagerWrapper(SyncStreamManagerWrapper):
+        def _wrap_stream(self, stream, invocation):
+            return ScopedWrapper(stream, invocation=invocation)
+
+    class Manager(_FakeSyncManager):
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            # The SDK closes its stream here, so this is stream cleanup.
+            exits.append(active.get())
+            return super().__exit__(exc_type, exc_val, exc_tb)
+
+    stream = _FakeSyncStream(chunks=["a"])
+    manager = Manager(stream, exit_error=error if failure else None)
+    wrapper = ScopedManagerWrapper(manager, _FakeInvocation)
+    invocation = None
+
+    with pytest.raises(RuntimeError) if failure else nullcontext():
+        with wrapper as stream_wrapper:
+            invocation = stream_wrapper._self_invocation
+            assert not active.get()
+            assert next(stream_wrapper) == "a"
+            assert not active.get()
+
+    assert exits == [True]
+    assert not active.get()
+    assert invocation is not None
+    if failure:
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+    else:
+        assert invocation.failures == []
+        assert invocation.stop_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_async_manager_exit_runs_inside_stream_execution_scope(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    exits: list[bool] = []
+    error = RuntimeError("exit failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    class ScopedManagerWrapper(AsyncStreamManagerWrapper):
+        def _wrap_stream(self, stream, invocation):
+            return ScopedWrapper(stream, invocation=invocation)
+
+    class Manager(_FakeAsyncManager):
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            exits.append(active.get())
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+
+    stream = _FakeAsyncStream(chunks=["a"])
+    manager = Manager(stream, exit_error=error if failure else None)
+    wrapper = ScopedManagerWrapper(manager, _FakeInvocation)
+    invocation = None
+
+    with pytest.raises(RuntimeError) if failure else nullcontext():
+        async with wrapper as stream_wrapper:
+            invocation = stream_wrapper._self_invocation
+            assert not active.get()
+            assert await anext(stream_wrapper) == "a"
+            assert not active.get()
+
+    assert exits == [True]
+    assert not active.get()
+    assert invocation is not None
+    if failure:
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+    else:
+        assert invocation.failures == []
+        assert invocation.stop_count == 1

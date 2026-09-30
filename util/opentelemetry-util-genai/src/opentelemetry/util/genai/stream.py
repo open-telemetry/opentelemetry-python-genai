@@ -652,24 +652,34 @@ class SyncStreamManagerWrapper(
     ) -> bool | None:
         stream_wrapper = self._self_stream_wrapper
         self._self_stream_wrapper = None
-        try:
-            suppressed = self.__wrapped__.__exit__(exc_type, exc_val, exc_tb)
-        except BaseException as error:
-            if stream_wrapper is not None:
-                stream_wrapper.__exit__(
-                    type(error), error, error.__traceback__
+        # The SDK manager closes its stream on exit, so that runs in the
+        # stream wrapper's execution context like every other cleanup.
+        with (
+            nullcontext()
+            if stream_wrapper is None
+            else stream_wrapper._execution_context()
+        ):
+            try:
+                suppressed = self.__wrapped__.__exit__(
+                    exc_type, exc_val, exc_tb
                 )
-            elif self._self_invocation is not None:
-                self._self_invocation.fail(error)
-            raise
-        if stream_wrapper is not None:
-            if suppressed:
-                # The manager swallowed the caller's exception, so the stream
-                # ended successfully as far as telemetry is concerned.
-                stream_wrapper.__exit__(None, None, None)
-            else:
-                stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
-        return suppressed
+            except BaseException as error:
+                if stream_wrapper is not None:
+                    stream_wrapper.__exit__(
+                        type(error), error, error.__traceback__
+                    )
+                elif self._self_invocation is not None:
+                    self._self_invocation.fail(error)
+                raise
+            if stream_wrapper is not None:
+                if suppressed:
+                    # The manager swallowed the caller's exception, so the
+                    # stream ended successfully as far as telemetry is
+                    # concerned.
+                    stream_wrapper.__exit__(None, None, None)
+                else:
+                    stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+            return suppressed
 
 
 class AsyncStreamManagerWrapper(
@@ -719,25 +729,30 @@ class AsyncStreamManagerWrapper(
     ) -> bool | None:
         stream_wrapper = self._self_stream_wrapper
         self._self_stream_wrapper = None
-        try:
-            suppressed = await self.__wrapped__.__aexit__(
-                exc_type, exc_val, exc_tb
-            )
-        except BaseException as error:
-            if stream_wrapper is not None:
-                await stream_wrapper.__aexit__(
-                    type(error), error, error.__traceback__
+        # See SyncStreamManagerWrapper.__exit__.
+        with (
+            nullcontext()
+            if stream_wrapper is None
+            else stream_wrapper._execution_context()
+        ):
+            try:
+                suppressed = await self.__wrapped__.__aexit__(
+                    exc_type, exc_val, exc_tb
                 )
-            elif self._self_invocation is not None:
-                self._self_invocation.fail(error)
-            raise
-        if stream_wrapper is not None:
-            if suppressed:
-                # See SyncStreamManagerWrapper.__exit__.
-                await stream_wrapper.__aexit__(None, None, None)
-            else:
-                await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
-        return suppressed
+            except BaseException as error:
+                if stream_wrapper is not None:
+                    await stream_wrapper.__aexit__(
+                        type(error), error, error.__traceback__
+                    )
+                elif self._self_invocation is not None:
+                    self._self_invocation.fail(error)
+                raise
+            if stream_wrapper is not None:
+                if suppressed:
+                    await stream_wrapper.__aexit__(None, None, None)
+                else:
+                    await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+            return suppressed
 
 
 __all__ = [
