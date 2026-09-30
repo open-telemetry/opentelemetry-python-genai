@@ -141,8 +141,12 @@ programmatically, which takes precedence over the environment variable::
 Known Limitations
 -----------------
 
-Context propagation to nested calls (such as auto-instrumented HTTP clients
-or database queries within tools) is not supported when using LangChain async API.
+Context is propagated to nested calls (such as auto-instrumented HTTP clients or
+database queries) where LangChain hands control to user code: chat models, tools,
+retrievers, runnables built on ``_call_with_config``, streams, the steps of sequence,
+parallel and fallback runnables, and LangGraph nodes. A ``Runnable`` whose ``invoke``
+starts no run of its own is not correlated when it runs as a ``RunnableBranch``
+branch or through ``batch``/``abatch``.
 
 References
 ----------
