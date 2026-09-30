@@ -844,6 +844,77 @@ def test_finalize_on_aclose_finalizes_when_aclose_raises():
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("close_error", [None, RuntimeError("close failure")])
+def test_finalize_on_close_runs_inside_execution_context(close_error):
+    active = ContextVar("active", default=False)
+    seen: list[bool] = []
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class Closable(_FakeClosable):
+        def close(self):
+            seen.append(active.get())
+            super().close()
+
+    proxy = finalize_on_close(
+        Closable(close_error=close_error),
+        lambda: seen.append(active.get()),
+        execution_context=scope,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="close failure")
+        if close_error
+        else nullcontext()
+    ):
+        proxy.close()
+
+    assert seen == [True, True]
+    assert not active.get()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_error", [None, RuntimeError("close failure")])
+async def test_finalize_on_aclose_runs_inside_execution_context(close_error):
+    active = ContextVar("active", default=False)
+    seen: list[bool] = []
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class Closable(_FakeClosable):
+        async def aclose(self):
+            seen.append(active.get())
+            await super().aclose()
+
+    proxy = finalize_on_aclose(
+        Closable(close_error=close_error),
+        lambda: seen.append(active.get()),
+        execution_context=scope,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="close failure")
+        if close_error
+        else nullcontext()
+    ):
+        await proxy.aclose()
+
+    assert seen == [True, True]
+    assert not active.get()
+
+
 class _FakeInvocation:
     def __init__(self):
         self.stop_count = 0

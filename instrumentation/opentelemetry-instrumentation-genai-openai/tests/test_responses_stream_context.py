@@ -172,3 +172,75 @@ async def test_responses_stream_manager_activates_only_during_reads(
     assert context.get_current() is before
     assert len(span_exporter.get_finished_spans()) == 1
     _assert_no_detach_errors(caplog)
+
+
+class _RecordingHook:
+    def __init__(self) -> None:
+        self.seen: list[Any] = []
+
+    def on_completion(self, **kwargs: Any) -> None:
+        self.seen.append(trace.get_current_span().get_span_context())
+
+
+class _Response:
+    def __init__(self) -> None:
+        self.closed_in: list[Any] = []
+
+    def close(self) -> None:
+        self.closed_in.append(trace.get_current_span().get_span_context())
+
+    async def aclose(self) -> None:
+        self.close()
+
+
+class _Stream:
+    def __init__(self, response: _Response) -> None:
+        self._response = response
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(())
+
+    def __aiter__(self) -> _Stream:
+        return self
+
+    async def __anext__(self) -> Any:
+        raise StopAsyncIteration
+
+    def close(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_responses_stream_response_close_activates_invocation(
+    tracer_provider, span_exporter, caplog, asynchronous: bool
+) -> None:
+    before = context.get_current()
+    hook = _RecordingHook()
+    invocation = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=hook
+    ).inference("openai", request_model="test-model")
+    expected = trace.get_current_span(invocation.context).get_span_context()
+    response = _Response()
+
+    if asynchronous:
+        stream = AsyncResponseStreamWrapper(
+            _Stream(response), invocation, False
+        )
+    else:
+        stream = ResponseStreamWrapper(_Stream(response), invocation, False)
+    assert context.get_current() is before
+
+    if asynchronous:
+        await stream.response.aclose()
+    else:
+        stream.response.close()
+
+    assert context.get_current() is before
+    assert response.closed_in == [expected]
+    assert hook.seen == [expected]
+    assert len(span_exporter.get_finished_spans()) == 1
+    _assert_no_detach_errors(caplog)
