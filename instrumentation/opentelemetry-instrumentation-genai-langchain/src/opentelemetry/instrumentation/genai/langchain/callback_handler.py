@@ -62,7 +62,6 @@ from opentelemetry.util.genai.types import (
     TextPart,
     ToolCallRequestPart,
 )
-from opentelemetry.util.genai.utils import gen_ai_json_dumps
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
 
@@ -74,17 +73,14 @@ CONVERSATION_ID_METADATA_KEYS = (
 )
 
 _PROMPT_TEMPLATE_TYPES = {"ChatPromptTemplate", "PromptTemplate"}
-_INVALID_PROMPT_VALUE = object()
 
 
-def _prompt_template_type(serialized: Mapping[str, Any]) -> str | None:
-    serialized_id = serialized.get("id")
-    if not isinstance(serialized_id, Sequence) or isinstance(
-        serialized_id, str
-    ):
+def _prompt_template_type(runnable: Mapping[str, Any]) -> str | None:
+    runnable_id = runnable.get("id")
+    if not isinstance(runnable_id, Sequence) or isinstance(runnable_id, str):
         return None
-    serialized_id = cast(Sequence[object], serialized_id)
-    template_type = serialized_id[-1] if serialized_id else None
+    runnable_id = cast(Sequence[str], runnable_id)
+    template_type = runnable_id[-1] if runnable_id else None
     if not isinstance(template_type, str):
         return None
     return template_type if template_type in _PROMPT_TEMPLATE_TYPES else None
@@ -98,101 +94,47 @@ def _string_sequence(value: object) -> list[str]:
     ]
 
 
-def _prompt_variable_value(
-    value: object, active_container_ids: set[int] | None = None
-) -> object:
-    if active_container_ids is None:
-        active_container_ids = set()
-
-    if isinstance(value, BaseMessage):
-        value = value.model_dump()
-    elif isinstance(value, Mapping):
-        value = cast(Mapping[object, object], value)
-        if value.get("type") == "not_implemented":
-            return _INVALID_PROMPT_VALUE
-        container_id = id(value)
-        if container_id in active_container_ids:
-            return _INVALID_PROMPT_VALUE
-        active_container_ids.add(container_id)
-        normalized_mapping: dict[object, object] = {}
-        try:
-            for key, item in value.items():
-                normalized_item = _prompt_variable_value(
-                    item, active_container_ids
-                )
-                if normalized_item is _INVALID_PROMPT_VALUE:
-                    return _INVALID_PROMPT_VALUE
-                normalized_mapping[key] = normalized_item
-        finally:
-            active_container_ids.remove(container_id)
-        value = normalized_mapping
-    elif isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
-    ):
-        value = cast(Sequence[object], value)
-        container_id = id(value)
-        if container_id in active_container_ids:
-            return _INVALID_PROMPT_VALUE
-        active_container_ids.add(container_id)
-        normalized_sequence: list[object] = []
-        try:
-            for item in value:
-                normalized_item = _prompt_variable_value(
-                    item, active_container_ids
-                )
-                if normalized_item is _INVALID_PROMPT_VALUE:
-                    return _INVALID_PROMPT_VALUE
-                normalized_sequence.append(normalized_item)
-        finally:
-            active_container_ids.remove(container_id)
-        value = normalized_sequence
-    elif callable(value):
-        return _INVALID_PROMPT_VALUE
-
-    try:
-        gen_ai_json_dumps(value)
-    except (TypeError, ValueError, OverflowError):
-        return _INVALID_PROMPT_VALUE
-    return value
-
-
 def _extract_prompt_context(
-    serialized: Mapping[str, Any],
+    runnable: Mapping[str, Any],
     inputs: object,
     metadata: Mapping[str, Any] | None,
     *,
     capture_variables: bool = True,
 ) -> _PromptContext | None:
-    template_type = _prompt_template_type(serialized)
+    template_type = _prompt_template_type(runnable)
     if template_type is None:
         return None
 
-    raw_serialized_kwargs = serialized.get("kwargs")
-    if not isinstance(raw_serialized_kwargs, Mapping):
-        serialized_kwargs: Mapping[str, object] = {}
+    raw_template_kwargs = runnable.get("kwargs")
+    if not isinstance(raw_template_kwargs, Mapping):
+        template_kwargs: Mapping[str, object] = {}
     else:
-        serialized_kwargs = cast(Mapping[str, object], raw_serialized_kwargs)
+        template_kwargs = cast(Mapping[str, object], raw_template_kwargs)
 
     name = (metadata or {}).get("prompt_name")
     if not isinstance(name, str):
-        name = serialized_kwargs.get("name")
+        name = template_kwargs.get("name")
     if not isinstance(name, str):
-        name = serialized.get("name")
-    if not isinstance(name, str) or name in _PROMPT_TEMPLATE_TYPES:
-        name = None
+        runnable_name = runnable.get("name")
+        name = (
+            runnable_name
+            if isinstance(runnable_name, str)
+            and runnable_name not in _PROMPT_TEMPLATE_TYPES
+            else None
+        )
 
     if not capture_variables:
         return _PromptContext(name=name, variables={})
 
     required_variables = _string_sequence(
-        serialized_kwargs.get("input_variables")
+        template_kwargs.get("input_variables")
     )
     declared_variables = set(required_variables)
     declared_variables.update(
-        _string_sequence(serialized_kwargs.get("optional_variables"))
+        _string_sequence(template_kwargs.get("optional_variables"))
     )
 
-    partial_variables = serialized_kwargs.get("partial_variables")
+    partial_variables = template_kwargs.get("partial_variables")
     if isinstance(partial_variables, Mapping):
         partial_variables = cast(Mapping[object, object], partial_variables)
         declared_variables.update(
@@ -200,8 +142,8 @@ def _extract_prompt_context(
         )
 
     if isinstance(inputs, Mapping):
-        runtime_variables: Mapping[object, object] = cast(
-            Mapping[object, object], inputs
+        runtime_variables: Mapping[str, object] = cast(
+            Mapping[str, object], inputs
         )
     elif len(required_variables) == 1:
         runtime_variables = {required_variables[0]: inputs}
@@ -216,9 +158,7 @@ def _extract_prompt_context(
         for key, value in source.items():
             if not isinstance(key, str) or key not in declared_variables:
                 continue
-            normalized_value = _prompt_variable_value(value)
-            if normalized_value is not _INVALID_PROMPT_VALUE:
-                effective_variables[key] = normalized_value
+            effective_variables[key] = value
 
     return _PromptContext(name=name, variables=effective_variables)
 

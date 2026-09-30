@@ -127,6 +127,7 @@ class TestExtractPromptContext:
     def test_extracts_name_and_declared_variables(
         self, template_type: str
     ) -> None:
+        history = [HumanMessage(content="Earlier question")]
         context = _extract_prompt_context(
             {
                 "id": ["langchain", "prompts", template_type],
@@ -139,7 +140,7 @@ class TestExtractPromptContext:
             },
             {
                 "question": "Will it rain?",
-                "history": [HumanMessage(content="Earlier question")],
+                "history": history,
                 "unused": "ignored",
             },
             None,
@@ -149,7 +150,7 @@ class TestExtractPromptContext:
         assert context.name == "weather"
         assert context.variables == {
             "question": "Will it rain?",
-            "history": [HumanMessage(content="Earlier question").model_dump()],
+            "history": history,
             "language": "French",
         }
 
@@ -171,6 +172,24 @@ class TestExtractPromptContext:
         )
         assert unnamed is not None
         assert unnamed.name is None
+
+    @pytest.mark.parametrize("source", ["metadata", "kwargs"])
+    def test_explicit_template_class_name_is_preserved(self, source: str):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "name": "PromptTemplate",
+            "kwargs": {},
+        }
+        metadata = None
+        if source == "metadata":
+            metadata = {"prompt_name": "PromptTemplate"}
+        else:
+            serialized["kwargs"] = {"name": "PromptTemplate"}
+
+        context = _extract_prompt_context(serialized, {}, metadata)
+
+        assert context is not None
+        assert context.name == "PromptTemplate"
 
     def test_runtime_values_override_partials_and_scalar_is_mapped(self):
         serialized = {
@@ -203,12 +222,14 @@ class TestExtractPromptContext:
         assert context is not None
         assert context.variables == {"value": None}
 
-    def test_skips_unresolved_and_unserializable_values(self):
+    def test_passes_declared_values_without_serializing(self):
+        callable_value = lambda: "value"
+        unsupported_value = object()
         serialized = {
             "id": ["langchain", "prompts", "PromptTemplate"],
             "kwargs": {
                 "partial_variables": {
-                    "callable": lambda: "value",
+                    "callable": callable_value,
                     "unresolved": {
                         "lc": 1,
                         "type": "not_implemented",
@@ -219,32 +240,15 @@ class TestExtractPromptContext:
         }
 
         context = _extract_prompt_context(
-            serialized, {"unsupported": object()}, None
+            serialized, {"unsupported": unsupported_value}, None
         )
 
         assert context is not None
-        assert context.variables == {}
-
-    def test_skips_cyclic_values(self):
-        cyclic_list = []
-        cyclic_list.append(cyclic_list)
-        cyclic_mapping = {}
-        cyclic_mapping["self"] = cyclic_mapping
-
-        context = _extract_prompt_context(
-            {
-                "id": ["langchain", "prompts", "PromptTemplate"],
-                "kwargs": {"input_variables": ["list_value", "mapping_value"]},
-            },
-            {
-                "list_value": cyclic_list,
-                "mapping_value": cyclic_mapping,
-            },
-            None,
-        )
-
-        assert context is not None
-        assert context.variables == {}
+        assert context.variables == {
+            "callable": callable_value,
+            "unresolved": {"lc": 1, "type": "not_implemented"},
+            "unsupported": unsupported_value,
+        }
 
     def test_ignores_non_prompt_runs(self):
         assert (
