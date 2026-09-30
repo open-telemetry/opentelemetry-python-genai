@@ -20,6 +20,9 @@
 # pyproject floors by UV_RESOLUTION=lowest-direct on the oldest tox factor, so they are NOT pinned
 # here to avoid drift between the declared bound and the tested version.
 
+# langchain-core is transitive, so lowest-direct does not floor it: pin the floor that
+# langchain 0.3.22 declares, which is the oldest core with the set_config_context boundary.
+langchain-core==0.3.49
 langchain-openai==0.2.0
 langchain-aws==0.2.2
 langchain-google-genai==2.0.0
