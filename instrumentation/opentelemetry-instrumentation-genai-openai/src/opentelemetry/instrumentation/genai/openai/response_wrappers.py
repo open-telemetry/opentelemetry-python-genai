@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from types import TracebackType
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
@@ -132,6 +133,12 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         self._self_invocation = invocation
         self._self_capture_content = capture_content
         self._self_response_telemetry_finalized = False
+        # The stream returns to the caller undrained: leave the caller's
+        # context as it was and make the span current only while reading.
+        invocation.suspend()
+
+    def _execution_context(self) -> AbstractContextManager[None]:
+        return self._self_invocation.activate()
 
     def _stop(
         self, result: ParsedResponse[TextFormatT] | Response | None
