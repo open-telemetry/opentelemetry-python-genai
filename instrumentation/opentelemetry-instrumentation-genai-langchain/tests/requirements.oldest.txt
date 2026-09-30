@@ -25,3 +25,11 @@ langchain-aws==0.2.2
 langchain-google-genai==2.0.0
 langchain-anthropic==0.3.0
 boto3==1.37.0
+
+opentelemetry-instrumentation-httpx >= 0.64b0, <1
+-e instrumentation/opentelemetry-instrumentation-genai-openai[instruments]
+# The oldest OpenAI client still passes the removed httpx proxies argument.
+httpx==0.27.2
+
+# The stream execution hook is in the unreleased workspace util package.
+-e util/opentelemetry-util-genai
