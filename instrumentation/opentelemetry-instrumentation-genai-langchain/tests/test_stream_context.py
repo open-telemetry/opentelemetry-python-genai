@@ -12,10 +12,15 @@ from uuid import UUID, uuid4
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.callbacks.manager import CallbackManager
-from langchain_core.runnables import RunnableGenerator, RunnableLambda
+from langchain_core.runnables import (
+    RunnableGenerator,
+    RunnableLambda,
+    RunnableParallel,
+)
 from langchain_openai import ChatOpenAI
 
 from opentelemetry import context, trace
+from opentelemetry.instrumentation.genai.langchain import _run_context
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
@@ -486,4 +491,37 @@ async def test_runnable_stream_close(
     (workflow,) = _spans(span_exporter, _LC_SCOPE)
     (http,) = _spans(span_exporter, _HTTP_SCOPE)
     _child(http, workflow)
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("composite", ["sequence", "parallel"])
+async def test_composite_stream_attaches_each_context_once(
+    clients, span_exporter, monkeypatch, asynchronous: bool, composite: str
+) -> None:
+    attached: list[bool] = []
+    original = _run_context.attach
+
+    def attach(ctx: context.Context) -> object:
+        # Attaching the current context again is a redundant token.
+        attached.append(context.get_current() is ctx)
+        return original(ctx)
+
+    monkeypatch.setattr(_run_context, "attach", attach)
+    steps = [RunnableLambda(lambda text: text) for _ in range(2)]
+    chain = (
+        steps[0] | steps[1]
+        if composite == "sequence"
+        else RunnableParallel(one=steps[0], two=steps[1])
+    )
+    before = context.get_current()
+    if asynchronous:
+        chunks = [chunk async for chunk in chain.astream("hello")]
+    else:
+        chunks = list(chain.stream("hello"))
+    assert chunks
+    assert context.get_current() is before
+    assert attached
+    assert not any(attached)
     _assert_no_runs()

@@ -59,7 +59,9 @@ class _RunScope:
         with ExitStack() as stack:
             token = _active_run.set(_RunActivation(self, stack))
             stack.callback(_active_run.reset, token)
-            if self.context is not None:
+            # A stream read inside an enclosing read of the same run tree
+            # already has this context current.
+            if self.context is not None and get_current() is not self.context:
                 stack.callback(detach, attach(self.context))
             yield
 
