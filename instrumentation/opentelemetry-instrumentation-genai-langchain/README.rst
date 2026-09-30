@@ -144,9 +144,11 @@ Known Limitations
 Context is propagated to nested calls (such as auto-instrumented HTTP clients or
 database queries) where LangChain hands control to user code: chat models, tools,
 retrievers, runnables built on ``_call_with_config``, streams, the steps of sequence,
-parallel and fallback runnables, and LangGraph nodes. A ``Runnable`` whose ``invoke``
-starts no run of its own is not correlated when it runs as a ``RunnableBranch``
-branch or through ``batch``/``abatch``.
+parallel, branch and fallback runnables, single-input ``batch``/``abatch`` calls, and
+LangGraph nodes. A ``Runnable`` whose ``invoke`` starts no run of its own is not
+correlated when ``batch``/``abatch`` runs it for several inputs at once: the default
+implementation dispatches each input from a thread pool or task with no frame of its
+own to carry that input's parent.
 
 References
 ----------

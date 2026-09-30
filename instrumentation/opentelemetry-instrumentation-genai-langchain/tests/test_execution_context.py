@@ -21,7 +21,7 @@ from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
 from langchain_core.runnables import base as runnables_base
 from langchain_core.tools import BaseTool, StructuredTool, Tool
 from langchain_core.vectorstores import VectorStore
@@ -707,6 +707,12 @@ def test_uninstrument_restores_execution_methods(
         (Runnable, "_acall_with_config"),
         (Runnable, "_transform_stream_with_config"),
         (Runnable, "_atransform_stream_with_config"),
+        (Runnable, "batch"),
+        (Runnable, "abatch"),
+        (RunnableBranch, "invoke"),
+        (RunnableBranch, "ainvoke"),
+        (RunnableBranch, "stream"),
+        (RunnableBranch, "astream"),
         (runnables_base, "set_config_context"),
         (CallbackManager, "on_chain_start"),
     ]

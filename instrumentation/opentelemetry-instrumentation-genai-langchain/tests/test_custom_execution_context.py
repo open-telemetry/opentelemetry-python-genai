@@ -13,6 +13,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import (
     Runnable,
+    RunnableBranch,
     RunnableConfig,
     RunnableLambda,
     RunnableParallel,
@@ -394,6 +395,82 @@ async def test_sequence_batch_correlates_each_input(
     # Every root run parents exactly one runnable step and one inference.
     roots = sorted(w.context.span_id for w in workflows)
     assert sorted(s.parent.span_id for s in runnable_http) == roots
+    assert sorted(s.parent.span_id for s in inferences) == roots
+    for http in provider_http:
+        _child(http, next(i for i in inferences if i.context == http.parent))
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async", "stream", "astream"])
+async def test_plain_runnable_in_branch_correlates_http(
+    clients: Any, span_exporter: Any, mode: str
+) -> None:
+    chain = RunnableBranch(
+        (lambda text: text == "hello", _PlainRunnable(clients)),
+        RunnableLambda(clients.infer),
+    )
+    before = context.get_current()
+    if mode == "sync":
+        result = chain.invoke("hello")
+    elif mode == "async":
+        result = await chain.ainvoke("hello")
+    elif mode == "stream":
+        result = "".join(chain.stream("hello"))
+    else:
+        result = "".join([chunk async for chunk in chain.astream("hello")])
+    assert result == "hello"
+    assert context.get_current() is before
+    (workflow,) = _spans(span_exporter, _LC_SCOPE)
+    assert workflow.name == "invoke_workflow RunnableBranch"
+    assert _spans(span_exporter, _OPENAI_SCOPE) == []
+    (plain_http,) = _spans(span_exporter, _HTTP_SCOPE)
+    _child(plain_http, workflow)
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["batch", "abatch"])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        ["one"],
+        pytest.param(
+            ["one", "two"],
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="Runnable.batch dispatches several inputs from the "
+                "executor with no frame to attach each input's parent in; "
+                "see the README known limitations",
+            ),
+        ),
+    ],
+)
+async def test_plain_runnable_batch_correlates_each_input(
+    clients: Any, span_exporter: Any, mode: str, inputs: list[str]
+) -> None:
+    chain = _PlainRunnable(clients) | RunnableLambda(clients.infer)
+    before = context.get_current()
+    if mode == "batch":
+        results = chain.batch(inputs)
+    else:
+        results = await chain.abatch(inputs)
+    assert results == ["answer"] * len(inputs)
+    assert context.get_current() is before
+    workflows = _spans(span_exporter, _LC_SCOPE)
+    assert [w.name for w in workflows] == [
+        "invoke_workflow RunnableSequence"
+    ] * len(inputs)
+    inferences = _spans(span_exporter, _OPENAI_SCOPE)
+    http_spans = _spans(span_exporter, _HTTP_SCOPE)
+    plain_http = [s for s in http_spans if _url(s).endswith("/plain")]
+    provider_http = [s for s in http_spans if s not in plain_http]
+    assert (
+        len(inferences) == len(plain_http) == len(provider_http) == len(inputs)
+    )
+    # Every root run parents exactly one plain step and one inference.
+    roots = sorted(w.context.span_id for w in workflows)
+    assert sorted(s.parent.span_id for s in plain_http if s.parent) == roots
     assert sorted(s.parent.span_id for s in inferences) == roots
     for http in provider_http:
         _child(http, next(i for i in inferences if i.context == http.parent))

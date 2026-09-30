@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import Context as PythonContext
 from functools import partial, wraps
 from importlib import import_module
 from importlib.util import find_spec
 from inspect import iscoroutinefunction, signature
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from wrapt import wrap_function_wrapper
@@ -62,7 +62,7 @@ class _ExecutionContext:
     @contextmanager
     def _activate(self, run_id: UUID | None) -> Iterator[None]:
         context = self._invocations.get_parent_context(run_id)
-        if context is None:
+        if context is None or get_current() is context:
             yield
             return
         token = attach(context)
@@ -70,6 +70,45 @@ class _ExecutionContext:
             yield
         finally:
             detach(token)
+
+    def _wrap_batch(self, original: Callable[..., Any]) -> Callable[..., Any]:
+        parameters = signature(original)
+
+        def parent_run_id_for(
+            instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+        ) -> UUID | None:
+            # One input runs in this frame; several run in the executor or
+            # as tasks, each in a copied context that this frame never sees.
+            bound = parameters.bind(instance, *args, **kwargs).arguments
+            if len(bound["inputs"]) != 1:
+                return None
+            config = bound.get("config")
+            if isinstance(config, Sequence):
+                config = cast(Any, config[0])
+            callbacks = cast(Any, config or {}).get("callbacks")
+            return getattr(callbacks, "parent_run_id", None)
+
+        @wraps(original)
+        def sync(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            with self._activate(parent_run_id_for(instance, args, kwargs)):
+                return wrapped(*args, **kwargs)
+
+        @wraps(original)
+        async def asynchronous(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            with self._activate(parent_run_id_for(instance, args, kwargs)):
+                return await wrapped(*args, **kwargs)
+
+        return asynchronous if iscoroutinefunction(original) else sync
 
     def _wrap(self, original: Callable[..., Any]) -> Callable[..., Any]:
         parameters = signature(original)
@@ -203,21 +242,41 @@ class _ExecutionContext:
                     ),
                 )
 
-        # These helpers start the chain run themselves, so the run id is chosen
-        # up front for _started to match.
-        for method, asynchronous in (
-            ("_call_with_config", False),
-            ("_acall_with_config", True),
+        # These start the chain run themselves, so the run id is chosen up
+        # front for _started to match.
+        for module_name, class_name, methods in (
+            (
+                "langchain_core.runnables.base",
+                "Runnable",
+                ("_call_with_config", "_acall_with_config"),
+            ),
+            # RunnableBranch dispatches the chosen branch straight from its
+            # own run, so a branch without a boundary inherits it from here.
+            (
+                "langchain_core.runnables.branch",
+                "RunnableBranch",
+                ("invoke", "ainvoke"),
+            ),
         ):
+            for method, asynchronous in zip(methods, (False, True)):
+                self._patch(
+                    module_name,
+                    class_name,
+                    method,
+                    partial(
+                        _wrap_call,
+                        invocations=self._invocations,
+                        asynchronous=asynchronous,
+                    ),
+                )
+
+        # The default batch runs a single input in the caller's frame.
+        for method in ("batch", "abatch"):
             self._patch(
                 "langchain_core.runnables.base",
                 "Runnable",
                 method,
-                partial(
-                    _wrap_call,
-                    invocations=self._invocations,
-                    asynchronous=asynchronous,
-                ),
+                self._wrap_batch,
             )
 
         for class_name, wrapper in (
@@ -256,6 +315,11 @@ class _ExecutionContext:
             (
                 "langchain_core.runnables.base",
                 "RunnableLambda",
+                ("stream", "astream"),
+            ),
+            (
+                "langchain_core.runnables.branch",
+                "RunnableBranch",
                 ("stream", "astream"),
             ),
             ("langgraph.pregel", "Pregel", ("stream", "astream")),
