@@ -718,21 +718,35 @@ def test_uninstrument_restores_execution_methods(
 
 
 @pytest.mark.parametrize(
-    ("module_name", "class_name", "method"),
+    ("module_name", "class_name", "method", "level"),
     [
         (
             "langchain_core.language_models.chat_models",
             "BaseChatModel",
             "_agenerate_with_cache",
+            logging.WARNING,
         ),
         (
             "langchain_core.runnables.base",
             "Runnable",
             "_atransform_stream_with_config",
+            logging.WARNING,
         ),
-        ("langchain_core.runnables.base", None, "set_config_context"),
-        ("langgraph._internal._runnable", None, "set_config_context"),
-        ("langgraph._internal._runnable", None, None),
+        (
+            "langchain_core.runnables.base",
+            None,
+            "set_config_context",
+            logging.WARNING,
+        ),
+        (
+            "langgraph._internal._runnable",
+            None,
+            "set_config_context",
+            logging.WARNING,
+        ),
+        ("langgraph._internal._runnable", None, None, logging.WARNING),
+        # The optional library itself is absent: nothing to warn about.
+        ("langgraph", None, None, logging.DEBUG),
     ],
 )
 def test_instrument_skips_missing_execution_boundary(
@@ -744,10 +758,14 @@ def test_instrument_skips_missing_execution_boundary(
     module_name: str,
     class_name: str | None,
     method: str | None,
+    level: int,
 ) -> None:
     module = pytest.importorskip(module_name)
     if method is None:
-        monkeypatch.setitem(sys.modules, module_name, None)
+        # Hide the module and everything imported under it.
+        for name in list(sys.modules):
+            if name == module_name or name.startswith(f"{module_name}."):
+                monkeypatch.setitem(sys.modules, name, None)
     else:
         owner = getattr(module, class_name) if class_name else module
         monkeypatch.delattr(owner, method)
@@ -764,15 +782,13 @@ def test_instrument_skips_missing_execution_boundary(
             assert BaseChatModel._generate_with_cache is not generate
         assert BaseTool.run is run
         assert BaseChatModel._generate_with_cache is generate
+    target = ".".join(filter(None, (module_name, class_name, method)))
+    prefix = f"Skipping execution boundary {target}{': ' if method else '.'}"
     skipped = [
-        record.getMessage()
+        record
         for record in caplog.records
         if record.name == f"{_LC_SCOPE}._execution_context"
-        and record.levelno == logging.DEBUG
+        and record.getMessage().startswith(prefix)
     ]
-    target = ".".join(
-        part
-        for part in (module_name, class_name, method or "set_config_context")
-        if part
-    )
-    assert f"Skipping execution boundary {target}: not found" in skipped
+    assert skipped
+    assert {record.levelno for record in skipped} == {level}

@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import Context as PythonContext
 from functools import partial, wraps
 from importlib import import_module
+from importlib.util import find_spec
 from inspect import iscoroutinefunction, signature
 from typing import Any
 from uuid import UUID
@@ -147,12 +148,22 @@ class _ExecutionContext:
                 owner = getattr(owner, class_name)
             original = getattr(owner, method)
         except (ImportError, AttributeError):
-            _logger.debug(
-                "Skipping execution boundary %s.%s%s: not found",
-                module_name,
-                f"{class_name}." if class_name else "",
-                method,
-            )
+            target = ".".join(filter(None, (module_name, class_name, method)))
+            library = module_name.partition(".")[0]
+            if find_spec(library) is None:
+                _logger.debug(
+                    "Skipping execution boundary %s: %s is not installed",
+                    target,
+                    library,
+                )
+            else:
+                # Installed but changed: spans under it will not correlate.
+                _logger.warning(
+                    "Skipping execution boundary %s: not found in the "
+                    "installed %s, so context is not propagated across it",
+                    target,
+                    library,
+                )
             return
         wrap_function_wrapper(owner, method, wrapper_for(original))
         self._patched.append((owner, method))
