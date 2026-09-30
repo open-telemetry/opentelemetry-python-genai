@@ -1,1 +1,1 @@
-Require `langchain >= 0.3.22`: the execution boundaries rely on `set_config_context`, which langchain-core added in 0.3.46 (langchain 0.3.22 is the first release whose langchain-core floor includes it).
+Require `langchain >= 0.3.22`: the execution boundaries rely on `set_config_context`, which langchain-core added in 0.3.46 (langchain 0.3.22 is the first release whose langchain-core floor includes it). LangGraph, when installed, needs 0.3.18 or newer for node boundaries.

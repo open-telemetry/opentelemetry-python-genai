@@ -23,6 +23,9 @@
 # langchain-core is transitive, so lowest-direct does not floor it: pin the floor that
 # langchain 0.3.22 declares, which is the oldest core with the set_config_context boundary.
 langchain-core==0.3.49
+# LangGraph is optional and has no bound in pyproject.toml: 0.3.18 is the oldest release with
+# the node boundary (langgraph.utils.runnable.set_config_context) the instrumentation wraps.
+langgraph==0.3.18
 langchain-openai==0.2.0
 langchain-aws==0.2.2
 langchain-google-genai==2.0.0

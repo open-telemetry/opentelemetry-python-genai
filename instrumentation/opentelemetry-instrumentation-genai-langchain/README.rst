@@ -29,6 +29,10 @@ Installation
 
     pip install opentelemetry-instrumentation-genai-langchain
 
+LangGraph is optional. Graph node boundaries are instrumented from LangGraph
+0.3.18 on; an older LangGraph still runs, with a warning that context is not
+propagated across its nodes.
+
 See the `examples <examples>`_ directory for runnable ``workflow``, ``agent``,
 ``tools``, and ``zero-code`` scenarios.
 
