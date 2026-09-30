@@ -10,7 +10,9 @@ import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from contextvars import copy_context
-from importlib import import_module
+from importlib import import_module, invalidate_caches
+from importlib.util import find_spec
+from pathlib import Path
 from typing import Any, TypedDict
 
 import httpx
@@ -736,6 +738,43 @@ def test_uninstrument_restores_execution_methods(
             assert getattr(owner, name) is original
 
 
+def _uninstall_langgraph(monkeypatch, tmp_path, keep: str | None) -> None:
+    """Take LangGraph off sys.path and out of sys.modules.
+
+    ``keep`` names a sibling distribution under the ``langgraph`` namespace
+    (``langgraph-checkpoint``) that stays installed without the runtime.
+    Every other package on the affected path entries stays reachable.
+    """
+    for name in list(sys.modules):
+        if name == "langgraph" or name.startswith("langgraph."):
+            monkeypatch.delitem(sys.modules, name)
+    path: list[str] = []
+    for entry in sys.path:
+        root = Path(entry or ".")
+        if not (root / "langgraph").is_dir():
+            path.append(entry)
+            continue
+        shadow = tmp_path / f"site-packages-{len(path)}"
+        shadow.mkdir()
+        for child in root.iterdir():
+            if (
+                not child.name.startswith(
+                    ("langgraph.", "langgraph_", "langgraph-")
+                )
+                and child.name != "langgraph"
+            ):
+                (shadow / child.name).symlink_to(child)
+        if keep is not None:
+            (shadow / "langgraph").mkdir()
+            (shadow / "langgraph" / keep).symlink_to(root / "langgraph" / keep)
+            for info in root.glob(f"langgraph_{keep}-*.dist-info"):
+                (shadow / info.name).symlink_to(info)
+        path.append(str(shadow))
+    monkeypatch.setattr(sys, "path", path)
+    monkeypatch.setattr(sys, "path_importer_cache", {})
+    invalidate_caches()
+
+
 @pytest.mark.parametrize(
     ("module_name", "class_name", "method", "level"),
     [
@@ -764,8 +803,6 @@ def test_uninstrument_restores_execution_methods(
             logging.WARNING,
         ),
         ("langgraph._internal._runnable", None, None, logging.WARNING),
-        # The optional library itself is absent: nothing to warn about.
-        ("langgraph", None, None, logging.DEBUG),
     ],
 )
 def test_instrument_skips_missing_execution_boundary(
@@ -811,3 +848,44 @@ def test_instrument_skips_missing_execution_boundary(
     ]
     assert skipped
     assert {record.levelno for record in skipped} == {level}
+
+
+# The optional library is absent, or only langgraph-checkpoint is installed:
+# the namespace then resolves without the runtime. Nothing to warn about.
+@pytest.mark.parametrize("installed", [None, "checkpoint"])
+def test_instrument_skips_absent_langgraph(
+    monkeypatch,
+    caplog,
+    tmp_path,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    installed: str | None,
+) -> None:
+    pytest.importorskip("langgraph")
+    _uninstall_langgraph(monkeypatch, tmp_path, installed)
+    assert (find_spec("langgraph") is not None) == (installed is not None)
+    with caplog.at_level(logging.DEBUG, logger=_LC_SCOPE):
+        with instrument(
+            LangChainInstrumentor(),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+        ):
+            pass
+    records = [
+        record
+        for record in caplog.records
+        if record.name == f"{_LC_SCOPE}._execution_context"
+    ]
+    assert {record.levelno for record in records} == {logging.DEBUG}
+    assert sorted(record.getMessage() for record in records) == [
+        f"Skipping execution boundary {target}: langgraph is not installed"
+        for target in sorted(
+            (
+                "langgraph._internal._runnable.set_config_context",
+                "langgraph.pregel.Pregel.astream",
+                "langgraph.pregel.Pregel.stream",
+            )
+        )
+    ]

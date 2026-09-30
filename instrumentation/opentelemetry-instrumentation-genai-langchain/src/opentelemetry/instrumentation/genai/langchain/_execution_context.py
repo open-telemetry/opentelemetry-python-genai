@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import Context as PythonContext
 from functools import partial, wraps
 from importlib import import_module
-from importlib.util import find_spec
+from importlib.metadata import PackageNotFoundError, distribution
 from inspect import iscoroutinefunction, signature
 from typing import Any, cast
 from uuid import UUID
@@ -196,7 +196,11 @@ class _ExecutionContext:
             return
         target = ".".join(filter(None, (module_name, class_name, method)))
         library = module_name.partition(".")[0]
-        if find_spec(library) is None:
+        try:
+            # The namespace alone proves nothing: langgraph-checkpoint fills
+            # it without the runtime. Look for the distribution instead.
+            distribution(library)
+        except PackageNotFoundError:
             _logger.debug(
                 "Skipping execution boundary %s: %s is not installed",
                 target,
