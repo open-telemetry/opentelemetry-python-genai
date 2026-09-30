@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from contextvars import copy_context
@@ -648,3 +650,63 @@ def test_uninstrument_restores_execution_methods(
                 assert getattr(owner, name) is not original
         for (owner, name), original in zip(targets, originals):
             assert getattr(owner, name) is original
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "method"),
+    [
+        (
+            "langchain_core.language_models.chat_models",
+            "BaseChatModel",
+            "_agenerate_with_cache",
+        ),
+        (
+            "langchain_core.runnables.base",
+            "Runnable",
+            "_atransform_stream_with_config",
+        ),
+        ("langgraph._internal._runnable", None, "set_config_context"),
+        ("langgraph._internal._runnable", None, None),
+    ],
+)
+def test_instrument_skips_missing_execution_boundary(
+    monkeypatch,
+    caplog,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    module_name: str,
+    class_name: str | None,
+    method: str | None,
+) -> None:
+    module = pytest.importorskip(module_name)
+    if method is None:
+        monkeypatch.setitem(sys.modules, module_name, None)
+    else:
+        owner = getattr(module, class_name) if class_name else module
+        monkeypatch.delattr(owner, method)
+    run = BaseTool.run
+    generate = BaseChatModel._generate_with_cache
+    with caplog.at_level(logging.DEBUG, logger=_LC_SCOPE):
+        with instrument(
+            LangChainInstrumentor(),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+        ):
+            assert BaseTool.run is not run
+            assert BaseChatModel._generate_with_cache is not generate
+        assert BaseTool.run is run
+        assert BaseChatModel._generate_with_cache is generate
+    skipped = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == f"{_LC_SCOPE}._execution_context"
+        and record.levelno == logging.DEBUG
+    ]
+    target = ".".join(
+        part
+        for part in (module_name, class_name, method or "set_config_context")
+        if part
+    )
+    assert f"Skipping execution boundary {target}: not found" in skipped
