@@ -99,6 +99,65 @@ async def clients(
                     client_set.stream_waiting.set()
                     await asyncio.Event().wait()
 
+    class ResponsesApiStream(ResponseStream):
+        def __iter__(self) -> Iterator[bytes]:
+            response = {
+                "id": "resp-test",
+                "object": "response",
+                "created_at": 1,
+                "model": "test-model",
+                "status": "in_progress",
+                "output": [],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            }
+            message = {
+                "type": "message",
+                "id": "msg-test",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                    }
+                ],
+            }
+            yield sse_event("response.created", response=response)
+            yield sse_event(
+                "response.output_text.delta",
+                item_id="msg-test",
+                output_index=0,
+                content_index=0,
+                delta="answer",
+                logprobs=[],
+            )
+            if client_set.stream_error is not None:
+                raise client_set.stream_error
+            yield sse_event(
+                "response.completed",
+                response={
+                    **response,
+                    "status": "completed",
+                    "output": [message],
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                    },
+                },
+            )
+
+    def sse_event(event_type: str, **payload: Any) -> bytes:
+        data = json.dumps(
+            {"type": event_type, "sequence_number": 0, **payload}
+        )
+        return f"event: {event_type}\ndata: {data}\n\n".encode()
+
     def sse_chunk(content: str, finish_reason: str | None) -> bytes:
         payload = {
             "id": "chatcmpl-test",
@@ -127,7 +186,11 @@ async def clients(
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=ResponseStream(),
+                stream=(
+                    ResponsesApiStream()
+                    if request.url.path.endswith("/responses")
+                    else ResponseStream()
+                ),
             )
         return httpx.Response(
             200,

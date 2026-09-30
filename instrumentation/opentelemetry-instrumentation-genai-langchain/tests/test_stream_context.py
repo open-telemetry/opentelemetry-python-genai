@@ -34,12 +34,16 @@ from .test_execution_context import (
 __all__ = ["clients", "no_detach_errors"]
 
 
-def _model(clients: Any) -> ChatOpenAI:
+_RESPONSES_API = "use_responses_api" in ChatOpenAI.model_fields
+
+
+def _model(clients: Any, **kwargs: Any) -> ChatOpenAI:
     return ChatOpenAI(
         model="test-model",
         api_key="test",
         http_client=clients.http,
         http_async_client=clients.ahttp,
+        **kwargs,
     )
 
 
@@ -89,6 +93,53 @@ async def test_chat_stream_is_lazy_and_restores_consumer_context(
         assert "".join(chunk.content for chunk in rest) == ""
         assert context.get_current() is before
     assert config == original_config
+    (model_span,) = _spans(span_exporter, _LC_SCOPE)
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    http, consumer_http = _spans(span_exporter, _HTTP_SCOPE)
+    assert model_span.parent == root.get_span_context()
+    _child(inference, model_span)
+    _child(http, inference)
+    assert consumer_http.parent == root.get_span_context()
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _RESPONSES_API, reason="langchain-openai predates the Responses API"
+)
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_responses_stream_restores_consumer_context(
+    clients, span_exporter, tracer_provider, asynchronous: bool
+) -> None:
+    model = _model(clients, use_responses_api=True)
+    with tracer_provider.get_tracer("test").start_as_current_span(
+        "request"
+    ) as root:
+        before = context.get_current()
+        stream = (
+            model.astream("hello") if asynchronous else model.stream("hello")
+        )
+        if asynchronous:
+            first = await asyncio.create_task(anext(stream))
+        else:
+            first = next(stream)
+        assert context.get_current() is before
+        clients.http.get("https://example.test/consumer")
+
+        async def drain() -> list[Any]:
+            return [chunk async for chunk in stream]
+
+        # Later reads move to another task, so each read must attach and
+        # detach within its own frame.
+        rest = (
+            await asyncio.create_task(drain())
+            if asynchronous
+            else list(stream)
+        )
+        assert "answer" in "".join(
+            str(chunk.content) for chunk in (first, *rest)
+        )
+        assert context.get_current() is before
     (model_span,) = _spans(span_exporter, _LC_SCOPE)
     (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
     http, consumer_http = _spans(span_exporter, _HTTP_SCOPE)
