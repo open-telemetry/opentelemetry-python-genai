@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import inspect
 import logging
 from collections.abc import Callable, Iterator
 from typing import Any, cast
@@ -23,6 +24,7 @@ from typing import Any, cast
 from crewai.agent.core import Agent
 from crewai.llms.base_llm import BaseLLM
 from crewai.task import Task
+from crewai.telemetry.telemetry import Telemetry
 from crewai.tools.structured_tool import CrewStructuredTool
 from crewai.utilities.types import LLMMessage
 
@@ -59,11 +61,6 @@ Set by the agent wrappers and read by the tool wrapper to stamp
 entry points carry no reference to the calling agent. It propagates into
 CrewAI's thread pools because CrewAI copies the context into them.
 """
-
-_current_tool_call_id: contextvars.ContextVar[str | None] = (
-    contextvars.ContextVar("otel_genai_crewai_tool_call_id", default=None)
-)
-"""Native tool call ID for the tool currently being executed, or ``None``."""
 
 
 def _suppressed() -> bool:
@@ -215,40 +212,6 @@ def agent_execute_task(handler: TelemetryHandler) -> Callable[..., Any]:
     return wrapper
 
 
-def agent_aexecute_task(handler: TelemetryHandler) -> Callable[..., Any]:
-    """Build the wrapper for ``Agent.aexecute_task``."""
-
-    async def wrapper(
-        wrapped: Callable[..., Any],
-        instance: Agent,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        if _suppressed():
-            return await wrapped(*args, **kwargs)
-
-        def collect_input(invocation: LocalAgentInvocation) -> None:
-            bound = bind_call_arguments(wrapped, args, kwargs)
-            tools: list[CrewAITool] | None = crewai_tools(bound.get("tools"))
-            if tools is None:
-                tools = crewai_tools(instance.tools)
-            invocation.tool_definitions = agent_tool_definitions(tools)
-            task: object = bound.get("task")
-            context: object = bound.get("context")
-            if invocation.should_capture_content and isinstance(task, Task):
-                invocation.input_messages = task_to_input_messages(
-                    task,
-                    context=context if isinstance(context, str) else None,
-                )
-
-        with _agent_invocation(handler, instance, collect_input) as invocation:
-            result = await wrapped(*args, **kwargs)
-            _record_agent_output(invocation, result)
-            return result
-
-    return wrapper
-
-
 def agent_kickoff(handler: TelemetryHandler) -> Callable[..., Any]:
     """Build the wrapper for standalone ``Agent.kickoff(messages, ...)``.
 
@@ -259,8 +222,9 @@ def agent_kickoff(handler: TelemetryHandler) -> Callable[..., Any]:
     the output.
 
     When an event loop is already running (for example inside a ``Flow``),
-    CrewAI delegates to ``kickoff_async``; that separately patched method owns
-    the invocation so only one span is emitted.
+    CrewAI returns a coroutine from ``kickoff`` instead of executing. The
+    coroutine is wrapped so the invocation opens when it is awaited and
+    closes when it completes, rather than around the un-started coroutine.
 
     Args:
         handler: Telemetry handler used to create the invocation.
@@ -294,83 +258,54 @@ def agent_kickoff(handler: TelemetryHandler) -> Callable[..., Any]:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            pass
-        else:
-            return wrapped(*args, **kwargs)
+            with _agent_invocation(
+                handler, instance, collect_input
+            ) as invocation:
+                result = wrapped(*args, **kwargs)
+                _record_agent_output(invocation, result)
+                return result
 
-        with _agent_invocation(handler, instance, collect_input) as invocation:
-            result = wrapped(*args, **kwargs)
-            _record_agent_output(invocation, result)
-            return result
+        # Calling kickoff here only builds the kickoff_async coroutine; the
+        # agent runs when the caller awaits it.
+        awaitable = wrapped(*args, **kwargs)
+        if not inspect.isawaitable(awaitable):
+            return awaitable
 
-    return wrapper
+        async def traced() -> object:
+            with _agent_invocation(
+                handler, instance, collect_input
+            ) as invocation:
+                result: object = await awaitable
+                _record_agent_output(invocation, result)
+                return result
 
-
-def agent_kickoff_async(handler: TelemetryHandler) -> Callable[..., Any]:
-    """Build the wrapper for ``Agent.kickoff_async``."""
-
-    async def wrapper(
-        wrapped: Callable[..., Any],
-        instance: Agent,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        if _suppressed():
-            return await wrapped(*args, **kwargs)
-
-        def collect_input(invocation: LocalAgentInvocation) -> None:
-            invocation.tool_definitions = agent_tool_definitions(
-                crewai_tools(instance.tools)
-            )
-            if invocation.should_capture_content:
-                bound = bind_call_arguments(wrapped, args, kwargs)
-                messages: object = bound.get("messages")
-                if isinstance(messages, (str, list)):
-                    invocation.input_messages = messages_to_input_messages(
-                        cast("str | list[LLMMessage]", messages)
-                    )
-
-        with _agent_invocation(handler, instance, collect_input) as invocation:
-            result = await wrapped(*args, **kwargs)
-            _record_agent_output(invocation, result)
-            return result
+        return traced()
 
     return wrapper
 
 
-def _tool_call_id(value: object) -> str | None:
-    """Extract a native call ID from CrewAI's supported call shapes."""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        value_dict = cast("dict[str, object]", value)
-        call_id = value_dict.get("call_id") or value_dict.get("id")
-    else:
-        call_id = getattr(value, "call_id", None) or getattr(value, "id", None)
-    return call_id if isinstance(call_id, str) else None
+def crewai_telemetry_disabled(
+    wrapped: Callable[..., Any],
+    instance: Telemetry,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
+    """Wrapper for ``Telemetry._safe_telemetry_operation`` that drops the call.
 
+    Every CrewAI usage-telemetry emitter funnels through that method, and
+    returning ``None`` is the branch it takes under
+    ``CREWAI_DISABLE_TELEMETRY``, so callers already handle it.
 
-def native_tool_call_context() -> Callable[..., Any]:
-    """Propagate a native executor's call ID to the tool wrapper."""
+    Args:
+        wrapped: The original method; never called.
+        instance: The ``Telemetry`` singleton; unused.
+        args: Positional arguments of the original call; unused.
+        kwargs: Keyword arguments of the original call; unused.
 
-    def wrapper(
-        wrapped: Callable[..., Any],
-        instance: object,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        del instance
-        bound = bind_call_arguments(wrapped, args, kwargs)
-        call_id = _tool_call_id(bound.get("call_id")) or _tool_call_id(
-            bound.get("tool_call")
-        )
-        token = _current_tool_call_id.set(call_id)
-        try:
-            return wrapped(*args, **kwargs)
-        finally:
-            _current_tool_call_id.reset(token)
-
-    return wrapper
+    Returns:
+        Always ``None``, which CrewAI treats as telemetry being disabled.
+    """
+    del wrapped, instance, args, kwargs
 
 
 def tool_execution(handler: TelemetryHandler) -> Callable[..., Any]:
@@ -410,7 +345,6 @@ def tool_execution(handler: TelemetryHandler) -> Callable[..., Any]:
         ) as invocation:
 
             def collect_input() -> None:
-                invocation.tool_call_id = _current_tool_call_id.get()
                 invocation.tool_description = tool_description(instance)
                 if invocation.should_capture_content:
                     invocation.arguments = (

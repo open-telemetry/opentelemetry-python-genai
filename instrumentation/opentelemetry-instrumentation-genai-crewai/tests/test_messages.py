@@ -20,7 +20,7 @@ from opentelemetry.instrumentation.genai.crewai._messages import (
     tool_description,
     tool_result_to_result,
 )
-from opentelemetry.util.genai.types import BlobPart, TextPart, UriPart
+from opentelemetry.util.genai.types import GenericPart, TextPart
 
 from .test_operations import AddTool
 
@@ -79,24 +79,14 @@ def test_agent_message_conversion_handles_odd_inputs() -> None:
                         "type": "image_url",
                         "image_url": {"url": "https://example.test/a.png"},
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": "data:image/png;base64,QUJD",
-                    },
                     {"type": "text", "text": 42},
-                    {"type": "input_audio", "input_audio": "ignored"},
                 ],
             }
         ]
     )
     assert parts_message[0].parts == [
         TextPart(content="Hi"),
-        UriPart(
-            uri="https://example.test/a.png",
-            mime_type=None,
-            modality="image",
-        ),
-        BlobPart(content=b"ABC", mime_type="image/png", modality="image"),
+        GenericPart(type="image_url"),
     ]
     assert output_to_output_messages(None) == []
     assert output_to_output_messages("plain")[0].parts[0].content == "plain"

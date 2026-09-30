@@ -28,13 +28,13 @@ from pydantic import BaseModel
 
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
+    GenericPart,
     InputMessage,
     MessagePart,
     OutputMessage,
     TextPart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import image_from_url
 from opentelemetry.util.types import AnyValue
 
 _logger = logging.getLogger(__name__)
@@ -389,9 +389,11 @@ def _content_parts(content: str | list[dict[str, Any]]) -> list[MessagePart]:
             ``{"type": "image_url", ...}``, ...).
 
     Returns:
-        One ``TextPart`` for a string or for each ``text`` block. Supported
-        ``image_url`` blocks become ``UriPart`` or ``BlobPart`` values. Invalid
-        and unsupported blocks are skipped.
+        One ``TextPart`` for a string or for each ``text`` block; every other
+        block becomes a ``GenericPart`` carrying only its ``type``, so media
+        keeps its semantic shape without exposing provider payloads. Blocks
+        without a type, or ``text`` blocks whose text is not a string, are
+        skipped, as CrewAI itself skips them.
     """
     if isinstance(content, str):
         return [TextPart(content=content)]
@@ -402,16 +404,12 @@ def _content_parts(content: str | list[dict[str, Any]]) -> list[MessagePart]:
             text: object = block.get("text")
             if isinstance(text, str):
                 parts.append(TextPart(content=text))
-        elif block_type == "image_url":
-            image: object = block.get("image_url")
-            url: object = image
-            if isinstance(image, Mapping):
-                url = cast("Mapping[str, object]", image).get("url")
-            if (
-                isinstance(url, str)
-                and (part := image_from_url(url)) is not None
-            ):
-                parts.append(part)
+        elif isinstance(block_type, str) and block_type:
+            # Media blocks (``image_url``, ``input_audio``, ``file``, ...)
+            # only come from the optional ``crewai-files`` extra and are
+            # provider-shaped, so they are not yet mapped to ``UriPart`` /
+            # ``BlobPart`` / ``FilePart``; only their type is recorded.
+            parts.append(GenericPart(type=block_type))
     return parts
 
 

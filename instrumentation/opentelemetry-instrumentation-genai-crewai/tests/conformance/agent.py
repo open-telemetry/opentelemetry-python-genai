@@ -75,8 +75,8 @@ class AgentScenario(Scenario):
         "gen_ai.invoke_agent.duration",
         "gen_ai.execute_tool.duration",
     )
-    # CrewAI's ReAct path does not expose a tool call ID. Native
-    # function-calling paths do and are covered by the unit tests.
+    # The tool call id is only visible in CrewAI's native function-calling
+    # executor, which is not patched yet; the ReAct path has no id at all.
     expected_violations = (
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",

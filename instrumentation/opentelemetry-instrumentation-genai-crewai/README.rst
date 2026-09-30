@@ -4,8 +4,8 @@ OpenTelemetry CrewAI Instrumentation
 This package instruments CrewAI with OpenTelemetry Generative AI semantic
 conventions. It emits:
 
-* ``invoke_agent`` spans for ``Agent.execute_task``, ``Agent.aexecute_task``,
-  ``Agent.kickoff``, and ``Agent.kickoff_async`` calls.
+* ``invoke_agent`` spans for synchronous ``Agent.execute_task`` calls and
+  standalone ``Agent.kickoff`` calls.
 * ``execute_tool`` spans for direct/native ``BaseTool.run`` calls and
   structured/ReAct ``CrewStructuredTool.invoke`` calls.
 
@@ -69,31 +69,31 @@ The programmatic argument takes precedence over the environment variable.
 CrewAI's built-in telemetry
 ---------------------------
 
-CrewAI's built-in telemetry is left unchanged and can run alongside this
-instrumentation. To opt out, use CrewAI's own configuration before importing
-CrewAI (or this package, which imports it):
+CrewAI ships anonymous usage telemetry that exports spans to
+``telemetry.crewai.com``. It is disabled while this instrumentation is active
+and restored on ``uninstrument()``. To keep it running alongside
+OpenTelemetry:
 
 ::
 
-    export CREWAI_DISABLE_TELEMETRY=true
+    CrewAIInstrumentor().instrument(disable_crewai_telemetry=False)
 
-CrewAI releases before 1.15 install their telemetry ``TracerProvider`` as the
-global provider when ``crewai`` is imported. On those releases, applications
-that configure OpenTelemetry through the global provider must set
-``CREWAI_DISABLE_TELEMETRY=true`` before the import; otherwise a later
-``set_tracer_provider()`` call is ignored. Explicit providers passed to
-``CrewAIInstrumentor().instrument(...)`` continue to work without that
-environment variable.
+CrewAI releases before 1.15 also install that telemetry's ``TracerProvider`` as
+the global provider when ``crewai`` is imported, which ``instrument()`` cannot
+undo. On those releases set ``CREWAI_DISABLE_TELEMETRY=true`` before importing
+CrewAI or this package (which imports it), otherwise a later
+``set_tracer_provider()`` call is ignored.
 
 CrewAI's opt-in cloud tracing (``CREWAI_TRACING_ENABLED`` or
-``Crew(tracing=True)``) is also left unchanged.
+``Crew(tracing=True)``) is not affected by this setting.
 
 Current limitations
 -------------------
 
-Crew and Flow ``invoke_workflow`` spans, tool call IDs on the ReAct path (where
-CrewAI exposes no ID), memory retrieval, and Flow node spans are not yet
-instrumented. Native function-calling tool IDs are recorded.
+Crew and Flow ``invoke_workflow`` spans, the async ``Agent.kickoff_async`` and
+``Agent.aexecute_task`` APIs, tool call IDs, memory retrieval, and Flow node
+spans are not yet instrumented. (``Agent.kickoff`` called while an event loop
+is running returns a coroutine; that coroutine is instrumented when awaited.)
 
 Recursive ``Agent.execute_task`` retries emit one nested ``invoke_agent`` span
 per method invocation; retries initiated by a task guardrail outside that
