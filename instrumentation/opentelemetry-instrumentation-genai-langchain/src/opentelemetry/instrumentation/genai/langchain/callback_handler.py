@@ -551,7 +551,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         if prompt_context is not None:
             llm_invocation.prompt_name = prompt_context.name
             llm_invocation.prompt_variables = prompt_context.variables
-        llm_invocation.conversation_id = _conversation_id(metadata)
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
         llm_invocation.top_k = top_k
