@@ -1,1 +1,1 @@
-Add the `_execution_context()` hook on `SyncStreamWrapper`/`AsyncStreamWrapper` to scope each stream read and cleanup, including generator `send`/`throw` and `asend`/`athrow`.
+Add the `_execution_context()` hook on `SyncStreamWrapper`/`AsyncStreamWrapper` to scope each stream read and cleanup, including generator `send`/`throw` and `asend`/`athrow`. `finalize_on_close`/`finalize_on_aclose` accept an optional `execution_context` so a close through the HTTP response runs inside the same scope, and the stream manager wrappers run the wrapped manager's exit inside it.
