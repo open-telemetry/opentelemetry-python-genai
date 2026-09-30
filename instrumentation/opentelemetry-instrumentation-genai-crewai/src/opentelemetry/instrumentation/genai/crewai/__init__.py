@@ -7,8 +7,9 @@ OpenTelemetry CrewAI Instrumentation
 
 Instrumentation for `CrewAI <https://github.com/crewAIInc/crewAI>`_.
 
-Synchronous ``Agent.execute_task`` and standalone ``Agent.kickoff`` calls are
-recorded as ``invoke_agent`` spans. Tool executions that CrewAI runs itself
+``Agent.execute_task``, ``Agent.aexecute_task``, ``Agent.kickoff``, and
+``Agent.kickoff_async`` calls are recorded as ``invoke_agent`` spans. Tool
+executions that CrewAI runs itself
 (``BaseTool.run`` on the direct and native function-calling paths, and
 ``CrewStructuredTool.invoke`` on the ReAct path) are recorded as
 ``execute_tool`` spans, parented to the agent invocation that triggered them.
@@ -55,14 +56,12 @@ Set ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload`` (with
 via ``instrument(completion_hook=...)`` which takes precedence over the
 environment variable.
 
-CrewAI ships anonymous usage telemetry that exports spans to
-``telemetry.crewai.com``. It is turned off while this instrumentation is
-active; pass ``instrument(disable_crewai_telemetry=False)`` to keep it. CrewAI
-releases before 1.15 also install that telemetry's ``TracerProvider`` as the
-global provider at ``import crewai``, which ``instrument()`` cannot undo — set
-``CREWAI_DISABLE_TELEMETRY=true`` before importing CrewAI (or this package,
-which imports it) on those releases.
-CrewAI's opt-in cloud tracing (``CREWAI_TRACING_ENABLED``) is left untouched.
+CrewAI's built-in telemetry is left unchanged. Set
+``CREWAI_DISABLE_TELEMETRY=true`` before importing CrewAI to opt out using
+CrewAI's own configuration. On releases before 1.15 this is also necessary
+when configuring OpenTelemetry through the global ``TracerProvider`` because
+CrewAI installs its provider during import. Explicit providers passed to
+``instrument()`` are unaffected.
 
 API
 ---
@@ -70,12 +69,12 @@ API
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Collection
 from typing import Any
 
 from crewai.agent.core import Agent
-from crewai.telemetry.telemetry import Telemetry
+from crewai.agents.crew_agent_executor import CrewAgentExecutor
+from crewai.experimental.agent_executor import AgentExecutor
 from crewai.tools.base_tool import BaseTool
 from crewai.tools.structured_tool import CrewStructuredTool
 from wrapt import wrap_function_wrapper
@@ -88,26 +87,25 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .patch import (
+    agent_aexecute_task,
     agent_execute_task,
     agent_kickoff,
-    crewai_telemetry_disabled,
+    agent_kickoff_async,
+    native_tool_call_context,
     tool_execution,
 )
 
 __all__ = ["CrewAIInstrumentor"]
 
-_logger = logging.getLogger(__name__)
-
-_TELEMETRY_CHOKE_POINT = "_safe_telemetry_operation"
-
 
 class CrewAIInstrumentor(BaseInstrumentor):
     """An instrumentor for CrewAI.
 
-    Patches ``Agent.execute_task``, ``Agent.kickoff``, ``BaseTool.run`` and
-    ``CrewStructuredTool.invoke`` so that agent invocations and tool
-    executions are reported through ``opentelemetry-util-genai`` as
-    ``invoke_agent`` and ``execute_tool`` spans and duration metrics.
+    Patches the synchronous and asynchronous Agent execution APIs,
+    ``BaseTool.run``, and ``CrewStructuredTool.invoke`` so that agent
+    invocations and tool executions are reported through
+    ``opentelemetry-util-genai`` as ``invoke_agent`` and ``execute_tool``
+    spans and duration metrics.
 
     The constructor takes no arguments; behavior is configured through the
     keyword arguments of ``instrument()``:
@@ -119,12 +117,6 @@ class CrewAIInstrumentor(BaseInstrumentor):
         A ``CompletionHook`` that receives captured prompt and completion
         content. Defaults to the hook selected by
         ``OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK``, or a no-op.
-    ``disable_crewai_telemetry`` (default ``True``)
-        When ``True``, CrewAI's built-in usage telemetry (spans exported to
-        ``telemetry.crewai.com``) is suppressed while the instrumentor is
-        active and restored on ``uninstrument()``. When ``False``, it keeps
-        running alongside the OpenTelemetry emission.
-
     Example:
         Route CrewAI telemetry to an explicit tracer provider::
 
@@ -167,8 +159,6 @@ class CrewAIInstrumentor(BaseInstrumentor):
                 - ``meter_provider``: ``MeterProvider`` to emit metrics with.
                 - ``logger_provider``: ``LoggerProvider`` to emit logs with.
                 - ``completion_hook``: ``CompletionHook`` for captured content.
-                - ``disable_crewai_telemetry``: whether to suppress CrewAI's
-                  built-in usage telemetry (default ``True``).
 
         Raises:
             BaseException: Re-raised unchanged from a failed patch after the
@@ -189,48 +179,27 @@ class CrewAIInstrumentor(BaseInstrumentor):
         try:
             for cls, method, factory in (
                 (Agent, "execute_task", agent_execute_task),
+                (Agent, "aexecute_task", agent_aexecute_task),
                 (Agent, "kickoff", agent_kickoff),
+                (Agent, "kickoff_async", agent_kickoff_async),
                 (BaseTool, "run", tool_execution),
                 (CrewStructuredTool, "invoke", tool_execution),
             ):
                 wrap_function_wrapper(cls, method, factory(handler))
                 self._wrapped.append((cls, method))
-            if kwargs.get("disable_crewai_telemetry", True):
-                self._disable_crewai_telemetry()
+            for cls in (AgentExecutor, CrewAgentExecutor):
+                method = "_execute_single_native_tool_call"
+                wrap_function_wrapper(cls, method, native_tool_call_context())
+                self._wrapped.append((cls, method))
         except BaseException:
             self._uninstrument()
             raise
-
-    def _disable_crewai_telemetry(self) -> None:
-        """Suppress CrewAI's built-in usage telemetry.
-
-        Wraps the private method every CrewAI telemetry emitter funnels
-        through so that no span is created or exported. The wrapper is
-        registered alongside the other patches and removed on
-        ``_uninstrument()``. If CrewAI has renamed that method, a warning is
-        logged and instrumentation continues without suppression.
-        """
-        # The choke point is private to CrewAI, so a rename must not break
-        # instrument(); the user can still fall back to the env var.
-        if getattr(Telemetry, _TELEMETRY_CHOKE_POINT, None) is None:
-            _logger.warning(
-                "Could not disable CrewAI usage telemetry: "
-                "Telemetry.%s not found. Set CREWAI_DISABLE_TELEMETRY=true "
-                "to disable it.",
-                _TELEMETRY_CHOKE_POINT,
-            )
-            return
-        wrap_function_wrapper(
-            Telemetry, _TELEMETRY_CHOKE_POINT, crewai_telemetry_disabled
-        )
-        self._wrapped.append((Telemetry, _TELEMETRY_CHOKE_POINT))
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable CrewAI instrumentation.
 
         Removes every wrapper installed by ``_instrument()`` in reverse
-        installation order, restoring the original CrewAI methods and its
-        built-in telemetry.
+        installation order, restoring the original CrewAI methods.
 
         Args:
             **kwargs: Ignored; accepted for ``BaseInstrumentor`` compatibility.
