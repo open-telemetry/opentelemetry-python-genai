@@ -4,8 +4,8 @@ OpenTelemetry CrewAI Instrumentation
 This package instruments CrewAI with OpenTelemetry Generative AI semantic
 conventions. It emits:
 
-* ``invoke_agent`` spans for synchronous ``Agent.execute_task`` calls and
-  standalone ``Agent.kickoff`` calls.
+* ``invoke_agent`` spans for ``Agent.execute_task``, ``Agent.aexecute_task``,
+  ``Agent.kickoff``, and ``Agent.kickoff_async`` calls.
 * ``execute_tool`` spans for direct/native ``BaseTool.run`` calls and
   structured/ReAct ``CrewStructuredTool.invoke`` calls.
 
@@ -90,11 +90,9 @@ CrewAI's opt-in cloud tracing (``CREWAI_TRACING_ENABLED`` or
 Current limitations
 -------------------
 
-Crew and Flow ``invoke_workflow`` spans, the async ``Agent.kickoff_async`` and
-``Agent.aexecute_task`` APIs, tool call IDs, memory retrieval, and Flow node
-spans are not yet instrumented. (``Agent.kickoff`` called while an event loop
-is running returns a coroutine; that coroutine is instrumented when awaited.)
+Crew and Flow ``invoke_workflow`` spans, tool call IDs, memory retrieval, and
+Flow node spans are not yet instrumented.
 
-Recursive ``Agent.execute_task`` retries emit one nested ``invoke_agent`` span
-per method invocation; retries initiated by a task guardrail outside that
-method emit sibling spans.
+Recursive ``Agent.execute_task`` and ``Agent.aexecute_task`` retries emit one
+nested ``invoke_agent`` span per method invocation; retries initiated by a
+task guardrail outside those methods emit sibling spans.

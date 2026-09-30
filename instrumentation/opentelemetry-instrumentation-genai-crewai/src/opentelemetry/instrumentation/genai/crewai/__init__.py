@@ -7,8 +7,9 @@ OpenTelemetry CrewAI Instrumentation
 
 Instrumentation for `CrewAI <https://github.com/crewAIInc/crewAI>`_.
 
-Synchronous ``Agent.execute_task`` and standalone ``Agent.kickoff`` calls are
-recorded as ``invoke_agent`` spans. Tool executions that CrewAI runs itself
+``Agent.execute_task``, ``Agent.aexecute_task``, ``Agent.kickoff``, and
+``Agent.kickoff_async`` calls are recorded as ``invoke_agent`` spans. Tool
+executions that CrewAI runs itself
 (``BaseTool.run`` on the direct and native function-calling paths, and
 ``CrewStructuredTool.invoke`` on the ReAct path) are recorded as
 ``execute_tool`` spans, parented to the agent invocation that triggered them.
@@ -88,8 +89,10 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .patch import (
+    agent_aexecute_task,
     agent_execute_task,
     agent_kickoff,
+    agent_kickoff_async,
     crewai_telemetry_disabled,
     tool_execution,
 )
@@ -104,10 +107,11 @@ _TELEMETRY_CHOKE_POINT = "_safe_telemetry_operation"
 class CrewAIInstrumentor(BaseInstrumentor):
     """An instrumentor for CrewAI.
 
-    Patches ``Agent.execute_task``, ``Agent.kickoff``, ``BaseTool.run`` and
-    ``CrewStructuredTool.invoke`` so that agent invocations and tool
-    executions are reported through ``opentelemetry-util-genai`` as
-    ``invoke_agent`` and ``execute_tool`` spans and duration metrics.
+    Patches the synchronous and asynchronous Agent execution APIs,
+    ``BaseTool.run``, and ``CrewStructuredTool.invoke`` so that agent
+    invocations and tool executions are reported through
+    ``opentelemetry-util-genai`` as ``invoke_agent`` and ``execute_tool``
+    spans and duration metrics.
 
     The constructor takes no arguments; behavior is configured through the
     keyword arguments of ``instrument()``:
@@ -189,7 +193,9 @@ class CrewAIInstrumentor(BaseInstrumentor):
         try:
             for cls, method, factory in (
                 (Agent, "execute_task", agent_execute_task),
+                (Agent, "aexecute_task", agent_aexecute_task),
                 (Agent, "kickoff", agent_kickoff),
+                (Agent, "kickoff_async", agent_kickoff_async),
                 (BaseTool, "run", tool_execution),
                 (CrewStructuredTool, "invoke", tool_execution),
             ):

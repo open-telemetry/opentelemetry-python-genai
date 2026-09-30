@@ -22,7 +22,9 @@ def _patched_methods():
 
     return (
         (Agent, "execute_task"),
+        (Agent, "aexecute_task"),
         (Agent, "kickoff"),
+        (Agent, "kickoff_async"),
         (BaseTool, "run"),
         (CrewStructuredTool, "invoke"),
         (Telemetry, "_safe_telemetry_operation"),

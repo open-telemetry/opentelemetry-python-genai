@@ -67,6 +67,26 @@ class ScriptedLLM(BaseLLM):
         self._calls += 1
         return response
 
+    async def acall(
+        self,
+        messages: Any,
+        tools: Any = None,
+        callbacks: Any = None,
+        available_functions: Any = None,
+        from_task: Any = None,
+        from_agent: Any = None,
+        response_model: Any = None,
+    ) -> Any:
+        return self.call(
+            messages,
+            tools,
+            callbacks,
+            available_functions,
+            from_task,
+            from_agent,
+            response_model,
+        )
+
     def supports_function_calling(self) -> bool:
         return self._native
 
@@ -276,7 +296,9 @@ def test_standalone_agent_kickoff(
     result = agent.kickoff("Say hello")
 
     assert result.raw == "Hello from kickoff"
-    span = span_exporter.get_finished_spans()[0]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
     assert span.name == "invoke_agent Researcher"
     assert span.attributes[GenAIAttributes.GEN_AI_AGENT_NAME] == "Researcher"
     assert (
@@ -389,6 +411,76 @@ def test_kickoff_error_is_reraised_and_recorded(
     assert spans[0].status.status_code == StatusCode.ERROR
     assert spans[0].attributes["error.type"] == "RuntimeError"
     assert _current_agent_name.get() is None
+
+
+def test_aexecute_task_is_instrumented(
+    instrument_crewai_with_content,
+    span_exporter,
+) -> None:
+    agent = _agent(ScriptedLLM([FINAL_ANSWER.format("async task")]))
+
+    async def run() -> None:
+        assert await agent.aexecute_task(_task(agent)) == "async task"
+
+    asyncio.run(run())
+
+    spans = span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["invoke_agent Researcher"]
+    assert spans[0].status.status_code == StatusCode.UNSET
+    assert _current_agent_name.get() is None
+
+
+def test_aexecute_task_error_is_reraised_and_recorded(
+    instrument_crewai,
+    span_exporter,
+) -> None:
+    agent = _agent(FailingLLM([]))
+
+    async def run() -> None:
+        with pytest.raises(RuntimeError, match="model failed"):
+            await agent.aexecute_task(_task(agent))
+
+    asyncio.run(run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes["error.type"] == "RuntimeError"
+
+
+def test_kickoff_async_is_instrumented(
+    instrument_crewai_with_content,
+    span_exporter,
+) -> None:
+    agent = _agent(ScriptedLLM(["Hello from kickoff_async"]))
+
+    async def run() -> None:
+        result = await agent.kickoff_async("Say hello")
+        assert result.raw == "Hello from kickoff_async"
+
+    asyncio.run(run())
+
+    spans = span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["invoke_agent Researcher"]
+    assert spans[0].status.status_code == StatusCode.UNSET
+
+
+def test_kickoff_async_error_is_reraised_and_recorded(
+    instrument_crewai,
+    span_exporter,
+) -> None:
+    agent = _agent(FailingLLM([]))
+
+    async def run() -> None:
+        with pytest.raises(RuntimeError, match="model failed"):
+            await agent.kickoff_async("Say hello")
+
+    asyncio.run(run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes["error.type"] == "RuntimeError"
 
 
 def test_kickoff_in_running_loop_is_instrumented_when_awaited(
