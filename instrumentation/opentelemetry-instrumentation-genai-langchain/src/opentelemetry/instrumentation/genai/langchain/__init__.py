@@ -124,6 +124,8 @@ class LangChainInstrumentor(BaseInstrumentor):
         Cleanup instrumentation (unwrap).
         """
         unwrap("langchain_core.callbacks.base.BaseCallbackManager", "__init__")
+        # The agent entry points wrap last, over the execution boundary, so
+        # they come off first.
         try:
             import langgraph.pregel
 

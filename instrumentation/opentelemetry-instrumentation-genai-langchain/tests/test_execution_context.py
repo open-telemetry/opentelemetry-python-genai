@@ -31,7 +31,10 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI, OpenAI
 
 from opentelemetry import baggage, context, trace
-from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+from opentelemetry.instrumentation.genai.langchain import (
+    LangChainInstrumentor,
+    agent_context,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
@@ -736,6 +739,33 @@ def test_uninstrument_restores_execution_methods(
                 assert getattr(owner, name) is not original
         for (owner, name), original in zip(targets, originals):
             assert getattr(owner, name) is original
+
+
+def test_uninstrument_restores_the_twice_wrapped_graph_stream(
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+) -> None:
+    Pregel = pytest.importorskip("langgraph.pregel").Pregel
+    originals = {name: vars(Pregel)[name] for name in ("stream", "astream")}
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    ):
+        for name, original in originals.items():
+            # The agent announcement wraps the execution boundary, which
+            # wraps the original.
+            outer = vars(Pregel)[name]
+            assert outer._self_wrapper is getattr(
+                agent_context, f"wrap_{name}"
+            )
+            inner = outer.__wrapped__
+            assert inner is not original
+            assert inner.__wrapped__ is original
+    for name, original in originals.items():
+        assert vars(Pregel)[name] is original
 
 
 def _uninstall_langgraph(monkeypatch, tmp_path, keep: str | None) -> None:
