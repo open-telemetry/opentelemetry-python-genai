@@ -19,6 +19,7 @@ from wrapt import wrap_function_wrapper
 from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.langchain._run_context import (
     _astart_run,
+    _RunScope,
     _start_run,
     _wrap_call,
     _wrap_run,
@@ -138,8 +139,18 @@ class _ExecutionContext:
             args: tuple[Any, ...],
             kwargs: dict[str, Any],
         ) -> Any:
-            with self._activate(run_id_for(instance, args, kwargs)):
-                return await wrapped(*args, **kwargs)
+            run_id = run_id_for(instance, args, kwargs)
+            with self._activate(run_id):
+                try:
+                    return await wrapped(*args, **kwargs)
+                except BaseException as error:
+                    # agenerate reports an Exception from its gather results
+                    # and reaches on_llm_error; a cancellation or interrupt
+                    # leaves the gather before that, with no handler around
+                    # the await.
+                    if not isinstance(error, Exception):
+                        _RunScope(run_id, self._invocations).finish(error)
+                    raise
 
         return asynchronous if iscoroutinefunction(original) else sync
 

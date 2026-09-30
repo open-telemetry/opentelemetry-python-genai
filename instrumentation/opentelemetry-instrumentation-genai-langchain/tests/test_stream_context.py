@@ -449,6 +449,91 @@ async def test_chat_stream_task_cancellation(clients, span_exporter) -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_ainvoke_task_cancellation(clients, span_exporter) -> None:
+    waiting = asyncio.Event()
+    clients.stream_waiting = waiting
+    model = _model(clients, streaming=True)
+    before = context.get_current()
+
+    async def request() -> None:
+        try:
+            await model.ainvoke("hello")
+        finally:
+            assert context.get_current() is before
+
+    task = asyncio.create_task(request())
+    try:
+        await asyncio.wait_for(waiting.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert context.get_current() is before
+    (model_span,) = _spans(span_exporter, _LC_SCOPE)
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    _child(inference, model_span)
+    assert (
+        model_span.attributes[error_attributes.ERROR_TYPE]
+        == "asyncio.exceptions.CancelledError"
+    )
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [KeyboardInterrupt, SystemExit])
+async def test_chat_ainvoke_interrupt(
+    clients, span_exporter, error: type[BaseException]
+) -> None:
+    clients.stream_error = error()
+    model = _model(clients, streaming=True)
+    restored: list[bool] = []
+
+    async def request() -> None:
+        before = context.get_current()
+        try:
+            await model.ainvoke("hello")
+        finally:
+            restored.append(context.get_current() is before)
+
+    # Raised in a gather child, either leaves the loop from the task step
+    # before the gather resolves, and asyncio.run then cancels the caller.
+    # Run it on a loop of its own so this test's loop is not the one left.
+    with pytest.raises(error):
+        await asyncio.to_thread(asyncio.run, request())
+    assert restored == [True]
+    (model_span,) = _spans(span_exporter, _LC_SCOPE)
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    _child(inference, model_span)
+    assert model_span.status.status_code == StatusCode.ERROR
+    assert model_span.attributes[error_attributes.ERROR_TYPE] == error.__name__
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [KeyboardInterrupt, SystemExit])
+async def test_chat_invoke_interrupt(
+    clients, span_exporter, error: type[BaseException]
+) -> None:
+    # generate catches the BaseException around _generate_with_cache and
+    # reports it, so the callback handler ends this run.
+    clients.stream_error = error()
+    model = _model(clients, streaming=True)
+    before = context.get_current()
+    with pytest.raises(error):
+        model.invoke("hello")
+    assert context.get_current() is before
+    (model_span,) = _spans(span_exporter, _LC_SCOPE)
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    _child(inference, model_span)
+    assert model_span.status.status_code == StatusCode.ERROR
+    assert model_span.attributes[error_attributes.ERROR_TYPE] == error.__name__
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("kind", ["lambda", "generator"])
 async def test_runnable_stream_close(

@@ -31,6 +31,7 @@ from opentelemetry.util.genai.stream import (
 )
 
 __all__ = [
+    "_RunScope",
     "_astart_run",
     "_start_run",
     "_wrap_call",
@@ -67,10 +68,14 @@ class _RunScope:
 
     def finish(self, error: BaseException | None = None) -> None:
         # The callback handler ends the invocation from its end/error callback;
-        # this only acts when none fired: a tool or retriever cancelled by a
-        # BaseException the runner does not report, or a stream closed early by
-        # a runner that leaves its inner iterator open (RunnableLambda.astream).
-        # Finishing an ended invocation is a no-op in the util.
+        # its state stays registered while a child is live, so this may find
+        # an ended invocation, and finishing it again is a no-op in the util.
+        # This is the end when no callback fires: a tool or retriever cancelled
+        # by a BaseException the runner does not report, a chat model whose
+        # agenerate gather child is cancelled or interrupted, or a stream
+        # closed early by a runner that leaves its inner iterator open
+        # (RunnableLambda.astream). on_error routes a tool or retriever error
+        # through the handler's own error path so the attributes match.
         if self.run_id is None:
             return
         invocation = self.invocations.get_invocation(self.run_id)
