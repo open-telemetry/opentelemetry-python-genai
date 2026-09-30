@@ -547,32 +547,46 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
         self._self_tool_invocation.fail(error)
 
 
+_ExecutionContextFactory = Callable[[], AbstractContextManager[None]]
+
+
 class _CloseFinalizingProxy(_ObjectProxy):
-    def __init__(self, wrapped: object, finalize: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        wrapped: object,
+        finalize: Callable[[], None],
+        execution_context: _ExecutionContextFactory | None,
+    ) -> None:
         super().__init__(wrapped)
         self._self_finalize = finalize
+        self._self_execution_context = execution_context
+
+    def _scope(self) -> AbstractContextManager[None]:
+        if self._self_execution_context is None:
+            return nullcontext()
+        return self._self_execution_context()
 
     def close(self) -> None:
-        try:
-            self.__wrapped__.close()
-        finally:
-            self._self_finalize()
+        with self._scope():
+            try:
+                self.__wrapped__.close()
+            finally:
+                self._self_finalize()
 
 
-class _AcloseFinalizingProxy(_ObjectProxy):
-    def __init__(self, wrapped: object, finalize: Callable[[], None]) -> None:
-        super().__init__(wrapped)
-        self._self_finalize = finalize
-
+class _AcloseFinalizingProxy(_CloseFinalizingProxy):
     async def aclose(self) -> None:
-        try:
-            await self.__wrapped__.aclose()
-        finally:
-            self._self_finalize()
+        with self._scope():
+            try:
+                await self.__wrapped__.aclose()
+            finally:
+                self._self_finalize()
 
 
 def finalize_on_close(
-    wrapped: WrappedT, finalize: Callable[[], None]
+    wrapped: WrappedT,
+    finalize: Callable[[], None],
+    execution_context: _ExecutionContextFactory | None = None,
 ) -> WrappedT:
     """Proxy ``wrapped`` so closing it also finalizes telemetry.
 
@@ -581,15 +595,26 @@ def finalize_on_close(
     ``stream.response`` -- where a ``close()`` means the caller is done and the
     invocation should be finalized. Everything but ``close`` forwards
     unchanged.
+
+    ``execution_context`` is entered around the close and the finalizer, the
+    same way the stream wrapper scopes its own ``close``; a stream wrapper
+    passes its ``_execution_context`` so this cleanup path finalizes in the
+    same context as the others.
     """
-    return cast(WrappedT, _CloseFinalizingProxy(wrapped, finalize))
+    return cast(
+        WrappedT, _CloseFinalizingProxy(wrapped, finalize, execution_context)
+    )
 
 
 def finalize_on_aclose(
-    wrapped: WrappedT, finalize: Callable[[], None]
+    wrapped: WrappedT,
+    finalize: Callable[[], None],
+    execution_context: _ExecutionContextFactory | None = None,
 ) -> WrappedT:
     """Async counterpart of ``finalize_on_close``, hooking ``aclose``."""
-    return cast(WrappedT, _AcloseFinalizingProxy(wrapped, finalize))
+    return cast(
+        WrappedT, _AcloseFinalizingProxy(wrapped, finalize, execution_context)
+    )
 
 
 class SyncStreamManagerWrapper(

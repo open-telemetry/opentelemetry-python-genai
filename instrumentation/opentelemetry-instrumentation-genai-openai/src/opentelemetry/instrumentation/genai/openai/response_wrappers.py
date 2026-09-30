@@ -206,7 +206,13 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         response = _get_stream_response(self.stream)
         if response is None:
             return None
-        return finalize_on_close(response, lambda: self._stop(None))
+        # A close through the HTTP response is stream cleanup too: run it and
+        # the finalizer in the same context as the wrapper's own close.
+        return finalize_on_close(
+            response,
+            lambda: self._stop(None),
+            execution_context=self._execution_context,
+        )
 
     def process_event(self, event: ResponseStreamEvent[TextFormatT]) -> None:
         # raw-response stream can be parsed into a caller-defined event type.
@@ -419,7 +425,12 @@ class AsyncResponseStreamWrapper(
         response = _get_stream_response(self.stream)
         if response is None:
             return None
-        return finalize_on_aclose(response, lambda: self._stop(None))
+        # See _ResponseStreamMixin.response.
+        return finalize_on_aclose(
+            response,
+            lambda: self._stop(None),
+            execution_context=self._execution_context,
+        )
 
 
 class AsyncFetchResponseStreamWrapper(
