@@ -66,6 +66,11 @@ class _RunScope:
             yield
 
     def finish(self, error: BaseException | None = None) -> None:
+        # The callback handler ends the invocation from its end/error callback;
+        # this only acts when none fired: a tool or retriever cancelled by a
+        # BaseException the runner does not report, or a stream closed early by
+        # a runner that leaves its inner iterator open (RunnableLambda.astream).
+        # Finishing an ended invocation is a no-op in the util.
         if self.run_id is None:
             return
         invocation = self.invocations.get_invocation(self.run_id)
@@ -174,6 +179,10 @@ class _AsyncContextStream(AsyncStreamWrapper[Any]):
 
 
 def _config_run(bound: BoundArguments, scope: _RunScope) -> BoundArguments:
+    # The run id is chosen here so _started can tell this frame's own run from
+    # one started under the same activation before reaching its own boundary
+    # (a chat model invoked from a lambda body): attaching that one here would
+    # leave its ended span current for the rest of this frame.
     config = dict(bound.arguments.get("config") or {})
     scope.run_id = config.get("run_id") or uuid4()
     config["run_id"] = scope.run_id

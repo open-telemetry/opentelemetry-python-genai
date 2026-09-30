@@ -342,7 +342,10 @@ class _ExecutionContext:
 
         # Composite runnables drive steps that may start no run of their own
         # (a plain ``invoke`` override), so the child context is attached where
-        # LangChain and LangGraph enter the step's copied context.
+        # LangChain and LangGraph enter the step's copied context. Each caller
+        # binds ``set_config_context`` by name at import, so the replacement
+        # goes into the calling modules rather than ``runnables.config``; tools
+        # bind it too, but ``BaseTool.run`` above already covers them.
         for module_name, fallback_modules in (
             ("langchain_core.runnables.base", ()),
             ("langchain_core.runnables.fallbacks", ()),
