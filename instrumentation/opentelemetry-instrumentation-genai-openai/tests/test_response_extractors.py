@@ -1310,7 +1310,7 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
                 "cache_write_tokens": 0,
             },
             "output_tokens": 7,
-            "output_tokens_details": {"reasoning_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 4},
             "total_tokens": 18,
         },
     )
@@ -1325,6 +1325,7 @@ def test_set_invocation_response_attributes_populates_usage_and_metadata(
     assert invocation.output_tokens == 7
     assert invocation.cache_read_input_tokens == 3
     assert invocation.cache_write_input_tokens == 0
+    assert invocation.thinking_tokens == 4
     assert invocation.attributes == {
         OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER: "scale",
     }

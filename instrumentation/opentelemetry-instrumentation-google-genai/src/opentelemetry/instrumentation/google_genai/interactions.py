@@ -1092,6 +1092,10 @@ def _apply_interaction_request_attributes(
     invocation: InferenceInvocation | RemoteAgentInvocation,
     request: Mapping[str, object],
 ) -> None:
+    previous_interaction_id = _get_field(request, "previous_interaction_id")
+    if isinstance(previous_interaction_id, str) and previous_interaction_id:
+        invocation.previous_response_id = previous_interaction_id
+
     config = _explicit_request_fields(_get_field(request, "generation_config"))
     invocation.temperature = _coerce_float(_get_field(config, "temperature"))
     invocation.top_p = _coerce_float(_get_field(config, "top_p"))

@@ -128,7 +128,15 @@ def create_chat_invocation(
     )
     invocation.temperature = get_value(kwargs.get("temperature"))
     invocation.top_p = get_value(kwargs.get("p") or kwargs.get("top_p"))
-    invocation.max_tokens = get_value(kwargs.get("max_tokens"))
+    max_tokens = get_value(kwargs.get("max_completion_tokens"))
+    if max_tokens is None:
+        max_tokens = get_value(kwargs.get("max_tokens"))
+    # Older SDKs (e.g. 1.26.0) only accept max_completion_tokens via extra_body
+    if max_tokens is None:
+        extra_body = get_value(kwargs.get("extra_body"))
+        if isinstance(extra_body, Mapping):
+            max_tokens = get_value(extra_body.get("max_completion_tokens"))
+    invocation.max_tokens = max_tokens
     invocation.presence_penalty = get_value(kwargs.get("presence_penalty"))
     invocation.frequency_penalty = get_value(kwargs.get("frequency_penalty"))
     invocation.seed = get_value(kwargs.get("seed"))

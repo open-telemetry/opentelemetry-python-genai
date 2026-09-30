@@ -185,6 +185,9 @@ async def test_async_chat_completion_reports_reasoning_tokens(
         )
 
     spans = span_exporter.get_finished_spans()
+    assert (
+        spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 1024
+    )
     assert_reasoning_attributes(
         spans[0], response.usage, require_reasoning=True
     )
@@ -1222,6 +1225,9 @@ async def test_async_chat_completion_streaming_reports_reasoning_tokens(
 
     assert usage is not None
     spans = span_exporter.get_finished_spans()
+    assert (
+        spans[0].attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 1024
+    )
     assert_reasoning_attributes(spans[0], usage, require_reasoning=True)
 
 

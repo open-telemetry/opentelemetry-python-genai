@@ -128,6 +128,7 @@ class UsageTokens:
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
     cache_write_input_tokens: int | None = None
+    thinking_tokens: int | None = None
 
 
 def _get_field(value: object, field_name: str) -> object | None:
@@ -867,6 +868,9 @@ def extract_usage_tokens(usage: ResponseUsage | None) -> UsageTokens:
             if details is not None
             else None
         ),
+        thinking_tokens=getattr(
+            usage.output_tokens_details, "reasoning_tokens", None
+        ),
     )
 
 
@@ -926,6 +930,7 @@ def set_invocation_response_attributes(
     invocation.output_tokens = tokens.output_tokens
     invocation.cache_write_input_tokens = tokens.cache_write_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
+    invocation.thinking_tokens = tokens.thinking_tokens
 
     finish_reasons = extract_finish_reasons(response)
     if finish_reasons:

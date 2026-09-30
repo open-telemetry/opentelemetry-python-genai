@@ -1,0 +1,1 @@
+Capture `previous_interaction_id` on `interactions.create` as `gen_ai.request.previous_response.id`

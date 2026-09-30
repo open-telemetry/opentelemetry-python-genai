@@ -151,7 +151,10 @@ class TestOnChainStartWorkflow:
         )
 
         telemetry.workflow.assert_called_once_with(
-            name="MyLangGraph", context=None, _attach_to_context=True
+            name="MyLangGraph",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
         )
 
     def test_workflow_name_overridden_by_metadata(self):
@@ -167,11 +170,14 @@ class TestOnChainStartWorkflow:
         )
 
         telemetry.workflow.assert_called_once_with(
-            name="custom_workflow", context=None, _attach_to_context=True
+            name="custom_workflow",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
         )
 
     def test_workflow_conversation_id_from_metadata(self):
-        handler, _, workflow_inv, _ = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -182,7 +188,7 @@ class TestOnChainStartWorkflow:
             metadata={"thread_id": "t1"},
         )
 
-        assert workflow_inv.conversation_id == "t1"
+        assert telemetry.workflow.call_args.kwargs["conversation_id"] == "t1"
 
     def test_workflow_registered_in_invocation_manager(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -223,6 +229,7 @@ class TestOnChainStartWorkflow:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
             context=workflow_inv.context,
+            conversation_id=None,
             _attach_to_context=True,
         )
 
@@ -248,6 +255,7 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
             context=None,
+            conversation_id=None,
             _attach_to_context=True,
         )
         assert (
@@ -277,15 +285,15 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="AgentExecutor",
             context=None,
+            conversation_id="thread-abc",
             _attach_to_context=True,
         )
-        assert agent_inv.conversation_id == "thread-abc"
         assert agent_inv.input_messages[0].parts[0].content == "Solve this"
         assert agent_inv.output_messages[0].parts[0].content == "Solved"
         agent_inv.stop.assert_called_once_with()
 
     def test_agent_metadata_set(self):
-        handler, _, _, agent_inv = _make_handler()
+        handler, telemetry, _, agent_inv = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -303,10 +311,13 @@ class TestOnChainStartAgent:
 
         assert agent_inv.agent_id is None
         assert agent_inv.agent_description == "does math"
-        assert agent_inv.conversation_id == "thread-abc"
+        assert (
+            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
+            == "thread-abc"
+        )
 
     def test_conversation_id_prefers_thread_id_over_session_id(self):
-        handler, _, _, agent_inv = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -321,11 +332,14 @@ class TestOnChainStartAgent:
             },
         )
 
-        assert agent_inv.conversation_id == "t1"
+        assert (
+            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
+            == "t1"
+        )
 
     def test_conversation_id_prefers_session_id_over_conversation_id(self):
         """thread_id > session_id > conversation_id is the resolution order."""
-        handler, _, _, agent_inv = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -340,7 +354,10 @@ class TestOnChainStartAgent:
             },
         )
 
-        assert agent_inv.conversation_id == "s1"
+        assert (
+            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
+            == "s1"
+        )
 
     def test_duplicate_agent_name_does_not_create_new_span(self):
         """When the nearest ancestor already has the same agent name, no new
@@ -519,7 +536,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.return_value.conversation_id == "t1"
+        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
 
     def test_no_conversation_id_available(self):
         handler, telemetry, _, _ = _make_handler()
@@ -534,7 +551,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.return_value.conversation_id is None
+        assert telemetry.inference.call_args.kwargs["conversation_id"] is None
 
     def test_chat_model_passes_parent_context_to_telemetry_handler(self):
         handler, telemetry, _, _ = _make_handler()
@@ -559,6 +576,7 @@ class TestOnChatModelStartConversationId:
             "openai",
             request_model="gpt-4",
             context=parent_wf.context,
+            conversation_id=None,
             _attach_to_context=True,
         )
 
@@ -746,6 +764,7 @@ class TestAgentAncestryPublicBehavior:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
             context=workflow_inv.context,
+            conversation_id=None,
             _attach_to_context=True,
         )
 
@@ -3461,7 +3480,10 @@ def test_explicit_attach_to_context_false():
     )
 
     telemetry.workflow.assert_called_once_with(
-        name="LangGraph", context=None, _attach_to_context=False
+        name="LangGraph",
+        context=None,
+        conversation_id=None,
+        _attach_to_context=False,
     )
 
 
@@ -3481,7 +3503,10 @@ def test_sync_defaults_attach_to_context_true():
     )
 
     telemetry.workflow.assert_called_once_with(
-        name="LangGraph", context=None, _attach_to_context=True
+        name="LangGraph",
+        context=None,
+        conversation_id=None,
+        _attach_to_context=True,
     )
 
 

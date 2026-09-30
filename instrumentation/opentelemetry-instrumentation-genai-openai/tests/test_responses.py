@@ -50,6 +50,7 @@ from .test_utils import (
     assert_cache_attributes,
     assert_fetch_response_attributes,
     assert_messages_attribute,
+    assert_reasoning_attributes,
     format_simple_expected_output_message,
     get_responses_custom_tool_definition,
     get_responses_custom_tool_loop_input,
@@ -1485,15 +1486,6 @@ def test_responses_create_reports_reasoning_tokens(
         timeout=30.0,
     )
 
-    reasoning_tokens = getattr(
-        getattr(response.usage, "output_tokens_details", None),
-        "reasoning_tokens",
-        None,
-    )
-
-    assert reasoning_tokens is not None
-    assert reasoning_tokens > 0
-
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     (span,) = spans
@@ -1512,10 +1504,37 @@ def test_responses_create_reports_reasoning_tokens(
         "stop",
     )
 
+    assert_reasoning_attributes(span, response.usage, require_reasoning=True)
+
     output_messages = _load_span_messages(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert len(output_messages) > 0
+
+
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_reasoning_param,
+    reason=(
+        "openai SDK too old to support 'reasoning' parameter on Responses.create"
+    ),
+)
+def test_responses_create_streaming_reports_reasoning_tokens(
+    request, span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with openai_client.responses.create(
+        model=REASONING_MODEL,
+        reasoning={"effort": "low"},
+        input=REASONING_PROMPT,
+        max_output_tokens=1000,
+        stream=True,
+    ) as stream:
+        response = _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_reasoning_attributes(span, response.usage, require_reasoning=True)
 
 
 @pytest.mark.vcr()
