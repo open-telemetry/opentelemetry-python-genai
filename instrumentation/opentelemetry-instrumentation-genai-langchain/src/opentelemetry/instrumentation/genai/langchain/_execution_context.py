@@ -141,32 +141,36 @@ class _ExecutionContext:
         class_name: str | None,
         method: str,
         wrapper_for: Callable[[Callable[..., Any]], Callable[..., Any]],
+        *,
+        fallback_modules: tuple[str, ...] = (),
     ) -> None:
-        try:
-            owner: Any = import_module(module_name)
-            if class_name is not None:
-                owner = getattr(owner, class_name)
-            original = getattr(owner, method)
-        except (ImportError, AttributeError):
-            target = ".".join(filter(None, (module_name, class_name, method)))
-            library = module_name.partition(".")[0]
-            if find_spec(library) is None:
-                _logger.debug(
-                    "Skipping execution boundary %s: %s is not installed",
-                    target,
-                    library,
-                )
-            else:
-                # Installed but changed: spans under it will not correlate.
-                _logger.warning(
-                    "Skipping execution boundary %s: not found in the "
-                    "installed %s, so context is not propagated across it",
-                    target,
-                    library,
-                )
+        for name in (module_name, *fallback_modules):
+            try:
+                owner: Any = import_module(name)
+                if class_name is not None:
+                    owner = getattr(owner, class_name)
+                original = getattr(owner, method)
+            except (ImportError, AttributeError):
+                continue
+            wrap_function_wrapper(owner, method, wrapper_for(original))
+            self._patched.append((owner, method))
             return
-        wrap_function_wrapper(owner, method, wrapper_for(original))
-        self._patched.append((owner, method))
+        target = ".".join(filter(None, (module_name, class_name, method)))
+        library = module_name.partition(".")[0]
+        if find_spec(library) is None:
+            _logger.debug(
+                "Skipping execution boundary %s: %s is not installed",
+                target,
+                library,
+            )
+        else:
+            # Installed but changed: spans under it will not correlate.
+            _logger.warning(
+                "Skipping execution boundary %s: not found in the "
+                "installed %s, so context is not propagated across it",
+                target,
+                library,
+            )
 
     def instrument(self) -> None:
         for module_name, class_name, method in _METHODS:
@@ -271,16 +275,18 @@ class _ExecutionContext:
         # Composite runnables drive steps that may start no run of their own
         # (a plain ``invoke`` override), so the child context is attached where
         # LangChain and LangGraph enter the step's copied context.
-        for module_name in (
-            "langchain_core.runnables.base",
-            "langchain_core.runnables.fallbacks",
-            "langgraph._internal._runnable",
+        for module_name, fallback_modules in (
+            ("langchain_core.runnables.base", ()),
+            ("langchain_core.runnables.fallbacks", ()),
+            # LangGraph moved the helper into _internal in 0.6.
+            ("langgraph._internal._runnable", ("langgraph.utils.runnable",)),
         ):
             self._patch(
                 module_name,
                 None,
                 "set_config_context",
                 lambda _original: self._config_context,
+                fallback_modules=fallback_modules,
             )
 
     def uninstrument(self) -> None:

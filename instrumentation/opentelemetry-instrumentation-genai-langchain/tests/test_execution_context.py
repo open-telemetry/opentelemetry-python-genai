@@ -10,6 +10,7 @@ import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from contextvars import copy_context
+from importlib import import_module
 from typing import Any, TypedDict
 
 import httpx
@@ -407,6 +408,13 @@ class _State(TypedDict):
     text: str
 
 
+def _optional_module(name: str) -> Any:
+    try:
+        return import_module(name)
+    except ImportError:
+        return None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_graph_node_and_nested_tool_correlate_http(
@@ -415,8 +423,13 @@ async def test_graph_node_and_nested_tool_correlate_http(
     asynchronous: bool,
 ) -> None:
     graph_module = pytest.importorskip("langgraph.graph")
-    helper = pytest.importorskip("langgraph._internal._runnable")
-    if not hasattr(helper, "set_config_context"):
+    if not any(
+        hasattr(_optional_module(name), "set_config_context")
+        for name in (
+            "langgraph._internal._runnable",
+            "langgraph.utils.runnable",
+        )
+    ):
         pytest.skip("LangGraph version has no scoped node execution helper")
 
     tool = StructuredTool.from_function(
