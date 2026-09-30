@@ -6,6 +6,10 @@
 import asyncio
 import inspect
 import timeit
+from collections.abc import AsyncGenerator, Generator, Iterator
+from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1607,3 +1611,144 @@ def test_async_tool_stream_wrapper_finalizes_failure_on_del():
         assert spans[0].attributes["error.type"] == "GeneratorExit"
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_sync_execution_scope_includes_send_throw_and_close(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    closed: list[bool] = []
+    error = ConnectionError("stream failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestSyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+        def _process_chunk(self, chunk: Any) -> None:
+            assert active.get()
+            super()._process_chunk(chunk)
+
+        def _on_stream_end(self) -> None:
+            assert active.get()
+            super()._on_stream_end()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            assert active.get()
+            super()._on_stream_error(error)
+
+    def produce() -> Generator[str, str, None]:
+        assert active.get()
+        try:
+            value = yield "first"
+            assert active.get()
+            assert value == "sent"
+            try:
+                yield "second"
+            except ConnectionError as caught:
+                assert caught is error
+                assert active.get()
+                if failure:
+                    raise
+                yield "recovered"
+        finally:
+            assert active.get()
+            closed.append(True)
+
+    wrapper = ScopedWrapper(produce())
+    assert next(wrapper) == "first"
+    assert not active.get()
+    assert wrapper.send("sent") == "second"
+    assert not active.get()
+    if failure:
+        with pytest.raises(ConnectionError) as raised:
+            wrapper.throw(error)
+        assert raised.value is error
+        assert wrapper._self_failures == [error]
+    else:
+        assert wrapper.throw(error) == "recovered"
+    assert not active.get()
+    wrapper.close()
+    assert not active.get()
+    assert closed == [True]
+    assert wrapper._self_stop_count == (0 if failure else 1)
+    assert not hasattr(ScopedWrapper(_FakeSyncStream()), "send")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_async_execution_scope_includes_asend_athrow_and_close(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    closed: list[bool] = []
+    error = ConnectionError("stream failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+        def _process_chunk(self, chunk: Any) -> None:
+            assert active.get()
+            super()._process_chunk(chunk)
+
+        def _on_stream_end(self) -> None:
+            assert active.get()
+            super()._on_stream_end()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            assert active.get()
+            super()._on_stream_error(error)
+
+    async def produce() -> AsyncGenerator[str, str]:
+        assert active.get()
+        try:
+            value = yield "first"
+            assert active.get()
+            assert value == "sent"
+            try:
+                yield "second"
+            except ConnectionError as caught:
+                assert caught is error
+                assert active.get()
+                if failure:
+                    raise
+                yield "recovered"
+        finally:
+            assert active.get()
+            closed.append(True)
+
+    wrapper = ScopedWrapper(produce())
+    assert await anext(wrapper) == "first"
+    assert not active.get()
+    assert await wrapper.asend("sent") == "second"
+    assert not active.get()
+    if failure:
+        with pytest.raises(ConnectionError) as raised:
+            await wrapper.athrow(error)
+        assert raised.value is error
+        assert wrapper._self_failures == [error]
+    else:
+        assert await wrapper.athrow(error) == "recovered"
+    assert not active.get()
+    await wrapper.aclose()
+    assert not active.get()
+    assert closed == [True]
+    assert wrapper._self_stop_count == (0 if failure else 1)
+    assert not hasattr(ScopedWrapper(_FakeAsyncStream()), "asend")
