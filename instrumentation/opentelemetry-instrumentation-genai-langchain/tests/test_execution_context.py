@@ -21,6 +21,7 @@ from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.runnables import base as runnables_base
 from langchain_core.tools import BaseTool, StructuredTool, Tool
 from langchain_core.vectorstores import VectorStore
 from langchain_openai import ChatOpenAI
@@ -693,6 +694,7 @@ def test_uninstrument_restores_execution_methods(
         (Runnable, "_acall_with_config"),
         (Runnable, "_transform_stream_with_config"),
         (Runnable, "_atransform_stream_with_config"),
+        (runnables_base, "set_config_context"),
         (CallbackManager, "on_chain_start"),
     ]
     try:
@@ -728,6 +730,7 @@ def test_uninstrument_restores_execution_methods(
             "Runnable",
             "_atransform_stream_with_config",
         ),
+        ("langchain_core.runnables.base", None, "set_config_context"),
         ("langgraph._internal._runnable", None, "set_config_context"),
         ("langgraph._internal._runnable", None, None),
     ],

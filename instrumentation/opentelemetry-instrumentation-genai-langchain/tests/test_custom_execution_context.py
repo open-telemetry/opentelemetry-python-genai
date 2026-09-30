@@ -11,7 +11,12 @@ from typing import Any
 import pytest
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
+from langchain_core.runnables import (
+    Runnable,
+    RunnableConfig,
+    RunnableLambda,
+    RunnableParallel,
+)
 from langchain_core.tools import BaseTool
 
 from opentelemetry import context
@@ -266,4 +271,130 @@ async def test_custom_runnable_in_sequence_correlates_http(
     _child(runnable_http, workflow)
     _child(inference, workflow)
     _child(provider_http, inference)
+    _assert_no_runs()
+
+
+def _url(span: Any) -> str:
+    attributes = span.attributes
+    return str(attributes.get("url.full") or attributes.get("http.url"))
+
+
+class _PlainRunnable(Runnable[str, str]):
+    """A Runnable whose ``invoke`` starts no run and uses no helper."""
+
+    def __init__(self, clients: Any, error: Exception | None = None) -> None:
+        self._clients = clients
+        self._error = error
+
+    def invoke(
+        self, input: str, config: RunnableConfig | None = None, **kwargs: Any
+    ) -> str:
+        self._clients.http.get("https://example.test/plain")
+        if self._error is not None:
+            raise self._error
+        return input
+
+    async def ainvoke(
+        self, input: str, config: RunnableConfig | None = None, **kwargs: Any
+    ) -> str:
+        await self._clients.ahttp.get("https://example.test/plain")
+        if self._error is not None:
+            raise self._error
+        return input
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("composite", ["sequence", "parallel", "nested"])
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_plain_runnable_in_composite_correlates_http(
+    clients: Any, span_exporter: Any, mode: str, composite: str
+) -> None:
+    plain = _PlainRunnable(clients)
+    infer = RunnableLambda(clients.infer)
+    if composite == "sequence":
+        chain: Runnable[str, Any] = plain | infer
+    elif composite == "parallel":
+        chain = RunnableParallel(plain=plain, infer=infer)
+    else:
+        chain = RunnableLambda(lambda text: text) | (plain | infer)
+    before = context.get_current()
+    result = (
+        chain.invoke("hello")
+        if mode == "sync"
+        else await chain.ainvoke("hello")
+    )
+    assert (
+        result == {"plain": "hello", "infer": "answer"}
+        if composite == "parallel"
+        else result == "answer"
+    )
+    assert context.get_current() is before
+    (workflow,) = _spans(span_exporter, _LC_SCOPE)
+    assert workflow.name.startswith("invoke_workflow Runnable")
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    http_spans = _spans(span_exporter, _HTTP_SCOPE)
+    (plain_http,) = [s for s in http_spans if _url(s).endswith("/plain")]
+    (provider_http,) = [s for s in http_spans if s is not plain_http]
+    _child(plain_http, workflow)
+    _child(inference, workflow)
+    _child(provider_http, inference)
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_plain_runnable_fallback_correlates_http(
+    clients: Any, span_exporter: Any, mode: str
+) -> None:
+    chain = _PlainRunnable(clients, ConnectionError("down")).with_fallbacks(
+        [RunnableLambda(clients.infer)]
+    )
+    before = context.get_current()
+    result = (
+        chain.invoke("hello")
+        if mode == "sync"
+        else await chain.ainvoke("hello")
+    )
+    assert result == "answer"
+    assert context.get_current() is before
+    (workflow,) = _spans(span_exporter, _LC_SCOPE)
+    assert workflow.name == "invoke_workflow RunnableWithFallbacks"
+    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    http_spans = _spans(span_exporter, _HTTP_SCOPE)
+    (plain_http,) = [s for s in http_spans if _url(s).endswith("/plain")]
+    (provider_http,) = [s for s in http_spans if s is not plain_http]
+    _child(plain_http, workflow)
+    _child(inference, workflow)
+    _child(provider_http, inference)
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["batch", "abatch"])
+async def test_sequence_batch_correlates_each_input(
+    clients: Any, span_exporter: Any, mode: str
+) -> None:
+    chain = _HttpRunnable(clients) | RunnableLambda(clients.infer)
+    before = context.get_current()
+    if mode == "batch":
+        results = chain.batch(["one", "two"])
+    else:
+        results = await chain.abatch(["one", "two"])
+    assert results == ["answer", "answer"]
+    assert context.get_current() is before
+    workflows = _spans(span_exporter, _LC_SCOPE)
+    assert [w.name for w in workflows] == [
+        "invoke_workflow RunnableSequence"
+    ] * 2
+    inferences = _spans(span_exporter, _OPENAI_SCOPE)
+    http_spans = _spans(span_exporter, _HTTP_SCOPE)
+    runnable_http = [s for s in http_spans if _url(s).endswith("/runnable")]
+    provider_http = [s for s in http_spans if s not in runnable_http]
+    assert len(inferences) == len(runnable_http) == len(provider_http) == 2
+    # Every root run parents exactly one runnable step and one inference.
+    roots = sorted(w.context.span_id for w in workflows)
+    assert sorted(s.parent.span_id for s in runnable_http) == roots
+    assert sorted(s.parent.span_id for s in inferences) == roots
+    for http in provider_http:
+        _child(http, next(i for i in inferences if i.context == http.parent))
     _assert_no_runs()

@@ -15,7 +15,7 @@ from uuid import UUID
 
 from wrapt import wrap_function_wrapper
 
-from opentelemetry.context import attach, detach
+from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.langchain._run_context import (
     _astart_run,
     _start_run,
@@ -104,7 +104,7 @@ class _ExecutionContext:
         return asynchronous if iscoroutinefunction(original) else sync
 
     @contextmanager
-    def _graph_context(
+    def _config_context(
         self,
         wrapped: Callable[..., Any],
         instance: Any,
@@ -117,9 +117,17 @@ class _ExecutionContext:
             getattr(callbacks, "parent_run_id", None)
         )
         with wrapped(*args, **kwargs) as context:
-            # LangGraph executes nodes in this copied context. Restore the token
-            # in that same context, never in a callback or the consuming task.
-            token = context.run(attach, parent) if parent is not None else None
+            # LangChain runs each child (a sequence step, a parallel branch, a
+            # graph node) in this copied context. Restore the token in that
+            # same context, never in a callback or the consuming task. A child
+            # whose own boundary already attached the parent needs no second
+            # token.
+            token = (
+                context.run(attach, parent)
+                if parent is not None
+                and context.run(get_current) is not parent
+                else None
+            )
             try:
                 yield context
             finally:
@@ -249,12 +257,20 @@ class _ExecutionContext:
                     ),
                 )
 
-        self._patch(
+        # Composite runnables drive steps that may start no run of their own
+        # (a plain ``invoke`` override), so the child context is attached where
+        # LangChain and LangGraph enter the step's copied context.
+        for module_name in (
+            "langchain_core.runnables.base",
+            "langchain_core.runnables.fallbacks",
             "langgraph._internal._runnable",
-            None,
-            "set_config_context",
-            lambda _original: self._graph_context,
-        )
+        ):
+            self._patch(
+                module_name,
+                None,
+                "set_config_context",
+                lambda _original: self._config_context,
+            )
 
     def uninstrument(self) -> None:
         for owner, name in reversed(self._patched):

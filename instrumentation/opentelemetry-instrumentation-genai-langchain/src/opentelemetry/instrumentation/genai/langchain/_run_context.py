@@ -15,7 +15,7 @@ from uuid import UUID, uuid4
 
 from langchain_core.callbacks.manager import BaseRunManager
 
-from opentelemetry.context import Context, attach, detach
+from opentelemetry.context import Context, attach, detach, get_current
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
 )
@@ -94,8 +94,10 @@ def _started(result: BaseRunManager | list[BaseRunManager]) -> None:
     if context is not None:
         # The manager returns in the runner's context, after handlers finish.
         # Its token belongs to this activation, never to a callback handler.
+        # An enclosing composite may have attached the same context already.
         read.scope.context = context
-        read.stack.callback(detach, attach(context))
+        if get_current() is not context:
+            read.stack.callback(detach, attach(context))
 
 
 def _start_run(
