@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   check-links:
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     if: ${{ github.actor != 'dependabot[bot]' && github.actor != 'otelbot[bot]' }}
     timeout-minutes: 15
     steps:
