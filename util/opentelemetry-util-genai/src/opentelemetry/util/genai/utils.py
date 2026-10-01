@@ -139,36 +139,6 @@ def _should_emit_event(
     )
 
 
-def should_emit_event() -> bool:
-    """Check if event emission is enabled.
-
-    Returns True if event emission is enabled, False otherwise.
-
-    .. deprecated:: 1.2b0
-        This function reads environment variables on every call and should NOT
-        be called on the hot path. Event emission is managed internally by
-        telemetry handlers and invocations.
-    """
-    return _should_emit_event(get_content_capturing_mode())
-
-
-def should_capture_content_on_spans() -> bool:
-    """Returns whether capture content is enabled on spans.
-
-    This function reads environment variables on every call and should NOT
-    be called on the hot path.
-
-    .. deprecated:: 1.2b0
-        Use ``GenAIInvocation.should_capture_content``
-        or ``TelemetryHandler.should_capture_content``
-        instead.
-    """
-    return get_content_capturing_mode() in (
-        ContentCapturingMode.SPAN_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-
 def fq_exception_type(exception: BaseException) -> str:
     """Return the fully qualified name of an exception's type.
 

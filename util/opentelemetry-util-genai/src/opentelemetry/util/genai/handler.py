@@ -50,9 +50,7 @@ from opentelemetry.trace import (
     TracerProvider,
     get_tracer,
 )
-from opentelemetry.util.genai._inference_invocation import LLMInvocation
 from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
@@ -166,94 +164,6 @@ class TelemetryHandler:
         """
         return self._capture_content
 
-    # New-style factory methods: construct + start in one call, handler stored on invocation
-    def start_inference(
-        self,
-        provider: str,
-        *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        operation_name: str | None = None,
-        context: Context | None = None,
-        _attach_to_context: bool = True,
-    ) -> InferenceInvocation:
-        """Create and start an LLM inference invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.inference()`` instead.
-
-        Args:
-            context: An optional OpenTelemetry Context to parent the span.
-
-        Set remaining attributes (input_messages, temperature, etc.) on the
-        returned invocation, then call invocation.stop() or invocation.fail().
-        """
-        return InferenceInvocation(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            provider,
-            request_model=request_model,
-            server_address=server_address,
-            server_port=server_port,
-            operation_name=operation_name,
-            content_capturing_mode=self._content_capturing_mode,
-            context=context,
-            _attach_to_context=_attach_to_context,
-        )
-
-    def start_llm(self, invocation: LLMInvocation) -> LLMInvocation:
-        """Start an LLM invocation.
-
-        .. deprecated::
-            Use ``handler.inference()`` instead.
-        """
-        invocation._start_with_handler(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            content_capturing_mode=self._content_capturing_mode,
-        )
-        return invocation
-
-    def start_embedding(
-        self,
-        provider: str,
-        *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        context: Context | None = None,
-        _attach_to_context: bool = True,
-    ) -> EmbeddingInvocation:
-        """Create and start an Embedding invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.embedding()`` instead.
-
-        Args:
-            context: An optional OpenTelemetry Context to parent the span.
-
-        Set remaining attributes (encoding_formats, etc.) on the returned
-        invocation, then call invocation.stop() or invocation.fail().
-        """
-        return EmbeddingInvocation(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            provider,
-            request_model=request_model,
-            server_address=server_address,
-            server_port=server_port,
-            content_capturing_mode=self._content_capturing_mode,
-            context=context,
-            _attach_to_context=_attach_to_context,
-        )
-
     def retrieval(
         self,
         *,
@@ -290,98 +200,6 @@ class TelemetryHandler:
             context=context,
             _attach_to_context=_attach_to_context,
         )
-
-    def start_tool(
-        self,
-        name: str,
-        *,
-        tool_type: str | None = None,
-        tool_call_id: str | None = None,
-        tool_description: str | None = None,
-        context: Context | None = None,
-        _attach_to_context: bool = True,
-    ) -> ToolInvocation:
-        """Create and start a tool invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.tool()`` instead.
-
-        Args:
-            context: An optional OpenTelemetry Context to parent the span.
-
-        Set tool_result on the returned invocation when done, then call
-        invocation.stop() or invocation.fail().
-        """
-        return ToolInvocation(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            name,
-            tool_type=tool_type,
-            tool_call_id=tool_call_id,
-            tool_description=tool_description,
-            content_capturing_mode=self._content_capturing_mode,
-            context=context,
-            _attach_to_context=_attach_to_context,
-        )
-
-    def start_workflow(
-        self,
-        *,
-        name: str | None = None,
-        context: Context | None = None,
-        _attach_to_context: bool = True,
-    ) -> WorkflowInvocation:
-        """Create and start a workflow invocation.
-
-        .. deprecated:: 1.0b0
-            Use ``handler.workflow()`` instead.
-
-        Args:
-            context: An optional OpenTelemetry Context to parent the span.
-
-        Set remaining attributes on the returned invocation, then call
-        invocation.stop() or invocation.fail().
-        """
-        return WorkflowInvocation(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            name,
-            content_capturing_mode=self._content_capturing_mode,
-            context=context,
-            _attach_to_context=_attach_to_context,
-        )
-
-    def stop_llm(self, invocation: LLMInvocation) -> LLMInvocation:  # pylint: disable=no-self-use
-        """Finalize an LLM invocation successfully and end its span.
-
-        .. deprecated::
-            Use ``handler.inference()``  and then ``inference.stop()`` instead.
-        """
-        invocation._sync_to_invocation()
-        if invocation._inference_invocation is not None:
-            invocation._inference_invocation.stop()
-        return invocation
-
-    def fail_llm(  # pylint: disable=no-self-use
-        self,
-        invocation: LLMInvocation,
-        error: Error,
-    ) -> LLMInvocation:
-        """Fail an LLM invocation and end its span with error status.
-
-        .. deprecated::
-            Use ``handler.inference()``  and then ``inference.fail()`` instead.
-        """
-        invocation._sync_to_invocation()
-        if invocation._inference_invocation is not None:
-            invocation._inference_invocation.fail(error)
-        return invocation
-
-    # New-style factory methods: construct + start in one call, handler stored on invocation
 
     def inference(
         self,
@@ -549,78 +367,6 @@ class TelemetryHandler:
             _attach_to_context=_attach_to_context,
         )
 
-    def start_invoke_local_agent(
-        self,
-        *,
-        request_model: str | None = None,
-        agent_name: str | None = None,
-        context: Context | None = None,
-        _attach_to_context: bool = True,
-    ) -> AgentInvocation:
-        """Create and start a local agent invocation (INTERNAL span kind).
-
-        .. deprecated:: 1.0b0
-            Use ``handler.invoke_local_agent()`` instead.
-
-        Use for agents running within the same process (e.g. LangChain, CrewAI).
-
-        Args:
-            context: An optional OpenTelemetry Context to parent the span.
-
-        Set remaining attributes (agent_name, etc.) on the returned invocation,
-        then call invocation.stop() or invocation.fail().
-        """
-        return LocalAgentInvocation(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            request_model=request_model,
-            agent_name=agent_name,
-            content_capturing_mode=self._content_capturing_mode,
-            context=context,
-            _attach_to_context=_attach_to_context,
-        )
-
-    def start_invoke_remote_agent(
-        self,
-        provider: str,
-        *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        agent_name: str | None = None,
-        context: Context | None = None,
-        _attach_to_context: bool = True,
-    ) -> AgentInvocation:
-        """Create and start a remote agent invocation (CLIENT span kind).
-
-        .. deprecated:: 1.0b0
-            Use ``handler.invoke_remote_agent()`` instead.
-
-        Use for agents invoked over a remote service (e.g. OpenAI Assistants, AWS Bedrock).
-
-        Args:
-            context: An optional OpenTelemetry Context to parent the span.
-
-        Set remaining attributes (agent_name, etc.) on the returned invocation,
-        then call invocation.stop() or invocation.fail().
-        """
-        return RemoteAgentInvocation(
-            self._tracer,
-            self._instruments,
-            self._logger,
-            self._completion_hook,
-            provider=provider,
-            request_model=request_model,
-            agent_name=agent_name,
-            server_address=server_address,
-            server_port=server_port,
-            content_capturing_mode=self._content_capturing_mode,
-            context=context,
-            _attach_to_context=_attach_to_context,
-        )
-
     def invoke_local_agent(
         self,
         *,
@@ -736,29 +482,3 @@ class TelemetryHandler:
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
-
-
-def get_telemetry_handler(
-    tracer_provider: TracerProvider | None = None,
-    meter_provider: MeterProvider | None = None,
-    logger_provider: LoggerProvider | None = None,
-    completion_hook: CompletionHook | None = None,
-) -> TelemetryHandler:
-    """
-    Returns a singleton TelemetryHandler instance.
-
-    .. deprecated::
-        Construct a :class:`TelemetryHandler` directly instead.
-    """
-    handler: TelemetryHandler | None = getattr(
-        get_telemetry_handler, "_default_handler", None
-    )
-    if handler is None:
-        handler = TelemetryHandler(
-            tracer_provider=tracer_provider,
-            meter_provider=meter_provider,
-            logger_provider=logger_provider,
-            completion_hook=completion_hook,
-        )
-        setattr(get_telemetry_handler, "_default_handler", handler)
-    return handler

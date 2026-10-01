@@ -205,7 +205,7 @@ def test_tool_span_is_internal_kind():
     assert span_exporter.get_finished_spans()[0].kind == SpanKind.INTERNAL
 
 
-def test_start_tool_passes_sampling_attributes_at_span_creation():
+def test_tool_passes_sampling_attributes_at_span_creation():
     """Verify that only sampling-relevant attributes are available at start_span() time for tools."""
     captured_attributes = {}
 
@@ -613,8 +613,7 @@ def test_tool_invocation_context_property():
         invocation.stop()
 
 
-@pytest.mark.parametrize("method_name", ["tool", "start_tool"])
-def test_tool_invocation_explicit_context(method_name: str):
+def test_tool_invocation_explicit_context():
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
@@ -625,9 +624,7 @@ def test_tool_invocation_explicit_context(method_name: str):
         parent_context = set_span_in_context(parent_span)
 
     with tracer.start_as_current_span("ambient_span"):
-        tool_invocation = getattr(handler, method_name)(
-            "child_tool", context=parent_context
-        )
+        tool_invocation = handler.tool("child_tool", context=parent_context)
         tool_invocation.stop()
 
     spans = span_exporter.get_finished_spans()
@@ -639,8 +636,7 @@ def test_tool_invocation_explicit_context(method_name: str):
     assert tool_span.parent.span_id == parent_span.get_span_context().span_id
 
 
-@pytest.mark.parametrize("method_name", ["tool", "start_tool"])
-def test_tool_invocation_attach_to_context_false(method_name: str):
+def test_tool_invocation_attach_to_context_false():
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
@@ -648,7 +644,7 @@ def test_tool_invocation_attach_to_context_false(method_name: str):
 
     tracer = tracer_provider.get_tracer("test")
     with tracer.start_as_current_span("ambient_span") as ambient_span:
-        tool_invocation = getattr(handler, method_name)(
+        tool_invocation = handler.tool(
             "detached_tool", _attach_to_context=False
         )
         assert get_current_span() == ambient_span
