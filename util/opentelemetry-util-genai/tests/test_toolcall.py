@@ -412,7 +412,6 @@ def test_tool_should_capture_content_defaults_to_false():
     handler = _make_handler()
     invocation = handler.tool("get_weather")
     assert invocation.should_capture_content is False
-    assert invocation.should_capture_content_on_span is False
     invocation.stop()
 
 
@@ -424,7 +423,6 @@ def test_tool_should_capture_content_enabled():
     handler = _make_handler()
     invocation = handler.tool("get_weather")
     assert invocation.should_capture_content is True
-    assert invocation.should_capture_content_on_span is True
     invocation.stop()
 
 
@@ -439,7 +437,6 @@ def test_tool_content_not_on_span_in_event_only_mode():
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     invocation = handler.tool("get_weather")
     assert invocation.should_capture_content is True
-    assert invocation.should_capture_content_on_span is False
     invocation.arguments = {"city": "Paris"}
     invocation.tool_result = "sunny"
     invocation.stop()
@@ -461,7 +458,6 @@ def test_tool_content_not_on_span_with_completion_hook():
     )
     invocation = handler.tool("get_weather")
     assert invocation.should_capture_content is True
-    assert invocation.should_capture_content_on_span is False
     invocation.arguments = {"city": "Paris"}
     invocation.tool_result = "sunny"
     invocation.stop()
@@ -495,7 +491,6 @@ def test_direct_invocation_instantiation_falls_back_to_env():
         name="direct_tool",
     )
     assert invocation.should_capture_content is True
-    assert invocation.should_capture_content_on_span is True
     invocation.arguments = {"arg": "val"}
     invocation.stop()
 

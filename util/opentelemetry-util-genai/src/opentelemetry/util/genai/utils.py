@@ -16,7 +16,6 @@ from typing import Any
 
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
@@ -102,41 +101,6 @@ def is_experimental_mode() -> bool:
     Don't use this function always returns True.
     """
     return True
-
-
-def _should_emit_event(  # pyright: ignore[reportUnusedFunction]
-    content_capturing_mode: ContentCapturingMode,
-) -> bool:
-    """Check if event emission is enabled.
-
-    Returns True if event emission is enabled, False otherwise.
-
-    If the environment variable OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is explicitly set,
-    its value takes precedence. Otherwise, the default value is determined by
-    the provided ContentCapturingMode:
-    - NO_CONTENT or SPAN_ONLY: defaults to False
-    - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
-    """
-    # If explicitly set (and not empty), use the user's value (highest priority)
-    if (
-        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
-        .lower()
-        .strip()
-    ):
-        if envvar == "true":
-            return True
-        if envvar == "false":
-            return False
-        logger.warning(
-            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
-            envvar,
-            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-        )
-    # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
-    return content_capturing_mode in (
-        ContentCapturingMode.EVENT_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
 
 
 def fq_exception_type(exception: BaseException) -> str:

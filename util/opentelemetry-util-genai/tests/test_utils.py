@@ -32,6 +32,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._inference_invocation import _should_emit_event
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
@@ -54,7 +55,6 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
-    _should_emit_event,
     bind_arguments,
     decode_base64,
     gen_ai_json_dumps,
