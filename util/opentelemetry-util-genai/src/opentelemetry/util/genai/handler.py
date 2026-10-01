@@ -57,7 +57,6 @@ from opentelemetry.util.genai.completion_hook import (
     _SafeCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     EmbeddingInvocation,
     FetchResponseInvocation,
     InferenceInvocation,

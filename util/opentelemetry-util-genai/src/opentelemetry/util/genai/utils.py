@@ -104,7 +104,7 @@ def is_experimental_mode() -> bool:
     return True
 
 
-def _should_emit_event(
+def _should_emit_event(  # pyright: ignore[reportUnusedFunction]
     content_capturing_mode: ContentCapturingMode,
 ) -> bool:
     """Check if event emission is enabled.

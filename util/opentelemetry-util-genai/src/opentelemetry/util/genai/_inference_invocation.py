@@ -22,6 +22,7 @@ from opentelemetry.util.genai._invocation import (
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
@@ -31,10 +32,7 @@ from opentelemetry.util.genai.types import (
     SystemInstructionPart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
-    _should_emit_event,
-)
+from opentelemetry.util.genai.utils import _should_emit_event
 from opentelemetry.util.types import AttributeValue
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (

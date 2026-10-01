@@ -266,6 +266,7 @@ class TestShouldEmitEvent(unittest.TestCase):
                 is False
             )
 
+
 class TestShouldCaptureContent(unittest.TestCase):
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
         for content_capture, expected_content_capturing in [
