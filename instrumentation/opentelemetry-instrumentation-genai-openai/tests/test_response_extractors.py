@@ -102,6 +102,48 @@ def _make_response(output=None, **overrides):
     return Response.model_validate(payload)
 
 
+def _response_accepts_output_item(item):
+    if not HAS_RESPONSES_TYPES:
+        return False
+
+    try:
+        _make_response(output=[item])
+    except Exception:  # pragma: no cover - capability probe
+        return False
+    return True
+
+
+_supports_computer_tool_call = _response_accepts_output_item(
+    {
+        "id": "cc_1",
+        "type": "computer_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "pending_safety_checks": [],
+        "action": {
+            "type": "click",
+            "x": 1,
+            "y": 2,
+            "button": "left",
+        },
+    }
+)
+
+_supports_computer_tool_call_output = _response_accepts_output_item(
+    {
+        "id": "cco_1",
+        "type": "computer_call_output",
+        "call_id": "call_1",
+        "status": "completed",
+        "acknowledged_safety_checks": [],
+        "output": {
+            "type": "computer_screenshot",
+            "image_url": "https://example.com/s.png",
+        },
+    }
+)
+
+
 class _RawResponse:
     def __init__(self, parsed_response):
         self.headers = {"x-ms-served-model": "served-gpt-4.1"}
@@ -761,6 +803,37 @@ def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
                 "outputs": [{"type": "logs", "logs": "1"}],
             },
         ),
+        pytest.param(
+            {
+                "id": "cc_1",
+                "type": "computer_call",
+                "call_id": "call_1",
+                "status": "completed",
+                "pending_safety_checks": [],
+                "action": {
+                    "type": "click",
+                    "x": 1,
+                    "y": 2,
+                    "button": "left",
+                },
+            },
+            "computer",
+            {
+                "type": "computer",
+                "status": "completed",
+                "pending_safety_checks": [],
+                "action": {
+                    "type": "click",
+                    "x": 1,
+                    "y": 2,
+                    "button": "left",
+                },
+            },
+            marks=pytest.mark.skipif(
+                not _supports_computer_tool_call,
+                reason="openai SDK too old to support computer tool items",
+            ),
+        ),
         (
             {
                 "id": "mcp_1",
@@ -844,32 +917,70 @@ def test_extract_output_messages_maps_server_tools(
     assert part.server_tool_call == expected_payload
 
 
-@pytest.mark.skipif(
-    not _has_tool_search_types,
-    reason="openai SDK too old to support tool_search server tool items",
+@pytest.mark.parametrize(
+    ("item", "expected_id", "expected_payload"),
+    [
+        pytest.param(
+            {
+                "id": "ts_2",
+                "type": "tool_search_output",
+                "call_id": "ts_1",
+                "execution": "server",
+                "status": "completed",
+                "tools": [],
+            },
+            "ts_1",
+            {
+                "execution": "server",
+                "status": "completed",
+                "tools": [],
+                "type": "tool_search",
+            },
+            marks=pytest.mark.skipif(
+                not _has_tool_search_types,
+                reason="openai SDK too old to support tool_search server tool items",
+            ),
+        ),
+        pytest.param(
+            {
+                "id": "cco_1",
+                "type": "computer_call_output",
+                "call_id": "call_1",
+                "status": "completed",
+                "acknowledged_safety_checks": [],
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "https://example.com/s.png",
+                },
+            },
+            "call_1",
+            {
+                "status": "completed",
+                "acknowledged_safety_checks": [],
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "https://example.com/s.png",
+                },
+                "type": "computer",
+            },
+            marks=pytest.mark.skipif(
+                not _supports_computer_tool_call_output,
+                reason="openai SDK too old to support computer tool items",
+            ),
+        ),
+    ],
 )
-def test_extract_output_messages_maps_server_tool_search_result(loaded_module):
-    item = {
-        "id": "ts_2",
-        "type": "tool_search_output",
-        "call_id": "ts_1",
-        "execution": "server",
-        "status": "completed",
-        "tools": [],
-    }
+def test_extract_output_messages_maps_server_tool_results(
+    loaded_module, item, expected_id, expected_payload
+):
     response = _make_response(output=[item])
 
     messages = loaded_module.get_output_messages_from_response(response)
 
     part = messages[0].parts[0]
     assert isinstance(part, ServerToolCallResponsePart)
-    assert part.id == "ts_1"
-    assert part.server_tool_call_response == {
-        "execution": "server",
-        "status": "completed",
-        "tools": [],
-        "type": "tool_search",
-    }
+    assert part.id == expected_id
+    assert part.server_tool_call_response == expected_payload
 
 
 @pytest.mark.skipif(

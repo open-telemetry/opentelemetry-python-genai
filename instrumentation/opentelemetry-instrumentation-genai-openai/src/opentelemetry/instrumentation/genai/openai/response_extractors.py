@@ -405,6 +405,7 @@ def _extract_reasoning_parts(
 
 
 _SERVER_TOOL_NAMES = {
+    "computer_call": "computer",
     "code_interpreter_call": "code_interpreter",
     "file_search_call": "file_search",
     "image_generation_call": "image_generation",
@@ -415,6 +416,7 @@ _SERVER_TOOL_NAMES = {
 }
 
 _SERVER_TOOL_RESPONSE_NAMES = {
+    "computer_call_output": "computer",
     "tool_search_output": "tool_search",
 }
 
@@ -478,7 +480,9 @@ def _server_tool_finish_reason(item: ResponseOutputItem) -> str | None:
         case "mcp_list_tools":
             return "error" if item.error else "stop"
         case (
-            "code_interpreter_call"
+            "computer_call"
+            | "computer_call_output"
+            | "code_interpreter_call"
             | "file_search_call"
             | "image_generation_call"
             | "mcp_call"
