@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import AbstractContextManager
 
 from openai import AsyncStream, Stream
 from openai.types.chat import ChatCompletionChunk
@@ -42,6 +43,9 @@ class _ChatStreamMixin:
     _self_completion_tokens: int | None
     _self_cached_prompt_tokens: int | None
     _self_reasoning_tokens: int | None
+
+    def _execution_context(self) -> AbstractContextManager[None]:
+        return self._self_invocation.activate()
 
     def _set_response_model(self, chunk: ChatCompletionChunk) -> None:
         # Set eagerly so the per-chunk streaming timing metrics carry
@@ -212,6 +216,7 @@ class ChatStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None
@@ -234,6 +239,7 @@ class AsyncChatStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None

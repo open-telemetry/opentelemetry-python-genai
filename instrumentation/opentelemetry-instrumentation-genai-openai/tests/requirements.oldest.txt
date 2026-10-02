@@ -30,3 +30,6 @@ httpx==0.27.2
 Deprecated==1.2.14
 importlib-metadata==6.11.0
 packaging==24.0
+
+# The stream execution hook is not released yet.
+-e util/opentelemetry-util-genai

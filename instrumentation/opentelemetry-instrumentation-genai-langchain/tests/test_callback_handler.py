@@ -154,7 +154,7 @@ class TestOnChainStartWorkflow:
             name="MyLangGraph",
             context=None,
             conversation_id=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
     def test_workflow_name_overridden_by_metadata(self):
@@ -173,7 +173,7 @@ class TestOnChainStartWorkflow:
             name="custom_workflow",
             context=None,
             conversation_id=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
     def test_workflow_conversation_id_from_metadata(self):
@@ -230,7 +230,7 @@ class TestOnChainStartWorkflow:
             agent_name="math_agent",
             context=workflow_inv.context,
             conversation_id=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
 
@@ -256,7 +256,7 @@ class TestOnChainStartAgent:
             agent_name="math_agent",
             context=None,
             conversation_id=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
         assert (
             handler._invocation_manager.get_agent_name(run_id) == "math_agent"
@@ -286,7 +286,7 @@ class TestOnChainStartAgent:
             agent_name="AgentExecutor",
             context=None,
             conversation_id="thread-abc",
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
         assert agent_inv.input_messages[0].parts[0].content == "Solve this"
         assert agent_inv.output_messages[0].parts[0].content == "Solved"
@@ -577,7 +577,7 @@ class TestOnChatModelStartConversationId:
             request_model="gpt-4",
             context=parent_wf.context,
             conversation_id=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
 
@@ -765,7 +765,7 @@ class TestAgentAncestryPublicBehavior:
             agent_name="math_agent",
             context=workflow_inv.context,
             conversation_id=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
 
@@ -1479,7 +1479,7 @@ class TestOnToolStart:
             tool_type="function",
             agent_name=None,
             context=parent_wf.context,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
 
@@ -1545,7 +1545,7 @@ class TestOnRetrieverStart:
             provider="Chroma",
             request_model=None,
             context=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
     def test_provider_none_when_metadata_absent(self):
@@ -1562,7 +1562,7 @@ class TestOnRetrieverStart:
             provider=None,
             request_model=None,
             context=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
     def test_request_model_passed_from_ls_embedding_model(self):
@@ -1583,7 +1583,7 @@ class TestOnRetrieverStart:
             provider="Chroma",
             request_model="text-embedding-3-small",
             context=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
     def test_request_model_none_when_ls_embedding_model_absent(self):
@@ -1601,7 +1601,7 @@ class TestOnRetrieverStart:
             provider="Chroma",
             request_model=None,
             context=None,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
     def test_registered_in_invocation_manager(self):
@@ -1641,7 +1641,7 @@ class TestOnRetrieverStart:
             provider=None,
             request_model=None,
             context=parent_wf.context,
-            _attach_to_context=True,
+            _attach_to_context=False,
         )
 
 
@@ -3462,32 +3462,7 @@ def test_on_chat_model_start_preserves_message_name():
     assert llm_inv.input_messages[0].name == "Alice"
 
 
-def test_explicit_attach_to_context_false():
-    telemetry = mock.MagicMock()
-    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
-    telemetry.workflow.return_value = workflow_inv
-
-    handler = OpenTelemetryLangChainCallbackHandler(
-        telemetry, _attach_to_context=False
-    )
-    run_id = _run_id()
-
-    handler.on_chain_start(
-        serialized={"name": "LangGraph", "id": ["langgraph"]},
-        inputs={},
-        run_id=run_id,
-        parent_run_id=None,
-    )
-
-    telemetry.workflow.assert_called_once_with(
-        name="LangGraph",
-        context=None,
-        conversation_id=None,
-        _attach_to_context=False,
-    )
-
-
-def test_sync_defaults_attach_to_context_true():
+def test_handler_does_not_attach_context():
     telemetry = mock.MagicMock()
     workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
     telemetry.workflow.return_value = workflow_inv
@@ -3506,11 +3481,11 @@ def test_sync_defaults_attach_to_context_true():
         name="LangGraph",
         context=None,
         conversation_id=None,
-        _attach_to_context=True,
+        _attach_to_context=False,
     )
 
 
-def test_instrumentor_routes_sync_and_async_callback_managers():
+def test_instrumentor_shares_handler_across_callback_managers():
     from langchain_core.callbacks.manager import (
         AsyncCallbackManager,
         CallbackManager,
@@ -3529,7 +3504,6 @@ def test_instrumentor_routes_sync_and_async_callback_managers():
             if isinstance(h, OpenTelemetryLangChainCallbackHandler)
         ]
         assert len(sync_handlers) == 1
-        assert sync_handlers[0]._attach_to_context is True
         assert sync_handlers[0].run_inline is False
 
         acm = AsyncCallbackManager([])
@@ -3539,7 +3513,7 @@ def test_instrumentor_routes_sync_and_async_callback_managers():
             if isinstance(h, OpenTelemetryLangChainCallbackHandler)
         ]
         assert len(async_handlers) == 1
-        assert async_handlers[0]._attach_to_context is False
+        assert sync_handlers[0] is async_handlers[0]
         assert async_handlers[0].run_inline is False
     finally:
         LangChainInstrumentor().uninstrument()
