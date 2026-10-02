@@ -862,6 +862,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         invocation.fail(error)
         self._invocation_manager.delete_invocation_state(run_id=run_id)
 
+    def on_interrupt(self, event: Any) -> None:
+        """Accept LangGraph's graph interrupt event without recording it."""
+
+    def on_resume(self, event: Any) -> None:
+        """Accept LangGraph's graph resume event without recording it."""
+
     def _find_agent_context(
         self, run_id: UUID | None
     ) -> tuple[str | None, set[str]]:
