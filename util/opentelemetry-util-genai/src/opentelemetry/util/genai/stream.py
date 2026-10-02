@@ -20,6 +20,7 @@ from typing import (
 )
 
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
+from opentelemetry.util.genai.utils import object_to_any_value
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai.types import Error
@@ -461,7 +462,9 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
                     self._self_chunks
                 )
             else:
-                self._self_tool_invocation.tool_result = self._self_chunks
+                self._self_tool_invocation.tool_result = object_to_any_value(
+                    self._self_chunks
+                )
         self._self_tool_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
@@ -521,7 +524,9 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
                     self._self_chunks
                 )
             else:
-                self._self_tool_invocation.tool_result = self._self_chunks
+                self._self_tool_invocation.tool_result = object_to_any_value(
+                    self._self_chunks
+                )
         self._self_tool_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:

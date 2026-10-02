@@ -1438,6 +1438,22 @@ def test_sync_tool_stream_wrapper_non_string_chunks():
     )
 
 
+def test_tool_stream_wrapper_converts_model_chunks():
+    class Model:
+        def model_dump(self):
+            return {"k": "v"}
+
+    invocation, span_exporter = _started_tool_invocation()
+    wrapper = SyncToolStreamWrapper(
+        _FakeSyncStream(chunks=[Model(), {"n": 1}]), invocation
+    )
+
+    list(wrapper)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes["gen_ai.tool.call.result"] == '[{"k":"v"},{"n":1}]'
+
+
 def test_async_tool_stream_wrapper_non_string_chunks():
     async def exercise():
         invocation, span_exporter = _started_tool_invocation()

@@ -6,10 +6,14 @@ import json
 import os
 import unittest
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from enum import Enum
-from typing import Any
+from pathlib import PurePosixPath
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider
@@ -63,8 +67,10 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
     get_signature,
     image_from_url,
+    object_to_any_value,
     should_capture_content_on_spans,
     should_emit_event,
+    tool_arguments_to_any_value,
 )
 
 
@@ -1625,6 +1631,40 @@ class TestTelemetryHandler(unittest.TestCase):
             assert event_attrs["gen_ai.prompt.variable.style"] == "formal"
             assert event_attrs["gen_ai.prompt.variable.tags"] == '["a","b"]'
 
+    def test_inference_prompt_variables_safe_serialization(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            },
+        ):
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                logger_provider=self.logger_provider,
+            )
+            invocation = handler.inference(
+                "test-provider", request_model="test-model"
+            )
+
+            invocation.prompt_variables = {
+                "plain_str": "hello",
+                "int_val": 42,
+                "none_val": None,
+                "valid_dict": {"clean": "data", "bad_leaf": object()},
+                "bad_obj": object(),
+            }
+            invocation.stop()
+
+            attrs = self.span_exporter.get_finished_spans()[-1].attributes
+            assert attrs["gen_ai.prompt.variable.plain_str"] == "hello"
+            assert attrs["gen_ai.prompt.variable.int_val"] == "42"
+            assert "gen_ai.prompt.variable.none_val" not in attrs
+            assert (
+                attrs["gen_ai.prompt.variable.valid_dict"]
+                == '{"clean":"data"}'
+            )
+            assert "gen_ai.prompt.variable.bad_obj" not in attrs
+
 
 class AnyNonNone:
     def __eq__(self, other):
@@ -2081,3 +2121,218 @@ class TestArgumentBinding(unittest.TestCase):
             )
             self.assertEqual(val, "fallback")
             mock_bind.assert_not_called()
+
+
+class TestObjectToAnyValue(unittest.TestCase):
+    def test_primitives(self):
+        self.assertEqual(object_to_any_value("hello"), "hello")
+        self.assertEqual(object_to_any_value(""), "")
+        self.assertEqual(object_to_any_value(123), 123)
+        self.assertEqual(object_to_any_value(3.14), 3.14)
+        self.assertIs(object_to_any_value(True), True)
+        self.assertIs(object_to_any_value(False), False)
+        self.assertEqual(object_to_any_value(b"hello"), b"hello")
+        self.assertIsNone(object_to_any_value(None))
+
+    def test_rich_types(self):
+        class Status(Enum):
+            ACTIVE = "active"
+
+        dt = datetime(2026, 9, 30, 15, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(object_to_any_value(dt), "2026-09-30T15:00:00+00:00")
+        u = UUID("12345678-1234-5678-1234-567812345678")
+        self.assertEqual(
+            object_to_any_value(u), "12345678-1234-5678-1234-567812345678"
+        )
+        self.assertEqual(object_to_any_value(Status.ACTIVE), "active")
+
+    def test_bytearray_copied_to_bytes(self):
+        raw = bytearray(b"hello")
+        sanitized = object_to_any_value(raw)
+        raw[0] = ord("j")
+        self.assertEqual(sanitized, b"hello")
+
+    def test_models(self):
+        @dataclass
+        class SampleData:
+            name: str
+            age: int
+
+        class FakePydantic:
+            def model_dump(self):
+                return {"field": "value", "sub": [1, 2]}
+
+        class FakeModel:
+            def to_dict(self):
+                return {"key": "val"}
+
+        self.assertEqual(
+            object_to_any_value(SampleData(name="Alice", age=30)),
+            {"name": "Alice", "age": 30},
+        )
+        self.assertEqual(
+            object_to_any_value(FakePydantic()),
+            {"field": "value", "sub": [1, 2]},
+        )
+        self.assertEqual(object_to_any_value(FakeModel()), {"key": "val"})
+
+    def test_plain_object_uses_dict(self):
+        class _Inner:
+            def __init__(self):
+                self.flag = True
+
+        class _Plain:
+            def __init__(self):
+                self.city = "Paris"
+                self.inner = _Inner()
+                self.bad = object()
+
+        self.assertEqual(
+            object_to_any_value(_Plain()),
+            {"city": "Paris", "inner": {"flag": True}},
+        )
+
+    def test_collections_prune_invalid_entries(self):
+        self.assertEqual(
+            object_to_any_value(
+                {
+                    "good": "data",
+                    "bad_val": object(),
+                    "callable_val": lambda: 1,
+                    "nested": {"num": 42, "bad": object()},
+                }
+            ),
+            {"good": "data", "nested": {"num": 42}},
+        )
+        self.assertEqual(
+            object_to_any_value(
+                [1, object(), "valid", lambda: None, [True, object()]]
+            ),
+            [1, "valid", [True]],
+        )
+
+    def test_set_converted_to_list(self):
+        sanitized = object_to_any_value({"b", "a", "c"})
+        self.assertIsInstance(sanitized, list)
+        self.assertEqual(set(cast(list[str], sanitized)), {"a", "b", "c"})
+
+    def test_circular_reference_omitted(self):
+        circular_list: list[object] = [1]
+        circular_list.append(circular_list)
+        self.assertEqual(object_to_any_value(circular_list), [1])
+
+        circular_map: dict[str, object] = {"a": 1}
+        circular_map["self"] = circular_map
+        self.assertEqual(object_to_any_value(circular_map), {"a": 1})
+
+    def test_shared_non_circular_reference_kept(self):
+        shared = {"x": 1}
+        self.assertEqual(
+            object_to_any_value([shared, shared]), [{"x": 1}, {"x": 1}]
+        )
+
+    @patch("opentelemetry.util.genai.utils._MAX_DEPTH", 3)
+    def test_deep_structure_truncated(self):
+        self.assertEqual(object_to_any_value([[[["deep"]]]]), [[[]]])
+
+    def test_generators_not_consumed(self):
+        def gen():
+            yield 1
+
+        generator = gen()
+        self.assertIsNone(object_to_any_value(generator))
+        self.assertEqual(list(generator), [1])
+
+    def test_custom_str_used_as_fallback(self):
+        self.assertEqual(object_to_any_value(Decimal("1.5")), "1.5")
+        self.assertEqual(
+            object_to_any_value({"path": PurePosixPath("/tmp/a")}),
+            {"path": "/tmp/a"},
+        )
+
+    def test_object_with_empty_dict_uses_str(self):
+        self.assertEqual(object_to_any_value(ValueError("boom")), "boom")
+
+    def test_private_attributes_skipped(self):
+        class Secret:
+            def __init__(self, value: str):
+                self._value = value
+
+            def __str__(self) -> str:
+                return "**********"
+
+        class Credentials:
+            def __init__(self):
+                self.user = "bob"
+                self.password = Secret("hunter2")
+                self._token = "t0k3n"
+
+        self.assertEqual(object_to_any_value(Secret("hunter2")), "**********")
+        self.assertEqual(
+            object_to_any_value(Credentials()),
+            {"user": "bob", "password": "**********"},
+        )
+
+    def test_dataclass_uncopyable_field_dropped(self):
+        @dataclass
+        class WithGenerator:
+            name: str
+            items: object
+
+        value = WithGenerator(name="a", items=(i for i in range(2)))
+        self.assertEqual(object_to_any_value(value), {"name": "a"})
+        self.assertEqual(list(cast(Any, value.items)), [0, 1])
+
+    def test_model_non_any_value_fields_converted(self):
+        class Model:
+            def model_dump(self):
+                return {"price": Decimal("1.5"), "data": b"abc"}
+
+        self.assertEqual(
+            object_to_any_value(Model()), {"price": "1.5", "data": b"abc"}
+        )
+
+    def test_unserializable_returns_none(self):
+        self.assertIsNone(object_to_any_value(object()))
+        self.assertIsNone(object_to_any_value(lambda: "bad"))
+        self.assertIsNone(object_to_any_value(int))
+        self.assertIsNone(object_to_any_value(float("nan")))
+        self.assertIsNone(object_to_any_value(float("inf")))
+        self.assertIsNone(object_to_any_value(float("-inf")))
+        self.assertIsNone(object_to_any_value({123: "bad_key"}))
+        self.assertIsNone(object_to_any_value({(1, 2): "bad_key"}))
+
+    def test_raising_objects_return_none(self):
+        class RaisingMapping(Mapping[str, object]):
+            def __getitem__(self, key: str) -> object:
+                raise RuntimeError("boom")
+
+            def __iter__(self):
+                return iter(["a"])
+
+            def __len__(self) -> int:
+                return 1
+
+        class RaisingDict:
+            @property
+            def __dict__(self):
+                raise RuntimeError("boom")
+
+        self.assertIsNone(object_to_any_value(RaisingMapping()))
+        self.assertIsNone(object_to_any_value(RaisingDict()))
+
+
+class TestToolArgumentsToAnyValue(unittest.TestCase):
+    def test_json_string_parsed(self):
+        self.assertEqual(
+            tool_arguments_to_any_value('{"city":"Paris"}'), {"city": "Paris"}
+        )
+
+    def test_non_json_string_kept(self):
+        self.assertEqual(tool_arguments_to_any_value("Paris"), "Paris")
+
+    def test_object_converted(self):
+        self.assertEqual(
+            tool_arguments_to_any_value({"when": date(2026, 1, 1)}),
+            {"when": "2026-01-01"},
+        )
