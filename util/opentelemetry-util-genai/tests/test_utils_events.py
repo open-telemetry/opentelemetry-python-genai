@@ -486,6 +486,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_with_debug_severity(self):
@@ -508,6 +509,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_event_not_emitted_when_logger_disabled(self):
@@ -546,6 +548,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_event_emitted_when_logger_enabled(self):
@@ -584,6 +587,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_event_logger_enabled_fallback_without_severity_number(self):
@@ -611,4 +615,36 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         logs = self.log_exporter.get_finished_logs()
         self.assertEqual(len(logs), 0)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_event_logger_enabled_propagates_unrelated_type_error(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+
+        def broken_enabled(*args, **kwargs):
+            raise TypeError("unrelated internal bug")
+
+        logger.enabled = broken_enabled
+
+        inv = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        with self.assertRaises(TypeError) as ctx:
+            inv.stop()
+        self.assertIn("unrelated internal bug", str(ctx.exception))
+
 
