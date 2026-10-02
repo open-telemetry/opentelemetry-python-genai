@@ -190,6 +190,75 @@ class TestClassifyChainRun:
         )
         assert result == OperationName.INVOKE_WORKFLOW
 
+    def test_explicit_workflow_override_with_parent(self):
+        result = classify_chain_run(
+            serialized={"name": "SomeName"},
+            metadata={"otel_workflow_span": True},
+            kwargs={},
+            parent_run_id=uuid.uuid4(),
+        )
+        assert result == OperationName.INVOKE_WORKFLOW
+
+    @pytest.mark.parametrize(
+        ("metadata", "announced_workflow", "expected"),
+        [
+            pytest.param(
+                {"agent_type": "outer"},
+                True,
+                OperationName.INVOKE_WORKFLOW,
+                id="announcement-beats-inherited-agent-type",
+            ),
+            pytest.param(
+                {"otel_agent_span": True},
+                True,
+                OperationName.INVOKE_WORKFLOW,
+                id="announcement-beats-inherited-agent-override",
+            ),
+            pytest.param(
+                {
+                    "otel_workflow_span": True,
+                    "agent_type": "inherited",
+                },
+                False,
+                OperationName.INVOKE_WORKFLOW,
+                id="explicit-workflow-beats-agent-type",
+            ),
+            pytest.param(
+                {
+                    "otel_workflow_span": True,
+                    "otel_agent_span": False,
+                },
+                False,
+                OperationName.INVOKE_WORKFLOW,
+                id="explicit-workflow-beats-agent-suppression",
+            ),
+        ],
+    )
+    def test_workflow_override_precedence(
+        self,
+        metadata: dict[str, Any],
+        announced_workflow: bool,
+        expected: str,
+    ) -> None:
+        result = classify_chain_run(
+            serialized={},
+            metadata=metadata,
+            kwargs={"name": "named_subgraph"},
+            parent_run_id=uuid.uuid4(),
+            announced_workflow=announced_workflow,
+        )
+        assert result == expected
+
+    def test_root_graph_announcement_beats_inherited_agent_metadata(self):
+        result = classify_chain_run(
+            serialized={},
+            metadata={"agent_type": "outer"},
+            kwargs={"name": "LangGraph"},
+            parent_run_id=None,
+            announced_workflow=True,
+        )
+        assert result == OperationName.INVOKE_WORKFLOW
+
     def test_root_chain_with_no_signals_is_workflow(self):
         # A root chain (no parent) with no special names defaults to workflow.
         result = classify_chain_run(
