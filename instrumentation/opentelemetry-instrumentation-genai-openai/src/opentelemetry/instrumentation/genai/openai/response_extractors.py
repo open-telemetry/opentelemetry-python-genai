@@ -183,6 +183,21 @@ def _extract_output_type_from_value(text_config: object) -> str | None:
     return None
 
 
+def _extract_output_type_from_text_format(text_format: object) -> str | None:
+    """Map ``Responses.parse(text_format=...)`` onto an output type.
+
+    ``parse()`` takes the caller's Pydantic model (or dataclass) as
+    ``text_format`` and only turns it into a JSON-schema ``text.format``
+    inside the SDK, after this wrapper has read the request kwargs, so the
+    ``text`` mapping alone misses it (issue #659). Mirror the
+    ``chat.completions.parse`` handling: a structured-output type means JSON.
+    Only the format metadata is recorded -- never the caller's schema.
+    """
+    if isinstance(text_format, type):
+        return GenAIAttributes.GenAiOutputTypeValues.JSON.value
+    return None
+
+
 def _extract_conversation_id(conversation: object) -> str | None:
     """Return the conversation id the ``conversation`` parameter names."""
     if isinstance(conversation, str):
@@ -204,6 +219,7 @@ def extract_params(
     service_tier: str | None = None,
     temperature: float | None = None,
     text: object | None = None,
+    text_format: object | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
     **_kwargs: object,
@@ -231,7 +247,10 @@ def extract_params(
             else None
         ),
         temperature=_get_float(temperature),
-        output_type=_extract_output_type_from_value(text),
+        output_type=(
+            _extract_output_type_from_value(text)
+            or _extract_output_type_from_text_format(text_format)
+        ),
         tools=_get_tools(tools),
         top_p=_get_float(top_p),
     )
