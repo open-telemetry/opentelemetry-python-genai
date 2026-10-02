@@ -421,6 +421,7 @@ class NonStreamingTestCase(TestCase):
         {
             "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "gcp.gen_ai.operation.config.response_schema",
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_log_event_no_content_capture(self):
