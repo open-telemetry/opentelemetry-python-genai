@@ -38,8 +38,8 @@ required-version = ">=0.6.0"
 # resolves against the versions the util packages require. This is the
 # lock-time analog of the conformance-only UV_OVERRIDE wired in tox.ini.
 override-dependencies = [
-  "opentelemetry-api ~= 1.43",
-  "opentelemetry-sdk ~= 1.43",
+  "opentelemetry-api ~= 1.45",
+  "opentelemetry-sdk ~= 1.45",
 ]
 
 # https://docs.astral.sh/uv/reference/settings/#sources

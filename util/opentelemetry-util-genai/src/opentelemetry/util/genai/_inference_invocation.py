@@ -432,7 +432,9 @@ class InferenceInvocation(GenAIInvocation):
             tool_definitions=self.tool_definitions,
             log_record=log_record,
         )
-        if log_record is not None:
+        if log_record is not None and self._logger.enabled(
+            context=self._span_context, event_name=log_record.event_name
+        ):
             self._logger.emit(log_record)
 
     def _maybe_create_event(self) -> LogRecord | None:
