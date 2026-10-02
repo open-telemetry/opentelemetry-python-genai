@@ -195,13 +195,23 @@ def test_prompt_template_accepts_scalar_input(
     assert chat_span.attributes["gen_ai.prompt.variable.name"] == "Ada"
 
 
-def test_prompt_template_omits_non_serializable_variable(
-    span_exporter, tracer_provider, meter_provider, logger_provider
+@pytest.mark.xfail(
+    strict=True,
+    reason="Blocked by opentelemetry-python-genai#821",
+)
+def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
+    span_exporter,
+    metric_reader,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
 ):
     model = FakeMessagesListChatModel(
         responses=[AIMessage(content="It is raining.")]
     )
-    prompt = PromptTemplate.from_template("Input: {value}")
+    prompt = PromptTemplate.from_template("Input: {value}").partial(
+        value={"lc": object()}
+    )
 
     with instrument(
         LangChainInstrumentor(),
@@ -211,7 +221,7 @@ def test_prompt_template_omits_non_serializable_variable(
         content_capture="SPAN_ONLY",
     ):
         response = (prompt | model).invoke(
-            {"value": object()},
+            {},
             config={"metadata": {"ls_model_name": "test-chat-model"}},
         )
 
@@ -223,6 +233,21 @@ def test_prompt_template_omits_non_serializable_variable(
         == "chat"
     )
     assert "gen_ai.prompt.variable.value" not in chat_span.attributes
+    assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
+    assert (
+        gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
+        in chat_span.attributes
+    )
+
+    metrics_data = metric_reader.get_metrics_data()
+    assert metrics_data is not None
+    metric_names = {
+        metric.name
+        for resource_metrics in metrics_data.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+    }
+    assert gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION in metric_names
 
 
 @pytest.mark.skipif(
