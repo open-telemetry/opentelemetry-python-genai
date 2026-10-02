@@ -63,6 +63,22 @@ def chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     def traced_method(wrapped, instance, args, kwargs):
+        # Materialize generator/map-backed messages/tools before they are
+        # consumed by either instrumentation or the SDK (fixes #825).
+        messages_raw = kwargs.get("messages")
+        if messages_raw is not None and not isinstance(messages_raw, (list, tuple)):
+            try:
+                messages_raw = list(messages_raw)
+            except TypeError:
+                pass
+            kwargs = {**kwargs, "messages": messages_raw}
+        tools_raw = kwargs.get("tools")
+        if tools_raw is not None and not isinstance(tools_raw, (list, tuple)):
+            try:
+                tools_raw = list(tools_raw)
+            except TypeError:
+                pass
+            kwargs = {**kwargs, "tools": tools_raw}
         chat_invocation = create_chat_invocation(
             handler, kwargs, instance, capture_content=capture_content
         )
@@ -94,6 +110,22 @@ def async_chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     async def traced_method(wrapped, instance, args, kwargs):
+        # Materialize generator/map-backed messages/tools before they are
+        # consumed by either instrumentation or the SDK (fixes #825).
+        messages_raw = kwargs.get("messages")
+        if messages_raw is not None and not isinstance(messages_raw, (list, tuple)):
+            try:
+                messages_raw = list(messages_raw)
+            except TypeError:
+                pass
+            kwargs = {**kwargs, "messages": messages_raw}
+        tools_raw = kwargs.get("tools")
+        if tools_raw is not None and not isinstance(tools_raw, (list, tuple)):
+            try:
+                tools_raw = list(tools_raw)
+            except TypeError:
+                pass
+            kwargs = {**kwargs, "tools": tools_raw}
         chat_invocation = create_chat_invocation(
             handler, kwargs, instance, capture_content=capture_content
         )
