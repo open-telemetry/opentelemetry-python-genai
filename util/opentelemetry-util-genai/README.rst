@@ -35,6 +35,20 @@ to manage context:
   ambient context is used.
 
 
+Stream execution context
+------------------------
+
+Subclasses of ``SyncStreamWrapper`` and ``AsyncStreamWrapper`` can override
+``_execution_context()`` to return a fresh context manager for each stream read
+and cleanup operation. Context is restored before returning a chunk to the
+consumer. Generator ``send``/``throw`` and ``asend``/``athrow`` also use this
+scope when the underlying stream supports them.
+
+For invocation-backed streams, call ``invocation.suspend()`` before returning the
+stream and return ``invocation.activate()`` from ``_execution_context()``.
+Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
+
+
 Modalities
 ----------
 
