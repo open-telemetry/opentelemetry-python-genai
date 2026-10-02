@@ -23,8 +23,8 @@ jobs:
 
   spellcheck:
     name: spellcheck
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,8 +44,8 @@ jobs:
 
   docs:
     name: docs
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     if: |
       github.event.pull_request.user.login != 'otelbot[bot]' && github.event_name == 'pull_request'
     steps:
@@ -67,8 +67,8 @@ jobs:
 
   generate:
     name: generate
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,8 +91,8 @@ jobs:
 
   readme:
     name: readme
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -112,8 +112,8 @@ jobs:
 
   shellcheck:
     name: shellcheck
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -133,8 +133,8 @@ jobs:
 
   precommit:
     name: precommit
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -175,7 +175,7 @@ jobs:
 
   deps-check:
     name: deps-check
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -196,7 +196,7 @@ jobs:
 
   license-header-check:
     name: license-header-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -217,7 +217,7 @@ jobs:
 
   check-versions:
     name: check-versions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
