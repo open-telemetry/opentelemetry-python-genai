@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -472,14 +472,23 @@ class InferenceInvocation(GenAIInvocation):
         if not self._emit_event:
             return None
 
+        event_name = "gen_ai.client.inference.operation.details"
+        if not self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
+            event_name=event_name,
+        ):
+            return None
+
         attributes = dict(self._start_attributes)
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
         return LogRecord(
-            event_name="gen_ai.client.inference.operation.details",
+            event_name=event_name,
             attributes=attributes,
             context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
         )
 
 

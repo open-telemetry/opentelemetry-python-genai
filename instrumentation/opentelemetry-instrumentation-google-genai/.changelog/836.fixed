@@ -1,0 +1,1 @@
+Remove unconditional mutation of OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT during instrumentation to respect user configuration and default content capture settings.
