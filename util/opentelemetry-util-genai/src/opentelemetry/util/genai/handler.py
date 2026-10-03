@@ -491,6 +491,7 @@ def get_telemetry_handler(
 ) -> TelemetryHandler:
     """
     Returns a singleton TelemetryHandler instance.
+
     .. deprecated::1.2b0
         Construct a :class:`TelemetryHandler` directly instead.
     """
