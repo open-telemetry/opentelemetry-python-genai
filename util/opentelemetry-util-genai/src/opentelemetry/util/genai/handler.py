@@ -481,3 +481,28 @@ class TelemetryHandler:
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
+
+
+def get_telemetry_handler(
+    tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
+    logger_provider: LoggerProvider | None = None,
+    completion_hook: CompletionHook | None = None,
+) -> TelemetryHandler:
+    """
+    Returns a singleton TelemetryHandler instance.
+    .. deprecated::1.2b0
+        Construct a :class:`TelemetryHandler` directly instead.
+    """
+    handler: TelemetryHandler | None = getattr(
+        get_telemetry_handler, "_default_handler", None
+    )
+    if handler is None:
+        handler = TelemetryHandler(
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+            completion_hook=completion_hook,
+        )
+        setattr(get_telemetry_handler, "_default_handler", handler)
+    return handler
