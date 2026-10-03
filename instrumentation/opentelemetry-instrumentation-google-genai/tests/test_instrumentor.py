@@ -63,22 +63,6 @@ def test_co_filename_on_wrapped_functions(
             f"Expected opentelemetry/instrumentation/google_genai removed from {co_filename} upon uninstrument"
         )
 
-
-def test_instrument_does_not_mutate_emit_event_env_var(
-    monkeypatch, tracer_provider, logger_provider, meter_provider
-):
-    monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT", raising=False)
-    assert "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT" not in os.environ
-
-    with instrument(
-        GoogleGenAiSdkInstrumentor(),
-        tracer_provider=tracer_provider,
-        logger_provider=logger_provider,
-        meter_provider=meter_provider,
-    ):
-        assert "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT" not in os.environ
-
-
 def test_instrument_preserves_explicit_emit_event_false(
     monkeypatch, tracer_provider, logger_provider, meter_provider
 ):

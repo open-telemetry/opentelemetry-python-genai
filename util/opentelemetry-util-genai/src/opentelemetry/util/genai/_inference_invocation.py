@@ -445,25 +445,12 @@ class InferenceInvocation(GenAIInvocation):
             return None
 
         event_name = "gen_ai.client.inference.operation.details"
-        if getattr(self._logger, "enabled", None):
-            try:
-                if not self._logger.enabled(
-                    context=self._span_context,
-                    severity_number=SeverityNumber.DEBUG,
-                    event_name=event_name,
-                ):
-                    return None
-            except TypeError as exc:
-                if "severity_number" in str(exc) and (
-                    "unexpected" in str(exc) or "keyword" in str(exc)
-                ):
-                    if not self._logger.enabled(
-                        context=self._span_context,
-                        event_name=event_name,
-                    ):
-                        return None
-                else:
-                    raise
+        if not self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
+            event_name=event_name,
+        ):
+            return None
 
         attributes = dict(self._start_attributes)
         attributes.update(self._get_attributes())
