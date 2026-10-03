@@ -236,7 +236,7 @@ def check_workspace_dependencies(
         if name not in valid_locals and name not in reported_locals:
             errors.append(
                 f"{pkg_dir.name}: '{line}' in tests/requirements.oldest.txt is not permitted. "
-                f"Local/editable installs in oldest requirements are only allowed for workspace dependencies declaring an unreleased .dev floor."
+                f"Local/editable installs in oldest requirements are only allowed for workspace dependencies whose floor targets the current unreleased version."
             )
 
     return errors
