@@ -313,6 +313,14 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
                     file=sys.stderr,
                 )
 
+    # Lazy import: check_deps imports this module.
+    from check_deps import strip_released_local_installs
+
+    for path in strip_released_local_installs(repo_root):
+        print(
+            f"Removed local installs of released workspace deps from {path.relative_to(repo_root)}"
+        )
+
     return 0
 
 
