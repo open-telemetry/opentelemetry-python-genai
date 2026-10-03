@@ -18,6 +18,9 @@ except ImportError:
     AsyncPortkey = None  # type: ignore[assignment,misc]
 
 from opentelemetry.instrumentation.genai.portkey import PortkeyInstrumentor
+from opentelemetry.instrumentation.genai.portkey.utils import (
+    _prepare_input_messages,
+)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -27,6 +30,12 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.types import (
+    BlobPart,
+    Modality,
+    Text,
+    UriPart,
+)
 
 _has_async_portkey = AsyncPortkey is not None
 
@@ -580,6 +589,232 @@ def test_chat_completions_dict_and_multipart_content(
             {"content": "text part", "type": "text"},
             {"content": "nested dict part", "type": "text"},
         ]
+
+
+def test_chat_completions_generator_content_not_consumed(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        generator_content = (
+            {"type": "text", "text": f"item {i}"} for i in range(2)
+        )
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": generator_content,
+                }
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        assert input_messages[0]["parts"] == []
+        # Ensure generator was not drained by instrumentation
+        assert list(generator_content) == [
+            {"type": "text", "text": "item 0"},
+            {"type": "text", "text": "item 1"},
+        ]
+
+
+def test_chat_completions_image_parts(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        "Describe these images:",
+                        {
+                            "type": "image_url",
+                            "image_url": "https://example.com/remote.png",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/nested.png"
+                            },
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,QUJD"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": {
+                        "type": "image_url",
+                        "image_url": "https://example.com/single.png",
+                    },
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 2
+        assert input_messages[0]["parts"] == [
+            {"content": "Describe these images:", "type": "text"},
+            {
+                "mime_type": None,
+                "modality": "image",
+                "type": "uri",
+                "uri": "https://example.com/remote.png",
+            },
+            {
+                "mime_type": None,
+                "modality": "image",
+                "type": "uri",
+                "uri": "https://example.com/nested.png",
+            },
+            {
+                "content": "QUJD",
+                "mime_type": "image/png",
+                "modality": "image",
+                "type": "blob",
+            },
+        ]
+        assert input_messages[1]["parts"] == [
+            {
+                "mime_type": None,
+                "modality": "image",
+                "type": "uri",
+                "uri": "https://example.com/single.png",
+            }
+        ]
+
+
+def test_prepare_input_messages_generator_content_not_consumed():
+    generator_content = ({"type": "text", "text": "hello"} for _ in range(1))
+    messages = _prepare_input_messages(
+        [{"role": "user", "content": generator_content}]
+    )
+    assert len(messages) == 1
+    assert messages[0].parts == []
+    # Generator should remain untouched
+    assert list(generator_content) == [{"type": "text", "text": "hello"}]
+
+
+def test_prepare_input_messages_iterator_content_not_consumed():
+    iterator_content = iter([{"type": "text", "text": "hello"}])
+    messages = _prepare_input_messages(
+        [{"role": "user", "content": iterator_content}]
+    )
+    assert len(messages) == 1
+    assert messages[0].parts == []
+    # Iterator should remain untouched
+    assert list(iterator_content) == [{"type": "text", "text": "hello"}]
+
+
+def test_prepare_input_messages_bytes_content_ignored():
+    messages = _prepare_input_messages(
+        [{"role": "user", "content": b"not a sequence of parts"}]
+    )
+    assert len(messages) == 1
+    assert messages[0].parts == []
+
+
+def test_prepare_input_messages_image_parts():
+    messages = _prepare_input_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Before"},
+                    {
+                        "type": "image_url",
+                        "image_url": "https://example.com/img1.png",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img2.png"},
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,QUJD"},
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,invalid!"},
+                    },
+                    {"type": "unknown_type", "data": "foo"},
+                    "After",
+                ],
+            }
+        ]
+    )
+    assert len(messages) == 1
+    assert messages[0].parts == [
+        Text(content="Before"),
+        UriPart(
+            mime_type=None,
+            modality=Modality.IMAGE,
+            uri="https://example.com/img1.png",
+        ),
+        UriPart(
+            mime_type=None,
+            modality=Modality.IMAGE,
+            uri="https://example.com/img2.png",
+        ),
+        BlobPart(
+            mime_type="image/png",
+            modality=Modality.IMAGE,
+            content=b"ABC",
+        ),
+        Text(content="After"),
+    ]
+
+
+def test_prepare_input_messages_object_parts():
+    part_obj = SimpleNamespace(
+        type="image_url",
+        image_url=SimpleNamespace(url="https://example.com/obj.png"),
+    )
+    msg_obj = SimpleNamespace(role="user", content=[part_obj])
+    messages = _prepare_input_messages([msg_obj])
+    assert len(messages) == 1
+    assert messages[0].parts == [
+        UriPart(
+            mime_type=None,
+            modality=Modality.IMAGE,
+            uri="https://example.com/obj.png",
+        )
+    ]
 
 
 def test_chat_completions_top_p_zero_and_max_tokens_zero(
