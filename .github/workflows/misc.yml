@@ -206,7 +206,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # griffe compares against origin/main
+          # griffe needs the PR base branch available for comparison.
           fetch-depth: 0
 
       - name: Set up Python 3.14
