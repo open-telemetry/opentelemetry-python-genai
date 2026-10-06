@@ -17,9 +17,16 @@ from dataclasses import dataclass
 from functools import wraps
 from inspect import BoundArguments, signature
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from langchain_core.callbacks.manager import BaseRunManager
+
+try:
+    # LangChain mints time-ordered run ids; use the same generator so the ids
+    # tracers see for runs started here match the ones LangChain starts.
+    from langchain_core.utils.uuid import uuid7 as _new_run_id
+except ImportError:  # older langchain-core
+    from uuid import uuid4 as _new_run_id
 
 from opentelemetry.context import Context, attach, detach, get_current
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
@@ -189,7 +196,7 @@ def _config_run(bound: BoundArguments, scope: _RunScope) -> BoundArguments:
     # (a chat model invoked from a lambda body): attaching that one here would
     # leave its ended span current for the rest of this frame.
     config = dict(bound.arguments.get("config") or {})
-    scope.run_id = config.get("run_id") or uuid4()
+    scope.run_id = config.get("run_id") or _new_run_id()
     config["run_id"] = scope.run_id
     bound.arguments["config"] = config
     return bound
@@ -287,7 +294,7 @@ def _wrap_run(
     asynchronous: bool,
 ) -> Callable[..., Any]:
     def scope_for(kwargs: dict[str, Any]) -> _RunScope:
-        run_id = kwargs.get("run_id") or uuid4()
+        run_id = kwargs.get("run_id") or _new_run_id()
         kwargs["run_id"] = run_id
         return _RunScope(run_id, invocations, on_error)
 

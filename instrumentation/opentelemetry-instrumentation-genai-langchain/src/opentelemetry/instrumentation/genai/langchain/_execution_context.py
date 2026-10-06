@@ -85,7 +85,7 @@ class _ExecutionContext:
                 return None
             config = bound.get("config")
             if isinstance(config, Sequence):
-                config = cast(Any, config[0])
+                config = cast(Any, config[0]) if config else None
             callbacks = cast(Any, config or {}).get("callbacks")
             return getattr(callbacks, "parent_run_id", None)
 
