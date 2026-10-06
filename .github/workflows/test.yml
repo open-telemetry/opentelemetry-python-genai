@@ -60,7 +60,7 @@ jobs:
 
       - name: Install weaver ${{ steps.versions.outputs.WEAVER_VERSION }}
         if: ${{ matrix.needs_weaver }}
-        uses: open-telemetry/weaver/.github/actions/setup-weaver@38befce4bc68fe320d20f189465c93835ac20c12 # v0.26.1
+        uses: open-telemetry/weaver/.github/actions/setup-weaver@0f7c529d27eacc364824ad00a120566316c7247b # v0.27.0
         with:
           version: ${{ steps.versions.outputs.WEAVER_VERSION }}
 

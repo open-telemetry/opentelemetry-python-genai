@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
@@ -13,7 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import server_attributes
-from opentelemetry.trace import INVALID_SPAN, Span, SpanKind, Tracer
+from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
@@ -21,7 +23,11 @@ from opentelemetry.util.genai._invocation import (
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+)
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
@@ -31,11 +37,9 @@ from opentelemetry.util.genai.types import (
     SystemInstructionPart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
-    _should_emit_event,
-)
 from opentelemetry.util.types import AttributeValue
+
+_logger = logging.getLogger(__name__)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -76,6 +80,30 @@ _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
 )
 _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
+
+
+def _should_emit_event(
+    content_capturing_mode: ContentCapturingMode,
+) -> bool:
+    """Check if event emission is enabled."""
+    if (
+        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
+        .lower()
+        .strip()
+    ):
+        if envvar == "true":
+            return True
+        if envvar == "false":
+            return False
+        _logger.warning(
+            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
+            envvar,
+            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+        )
+    return content_capturing_mode in (
+        ContentCapturingMode.EVENT_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -457,10 +485,9 @@ class InferenceInvocation(GenAIInvocation):
 
 @dataclass
 class LLMInvocation:
-    """Deprecated. Use InferenceInvocation instead.
+    """Deprecated compatibility data container for an LLM invocation.
 
-    Data container for an LLM invocation. Pass to handler.llm() to start
-    the span, then update fields and call handler.stop_llm() or handler.fail_llm().
+    Use ``handler.inference()`` to create an ``InferenceInvocation`` instead.
     """
 
     request_model: str | None = None
@@ -489,82 +516,3 @@ class LLMInvocation:
     seed: int | None = None
     server_address: str | None = None
     server_port: int | None = None
-
-    _inference_invocation: InferenceInvocation | None = field(
-        default=None, init=False, repr=False
-    )
-
-    def _start_with_handler(
-        self,
-        tracer: Tracer,
-        instruments: _Instruments,
-        logger: Logger,
-        completion_hook: CompletionHook,
-        *,
-        content_capturing_mode: ContentCapturingMode | None = None,
-    ) -> None:
-        """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
-        inv = InferenceInvocation(
-            tracer,
-            instruments,
-            logger,
-            completion_hook,
-            self.provider or "",
-            request_model=self.request_model,
-            server_address=self.server_address,
-            server_port=self.server_port,
-            content_capturing_mode=content_capturing_mode,
-        )
-        inv.input_messages = self.input_messages
-        inv.output_messages = self.output_messages
-        inv.system_instruction = self.system_instruction
-        inv.response_model_name = self.response_model_name
-        inv.response_id = self.response_id
-        inv.finish_reasons = self.finish_reasons
-        inv.input_tokens = self.input_tokens
-        inv.output_tokens = self.output_tokens
-
-        inv.temperature = self.temperature
-        inv.top_p = self.top_p
-        inv.frequency_penalty = self.frequency_penalty
-        inv.presence_penalty = self.presence_penalty
-        inv.max_tokens = self.max_tokens
-        inv.stop_sequences = self.stop_sequences
-        inv.seed = self.seed
-        inv.attributes.update(self.attributes)
-        inv.metric_attributes.update(self.metric_attributes)
-        self._inference_invocation = inv
-
-    def _sync_to_invocation(self) -> None:
-        inv = self._inference_invocation
-        if inv is None:
-            return
-        # Start attributes (provider, request_model, server_address, server_port)
-        # are fixed at construction in _start_with_handler and cannot be reassigned.
-        inv.input_messages = self.input_messages
-        inv.output_messages = self.output_messages
-        inv.system_instruction = self.system_instruction
-        inv.response_model_name = self.response_model_name
-        inv.response_id = self.response_id
-        inv.finish_reasons = self.finish_reasons
-        inv.input_tokens = self.input_tokens
-        inv.output_tokens = self.output_tokens
-
-        inv.temperature = self.temperature
-        inv.top_p = self.top_p
-        inv.frequency_penalty = self.frequency_penalty
-        inv.presence_penalty = self.presence_penalty
-        inv.max_tokens = self.max_tokens
-        inv.stop_sequences = self.stop_sequences
-        inv.seed = self.seed
-        inv.attributes = self.attributes
-        inv.metric_attributes = self.metric_attributes
-
-    @property
-    def span(self) -> Span:
-        """The underlying span, for back-compat with code that checks span.is_recording()."""
-        return (
-            self._inference_invocation.span
-            if self._inference_invocation is not None
-            else INVALID_SPAN
-        )

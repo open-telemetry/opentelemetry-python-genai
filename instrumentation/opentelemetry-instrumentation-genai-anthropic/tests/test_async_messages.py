@@ -3,8 +3,10 @@
 
 """Tests for async Messages.create instrumentation."""
 
+import asyncio
 import inspect
 import json
+from dataclasses import asdict
 
 import pytest
 
@@ -43,6 +45,8 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
+from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 from .conftest import (
     assert_multimodal_input,
@@ -118,16 +122,18 @@ def _assert_weather_tool_definitions(span):
 
 
 class _AsyncErrorInjectingStreamDelegate:
-    def __init__(self, inner):
+    def __init__(self, inner, fail_after=1, error_type=ConnectionError):
         self._inner = inner
         self._count = 0
+        self._fail_after = fail_after
+        self.error = error_type("connection reset during stream")
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        if self._count == 1:
-            raise ConnectionError("connection reset during stream")
+        if self._count >= self._fail_after:
+            raise self.error
         self._count += 1
         return await self._inner.__anext__()
 
@@ -718,37 +724,82 @@ async def test_async_messages_stream_api_error(
 
 @pytest.mark.asyncio
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream_interrupted_mid_iteration")
+@pytest.mark.parametrize("capture_content", [True, False])
+@pytest.mark.parametrize("fail_after", [0, 1, 3])
+@pytest.mark.parametrize(
+    "error_type", [ConnectionError, asyncio.CancelledError]
+)
 async def test_async_messages_stream_interrupted_mid_iteration(
+    request,
     span_exporter,
     async_anthropic_client,
-    instrument_no_content,
+    capture_content,
+    fail_after,
+    error_type,
     monkeypatch,
 ):
     """Mid-stream errors from AsyncMessages.stream propagate and record error."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_content
+        else "instrument_no_content"
+    )
     model = "claude-haiku-4-5"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
     with pytest.raises(
-        ConnectionError, match="connection reset during stream"
-    ):
+        error_type, match="connection reset during stream"
+    ) as raised:
         async with async_anthropic_client.messages.stream(
             model=model,
             max_tokens=100,
             messages=messages,
         ) as stream:
-            monkeypatch.setattr(
-                stream,
-                "stream",
-                _AsyncErrorInjectingStreamDelegate(stream.stream),
+            delegate = _AsyncErrorInjectingStreamDelegate(
+                stream.stream, fail_after=fail_after, error_type=error_type
             )
+            monkeypatch.setattr(stream, "stream", delegate)
             async for _ in stream:
                 pass
 
+    assert raised.value is delegate.error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
-    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    expected_error = (
+        "asyncio.exceptions.CancelledError"
+        if error_type is asyncio.CancelledError
+        else "ConnectionError"
+    )
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == expected_error
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
+    if fail_after:
+        assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+        assert isinstance(
+            span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    has_output = capture_content and fail_after == 3
+    if has_output:
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello.")],
+                    finish_reason=None,
+                )
+            )
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.asyncio
@@ -1166,10 +1217,21 @@ async def test_async_messages_create_streaming_aggregates_cache_tokens(
 
 @pytest.mark.asyncio
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_create_stream_propagation_error")
+@pytest.mark.parametrize("capture_content", [True, False])
 async def test_async_messages_create_stream_propagation_error(
-    span_exporter, async_anthropic_client, instrument_no_content, monkeypatch
+    request,
+    span_exporter,
+    async_anthropic_client,
+    capture_content,
+    monkeypatch,
 ):
     """Mid-stream async errors must propagate and record error on span."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_content
+        else "instrument_no_content"
+    )
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "Say hello in one word."}]
 
@@ -1180,42 +1242,44 @@ async def test_async_messages_create_stream_propagation_error(
         stream=True,
     )
 
-    class ErrorInjectingStreamDelegate:
-        def __init__(self, inner):
-            self._inner = inner
-            self._count = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._count == 1:
-                raise ConnectionError("connection reset during stream")
-            self._count += 1
-            return await self._inner.__anext__()
-
-        async def close(self):
-            return await self._inner.close()
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-    monkeypatch.setattr(
-        stream, "stream", ErrorInjectingStreamDelegate(stream.stream)
-    )
+    delegate = _AsyncErrorInjectingStreamDelegate(stream.stream, fail_after=3)
+    monkeypatch.setattr(stream, "stream", delegate)
 
     with pytest.raises(
         ConnectionError, match="connection reset during stream"
-    ):
+    ) as raised:
         async with stream:
             async for _ in stream:
                 pass
 
+    assert raised.value is delegate.error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+    )
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
+    if capture_content:
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello!")],
+                    finish_reason=None,
+                )
+            )
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.asyncio
@@ -2439,23 +2503,53 @@ async def test_async_messages_stream_until_done_records_response(
 @pytest.mark.asyncio
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_async_messages_stream")
+@pytest.mark.parametrize("capture_content", [True, False])
 async def test_async_messages_stream_text_stream_user_exception(
-    span_exporter, async_anthropic_client, instrument_no_content
+    request, span_exporter, async_anthropic_client, capture_content
 ):
     """A caller error while reading ``text_stream`` propagates and is recorded."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_content
+        else "instrument_no_content"
+    )
     model = "claude-haiku-4-5"
+    error = ValueError("caller failed")
 
-    with pytest.raises(ValueError, match="caller failed"):
+    with pytest.raises(ValueError, match="caller failed") as raised:
         async with async_anthropic_client.messages.stream(
             model=model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         ) as stream:
             async for _ in stream.text_stream:
-                raise ValueError("caller failed")
+                raise error
 
+    assert raised.value is error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+    )
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
+    if capture_content:
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello.")],
+                    finish_reason=None,
+                )
+            )
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
