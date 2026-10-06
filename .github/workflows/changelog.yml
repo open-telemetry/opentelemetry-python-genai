@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   changelog:
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     if: >-
       ${{
         !contains(github.event.pull_request.labels.*.name, 'dependencies') &&

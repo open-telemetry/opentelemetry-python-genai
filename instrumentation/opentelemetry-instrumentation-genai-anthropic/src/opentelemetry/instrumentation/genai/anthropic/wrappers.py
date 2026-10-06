@@ -131,6 +131,15 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _fail(self, exc: BaseException) -> None:
         if self._self_message_telemetry_finalized:
             return
+        self._adopt_sdk_snapshot()
+        message = self._self_message
+        if message is not None:
+            capture_content = self._self_capture_content and bool(
+                message.content
+            )
+            _set_response_attributes(
+                self._self_invocation, message, capture_content
+            )
         self._self_invocation.fail(exc)
         self._self_message_telemetry_finalized = True
 
