@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
+from importlib.metadata import version
 from typing import Any
 
 import pytest
@@ -19,6 +21,7 @@ from langchain_core.runnables import (
     RunnableParallel,
 )
 from langchain_core.tools import BaseTool
+from packaging.version import Version
 
 from opentelemetry import context
 from opentelemetry.semconv.attributes import error_attributes
@@ -35,6 +38,13 @@ from .test_execution_context import (
 from .test_stream_context import _assert_no_runs
 
 __all__ = ["clients", "no_detach_errors"]
+
+requires_async_step_context = pytest.mark.skipif(
+    sys.version_info < (3, 11)
+    and Version(version("langchain-core")) < Version("1.5.0"),
+    reason="langchain-core < 1.5 on Python < 3.11 doesn't run async steps in the copied context",
+)
+_async_step = pytest.param("async", marks=requires_async_step_context)
 
 
 def _custom_operation(
@@ -306,7 +316,7 @@ class _PlainRunnable(Runnable[str, str]):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("composite", ["sequence", "parallel", "nested"])
-@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("mode", ["sync", _async_step])
 async def test_plain_runnable_in_composite_correlates_http(
     clients: Any, span_exporter: Any, mode: str, composite: str
 ) -> None:
@@ -343,7 +353,7 @@ async def test_plain_runnable_in_composite_correlates_http(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("mode", ["sync", _async_step])
 async def test_plain_runnable_fallback_correlates_http(
     clients: Any, span_exporter: Any, mode: str
 ) -> None:
