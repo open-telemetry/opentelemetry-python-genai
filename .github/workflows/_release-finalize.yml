@@ -32,7 +32,7 @@ jobs:
   finalize:
     permissions:
       contents: write
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     steps:
       - name: Resolve release target
         id: target
