@@ -2504,9 +2504,60 @@ async def test_async_messages_text_stream_early_exit_preserves_snapshot_and_cont
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "error",
     )
-    assert _load_span_messages(
-        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
-    ) == [
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages is not None, (
+        f"received={received!r}; output_messages={output_messages!r}"
+    )
+    assert json.loads(output_messages) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": text}],
+            "finish_reason": "error",
+            "name": None,
+        }
+    ]
+    assert snapshot.usage.output_tokens == output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_accessor_transition_preserves_text(
+    span_exporter, instrument_with_content
+):
+    text = "partial response"
+    with local_anthropic_sse_server(
+        incomplete_text_stream_sse_body(text)
+    ) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key",
+            base_url=base_url,
+        )
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Continue."}],
+        ) as stream:
+            await stream.__anext__()
+            await stream.__anext__()
+            async for received in stream.text_stream:
+                break
+            snapshot = stream.current_message_snapshot
+            output_tokens = snapshot.usage.output_tokens
+        await client.close()
+
+    assert received == text
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert output_messages is not None, (
+        f"received={received!r}; output_messages={output_messages!r}"
+    )
+    assert json.loads(output_messages) == [
         {
             "role": "assistant",
             "parts": [{"type": "text", "content": text}],

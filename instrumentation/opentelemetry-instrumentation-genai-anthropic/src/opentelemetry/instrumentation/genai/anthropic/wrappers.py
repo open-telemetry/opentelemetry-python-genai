@@ -28,7 +28,7 @@ from opentelemetry.util.genai.stream import (
     finalize_on_aclose,
     finalize_on_close,
 )
-from opentelemetry.util.genai.types import OutputMessage
+from opentelemetry.util.genai.types import MessagePart, OutputMessage
 
 from .messages_extractors import set_invocation_response_attributes
 from .utils import (
@@ -139,11 +139,17 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
 
     def _partial_output_messages(self) -> list[OutputMessage] | None:
         if self._self_block_states:
-            parts = [
-                part
-                for _, state in sorted(self._self_block_states.items())
-                if (part := stream_block_state_to_part(state)) is not None
-            ]
+            snapshot_content = getattr(self._self_message, "content", [])
+            parts: list[MessagePart] = []
+            for index, state in sorted(self._self_block_states.items()):
+                if state.type == "text" and index < len(snapshot_content):
+                    snapshot_text = getattr(
+                        snapshot_content[index], "text", None
+                    )
+                    if isinstance(snapshot_text, str) and snapshot_text:
+                        state.text = snapshot_text
+                if (part := stream_block_state_to_part(state)) is not None:
+                    parts.append(part)
         elif self._self_message is not None:
             parts = convert_content_to_parts(self._self_message.content)
         else:
