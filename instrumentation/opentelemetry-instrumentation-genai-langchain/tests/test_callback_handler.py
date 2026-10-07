@@ -33,6 +33,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import (
     ChatGeneration,
     ChatGenerationChunk,
+    Generation,
     LLMResult,
 )
 
@@ -579,6 +580,123 @@ class TestOnChatModelStartConversationId:
             conversation_id=None,
             _attach_to_context=True,
         )
+
+
+class TestOnLlmStart:
+    def test_plain_llm_lifecycle(self):
+        handler, telemetry, _, _ = _make_handler()
+        run_id = _run_id()
+        parent_id = _run_id()
+        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
+        llm_invocation = mock.MagicMock(spec=InferenceInvocation)
+        telemetry.inference.return_value = llm_invocation
+        handler._invocation_manager.add_invocation_state(
+            parent_id, None, parent_wf
+        )
+
+        handler.on_llm_start(
+            serialized={"name": "OpenAI"},
+            prompts=["First prompt", "Second prompt"],
+            run_id=run_id,
+            parent_run_id=parent_id,
+            metadata={
+                "ls_provider": "openai",
+                "ls_model_name": "gpt-3.5-turbo-instruct",
+                "thread_id": "conversation-1",
+            },
+            invocation_params={
+                "temperature": 0.25,
+                "max_tokens": 32,
+                "stop": ["END"],
+                "n": 2,
+                "top_p": 0.9,
+                "frequency_penalty": 0.1,
+                "presence_penalty": 0.2,
+                "seed": 7,
+            },
+        )
+
+        telemetry.inference.assert_called_once_with(
+            "openai",
+            request_model="gpt-3.5-turbo-instruct",
+            context=parent_wf.context,
+            _attach_to_context=True,
+        )
+        assert llm_invocation.conversation_id == "conversation-1"
+        assert llm_invocation.input_messages == [
+            InputMessage(
+                role="user", parts=[TextPart(content="First prompt")]
+            ),
+            InputMessage(
+                role="user", parts=[TextPart(content="Second prompt")]
+            ),
+        ]
+        assert llm_invocation.temperature == 0.25
+        assert llm_invocation.max_tokens == 32
+        assert llm_invocation.stop_sequences == ["END"]
+        assert llm_invocation.request_choice_count == 2
+        assert llm_invocation.top_p == 0.9
+        assert llm_invocation.frequency_penalty == 0.1
+        assert llm_invocation.presence_penalty == 0.2
+        assert llm_invocation.seed == 7
+        assert (
+            handler._invocation_manager.get_invocation(run_id)
+            is llm_invocation
+        )
+
+        handler.on_llm_end(
+            response=LLMResult(
+                generations=[
+                    [
+                        Generation(
+                            text="Completion",
+                            generation_info={"finish_reason": "stop"},
+                        )
+                    ]
+                ],
+                llm_output={
+                    "model_name": "gpt-3.5-turbo-instruct-0125",
+                    "token_usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 2,
+                    },
+                },
+            ),
+            run_id=run_id,
+        )
+
+        assert llm_invocation.output_messages == [
+            OutputMessage(
+                role="assistant",
+                parts=[TextPart(content="Completion", type="text")],
+                finish_reason="stop",
+            )
+        ]
+        llm_invocation.stop.assert_called_once_with()
+        assert handler._invocation_manager.get_invocation(run_id) is None
+
+    def test_content_disabled_omits_prompts_and_error_cleans_up(self):
+        handler, telemetry, _, _ = _make_handler()
+        run_id = _run_id()
+        llm_invocation = mock.MagicMock(spec=InferenceInvocation)
+        telemetry.inference.return_value = llm_invocation
+        telemetry.should_capture_content.return_value = False
+
+        handler.on_llm_start(
+            serialized={"name": "OpenAI"},
+            prompts=["secret prompt"],
+            run_id=run_id,
+            metadata={
+                "ls_provider": "openai",
+                "ls_model_name": "gpt-3.5-turbo-instruct",
+            },
+        )
+
+        assert llm_invocation.input_messages == []
+        error = RuntimeError("provider unavailable")
+        handler.on_llm_error(error, run_id=run_id)
+        llm_invocation.fail.assert_called_once_with(error)
+        assert handler._invocation_manager.get_invocation(run_id) is None
 
 
 class TestOnChainStartUnclassified:
