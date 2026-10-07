@@ -124,6 +124,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             context=context,
         )
         self._span_context: Context = set_span_in_context(self.span, context)
+        self._attach_to_context = _attach_to_context
         self._context_token: ContextToken | None = (
             attach(self._span_context) if _attach_to_context else None
         )
@@ -157,6 +158,19 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def context(self) -> Context:
         """The OpenTelemetry Context containing this invocation's span."""
         return self._span_context
+
+    @property
+    def _suspended(self) -> bool:
+        """True when this invocation attached itself to the context and ``suspend`` has since run.
+
+        Describes the original attachment only: it stays true during a
+        temporary ``activate`` and after the invocation has finished. The
+        stream wrappers activate such an invocation around each read. An
+        invocation that is still attached is left alone: its original
+        attachment is outstanding, and activating it around the read that
+        finishes it would reinstate the ended span after ``stop`` detached it.
+        """
+        return self._attach_to_context and self._context_token is None
 
     def suspend(self) -> None:
         """Restore the context that was current before this invocation started.

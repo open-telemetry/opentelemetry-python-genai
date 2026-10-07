@@ -14,13 +14,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from opentelemetry.context import attach, detach
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import get_current_span
+from opentelemetry.trace import get_current_span, set_span_in_context
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
@@ -1929,3 +1931,213 @@ async def test_async_manager_exit_runs_inside_stream_execution_scope(
     else:
         assert invocation.failures == []
         assert invocation.stop_count == 1
+
+
+class _ActivatingInvocation:
+    """Invocation double that records whether reads ran inside activate()."""
+
+    def __init__(self, suspended: bool) -> None:
+        self._suspended = suspended
+        self.active = False
+        self.activations = 0
+
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def fail(self, error: Any) -> None:
+        pass
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        self.activations += 1
+        self.active = True
+        try:
+            yield
+        finally:
+            self.active = False
+
+
+@pytest.mark.parametrize("attach", [True, False])
+def test_default_execution_context_follows_suspended(attach: bool):
+    invocation = _ActivatingInvocation(attach)
+    seen: list[bool] = []
+
+    class Wrapper(_TestSyncStreamWrapper):
+        def _process_chunk(self, chunk: Any) -> None:
+            seen.append(invocation.active)
+            super()._process_chunk(chunk)
+
+    wrapper = Wrapper(iter(["a", "b"]), invocation)
+    assert list(wrapper) == ["a", "b"]
+    assert seen == [attach, attach]
+    # one activation per read: two chunks and the read that ends the stream
+    assert invocation.activations == (3 if attach else 0)
+    assert invocation.active is False
+
+
+def test_default_execution_context_without_suspended_flag_is_a_noop():
+    class Bare:
+        def _on_stream_chunk(self, chunk_at: float) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def fail(self, error: Any) -> None:
+            pass
+
+    wrapper = _TestSyncStreamWrapper(iter(["a"]), Bare())
+    assert list(wrapper) == ["a"]
+
+
+def _parent_and_attached_invocation():
+    """A caller span made current, then a real invocation started under it and left attached."""
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(
+        SimpleSpanProcessor(InMemorySpanExporter())
+    )
+    parent = tracer_provider.get_tracer(__name__).start_span("caller")
+    token = attach(set_span_in_context(parent))
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="attached_tool",
+    )
+    assert get_current_span() is invocation.span
+    return parent, token, invocation
+
+
+@pytest.mark.parametrize("ending", ["exhaust", "error", "close"])
+def test_default_execution_context_leaves_unsuspended_invocation_alone(ending):
+    """An instrumentation that never calls suspend() must still end with the parent current."""
+    parent, token, invocation = _parent_and_attached_invocation()
+    try:
+
+        def chunks():
+            yield "a"
+            if ending == "error":
+                raise RuntimeError("boom")
+            yield "b"
+
+        wrapper = _TestSyncStreamWrapper(chunks(), invocation)
+        if ending == "exhaust":
+            assert list(wrapper) == ["a", "b"]
+        elif ending == "error":
+            with pytest.raises(RuntimeError):
+                list(wrapper)
+        else:
+            assert next(iter(wrapper)) == "a"
+            wrapper.close()
+        assert wrapper._self_finalized
+        assert get_current_span() is parent
+    finally:
+        detach(token)
+        parent.end()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["exhaust", "error", "close"])
+async def test_default_execution_context_leaves_unsuspended_invocation_alone_async(
+    ending,
+):
+    parent, token, invocation = _parent_and_attached_invocation()
+    try:
+
+        async def chunks():
+            yield "a"
+            if ending == "error":
+                raise RuntimeError("boom")
+            yield "b"
+
+        wrapper = _TestAsyncStreamWrapper(chunks(), invocation)
+        if ending == "exhaust":
+            assert [c async for c in wrapper] == ["a", "b"]
+        elif ending == "error":
+            with pytest.raises(RuntimeError):
+                _ = [c async for c in wrapper]
+        else:
+            assert await wrapper.__anext__() == "a"
+            await wrapper.aclose()
+        assert wrapper._self_finalized
+        assert get_current_span() is parent
+    finally:
+        detach(token)
+        parent.end()
+
+
+def test_default_execution_context_activates_suspended_invocation():
+    parent, token, invocation = _parent_and_attached_invocation()
+    try:
+        invocation.suspend()
+        assert get_current_span() is parent
+        seen: list[Any] = []
+
+        class Wrapper(_TestSyncStreamWrapper):
+            def _process_chunk(self, chunk: Any) -> None:
+                seen.append(get_current_span())
+                super()._process_chunk(chunk)
+
+        wrapper = Wrapper(iter(["a", "b"]), invocation)
+        for _ in wrapper:
+            assert get_current_span() is parent
+        assert seen == [invocation.span, invocation.span]
+        assert get_current_span() is parent
+    finally:
+        detach(token)
+        parent.end()
+
+
+def test_tool_stream_wrapper_records_no_chunk_timing_metrics():
+    reader = InMemoryMetricReader()
+    invocation = ToolInvocation(
+        tracer=TracerProvider().get_tracer(__name__),
+        instruments=_Instruments(
+            MeterProvider(metric_readers=[reader]).get_meter(__name__)
+        ),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="metrics_tool",
+    )
+    assert list(SyncToolStreamWrapper(iter(["a", "b"]), invocation)) == [
+        "a",
+        "b",
+    ]
+
+    names: set[str] = set()
+    data = reader.get_metrics_data()
+    for resource_metrics in data.resource_metrics if data else []:
+        for scope_metrics in resource_metrics.scope_metrics:
+            names.update(m.name for m in scope_metrics.metrics)
+    assert names == {"gen_ai.execute_tool.duration"}
+
+
+def test_tool_stream_wrapper_leaves_detached_tool_invocation_alone():
+    """A tool invocation created with _attach_to_context=False is never made current by the wrapper."""
+    caller_span = get_current_span()
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="detached_tool",
+        _attach_to_context=False,
+    )
+    assert get_current_span() is caller_span
+    inside: list[Any] = []
+
+    def tool_body():
+        inside.append(get_current_span())
+        yield "a"
+
+    assert list(SyncToolStreamWrapper(tool_body(), invocation)) == ["a"]
+    assert inside == [caller_span]
+    assert get_current_span() is caller_span
+    assert len(span_exporter.get_finished_spans()) == 1

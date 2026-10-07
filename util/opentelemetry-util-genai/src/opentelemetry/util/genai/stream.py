@@ -51,6 +51,8 @@ _logger = logging.getLogger(__name__)
 class _StreamTimingInvocation(Protocol):
     def _on_stream_chunk(self, chunk_at: float) -> None: ...
 
+    def activate(self) -> AbstractContextManager[None]: ...
+
 
 class _StreamingInvocation(_StreamTimingInvocation, Protocol):
     def fail(self, error: Error | BaseException) -> None: ...
@@ -84,8 +86,18 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     _self_finalized: bool
 
     def _execution_context(self) -> AbstractContextManager[None]:
-        """Scope stream reads and cleanup, restoring context before returning a chunk."""
-        return nullcontext()
+        """Scope stream reads and cleanup, restoring context before returning a chunk.
+
+        By default a suspended invocation is made current again for each read:
+        an instrumentation that hands the stream back to the caller calls
+        ``invocation.suspend()`` and gets the span restored around tool or
+        provider code without overriding this hook. Invocations that are still
+        attached, or that never attached, leave the context alone.
+        """
+        invocation = getattr(self, "_self_invocation", None)
+        if invocation is None or not getattr(invocation, "_suspended", False):
+            return nullcontext()
+        return invocation.activate()
 
     def _finalize_success(self) -> None:
         if self._self_finalized:
@@ -122,10 +134,11 @@ class SyncStreamWrapper(
 
     Subclass this when wrapping a provider SDK stream that is consumed with
     normal iteration. The subclass should pass the SDK stream to
-    ``super().__init__(stream)`` and implement the four telemetry hooks:
-    ``_execution_context`` for the context active around each read and
-    cleanup, ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
+    ``super().__init__(stream, invocation)`` and implement the three telemetry
+    hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
+    ``_execution_context`` scopes each read and cleanup; by default it makes a
+    suspended invocation current again and can be overridden.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -248,10 +261,11 @@ class AsyncStreamWrapper(
 
     Subclass this when wrapping a provider SDK stream that is consumed with
     async iteration. The subclass should pass the SDK stream to
-    ``super().__init__(stream)`` and implement the four telemetry hooks:
-    ``_execution_context`` for the context active around each read and
-    cleanup, ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
+    ``super().__init__(stream, invocation)`` and implement the three telemetry
+    hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
+    ``_execution_context`` scopes each read and cleanup; by default it makes a
+    suspended invocation current again and can be overridden.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
@@ -458,7 +472,9 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
     drained. This wrapper restores the caller's context before returning, and
     makes the tool span current only while tool code runs -- producing a chunk,
     closing, or finalizing -- so caller work between chunks is not parented
-    under the tool. Per-chunk content is accumulated and set on
+    under the tool. This applies to invocations created attached (the default);
+    a tool invocation created with ``_attach_to_context=False`` is left alone
+    and its span is never made current by the wrapper. Per-chunk content is accumulated and set on
     ``invocation.tool_result`` upon completion.
     """
 
@@ -467,13 +483,10 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
         stream: _SyncStream[ChunkT],
         invocation: ToolInvocation,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
         invocation.suspend()
         self._self_chunks: list[Any] = []
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_tool_invocation.activate()
 
     def __del__(self) -> None:
         try:
@@ -513,7 +526,7 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
         stream: _AsyncStream[ChunkT],
         invocation: ToolInvocation,
     ) -> None:
-        super().__init__(stream)
+        super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
         invocation.suspend()
         self._self_chunks: list[Any] = []
@@ -525,9 +538,6 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
             )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_tool_invocation.activate()
 
     def _process_chunk(self, chunk: ChunkT) -> None:
         if self._self_tool_invocation.should_capture_content:

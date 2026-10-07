@@ -124,6 +124,8 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
     _self_invocation: _ResponseInvocation
     _self_capture_content: bool
     _self_response_telemetry_finalized: bool
+    # provided by the stream wrapper base class the mixin is combined with
+    _execution_context: Callable[[], AbstractContextManager[None]]
 
     def __init__(
         self,
@@ -136,9 +138,6 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         # The stream returns to the caller undrained: leave the caller's
         # context as it was and make the span current only while reading.
         invocation.suspend()
-
-    def _execution_context(self) -> AbstractContextManager[None]:
-        return self._self_invocation.activate()
 
     def _stop(
         self, result: ParsedResponse[TextFormatT] | Response | None
