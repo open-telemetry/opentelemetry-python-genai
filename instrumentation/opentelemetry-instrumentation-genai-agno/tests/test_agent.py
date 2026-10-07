@@ -18,6 +18,7 @@ from agno.tools.function import Function, FunctionCall
 from tests.mock_model import MockModel
 
 from opentelemetry.instrumentation.genai.agno.patch import (
+    _fail_tool_invocation,
     _set_tool_invocation_output,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -59,6 +60,29 @@ def test_agent_run_spans(
         span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
         == "test-sync-agent"
     )
+
+
+def test_agent_run_captures_keyword_input(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that Agent.run captures input when passed as keyword argument."""
+    agent = Agent(name="test-kw-agent", model=MockModel(id="mock-model"))
+    mock_output = ModelResponse(content="Hello back!")
+
+    with (
+        patch.object(Agent, "run", wraps=agent.run),
+        patch("agno.models.base.Model.response", return_value=mock_output),
+    ):
+        res = agent.run(input="hello keyword")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    input_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    assert input_messages is not None
+    assert "hello keyword" in input_messages
 
 
 def test_agent_arun_spans(
@@ -223,12 +247,11 @@ def test_tool_call_failure_spans(
 def test_failed_tool_result_is_not_captured() -> None:
     invocation = MagicMock()
     invocation.tool_result = None
+    invocation.should_capture_content = True
 
-    _set_tool_invocation_output(
-        invocation,
-        SimpleNamespace(status="failure", error="tool failed"),
-        capture_content=True,
-    )
+    result = SimpleNamespace(status="failure", error="tool failed")
+    _fail_tool_invocation(invocation, result)
+    _set_tool_invocation_output(invocation, result)
 
     assert invocation.tool_result is None
     invocation.fail.assert_called_once()
@@ -710,6 +733,7 @@ def test_set_invocation_output_pydantic_structured_content(
 
 def test_set_tool_invocation_output_structured_result(
     tracer_provider,
+    monkeypatch,
 ) -> None:
     import json
 
@@ -724,15 +748,176 @@ def test_set_tool_invocation_output_structured_result(
         status: str
         code: int
 
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     invocation = handler.tool(name="sample_tool")
     _set_tool_invocation_output(
         invocation,
         ToolOutput(status="ok", code=200),
-        capture_content=True,
     )
     invocation.stop()
     assert json.loads(invocation.tool_result) == {
         "status": "ok",
         "code": 200,
     }
+
+
+def test_agent_run_attributes(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that Agent.run extracts description and model attributes."""
+    agent = Agent(
+        id="agent-custom-id",
+        name="attribute-agent",
+        description="Custom agent description",
+        model=MockModel(id="custom-model", provider="custom_provider"),
+    )
+
+    def mock_response(*args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(content="Response")
+
+    with (
+        patch("agno.models.base.Model.response", side_effect=mock_response),
+    ):
+        res = agent.run("hello")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "invoke_agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
+        == "attribute-agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_DESCRIPTION)
+        == "Custom agent description"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "custom-model"
+    )
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+
+
+def test_agent_arun_attributes(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that Agent.arun extracts description and model attributes."""
+    agent = Agent(
+        id="async-agent-id",
+        name="async-attribute-agent",
+        description="Async description",
+        model=MockModel(id="custom-async-model", provider="custom_provider"),
+    )
+
+    async def mock_aresponse(*args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(content="Async response")
+
+    async def _run_async() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse", side_effect=mock_aresponse
+        ):
+            res = await agent.arun("async hello")
+            assert res is not None
+
+    asyncio.run(_run_async())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
+        == "async-attribute-agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_DESCRIPTION)
+        == "Async description"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "custom-async-model"
+    )
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes
+
+
+def test_agent_run_attributes_model_from_kwargs(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test capturing model passed via kwargs at invocation start."""
+    import agno.agent
+    from agno.agent import RunOutput
+
+    agent = Agent(name="kwargs-agent", model=MockModel(id=None))
+
+    mock_run_output = RunOutput(
+        agent_id="extracted-agent-id",
+        content="Hello output",
+    )
+
+    dispatch_target = (
+        "agno.agent._run.run_dispatch"
+        if hasattr(agno.agent, "_run")
+        else "agno.agent.agent.Agent._run"
+    )
+
+    with patch(dispatch_target, return_value=mock_run_output):
+        res = agent.run("test", model=MockModel(id="kwargs-model"))
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "kwargs-model"
+    )
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes
+
+
+def test_agent_run_does_not_extract_model_from_run_output(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that model from RunOutput is not used as a fallback."""
+    import agno.agent
+    from agno.agent import RunOutput
+
+    agent = Agent(name="unconfigured-agent", model=MockModel(id=None))
+
+    mock_run_output = RunOutput(
+        agent_id="extracted-agent-id",
+        model="extracted-model",
+        content="Hello output",
+    )
+
+    dispatch_target = (
+        "agno.agent._run.run_dispatch"
+        if hasattr(agno.agent, "_run")
+        else "agno.agent.agent.Agent._run"
+    )
+
+    with patch(dispatch_target, return_value=mock_run_output):
+        res = agent.run("test")
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_REQUEST_MODEL not in span.attributes
+    assert GenAIAttributes.GEN_AI_AGENT_ID not in span.attributes
+    assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in span.attributes

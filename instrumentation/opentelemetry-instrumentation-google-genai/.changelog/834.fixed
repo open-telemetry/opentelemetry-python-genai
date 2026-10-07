@@ -1,0 +1,1 @@
+Preserve tool parameter schemas supplied through ``parameters_json_schema`` in Google GenAI function declarations.

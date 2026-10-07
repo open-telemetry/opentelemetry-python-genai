@@ -54,13 +54,18 @@ if TYPE_CHECKING:
         Response,
     )
 
-    from opentelemetry.util.genai._invocation import GenAIInvocation
+    from opentelemetry.util.genai.invocation import (
+        FetchResponseInvocation,
+        InferenceInvocation,
+    )
+
+    _ResponseInvocation = InferenceInvocation | FetchResponseInvocation
 
 _logger = logging.getLogger(__name__)
 
 TextFormatT = TypeVar("TextFormatT")
 ResponseT = TypeVar("ResponseT")
-ResponsesStreamContext = tuple["GenAIInvocation", bool]
+ResponsesStreamContext = tuple["_ResponseInvocation", bool]
 
 responses_stream_context: ContextVar[ResponsesStreamContext | None] = (
     ContextVar("responses_stream_context", default=None)
@@ -68,7 +73,7 @@ responses_stream_context: ContextVar[ResponsesStreamContext | None] = (
 
 
 def _set_responses_stream_context(
-    invocation: GenAIInvocation, capture_content: bool
+    invocation: _ResponseInvocation, capture_content: bool
 ):
     """Mark the current ``Responses.stream`` manager entry.
 
@@ -85,7 +90,7 @@ def _set_responses_stream_context(
 
 
 def _set_response_attributes(
-    invocation: GenAIInvocation,
+    invocation: _ResponseInvocation,
     result: ParsedResponse[TextFormatT] | Response | None,
     capture_content: bool,
 ) -> None:
@@ -95,7 +100,7 @@ def _set_response_attributes(
 
 
 def _set_fetch_response_attributes(
-    invocation: GenAIInvocation,
+    invocation: _ResponseInvocation,
     result: ParsedResponse[TextFormatT] | Response | None,
     capture_content: bool,
 ) -> None:
@@ -115,13 +120,13 @@ def _get_stream_response(stream):
 
 
 class _ResponseStreamMixin(Generic[TextFormatT]):
-    _self_invocation: GenAIInvocation
+    _self_invocation: _ResponseInvocation
     _self_capture_content: bool
     _self_response_telemetry_finalized: bool
 
     def __init__(
         self,
-        invocation: GenAIInvocation,
+        invocation: _ResponseInvocation,
         capture_content: bool,
     ) -> None:
         self._self_invocation = invocation
@@ -243,7 +248,7 @@ class ResponseStreamWrapper(
     def __init__(
         self,
         stream: ResponseStream[TextFormatT],
-        invocation: GenAIInvocation,
+        invocation: _ResponseInvocation,
         capture_content: bool,
     ):
         SyncStreamWrapper.__init__(self, stream, invocation=invocation)
@@ -270,7 +275,7 @@ class _FetchResponseStreamMixin(Generic[TextFormatT]):
     a failure of this fetch.
     """
 
-    _self_invocation: GenAIInvocation
+    _self_invocation: FetchResponseInvocation
     _self_capture_content: bool
 
     def _apply_response_attributes(
@@ -297,7 +302,7 @@ class FetchResponseStreamWrapper(
 class ResponseStreamManagerWrapper(
     SyncStreamManagerWrapper[
         "ResponseStream[TextFormatT]",
-        "GenAIInvocation",
+        "_ResponseInvocation",
         "ResponseStreamWrapper[TextFormatT]",
     ],
     Generic[TextFormatT],
@@ -311,14 +316,14 @@ class ResponseStreamManagerWrapper(
     def __init__(
         self,
         manager: ResponseStreamManager[TextFormatT],
-        invocation_factory: Callable[[], GenAIInvocation],
+        invocation_factory: Callable[[], _ResponseInvocation],
         capture_content: bool,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
 
     def _enter_manager(
-        self, invocation: GenAIInvocation
+        self, invocation: _ResponseInvocation
     ) -> ResponseStream[TextFormatT]:
         # The SDK manager enters by calling the patched Responses.create, which
         # this marker tells to return the SDK stream without opening a second
@@ -334,7 +339,9 @@ class ResponseStreamManagerWrapper(
             responses_stream_context.reset(stream_context_reset)
 
     def _wrap_stream(
-        self, stream: ResponseStream[TextFormatT], invocation: GenAIInvocation
+        self,
+        stream: ResponseStream[TextFormatT],
+        invocation: _ResponseInvocation,
     ) -> ResponseStreamWrapper[TextFormatT]:
         if getattr(stream, "_self_is_response_stream_wrapper", False):
             # Already wrapped by the inner patched create().
@@ -361,7 +368,7 @@ class AsyncResponseStreamWrapper(
     def __init__(
         self,
         stream: AsyncResponseStream[TextFormatT],
-        invocation: GenAIInvocation,
+        invocation: _ResponseInvocation,
         capture_content: bool,
     ):
         AsyncStreamWrapper.__init__(self, stream, invocation=invocation)
@@ -419,7 +426,7 @@ class AsyncFetchResponseStreamWrapper(
 class AsyncResponseStreamManagerWrapper(
     AsyncStreamManagerWrapper[
         "AsyncResponseStream[TextFormatT]",
-        "GenAIInvocation",
+        "_ResponseInvocation",
         "AsyncResponseStreamWrapper[TextFormatT]",
     ],
     Generic[TextFormatT],
@@ -429,14 +436,14 @@ class AsyncResponseStreamManagerWrapper(
     def __init__(
         self,
         manager: AsyncResponseStreamManager[TextFormatT],
-        invocation_factory: Callable[[], GenAIInvocation],
+        invocation_factory: Callable[[], _ResponseInvocation],
         capture_content: bool,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
 
     async def _enter_manager(
-        self, invocation: GenAIInvocation
+        self, invocation: _ResponseInvocation
     ) -> AsyncResponseStream[TextFormatT]:
         # See ResponseStreamManagerWrapper._enter_manager.
         stream_context_reset = _set_responses_stream_context(
@@ -453,7 +460,7 @@ class AsyncResponseStreamManagerWrapper(
     def _wrap_stream(
         self,
         stream: AsyncResponseStream[TextFormatT],
-        invocation: GenAIInvocation,
+        invocation: _ResponseInvocation,
     ) -> AsyncResponseStreamWrapper[TextFormatT]:
         if getattr(stream, "_self_is_response_stream_wrapper", False):
             # Already wrapped by the inner patched create().

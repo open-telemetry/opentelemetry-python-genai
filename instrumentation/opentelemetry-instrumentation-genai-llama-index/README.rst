@@ -12,7 +12,8 @@ This package contains OpenTelemetry instrumentation for
 It emits ``invoke_workflow`` spans for ``AgentWorkflow`` runs,
 ``invoke_agent`` spans for standalone and workflow-member ``FunctionAgent``
 and ``ReActAgent`` executions, and ``execute_tool`` spans when LlamaIndex
-executes tools. Model calls
+executes tools. It also emits ``retrieval`` spans for synchronous and
+asynchronous ``BaseRetriever`` operations. Model calls
 delegated to provider SDKs are intentionally left to those SDKs' OpenTelemetry
 instrumentations.
 
@@ -33,6 +34,36 @@ Usage
     )
 
     LlamaIndexInstrumentor().instrument()
+
+How instrumentation works
+--------------------------
+
+The instrumentor registers a LlamaIndex span handler with its dispatcher. The
+handler observes LlamaIndex-owned operations and delegates span creation and
+completion to ``opentelemetry-util-genai``. Provider model calls are left to
+the provider's instrumentation, so they can be composed without duplicate
+inference spans.
+
+.. code-block:: mermaid
+
+    flowchart TD
+        A[LlamaIndexInstrumentor.instrument] --> B[LlamaIndex dispatcher]
+        B --> C{Span callback}
+        C -->|AgentWorkflow.run| D[workflow invocation]
+        C -->|BaseWorkflowAgent.run / run_agent_step| E[agent invocation]
+        C -->|call_tool / FunctionTool.call| F[tool invocation]
+        C -->|BaseRetriever.retrieve / aretrieve| G[retrieval invocation]
+        D --> H[TelemetryHandler.workflow]
+        E --> I[TelemetryHandler.invoke_local_agent]
+        F --> J[TelemetryHandler.tool]
+        G --> K[TelemetryHandler.retrieval]
+        H --> L[Start OTel span]
+        I --> L
+        J --> L
+        K --> L
+        L --> M[Dispatcher exit or error callback]
+        M --> N[Set attributes and stop/fail invocation]
+        P[Provider SDK instrumentation] -. model calls .-> Q[inference spans]
 
 Configuration
 -------------

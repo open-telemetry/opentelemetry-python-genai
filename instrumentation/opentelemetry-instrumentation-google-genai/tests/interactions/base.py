@@ -40,7 +40,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 
 from ..common.base import TestCase as CommonTestCaseBase
-from .util import create_mock_completed_event, create_mock_interaction
+from .util import (
+    create_mock_completed_event,
+    create_mock_content_event,
+    create_mock_interaction,
+)
 
 
 class TestCase(CommonTestCaseBase):
@@ -97,8 +101,9 @@ class TestCase(CommonTestCaseBase):
                 self._interaction_index += 1
 
             if kwargs.get("stream"):
+                content_event = create_mock_content_event()
                 completed_event = create_mock_completed_event(result)
-                return [completed_event]
+                return [content_event, completed_event]
             return result
 
         mock.side_effect = e or _default_impl
@@ -387,13 +392,19 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].interaction.id, "stream-id-1")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].interaction.id, "stream-id-1")
 
         self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_to_first_chunk"
+        )
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_per_output_chunk"
+        )
 
     def test_generates_agent_span(self) -> None:
         self.configure_valid_interaction()
@@ -422,8 +433,8 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].interaction.id, "stream-id-2")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].interaction.id, "stream-id-2")
 
         self.otel.assert_has_span_named("invoke_agent my_agent")
         span = self.otel.get_span_named("invoke_agent my_agent")
@@ -486,6 +497,28 @@ class TestCase(CommonTestCaseBase):
             span.attributes["gen_ai.tool.definitions"],
             '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
         )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
+    )
+    def test_tool_definitions_omitted_without_content_capture(
+        self,
+    ) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test dict tool",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "dict_tool",
+                    "description": "Dict tool desc",
+                }
+            ],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertNotIn("gen_ai.tool.definitions", span.attributes)
 
     def test_interaction_with_builtin_tools_records_definitions(
         self,

@@ -420,7 +420,7 @@ def test_explicit_completion_hook_takes_precedence(
 
 
 @pytest.mark.parametrize("agent_fails", [False, True])
-def test_completion_hook_failure_reaches_the_caller(
+def test_completion_hook_failure_is_suppressed(
     tracer_provider,
     logger_provider,
     meter_provider,
@@ -429,8 +429,6 @@ def test_completion_hook_failure_reaches_the_caller(
     monkeypatch,
     agent_fails: bool,
 ) -> None:
-    # ``load_completion_hook`` wraps environment hooks so their errors do not
-    # reach the caller.
     agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
     if agent_fails:
 
@@ -447,11 +445,12 @@ def test_completion_hook_failure_reaches_the_caller(
         content_capture="SPAN_ONLY",
         completion_hook=RaisingHook(),
     ):
-        with pytest.raises(RuntimeError, match="hook failed") as caught:
+        if agent_fails:
+            with pytest.raises(ValueError, match="agent failed"):
+                agent.run("Test question")
+        else:
             agent.run("Test question")
 
-    if agent_fails:
-        assert isinstance(caught.value.__context__, ValueError)
     assert len(span_exporter.get_finished_spans()) == 1
     assert lifecycle.leaked == []
 

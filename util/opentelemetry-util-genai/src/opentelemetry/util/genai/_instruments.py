@@ -62,6 +62,22 @@ _GEN_AI_INVOKE_WORKFLOW_DURATION_BUCKETS: Final = [
 
 _GEN_AI_EXECUTE_TOOL_DURATION: Final = "gen_ai.execute_tool.duration"
 _GEN_AI_INVOKE_WORKFLOW_DURATION: Final = "gen_ai.invoke_workflow.duration"
+_GEN_AI_INVOKE_AGENT_DURATION: Final = "gen_ai.invoke_agent.duration"
+_GEN_AI_INVOKE_AGENT_DURATION_BUCKETS: Final = [
+    0.1,
+    0.2,
+    0.4,
+    0.8,
+    1.6,
+    3.2,
+    6.4,
+    12.8,
+    25.6,
+    51.2,
+    102.4,
+    204.8,
+    409.6,
+]
 
 
 class _Instruments:
@@ -103,6 +119,12 @@ class _Instruments:
             description="Measures the duration of a workflow execution.",
             unit="s",
             explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_WORKFLOW_DURATION_BUCKETS,
+        )
+        self.invoke_agent_duration: Histogram = meter.create_histogram(
+            name=_GEN_AI_INVOKE_AGENT_DURATION,
+            description="Measures the duration of an in-process agent invocation.",
+            unit="s",
+            explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_AGENT_DURATION_BUCKETS,
         )
 
 

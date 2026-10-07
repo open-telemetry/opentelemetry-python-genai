@@ -43,6 +43,42 @@ Usage
 Configuration
 -------------
 
+Token Usage
+***********
+
+Chat and prompt completions record detailed usage when Portkey returns it,
+for synchronous, asynchronous, and streaming calls:
+
+- ``usage.prompt_tokens_details.cache_write_tokens`` records
+  ``gen_ai.usage.cache_write.input_tokens``, falling back to
+  ``usage.cache_creation_input_tokens`` when the nested count is unavailable.
+- ``usage.prompt_tokens_details.cached_tokens`` records
+  ``gen_ai.usage.cache_read.input_tokens``, falling back to
+  ``usage.cache_read_input_tokens`` when the nested count is unavailable.
+  The two representations are not added together.
+- Explicit ``text_tokens``, ``image_tokens``, and ``audio_tokens`` under
+  ``usage.prompt_tokens_details`` record the corresponding
+  ``gen_ai.usage.{text,image,audio}.input_tokens`` attributes.
+- Explicit ``text_tokens``, ``image_tokens``, and ``audio_tokens`` under
+  ``usage.completion_tokens_details`` record
+  ``gen_ai.usage.{text,image,audio}.output_tokens``.
+- ``usage.completion_tokens_details.reasoning_tokens`` records
+  ``gen_ai.usage.reasoning.output_tokens`` without adding to the reported
+  output-token total.
+
+Availability depends on the provider and model. Aggregate input and output
+totals are preserved, and modality counts are never inferred from those
+totals. No per-modality cache counts are inferred from the aggregate cache-read
+count. Only non-negative integer counts, excluding booleans, are accepted.
+Missing or invalid counts are omitted; streaming updates
+retain previously reported counts when later chunks omit them. These
+attributes do not require message-content capture.
+
+The fallback cache fields follow Portkey's
+`prompt caching response format <https://portkey.ai/docs/integrations/llms/anthropic/prompt-caching>`_;
+nested details include fields preserved by its OpenAI-compatible response
+passthrough.
+
 Capture Message Content
 ***********************
 

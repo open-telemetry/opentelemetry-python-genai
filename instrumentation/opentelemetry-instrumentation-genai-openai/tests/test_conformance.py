@@ -32,6 +32,9 @@ from .conformance.multimodal import (
 )
 from .conformance.responses_conversation import ResponsesConversationScenario
 from .conformance.responses_fetch import ResponsesFetchScenario
+from .conformance.responses_server_tool_calling import (
+    ResponsesServerToolCallingScenario,
+)
 from .conformance.responses_stream import ResponsesStreamScenario
 from .conformance.responses_streaming import ResponsesStreamingScenario
 from .conformance.responses_tool_calling import (
@@ -54,6 +57,7 @@ from .conformance.tool_calling import ToolCallingScenario
         ResponsesStreamScenario(),
         ResponsesStreamingScenario(),
         ResponsesToolCallingScenario(),
+        ResponsesServerToolCallingScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

@@ -347,7 +347,7 @@ async def test_agent_content_extraction_is_opt_in(
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attrs
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attrs
     assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in attrs
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS in attrs
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in attrs
 
 
 @pytest.mark.asyncio

@@ -30,7 +30,7 @@
 # their runtimes. openai is the model backend the VCR agent test runs against; it
 # is test-only, so pyproject.toml does not declare it.
 smolagents[openai]~=1.26.0
-wrapt>=2.2.2
+wrapt>=2.4.1
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-smolagents

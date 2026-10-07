@@ -1,0 +1,1 @@
+Emit telemetry under the `opentelemetry.instrumentation.genai.claude_agent_sdk` instrumentation scope instead of `opentelemetry.util.genai.handler`

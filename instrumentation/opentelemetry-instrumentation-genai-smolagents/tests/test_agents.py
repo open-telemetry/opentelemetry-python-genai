@@ -143,7 +143,7 @@ def test_code_agent_no_content(instrument_no_content, span_exporter) -> None:
         span_exporter.get_finished_spans(), "invoke_agent"
     )
     assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
-    assert attr(agent_span, GenAI.GEN_AI_TOOL_DEFINITIONS) is not None
+    assert attr(agent_span, GenAI.GEN_AI_TOOL_DEFINITIONS) is None
     assert attr(agent_span, GenAI.GEN_AI_INPUT_MESSAGES) is None
     assert attr(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES) is None
 
@@ -353,7 +353,7 @@ def test_streaming_run_records_no_chunk_metrics(
     list(agent.run("Test question", stream=True))
 
     metrics = metrics_by_name(metric_reader)
-    assert gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION in metrics
+    assert "gen_ai.invoke_agent.duration" in metrics
     assert (
         gen_ai_metrics.GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK
         not in metrics
@@ -389,9 +389,9 @@ def test_agent_run_metrics(
     agent.run("Test question")
 
     metrics = metrics_by_name(metric_reader)
-    duration = metrics[gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION]
+    duration = metrics["gen_ai.invoke_agent.duration"]
     assert {
-        GenAI.GEN_AI_OPERATION_NAME: "invoke_agent",
+        GenAI.GEN_AI_AGENT_NAME: "CodeAgent",
         GenAI.GEN_AI_REQUEST_MODEL: "fake-model",
     } in data_point_attributes(duration)
     # A run reports no token counts of its own: each model call records its
@@ -657,17 +657,20 @@ def test_interrupted_agent_recording_ends_the_span(
 
 
 @pytest.fixture
-def signature_calls(monkeypatch) -> list[str]:
-    original_signature = patch_module.signature
+def signature_calls(monkeypatch) -> Generator[list[str], None, None]:
+    from opentelemetry.util.genai import utils as util_genai_utils
+
+    util_genai_utils._cached_signature.cache_clear()
+    original_signature = inspect.signature
     calls: list[str] = []
 
     def _signature(callable_: Any):
         calls.append(getattr(callable_, "__qualname__", repr(callable_)))
         return original_signature(callable_)
 
-    monkeypatch.setattr(patch_module, "_signatures", {})
-    monkeypatch.setattr(patch_module, "signature", _signature)
-    return calls
+    monkeypatch.setattr(util_genai_utils, "_inspect_signature", _signature)
+    yield calls
+    util_genai_utils._cached_signature.cache_clear()
 
 
 def test_agent_run_caches_the_signature(
@@ -684,6 +687,8 @@ def test_agent_run_caches_the_signature(
 def test_the_signature_cache_does_not_grow_per_agent(
     instrument_with_content, signature_calls: list[str]
 ) -> None:
+    from opentelemetry.util.genai import utils as util_genai_utils
+
     agents = [
         CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
         for _ in range(5)
@@ -692,7 +697,7 @@ def test_the_signature_cache_does_not_grow_per_agent(
         agent.run(f"Question {index}")
 
     assert signature_calls == ["MultiStepAgent.run"]
-    assert len(patch_module._signatures) == 1
+    assert util_genai_utils._cached_signature.cache_info().currsize == 1
 
 
 def test_the_signature_cache_does_not_retain_agents(

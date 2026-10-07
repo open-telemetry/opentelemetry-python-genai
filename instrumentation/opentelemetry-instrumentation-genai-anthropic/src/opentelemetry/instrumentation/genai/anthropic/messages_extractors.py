@@ -24,10 +24,13 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    GenericToolDefinition,
     InputMessage,
     OutputMessage,
     SystemInstructionPart,
     TextPart,
+    ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -63,12 +66,14 @@ class MessageRequestParams:
     stream: bool | None = None
     messages: Iterable[MessageParam] | None = None
     system: str | Iterable[TextBlockParam] | None = None
+    tools: Iterable[ToolUnionParam] | None = None
 
 
 @dataclass
 class UsageTokens:
     input_tokens: int | None = None
     output_tokens: int | None = None
+    thinking_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
 
@@ -81,6 +86,8 @@ def extract_usage_tokens(
 
     input_tokens = usage.input_tokens
     output_tokens = usage.output_tokens
+    output_tokens_details = getattr(usage, "output_tokens_details", None)
+    thinking_tokens = getattr(output_tokens_details, "thinking_tokens", None)
     cache_creation_input_tokens = usage.cache_creation_input_tokens
     cache_read_input_tokens = usage.cache_read_input_tokens
 
@@ -100,6 +107,7 @@ def extract_usage_tokens(
     return UsageTokens(
         input_tokens=total_input_tokens,
         output_tokens=output_tokens,
+        thinking_tokens=thinking_tokens,
         cache_creation_input_tokens=cache_creation_input_tokens,
         cache_read_input_tokens=cache_read_input_tokens,
     )
@@ -132,6 +140,58 @@ def get_system_instruction(
     ]
 
 
+def _tool_field(tool: object, key: str) -> object:
+    if isinstance(tool, Mapping):
+        return cast("Mapping[str, object]", tool).get(key)
+    return getattr(tool, key, None)
+
+
+def get_tool_definitions(
+    tools: Iterable[ToolUnionParam] | None,
+) -> list[ToolDefinition] | None:
+    """Convert the request's ``tools`` into semconv tool definitions.
+
+    A custom tool carries its JSON schema in ``input_schema`` and maps onto a
+    function definition. Server tools are identified by a versioned ``type``
+    (``web_search_20250305``, ``bash_20250124``, ...) and toolsets
+    (``computer_toolset_20260801``, ...) carry no ``name`` at all, so their type
+    stands in for the name.
+    """
+    if tools is None:
+        return None
+
+    definitions: list[ToolDefinition] = []
+    for tool in tools:
+        name = _tool_field(tool, "name")
+        tool_type = _tool_field(tool, "type")
+        input_schema = _tool_field(tool, "input_schema")
+        if input_schema is not None or tool_type in (None, "custom"):
+            description = _tool_field(tool, "description")
+            definitions.append(
+                FunctionToolDefinition(
+                    name=name if isinstance(name, str) else "",
+                    description=(
+                        description if isinstance(description, str) else None
+                    ),
+                    # The schema requires an object; drop anything else rather
+                    # than emit a tool definition that fails validation.
+                    parameters=(
+                        input_schema
+                        if isinstance(input_schema, Mapping)
+                        else None
+                    ),
+                )
+            )
+        elif isinstance(tool_type, str):
+            definitions.append(
+                GenericToolDefinition(
+                    name=name if isinstance(name, str) else tool_type,
+                    type=tool_type,
+                )
+            )
+    return definitions or None
+
+
 def get_output_messages_from_message(
     message: Message | None,
 ) -> list[OutputMessage]:
@@ -144,7 +204,7 @@ def get_output_messages_from_message(
         OutputMessage(
             role=message.role,
             parts=parts,
-            finish_reason=finish_reason or "",
+            finish_reason=finish_reason,
         )
     ]
 
@@ -167,6 +227,7 @@ def set_invocation_response_attributes(
     tokens = extract_usage_tokens(message.usage)
     invocation.input_tokens = tokens.input_tokens
     invocation.output_tokens = tokens.output_tokens
+    invocation.thinking_tokens = tokens.thinking_tokens
     invocation.cache_write_input_tokens = tokens.cache_creation_input_tokens
     invocation.cache_read_input_tokens = tokens.cache_read_input_tokens
 
@@ -232,6 +293,7 @@ def extract_params(  # pylint: disable=too-many-locals
         stream=stream,
         messages=messages,
         system=system,
+        tools=tools,
     )
 
 

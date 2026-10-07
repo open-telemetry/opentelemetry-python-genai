@@ -117,6 +117,9 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _stop(self) -> None:
         if self._self_message_telemetry_finalized:
             return
+        # text_stream and the get_final_* helpers bypass _process_chunk, so the
+        # snapshot can be the only record of the response.
+        self._adopt_sdk_snapshot()
         _set_response_attributes(
             self._self_invocation,
             self._self_message,
@@ -128,6 +131,15 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _fail(self, exc: BaseException) -> None:
         if self._self_message_telemetry_finalized:
             return
+        self._adopt_sdk_snapshot()
+        message = self._self_message
+        if message is not None:
+            capture_content = self._self_capture_content and bool(
+                message.content
+            )
+            _set_response_attributes(
+                self._self_invocation, message, capture_content
+            )
         self._self_invocation.fail(exc)
         self._self_message_telemetry_finalized = True
 
@@ -137,6 +149,28 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _on_stream_error(self, error: BaseException) -> None:
         self._fail(error)
 
+    def _adopt_sdk_snapshot(self) -> bool:
+        """Adopt the SDK stream's accumulated message, when it keeps one.
+
+        ``MessageStream`` updates ``current_message_snapshot`` as the response
+        arrives, whichever accessor the caller reads it through. A plain
+        ``Stream`` has no snapshot and leaves accumulation to us.
+        """
+        stream = cast(_StreamWrapperWithStream, self).stream
+        try:
+            snapshot = cast(
+                "ParsedMessage[ResponseFormatT] | None",
+                getattr(stream, "current_message_snapshot", None),
+            )
+        except AssertionError:
+            # The property asserts the snapshot is set, so an unconsumed stream
+            # raises rather than answering None.
+            return False
+        if snapshot is None:
+            return False
+        self._self_message = snapshot
+        return True
+
     def _process_chunk(
         self,
         chunk: RawMessageStreamEvent
@@ -144,13 +178,7 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     ) -> None:
         """Accumulate a final message snapshot from a streaming chunk."""
         global _accumulation_disabled
-        stream = cast(_StreamWrapperWithStream, self).stream
-        snapshot = cast(
-            "ParsedMessage[ResponseFormatT] | None",
-            getattr(stream, "current_message_snapshot", None),
-        )
-        if snapshot is not None:
-            self._self_message = snapshot
+        if self._adopt_sdk_snapshot():
             return
         if accumulate_event is None or _accumulation_disabled:
             return

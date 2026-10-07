@@ -17,7 +17,11 @@ Users can import everything from this single module:
     )
 """
 
-from opentelemetry.util.genai._agent_invocation import AgentInvocation
+from opentelemetry.util.genai._agent_invocation import (
+    AgentInvocation,
+    LocalAgentInvocation,
+    RemoteAgentInvocation,
+)
 from opentelemetry.util.genai._embedding_invocation import EmbeddingInvocation
 from opentelemetry.util.genai._fetch_response_invocation import (
     FetchResponseInvocation,
@@ -40,6 +44,8 @@ __all__ = [
     "FetchResponseInvocation",
     "GenAIInvocation",
     "InferenceInvocation",
+    "LocalAgentInvocation",
+    "RemoteAgentInvocation",
     "RetrievalInvocation",
     "ToolInvocation",
     "WorkflowInvocation",

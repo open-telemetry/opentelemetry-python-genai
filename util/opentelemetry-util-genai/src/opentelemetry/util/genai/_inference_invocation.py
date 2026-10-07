@@ -3,16 +3,19 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import server_attributes
-from opentelemetry.trace import INVALID_SPAN, Span, SpanKind, Tracer
+from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
@@ -20,19 +23,23 @@ from opentelemetry.util.genai._invocation import (
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+)
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     ErrorTypeResolver,
     InputMessage,
     MessagePart,
+    Modality,
+    ModalityTokens,
     OutputMessage,
     SystemInstructionPart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
-    should_emit_event,
-)
 from opentelemetry.util.types import AttributeValue
+
+_logger = logging.getLogger(__name__)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -52,12 +59,51 @@ _GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: Final = (
 _GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS: Final = (
     "gen_ai.usage.audio.cache_read.input_tokens"
 )
+_INPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    Modality.TEXT: "text_input_tokens",
+    Modality.IMAGE: "image_input_tokens",
+    Modality.AUDIO: "audio_input_tokens",
+}
+_OUTPUT_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    Modality.TEXT: "text_output_tokens",
+    Modality.IMAGE: "image_output_tokens",
+    Modality.AUDIO: "audio_output_tokens",
+}
+_CACHE_READ_MODALITY_FIELDS: Final[Mapping[str, str]] = {
+    Modality.TEXT: "text_cache_read_input_tokens",
+    Modality.IMAGE: "image_cache_read_input_tokens",
+    Modality.AUDIO: "audio_cache_read_input_tokens",
+}
 _GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
 _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
     "gen_ai.request.previous_response.id"
 )
 _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
+
+
+def _should_emit_event(
+    content_capturing_mode: ContentCapturingMode,
+) -> bool:
+    """Check if event emission is enabled."""
+    if (
+        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
+        .lower()
+        .strip()
+    ):
+        if envvar == "true":
+            return True
+        if envvar == "false":
+            return False
+        _logger.warning(
+            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
+            envvar,
+            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+        )
+    return content_capturing_mode in (
+        ContentCapturingMode.EVENT_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -80,11 +126,23 @@ class InferenceInvocation(GenAIInvocation):
         operation_name: str | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+        conversation_id: str | None = None,
     ) -> None:
         operation_name = (
             operation_name or GenAI.GenAiOperationNameValues.CHAT.value
         )
-        """Use handler.inference(provider) rather than calling this directly."""
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
             instruments,
@@ -96,13 +154,19 @@ class InferenceInvocation(GenAIInvocation):
             else operation_name,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            start_attributes=start_attributes,
+            context=context,
+            conversation_id=conversation_id,
             content_capturing_mode=content_capturing_mode,
+            _attach_to_context=_attach_to_context,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
-        self.conversation_id: str | None = None
+        self._emit_event: bool = _should_emit_event(
+            self._content_capturing_mode
+        )
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -141,13 +205,67 @@ class InferenceInvocation(GenAIInvocation):
         self.prompt_version: str | None = None
         self.prompt_variables: Mapping[str, object] | None = None
         self.tool_definitions: list[ToolDefinition] | None = None
-        self.top_k: float | None = None
+        self.top_k: int | None = None
         self.request_choice_count: int | None = None
         self.output_type: str | None = None
         # Rebuilt once per streaming chunk, so cache it and invalidate via
         # _invalidate_metric_attributes whenever an input changes.
         self._cached_metric_attributes: dict[str, AttributeValue] | None = None
-        self._start(self._get_start_attributes())
+
+    def set_input_tokens(self, entries: ModalityTokens | None) -> None:
+        """Record the per-modality breakdown of the input tokens.
+
+        Sets ``gen_ai.usage.{text,image,audio}.input_tokens`` from
+        ``entries``, an iterable of ``(modality, token count)`` pairs.
+        The modality may be a plain string or an enum member carrying one as
+        its ``value``; anything outside text, image and audio is dropped, as is
+        a count that is not a non-negative :class:`int`.
+
+        The breakdown is replaced wholesale, so a modality missing from
+        ``entries`` is cleared. Pass ``None`` to leave the current values
+        alone, which is what a streaming chunk carrying no usage should do.
+        """
+        self._set_modality_tokens(_INPUT_MODALITY_FIELDS, entries)
+
+    def set_output_tokens(self, entries: ModalityTokens | None) -> None:
+        """Record the per-modality breakdown of the output tokens.
+
+        Sets ``gen_ai.usage.{text,image,audio}.output_tokens``. See
+        :meth:`set_input_tokens` for the argument contract.
+        """
+        self._set_modality_tokens(_OUTPUT_MODALITY_FIELDS, entries)
+
+    def set_cache_read_input_tokens(
+        self, entries: ModalityTokens | None
+    ) -> None:
+        """Record the per-modality breakdown of the cache read input tokens.
+
+        Sets ``gen_ai.usage.{text,image,audio}.cache_read.input_tokens``. See
+        :meth:`set_input_tokens` for the argument contract.
+        """
+        self._set_modality_tokens(_CACHE_READ_MODALITY_FIELDS, entries)
+
+    def _set_modality_tokens(
+        self, fields: Mapping[str, str], entries: ModalityTokens | None
+    ) -> None:
+        if entries is None:
+            return
+        for field_name in fields.values():
+            setattr(self, field_name, None)
+        for modality, token_count in entries:
+            if (
+                not isinstance(token_count, int)
+                or isinstance(token_count, bool)
+                or token_count < 0
+            ):
+                continue
+            # modality may be an enum, whose str() is "MediaModality.AUDIO"
+            # rather than the bare name.
+            field_name = fields.get(
+                str(getattr(modality, "value", modality)).lower()
+            )
+            if field_name is not None:
+                setattr(self, field_name, token_count)
 
     @property
     def cache_creation_input_tokens(self) -> int | None:
@@ -195,18 +313,6 @@ class InferenceInvocation(GenAIInvocation):
             ]
             return reasons or None
         return None
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
@@ -316,7 +422,7 @@ class InferenceInvocation(GenAIInvocation):
         # Cached because this is rebuilt once per streaming chunk. Any mutation
         # of its inputs must call _invalidate_metric_attributes.
         if self._cached_metric_attributes is None:
-            attrs = self._get_start_attributes()
+            attrs = dict(self._start_attributes)
             if self._response_model_name is not None:
                 attrs[GenAI.GEN_AI_RESPONSE_MODEL] = self._response_model_name
             attrs.update(self.metric_attributes)
@@ -363,10 +469,10 @@ class InferenceInvocation(GenAIInvocation):
         For more details, see the semantic convention documentation:
         https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-events.md#event-eventgen_aiclientinferenceoperationdetails
         """
-        if not should_emit_event():
+        if not self._emit_event:
             return None
 
-        attributes = self._get_start_attributes()
+        attributes = dict(self._start_attributes)
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
@@ -379,10 +485,9 @@ class InferenceInvocation(GenAIInvocation):
 
 @dataclass
 class LLMInvocation:
-    """Deprecated. Use InferenceInvocation instead.
+    """Deprecated compatibility data container for an LLM invocation.
 
-    Data container for an LLM invocation. Pass to handler.llm() to start
-    the span, then update fields and call handler.stop_llm() or handler.fail_llm().
+    Use ``handler.inference()`` to create an ``InferenceInvocation`` instead.
     """
 
     request_model: str | None = None
@@ -411,82 +516,3 @@ class LLMInvocation:
     seed: int | None = None
     server_address: str | None = None
     server_port: int | None = None
-
-    _inference_invocation: InferenceInvocation | None = field(
-        default=None, init=False, repr=False
-    )
-
-    def _start_with_handler(
-        self,
-        tracer: Tracer,
-        instruments: _Instruments,
-        logger: Logger,
-        completion_hook: CompletionHook,
-        *,
-        content_capturing_mode: ContentCapturingMode | None = None,
-    ) -> None:
-        """Create and start an InferenceInvocation from this data container. Called by handler.start_llm()."""
-        inv = InferenceInvocation(
-            tracer,
-            instruments,
-            logger,
-            completion_hook,
-            self.provider or "",
-            request_model=self.request_model,
-            server_address=self.server_address,
-            server_port=self.server_port,
-            content_capturing_mode=content_capturing_mode,
-        )
-        inv.input_messages = self.input_messages
-        inv.output_messages = self.output_messages
-        inv.system_instruction = self.system_instruction
-        inv.response_model_name = self.response_model_name
-        inv.response_id = self.response_id
-        inv.finish_reasons = self.finish_reasons
-        inv.input_tokens = self.input_tokens
-        inv.output_tokens = self.output_tokens
-
-        inv.temperature = self.temperature
-        inv.top_p = self.top_p
-        inv.frequency_penalty = self.frequency_penalty
-        inv.presence_penalty = self.presence_penalty
-        inv.max_tokens = self.max_tokens
-        inv.stop_sequences = self.stop_sequences
-        inv.seed = self.seed
-        inv.attributes.update(self.attributes)
-        inv.metric_attributes.update(self.metric_attributes)
-        self._inference_invocation = inv
-
-    def _sync_to_invocation(self) -> None:
-        inv = self._inference_invocation
-        if inv is None:
-            return
-        # Start attributes (provider, request_model, server_address, server_port)
-        # are fixed at construction in _start_with_handler and cannot be reassigned.
-        inv.input_messages = self.input_messages
-        inv.output_messages = self.output_messages
-        inv.system_instruction = self.system_instruction
-        inv.response_model_name = self.response_model_name
-        inv.response_id = self.response_id
-        inv.finish_reasons = self.finish_reasons
-        inv.input_tokens = self.input_tokens
-        inv.output_tokens = self.output_tokens
-
-        inv.temperature = self.temperature
-        inv.top_p = self.top_p
-        inv.frequency_penalty = self.frequency_penalty
-        inv.presence_penalty = self.presence_penalty
-        inv.max_tokens = self.max_tokens
-        inv.stop_sequences = self.stop_sequences
-        inv.seed = self.seed
-        inv.attributes = self.attributes
-        inv.metric_attributes = self.metric_attributes
-
-    @property
-    def span(self) -> Span:
-        """The underlying span, for back-compat with code that checks span.is_recording()."""
-        return (
-            self._inference_invocation.span
-            if self._inference_invocation is not None
-            else INVALID_SPAN
-        )

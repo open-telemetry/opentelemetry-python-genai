@@ -23,8 +23,8 @@ jobs:
 
   spellcheck:
     name: spellcheck
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,15 +37,15 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run spellcheck
         run: uvx --with tox-uv tox -e spellcheck
 
   docs:
     name: docs
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     if: |
       github.event.pull_request.user.login != 'otelbot[bot]' && github.event_name == 'pull_request'
     steps:
@@ -60,15 +60,15 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Build docs
         run: uvx --with tox-uv tox -e docs
 
   generate:
     name: generate
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +81,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run generate
         run: uvx --with tox-uv tox -e generate
@@ -91,8 +91,8 @@ jobs:
 
   readme:
     name: readme
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,15 +105,15 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Check READMEs render on PyPI
         run: uvx --with tox-uv tox -e readme
 
   shellcheck:
     name: shellcheck
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,15 +126,15 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run shellcheck
         run: uvx --with tox-uv tox -e shellcheck
 
   precommit:
     name: precommit
-    runs-on: cncf-ubuntu-2-8-x86
-    timeout-minutes: 30
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,7 +147,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run pre-commit
         run: uvx --with tox-uv tox -e precommit
@@ -168,14 +168,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run typecheck
         run: uvx --with tox-uv tox -e typecheck
 
   deps-check:
     name: deps-check
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -189,14 +189,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Run dependency check
         run: uv run --with packaging scripts/check_deps.py
 
   license-header-check:
     name: license-header-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -210,14 +210,14 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Check license headers
         run: uvx --with tox-uv tox -e license-header-check
 
   check-versions:
     name: check-versions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -231,7 +231,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Check versions
         run: uvx --with tox-uv tox -e check-versions

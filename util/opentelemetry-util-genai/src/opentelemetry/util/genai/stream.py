@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import timeit
 from abc import ABCMeta, abstractmethod
@@ -18,8 +19,10 @@ from typing import (
     cast,
 )
 
+from opentelemetry.util.genai._tool_invocation import ToolInvocation
+
 if TYPE_CHECKING:
-    from opentelemetry.util.genai._invocation import GenAIInvocation
+    from opentelemetry.util.genai.types import Error
 
     class _ObjectProxy:
         __wrapped__: Any
@@ -39,9 +42,19 @@ AsyncStreamWrapperT = TypeVar(
     "AsyncStreamWrapperT", bound="AsyncStreamWrapper[Any]"
 )
 StreamT = TypeVar("StreamT")
-InvocationT = TypeVar("InvocationT", bound="GenAIInvocation")
 _ChunkT_co = TypeVar("_ChunkT_co", covariant=True)
 _logger = logging.getLogger(__name__)
+
+
+class _StreamTimingInvocation(Protocol):
+    def _on_stream_chunk(self, chunk_at: float) -> None: ...
+
+
+class _StreamingInvocation(_StreamTimingInvocation, Protocol):
+    def fail(self, error: Error | BaseException) -> None: ...
+
+
+InvocationT = TypeVar("InvocationT", bound="_StreamingInvocation")
 
 
 class _StreamWrapperMeta(ABCMeta, type(_ObjectProxy)):
@@ -115,15 +128,13 @@ class SyncStreamWrapper(
     def __init__(
         self,
         stream: _SyncStream[ChunkT],
-        invocation: GenAIInvocation | None = None,
+        invocation: _StreamTimingInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
-        # Marks the request as streamed (gen_ai.request.stream) and receives
-        # per-chunk timing via _on_stream_chunk.
         self._self_invocation = invocation
-        if invocation is not None:
-            invocation._request_stream = True
+        if invocation is not None and hasattr(invocation, "_request_stream"):
+            setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
     # The SDK stream, held loosely typed: subclasses re-expose it through a
@@ -222,15 +233,13 @@ class AsyncStreamWrapper(
     def __init__(
         self,
         stream: _AsyncStream[ChunkT],
-        invocation: GenAIInvocation | None = None,
+        invocation: _StreamTimingInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
-        # Marks the request as streamed (gen_ai.request.stream) and receives
-        # per-chunk timing via _on_stream_chunk.
         self._self_invocation = invocation
-        if invocation is not None:
-            invocation._request_stream = True
+        if invocation is not None and hasattr(invocation, "_request_stream"):
+            setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
     # See ``SyncStreamWrapper._self_stream``.
@@ -276,10 +285,11 @@ class AsyncStreamWrapper(
 
         SDK streams (OpenAI's and Anthropic's ``AsyncStream``) expose an async
         ``close``; async generators -- what Google's async
-        ``generate_content_stream`` hands back -- expose ``aclose`` instead.
-        ``aclose`` is preferred for an object carrying both, because a pairing
-        of the two names is how objects with a *sync* ``close`` spell their
-        async one, and awaiting the sync one would raise.
+        ``generate_content_stream`` hands back -- expose ``aclose`` instead;
+        some async streams (such as ``aiobotocore``'s ``AioEventStream``)
+        expose a synchronous ``close``. ``aclose`` is preferred for an object
+        carrying both, because a pairing of the two names is how objects with a
+        *sync* ``close`` spell their async one.
 
         A stream exposing neither is left alone; there is nothing to close, and
         the caller's iteration has already ended.
@@ -289,13 +299,15 @@ class AsyncStreamWrapper(
             close = getattr(self._self_stream, "close", None)
         if close is None:
             return
-        await close()
+        res = close()
+        if inspect.isawaitable(res):
+            await res
 
     async def _close(self) -> None:
         """Close the stream and finalize telemetry.
 
-        Reached through whichever of ``close`` / ``aclose`` the wrapped stream
-        exposes; see ``__getattr__``.
+        Reached through ``aclose`` or an async ``close`` on the wrapped stream;
+        see ``__getattr__``.
         """
         try:
             await self._close_stream()
@@ -307,6 +319,35 @@ class AsyncStreamWrapper(
             )
             raise
         self._finalize_success()
+
+    async def _await_close(self, close_awaitable: Any) -> Any:
+        try:
+            res = await close_awaitable
+        except BaseException as error:
+            self._finalize_failure(error)
+            _logger.debug(
+                "GenAI stream close error during close",
+                exc_info=True,
+            )
+            raise
+        self._finalize_success()
+        return res
+
+    def _sync_close(self) -> Any:
+        """Close a stream exposing a synchronous ``close`` and finalize telemetry."""
+        try:
+            res = self._self_stream.close()
+        except BaseException as error:
+            self._finalize_failure(error)
+            _logger.debug(
+                "GenAI stream close error during close",
+                exc_info=True,
+            )
+            raise
+        if inspect.isawaitable(res):
+            return self._await_close(res)
+        self._finalize_success()
+        return res
 
     if TYPE_CHECKING:
         # Declared for type checkers only. Defining them for real would make
@@ -330,8 +371,12 @@ class AsyncStreamWrapper(
             # that shape (an ``AsyncStream`` has ``close``, an async generator
             # has ``aclose``).
             wrapped = object.__getattribute__(self, "__wrapped__")
-            if name in ("close", "aclose") and hasattr(wrapped, name):
+            if name == "aclose" and hasattr(wrapped, name):
                 return self._close
+            if name == "close" and hasattr(wrapped, name):
+                if inspect.iscoroutinefunction(getattr(wrapped, name)):
+                    return self._close
+                return self._sync_close
             return getattr(wrapped, name)
 
     def __aiter__(self):
@@ -357,6 +402,130 @@ class AsyncStreamWrapper(
         if invocation is not None and chunk_at is not None:
             invocation._on_stream_chunk(chunk_at)
         return chunk
+
+
+class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
+    """Stream wrapper for synchronous tool executions that return iterators/generators.
+
+    Tool executions return an iterator or generator to the caller before it is
+    drained. This wrapper restores the caller's context before returning, and
+    makes the tool span current only while tool code runs -- producing a chunk,
+    closing, or finalizing -- so caller work between chunks is not parented
+    under the tool. Per-chunk content is accumulated and set on
+    ``invocation.tool_result`` upon completion.
+    """
+
+    def __init__(
+        self,
+        stream: _SyncStream[ChunkT],
+        invocation: ToolInvocation,
+    ) -> None:
+        super().__init__(stream)
+        self._self_tool_invocation = invocation
+        invocation.suspend()
+        self._self_chunks: list[Any] = []
+
+    def __next__(self) -> ChunkT:
+        with self._self_tool_invocation.activate():
+            return super().__next__()
+
+    def close(self) -> None:
+        with self._self_tool_invocation.activate():
+            super().close()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        with self._self_tool_invocation.activate():
+            return super().__exit__(exc_type, exc_val, exc_tb)
+
+    def __del__(self) -> None:
+        try:
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
+        except BaseException:  # pylint: disable=broad-exception-caught
+            pass
+
+    def _process_chunk(self, chunk: ChunkT) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            self._self_chunks.append(chunk)
+
+    def _on_stream_end(self) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            if all(isinstance(c, str) for c in self._self_chunks):
+                self._self_tool_invocation.tool_result = "".join(
+                    self._self_chunks
+                )
+            else:
+                self._self_tool_invocation.tool_result = self._self_chunks
+        self._self_tool_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_tool_invocation.fail(error)
+
+
+class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
+    """Stream wrapper for asynchronous tool executions that return async iterators/generators.
+
+    Async counterpart of ``SyncToolStreamWrapper``; the same context scoping
+    applies.
+    """
+
+    def __init__(
+        self,
+        stream: _AsyncStream[ChunkT],
+        invocation: ToolInvocation,
+    ) -> None:
+        super().__init__(stream)
+        self._self_tool_invocation = invocation
+        invocation.suspend()
+        self._self_chunks: list[Any] = []
+
+    def __del__(self) -> None:
+        try:
+            self._finalize_failure(
+                GeneratorExit("Stream garbage collected before completion")
+            )
+        except BaseException:  # pylint: disable=broad-exception-caught
+            pass
+
+    async def __anext__(self) -> ChunkT:
+        with self._self_tool_invocation.activate():
+            return await super().__anext__()
+
+    async def _close(self) -> None:
+        with self._self_tool_invocation.activate():
+            await super()._close()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        with self._self_tool_invocation.activate():
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+
+    def _process_chunk(self, chunk: ChunkT) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            self._self_chunks.append(chunk)
+
+    def _on_stream_end(self) -> None:
+        if self._self_tool_invocation.should_capture_content:
+            if all(isinstance(c, str) for c in self._self_chunks):
+                self._self_tool_invocation.tool_result = "".join(
+                    self._self_chunks
+                )
+            else:
+                self._self_tool_invocation.tool_result = self._self_chunks
+        self._self_tool_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_tool_invocation.fail(error)
 
 
 class _CloseFinalizingProxy(_ObjectProxy):
@@ -555,8 +724,10 @@ class AsyncStreamManagerWrapper(
 __all__ = [
     "AsyncStreamManagerWrapper",
     "AsyncStreamWrapper",
+    "AsyncToolStreamWrapper",
     "SyncStreamManagerWrapper",
     "SyncStreamWrapper",
+    "SyncToolStreamWrapper",
     "finalize_on_aclose",
     "finalize_on_close",
 ]

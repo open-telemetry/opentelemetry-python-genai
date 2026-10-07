@@ -1,1 +1,0 @@
-preserve caller exceptions when closing Anthropic streaming responses

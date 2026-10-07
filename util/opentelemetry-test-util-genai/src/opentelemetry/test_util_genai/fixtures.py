@@ -41,11 +41,14 @@ local runs typically skip; CI installs ``weaver`` ahead of the
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
+import sys
 import tarfile
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -72,6 +75,7 @@ from opentelemetry.test_util_genai._setup_weaver import (
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import ContentCapturingMode
 
 # ─── In-memory exporters and providers ──────────────────────────────────────
@@ -135,6 +139,56 @@ def meter_provider(
     provider = MeterProvider(metric_readers=[metric_reader])
     yield provider
     provider.shutdown()
+
+
+# ─── Instrumentation scope guard ────────────────────────────────────────────
+
+
+def _scope_problem(caller: str, kwargs: dict[str, Any]) -> str | None:
+    name = kwargs.get("instrumentation_scope_name")
+    if not name:
+        return "built a TelemetryHandler without instrumentation_scope_name"
+    if caller != name and not caller.startswith(f"{name}."):
+        return f"reports the unrelated instrumentation scope {name!r}"
+    expected_version = getattr(sys.modules.get(name), "__version__", None)
+    if kwargs.get("instrumentation_scope_version") != expected_version:
+        return (
+            f"reports instrumentation scope version "
+            f"{kwargs.get('instrumentation_scope_version')!r} instead of "
+            f"{expected_version!r}"
+        )
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _instrumentation_scope_guard() -> Iterator[None]:
+    """Fail any test where instrumentation code builds a mis-scoped handler.
+
+    ``TelemetryHandler`` falls back to the util's own module when
+    ``instrumentation_scope_name`` is omitted, which makes the telemetry of
+    every util-genai based instrumentation indistinguishable by
+    ``otel.scope.name``. Only handlers constructed from
+    ``opentelemetry.instrumentation.*`` are checked, so tests are free to build
+    bare handlers of their own.
+    """
+    original_init = TelemetryHandler.__init__
+    problems: set[str] = set()
+
+    @functools.wraps(original_init)
+    def guarded_init(
+        self: TelemetryHandler, *args: Any, **kwargs: Any
+    ) -> None:
+        caller = sys._getframe(1).f_globals.get("__name__", "")
+        if caller.startswith("opentelemetry.instrumentation."):
+            problem = _scope_problem(caller, kwargs)
+            if problem is not None:
+                problems.add(f"{caller} {problem}")
+        original_init(self, *args, **kwargs)
+
+    with patch.object(TelemetryHandler, "__init__", guarded_init):
+        yield
+
+    assert not problems, "; ".join(sorted(problems))
 
 
 # ─── Content-capture parametrization ────────────────────────────────────────

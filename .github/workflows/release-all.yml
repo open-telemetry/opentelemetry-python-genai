@@ -16,7 +16,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true &&
        contains(github.event.pull_request.labels.*.name, 'release'))
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     outputs:
       packages: ${{ steps.enumerate.outputs.packages }}
       ref: ${{ steps.release_ref.outputs.ref }}
@@ -76,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-build.yml
+    uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
@@ -112,7 +112,7 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
-    uses: ./.github/workflows/_release-finalize.yml
+    uses: $/.github/workflows/_release-finalize.yml
     with:
       package: ${{ matrix.package }}
       ref: ${{ needs.enumerate.outputs.ref }}
@@ -125,7 +125,7 @@ jobs:
     if: always() && needs.enumerate.result == 'success' && needs.publish.result == 'success' && needs.github_release.result == 'success'
     permissions:
       contents: write
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -133,7 +133,7 @@ jobs:
           persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the post-release branch
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Bump repository version to next dev version
         run: uv run ./scripts/version_utils.py bump --dev

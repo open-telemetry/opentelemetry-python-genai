@@ -54,7 +54,10 @@ class InvokeAgentScenario(Scenario):
     # invoke_agent span. LLM call (chat) spans are left to the underlying
     # model client library's instrumentation and are not emitted here.
     expected_spans = {"invoke_agent": 2, "execute_tool": 2}
-    expected_metrics = ("gen_ai.client.operation.duration",)
+    expected_metrics = (
+        "gen_ai.invoke_agent.duration",
+        "gen_ai.execute_tool.duration",
+    )
 
     def run(
         self,

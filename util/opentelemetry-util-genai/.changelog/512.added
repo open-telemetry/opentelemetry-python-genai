@@ -1,1 +1,0 @@
-Add `agent_name` kwarg to `TelemetryHandler.tool()`; when set, `gen_ai.agent.name` is written on the `execute_tool` span

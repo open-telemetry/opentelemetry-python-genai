@@ -16,6 +16,8 @@ application:
 * **Agent spans** for agent invocations nested inside a workflow, including the
   agent name, id, description, and conversation/session id when available.
 * **Tool spans** for tool calls made during a run.
+* **Retrieval spans** for retriever invocations, capturing the query and retrieved
+  document IDs and relevance scores when available.
 
 The spans nest to reflect the graph, so a single graph invocation produces a
 workflow span with the agent, tool, and model calls it triggered as children.
@@ -96,6 +98,31 @@ calls nested underneath.
         }
     )
 
+Retrieval Spans and Document Scores
+-----------------------------------
+
+When invoking LangChain retrievers (e.g., vectorstores, knowledge bases, or contextual compression retrievers),
+retrieval spans are recorded with the query and retrieved document IDs and scores.
+
+When message content capture is enabled (``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY``
+or ``SPAN_AND_EVENT``), the retrieved documents are serialized into the
+``gen_ai.retrieval.documents`` span attribute using the shared ``RetrievalDocument``
+model, as a JSON array of objects with only ``id`` and ``score``.
+Document text (previously recorded as ``content``) and metadata are not captured.
+Query text capture is unchanged.
+
+When available, relevance and similarity scores are captured in each document object under ``score``:
+
+* **Direct retrieval scores**: extracted from ``metadata["score"]`` (populated by retrievers such as
+  ``AmazonKnowledgeBasesRetriever``, ``TavilySearchAPIRetriever``, and vectorstore score-threshold searches).
+* **Reranking scores**: extracted from ``metadata["relevance_score"]`` (populated when retrievers are wrapped
+  with rerankers via ``ContextualCompressionRetriever``, such as ``CohereRerank``).
+* **Duck-typed / custom documents**: extracted from a top-level ``score`` attribute or mapping key.
+
+If a document has no score, or if the score is non-numeric or non-finite (``NaN``, ``Infinity``),
+``score`` is recorded as JSON ``null`` to ensure RFC 8259 JSON compliance.
+Missing document IDs are also recorded as ``null``.
+
 Configuration
 -------------
 
@@ -110,6 +137,12 @@ Prompts and completions can instead be uploaded to external storage via a comple
 programmatically, which takes precedence over the environment variable::
 
     LangChainInstrumentor().instrument(completion_hook=my_hook)
+
+Known Limitations
+-----------------
+
+Context propagation to nested calls (such as auto-instrumented HTTP clients
+or database queries within tools) is not supported when using LangChain async API.
 
 References
 ----------
