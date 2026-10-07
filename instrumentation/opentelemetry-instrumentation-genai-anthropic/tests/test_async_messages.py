@@ -46,6 +46,8 @@ from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
 from .conftest import (
     assert_multimodal_input,
+    incomplete_text_stream_sse_body,
+    local_anthropic_sse_server,
     multimodal_input_message,
 )
 
@@ -2468,6 +2470,79 @@ async def test_async_messages_stream_text_stream_records_response(
     assert output_messages[0]["parts"] == [
         {"type": "text", "content": "Hello."}
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_text_stream_early_exit_preserves_snapshot_and_content(
+    span_exporter, instrument_with_content
+):
+    text = "partial response"
+    with local_anthropic_sse_server(
+        incomplete_text_stream_sse_body(text)
+    ) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key",
+            base_url=base_url,
+        )
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Continue."}],
+        ) as stream:
+            async for received in stream.text_stream:
+                break
+            snapshot = stream.current_message_snapshot
+            output_tokens = snapshot.usage.output_tokens
+        await client.close()
+
+    assert received == text
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": text}],
+            "finish_reason": "error",
+            "name": None,
+        }
+    ]
+    assert snapshot.usage.output_tokens == output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_without_content_capture_does_not_accumulate_text(
+    span_exporter, instrument_no_content
+):
+    text = "x" * 100_000
+    with local_anthropic_sse_server(
+        incomplete_text_stream_sse_body(text)
+    ) as base_url:
+        client = AsyncAnthropic(
+            api_key="test_anthropic_api_key",
+            base_url=base_url,
+        )
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Continue."}],
+        ) as stream:
+            await stream.__anext__()
+            await stream.__anext__()
+            await stream.__anext__()
+            assert stream._self_block_states == {}
+        await client.close()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in spans[0].attributes
 
 
 @pytest.mark.asyncio

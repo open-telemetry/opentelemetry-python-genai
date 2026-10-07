@@ -33,6 +33,7 @@ from opentelemetry.util.genai.types import OutputMessage
 from .messages_extractors import set_invocation_response_attributes
 from .utils import (
     StreamBlockState,
+    convert_content_to_parts,
     create_stream_block_state,
     stream_block_state_to_part,
     update_stream_block_state,
@@ -137,14 +138,16 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         )
 
     def _partial_output_messages(self) -> list[OutputMessage] | None:
-        if not self._self_block_states:
+        if self._self_block_states:
+            parts = [
+                part
+                for _, state in sorted(self._self_block_states.items())
+                if (part := stream_block_state_to_part(state)) is not None
+            ]
+        elif self._self_message is not None:
+            parts = convert_content_to_parts(self._self_message.content)
+        else:
             return None
-
-        parts = [
-            part
-            for _, state in sorted(self._self_block_states.items())
-            if (part := stream_block_state_to_part(state)) is not None
-        ]
         if not parts:
             return None
 
@@ -164,17 +167,13 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         # snapshot can be the only record of the response.
         self._adopt_sdk_snapshot()
         incomplete_response = self._is_incomplete_response()
-        if self._self_message is not None:
-            usage = getattr(self._self_message, "usage", None)
-            if usage is not None and (
-                incomplete_response or self._self_output_tokens is not None
-            ):
-                usage.output_tokens = self._self_output_tokens
         _set_response_attributes(
             self._self_invocation,
             self._self_message,
             self._self_capture_content and not incomplete_response,
         )
+        if incomplete_response or self._self_output_tokens is not None:
+            self._self_invocation.output_tokens = self._self_output_tokens
         if incomplete_response:
             self._self_invocation.finish_reasons = ["error"]
             if (
@@ -263,6 +262,8 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     ) -> None:
         chunk_type = getattr(chunk, "type", None)
         if chunk_type == "content_block_start":
+            if not self._self_capture_content:
+                return
             index = getattr(chunk, "index", None)
             content_block = getattr(chunk, "content_block", None)
             if isinstance(index, int) and content_block is not None:
@@ -272,6 +273,8 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             return
 
         if chunk_type == "content_block_delta":
+            if not self._self_capture_content:
+                return
             index = getattr(chunk, "index", None)
             delta = getattr(chunk, "delta", None)
             state = (

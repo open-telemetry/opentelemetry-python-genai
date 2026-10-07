@@ -6,6 +6,10 @@
 
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 import pytest_asyncio
@@ -89,6 +93,88 @@ def multimodal_input_message():
             },
         ],
     }
+
+
+@contextmanager
+def local_anthropic_sse_server(body: bytes) -> Iterator[str]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length", "0")))
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def incomplete_text_stream_sse_body(text: str) -> bytes:
+    events = [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_incomplete_text",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        ),
+        (
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                },
+                "usage": {"output_tokens": 10},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return b"".join(
+        f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+        for name, payload in events
+    )
 
 
 def assert_multimodal_input(span: ReadableSpan) -> None:
