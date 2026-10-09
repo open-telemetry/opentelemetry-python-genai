@@ -1,0 +1,1 @@
+Stop tracing `with_raw_response` calls after `uninstrument()` on a client that used them while instrumented.
