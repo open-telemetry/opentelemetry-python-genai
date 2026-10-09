@@ -3,6 +3,8 @@
 
 """Tests for GoogleGenAiSdkInstrumentor."""
 
+import os
+
 from google.genai.models import AsyncModels, Models
 
 from opentelemetry.instrumentation.google_genai import (
@@ -100,4 +102,20 @@ def test_uninstrument_after_reinstantiation(
         ), (
             "Expected opentelemetry/instrumentation/google_genai "
             f"removed from {co_filename} upon uninstrument"
+        )
+
+
+def test_instrument_preserves_explicit_emit_event_false(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT", "false")
+
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        assert (
+            os.environ.get("OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT") == "false"
         )

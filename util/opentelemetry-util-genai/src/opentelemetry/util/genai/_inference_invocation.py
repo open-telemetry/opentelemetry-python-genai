@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import Final
 
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -286,6 +286,16 @@ class InferenceInvocation(GenAIInvocation):
         self._emit_event: bool = _should_emit_event(
             self._content_capturing_mode
         )
+        if (
+            self._emit_event
+            and isinstance(self._completion_hook, _NoOpCompletionHook)
+            and hasattr(self._logger, "enabled")
+        ):
+            self._emit_event = self._logger.enabled(
+                context=self._span_context,
+                severity_number=SeverityNumber.DEBUG,
+                event_name="gen_ai.client.inference.operation.details",
+            )
 
     @property
     def provider(self) -> str | None:
@@ -966,6 +976,7 @@ class InferenceInvocation(GenAIInvocation):
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
             context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
         )
 
 
