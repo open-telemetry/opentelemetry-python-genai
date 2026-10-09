@@ -121,6 +121,55 @@ def _assert_weather_tool_definitions(span):
     ]
 
 
+_STREAM_SSE_BODY = b"".join(
+    f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+    for name, payload in (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_generator",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "ok"},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 2},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+)
+
+
 class _AsyncErrorInjectingStreamDelegate:
     def __init__(self, inner, fail_after=1, error_type=ConnectionError):
         self._inner = inner
@@ -1072,6 +1121,246 @@ async def test_async_messages_create_system_generator_reaches_the_sdk(
     assert system_instructions == [
         {"type": "text", "content": "You are a helpful assistant."}
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_tools_generator_is_recorded(
+    span_exporter, instrument_with_content
+):
+    """``stream`` serializes the request before the invocation exists.
+
+    The generator has to be frozen in the wrapper, not while the invocation is
+    built, or the SDK drains it first and the span records no tools.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_SSE_BODY,
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    try:
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[
+                {"role": "user", "content": "What is the weather in SF?"}
+            ],
+            tools=(tool for tool in [_WEATHER_TOOL]),
+        ) as stream:
+            await stream.until_done()
+    finally:
+        await client.close()
+
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_messages_generator_is_recorded(
+    span_exporter, instrument_with_content
+):
+    """``stream`` serializes messages before the invocation exists."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_SSE_BODY,
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    user_msg = {"role": "user", "content": "What is the weather in SF?"}
+    try:
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=(msg for msg in [user_msg]),
+        ) as stream:
+            await stream.until_done()
+    finally:
+        await client.close()
+
+    assert seen["body"]["messages"] == [user_msg]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_messages = _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"] == [
+        {"type": "text", "content": "What is the weather in SF?"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_system_generator_is_recorded(
+    span_exporter, instrument_with_content
+):
+    """``stream`` serializes system before the invocation exists."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_SSE_BODY,
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    system_block = {"type": "text", "text": "You are a helpful assistant."}
+    try:
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Hello"}],
+            system=(block for block in [system_block]),
+        ) as stream:
+            await stream.until_done()
+    finally:
+        await client.close()
+
+    assert seen["body"]["system"] == [system_block]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    system_instructions = _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    )
+    assert system_instructions == [
+        {"type": "text", "content": "You are a helpful assistant."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_generator_no_content_transparency(
+    span_exporter, instrument_no_content
+):
+    """When content capture is disabled, generator inputs must reach the SDK
+    unmaterialized by instrumentation and recorded spans must not contain content attributes."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    user_msg = {"role": "user", "content": "Hello without capture"}
+    system_block = {"type": "text", "text": "System without capture"}
+    try:
+        await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=(msg for msg in [user_msg]),
+            system=(block for block in [system_block]),
+            tools=(tool for tool in [_WEATHER_TOOL]),
+        )
+    finally:
+        await client.close()
+
+    assert seen["body"]["messages"] == [user_msg]
+    assert seen["body"]["system"] == [system_block]
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_generator_no_content_transparency(
+    span_exporter, instrument_no_content
+):
+    """When content capture is disabled, streaming generator inputs must reach the SDK
+    unmaterialized by instrumentation and recorded spans must not contain content attributes."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_STREAM_SSE_BODY,
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    user_msg = {"role": "user", "content": "Stream without capture"}
+    system_block = {"type": "text", "text": "System stream without capture"}
+    try:
+        async with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=(msg for msg in [user_msg]),
+            system=(block for block in [system_block]),
+            tools=(tool for tool in [_WEATHER_TOOL]),
+        ) as stream:
+            await stream.until_done()
+    finally:
+        await client.close()
+
+    assert seen["body"]["messages"] == [user_msg]
+    assert seen["body"]["system"] == [system_block]
+    assert seen["body"]["tools"] == [_WEATHER_TOOL]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.asyncio

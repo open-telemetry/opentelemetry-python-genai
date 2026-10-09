@@ -101,8 +101,8 @@ def _materialize_iterables(kwargs: dict[str, Any]) -> None:
 
     ``messages``, ``system``, and ``tools`` are typed as iterables, so they may be
     generators, and both the SDK and telemetry extractors read them. Call this
-    before either of them does: ``create`` reads the request after this wrapper,
-    but ``stream`` serializes it while building the manager, before the
+    before either of them does when content capture is enabled: ``create`` reads the request
+    after this wrapper, but ``stream`` serializes it while building the manager, before the
     invocation is created.
     """
     for key in ("messages", "system", "tools"):
@@ -146,7 +146,8 @@ def messages_create(
         | AnthropicStream[RawMessageStreamEvent]
         | MessagesStreamWrapper[None]
     ):
-        _materialize_iterables(kwargs)
+        if capture_content:
+            _materialize_iterables(kwargs)
         invocation = _create_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -205,7 +206,8 @@ def async_messages_create(
         | AnthropicAsyncStream[RawMessageStreamEvent]
         | AsyncMessagesStreamWrapper[None]
     ):
-        _materialize_iterables(kwargs)
+        if capture_content:
+            _materialize_iterables(kwargs)
         invocation = _create_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -286,7 +288,8 @@ def messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> MessagesStreamManagerWrapper[Any]:
-        _materialize_iterables(kwargs)
+        if capture_content:
+            _materialize_iterables(kwargs)
         return MessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(
@@ -312,7 +315,8 @@ def async_messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> AsyncMessagesStreamManagerWrapper[Any]:
-        _materialize_iterables(kwargs)
+        if capture_content:
+            _materialize_iterables(kwargs)
         return AsyncMessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(
