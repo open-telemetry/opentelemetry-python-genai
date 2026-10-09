@@ -6,6 +6,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from opentelemetry._logs import SeverityNumber
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -91,10 +92,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         log_record = logs[0].log_record
 
-        # Verify event name
+        # Verify event name and severity
         self.assertEqual(
             log_record.event_name, "gen_ai.client.inference.operation.details"
         )
+        self.assertEqual(log_record.severity_number, SeverityNumber.DEBUG)
 
         # Verify event attributes
         attrs = log_record.attributes
@@ -479,3 +481,104 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             content_capturing_mode=ContentCapturingMode.NO_CONTENT,
         )
         self.assertFalse(inv_disabled._emit_event)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_emits_llm_event_with_debug_severity(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
+            "test-provider", request_model="event-model"
+        )
+        invocation.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(
+            logs[0].log_record.severity_number, SeverityNumber.DEBUG
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_event_not_emitted_when_logger_disabled(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=False)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        inv.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 0)
+        enabled_mock.assert_called_once()
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(
+            kwargs.get("event_name"),
+            "gen_ai.client.inference.operation.details",
+        )
+        self.assertEqual(
+            kwargs.get("severity_number"),
+            SeverityNumber.DEBUG,
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_event_emitted_when_logger_enabled(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=True)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        inv.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 1)
+        enabled_mock.assert_called_once()
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(
+            kwargs.get("event_name"),
+            "gen_ai.client.inference.operation.details",
+        )
+        self.assertEqual(
+            kwargs.get("severity_number"),
+            SeverityNumber.DEBUG,
+        )
