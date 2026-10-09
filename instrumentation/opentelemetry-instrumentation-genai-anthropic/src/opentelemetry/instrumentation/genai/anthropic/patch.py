@@ -96,17 +96,19 @@ def _fail_context_manager_response(
         )
 
 
-def _materialize_tools(kwargs: dict[str, Any]) -> None:
-    """Replace a one-shot ``tools`` iterator with a list.
+def _materialize_iterables(kwargs: dict[str, Any]) -> None:
+    """Replace one-shot iterators with lists so both telemetry and SDK see the same data.
 
-    ``tools`` is typed as an iterable, so it may be a generator, and both the
-    SDK and the tool definitions read it. Call this before either of them does:
-    ``create`` reads the request after this wrapper, but ``stream`` serializes
-    it while building the manager, before the invocation is created.
+    ``messages``, ``system``, and ``tools`` are typed as iterables, so they may be
+    generators, and both the SDK and telemetry extractors read them. Call this
+    before either of them does: ``create`` reads the request after this wrapper,
+    but ``stream`` serializes it while building the manager, before the
+    invocation is created.
     """
-    tools = kwargs.get("tools")
-    if isinstance(tools, Iterator):
-        kwargs["tools"] = list(cast("Iterator[Any]", tools))
+    for key in ("messages", "system", "tools"):
+        value = kwargs.get(key)
+        if isinstance(value, Iterator):
+            kwargs[key] = list(cast("Iterator[Any]", value))
 
 
 def _is_raw_response(result: object) -> bool:
@@ -144,7 +146,7 @@ def messages_create(
         | AnthropicStream[RawMessageStreamEvent]
         | MessagesStreamWrapper[None]
     ):
-        _materialize_tools(kwargs)
+        _materialize_iterables(kwargs)
         invocation = _create_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -203,7 +205,7 @@ def async_messages_create(
         | AnthropicAsyncStream[RawMessageStreamEvent]
         | AsyncMessagesStreamWrapper[None]
     ):
-        _materialize_tools(kwargs)
+        _materialize_iterables(kwargs)
         invocation = _create_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -284,7 +286,7 @@ def messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> MessagesStreamManagerWrapper[Any]:
-        _materialize_tools(kwargs)
+        _materialize_iterables(kwargs)
         return MessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(
@@ -310,7 +312,7 @@ def async_messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> AsyncMessagesStreamManagerWrapper[Any]:
-        _materialize_tools(kwargs)
+        _materialize_iterables(kwargs)
         return AsyncMessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(

@@ -971,6 +971,110 @@ async def test_async_messages_create_tools_generator_reaches_the_sdk(
 
 
 @pytest.mark.asyncio
+async def test_async_messages_create_messages_generator_reaches_the_sdk(
+    span_exporter, instrument_with_content
+):
+    """Async counterpart: a one-shot ``messages`` iterator must reach the SDK."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    user_msg = {"role": "user", "content": "What is the weather in SF?"}
+    try:
+        await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=(msg for msg in [user_msg]),
+        )
+    finally:
+        await client.close()
+
+    assert seen["body"]["messages"] == [user_msg]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    input_messages = _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"] == [
+        {"type": "text", "content": "What is the weather in SF?"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_messages_create_system_generator_reaches_the_sdk(
+    span_exporter, instrument_with_content
+):
+    """Async counterpart: a one-shot ``system`` iterator must reach the SDK."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return _http_lib.Response(
+            200,
+            json={
+                "id": "msg_generator",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncAnthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=_http_lib.AsyncClient(
+            transport=_http_lib.MockTransport(respond)
+        ),
+    )
+    system_block = {"type": "text", "text": "You are a helpful assistant."}
+    try:
+        await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Hello"}],
+            system=(block for block in [system_block]),
+        )
+    finally:
+        await client.close()
+
+    assert seen["body"]["system"] == [system_block]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    system_instructions = _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    )
+    assert system_instructions == [
+        {"type": "text", "content": "You are a helpful assistant."}
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_async_messages_create_captures_tool_use_content")
 @pytest.mark.skipif(
