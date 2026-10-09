@@ -184,6 +184,40 @@ class NonStreamingTestCase(TestCase):
         )
         self.assertEqual(response.text, "Yep, it works!")
 
+    def test_tuple_contents(self):
+        self.configure_valid_response(text="Yep, it works!")
+        response = self.generate_content(
+            model="gemini-2.0-flash", contents=("Hello", "world")
+        )
+        self.assertEqual(response.text, "Yep, it works!")
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
+    def test_empty_tuple_contents_mimics_sdk_error(self):
+        # Even with capture enabled, passing () should fail gracefully like [] does.
+        with self.assertRaises(ValueError):
+            self.generate_content(model="gemini-2.0-flash", contents=())
+
+    def test_tuple_system_instruction(self):
+        self.configure_valid_response(text="Yep, it works!")
+        response = self.generate_content(
+            model="gemini-2.0-flash",
+            contents="Hello",
+            config=GenerateContentConfig(system_instruction=("Be polite",)),
+        )
+        self.assertEqual(response.text, "Yep, it works!")
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
+    def test_mixed_tuple_contents(self):
+        self.configure_valid_response(text="Yep, it works!")
+        from google.genai.types import Part
+
+        response = self.generate_content(
+            model="gemini-2.0-flash",
+            contents=("Hello", Part.from_text(text="world")),
+        )
+        self.assertEqual(response.text, "Yep, it works!")
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
     def test_generates_span(self):
         self.configure_valid_response(text="Yep, it works!")
         response = self.generate_content(
