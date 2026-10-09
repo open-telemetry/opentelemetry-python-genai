@@ -21,9 +21,6 @@ from opentelemetry.instrumentation.genai.agno.patch import (
     _fail_tool_invocation,
     _set_tool_invocation_output,
 )
-from opentelemetry.util.genai._conversation_context import (
-    get_ambient_conversation_id,
-)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -34,6 +31,9 @@ from opentelemetry.semconv.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._conversation_context import (
+    get_ambient_conversation_id,
+)
 
 
 def test_agent_run_spans(
