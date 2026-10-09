@@ -38,14 +38,15 @@ to manage context:
 Stream execution context
 ------------------------
 
-Subclasses of ``SyncStreamWrapper`` and ``AsyncStreamWrapper`` can override
-``_execution_context()`` to return a fresh context manager for each stream read
-and cleanup operation. Context is restored before returning a chunk to the
-consumer. Generator ``send``/``throw`` and ``asend``/``athrow`` also use this
-scope when the underlying stream supports them.
+``SyncStreamWrapper`` and ``AsyncStreamWrapper`` scope each stream read and
+cleanup operation with ``_execution_context()``. Context is restored before
+returning a chunk to the consumer. Generator ``send``/``throw`` and
+``asend``/``athrow`` also use this scope when the underlying stream supports them.
 
-For invocation-backed streams, call ``invocation.suspend()`` before returning the
-stream and return ``invocation.activate()`` from ``_execution_context()``.
+For invocation-backed streams, pass the invocation to the base constructor
+(``super().__init__(stream, invocation)``) and call ``invocation.suspend()``
+before returning the stream. The base wrapper then makes the invocation current
+during reads and cleanup, so no ``_execution_context()`` override is needed.
 Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
 
 
