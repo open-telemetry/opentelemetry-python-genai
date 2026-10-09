@@ -2199,6 +2199,31 @@ def test_default_execution_context_without_suspended_flag_is_a_noop():
     assert list(wrapper) == ["a"]
 
 
+def test_default_execution_context_leaves_suppressed_inference_invocation_alone():
+    """A nested inference invocation never attached itself, so reads don't activate it."""
+    from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=import-outside-toplevel
+        SuppressedInferenceInvocation,
+    )
+    from opentelemetry.util.genai.handler import (  # pylint: disable=import-outside-toplevel
+        TelemetryHandler,
+    )
+
+    handler = TelemetryHandler(tracer_provider=TracerProvider())
+    outer = handler.inference("openai", request_model="model")
+    try:
+        inner = handler.inference("openai", request_model="model")
+        assert isinstance(inner, SuppressedInferenceInvocation)
+        inner.suspend()
+        assert not inner._suspended
+
+        wrapper = _TestSyncStreamWrapper(iter(["a"]), inner)
+        assert list(wrapper) == ["a"]
+        assert wrapper._self_finalized
+        assert get_current_span() is outer.span
+    finally:
+        outer.stop()
+
+
 def _parent_and_attached_invocation():
     """A caller span made current, then a real invocation started under it and left attached."""
     tracer_provider = TracerProvider()
