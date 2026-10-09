@@ -1677,16 +1677,6 @@ class TestMessageModels(unittest.TestCase):
             {"type": "text", "content": "hello"},
         )
 
-    def test_gen_ai_json_dumps_model(self):
-        class Model:
-            def model_dump(self) -> dict[str, str]:
-                return {"content": "hello"}
-
-        self.assertEqual(
-            json.loads(gen_ai_json_dumps(Model())),
-            {"content": "hello"},
-        )
-
 
 _REAL_PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"

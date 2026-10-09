@@ -127,9 +127,6 @@ class _GenAiJsonEncoder(json.JSONEncoder):
             return asdict(o)
         if isinstance(o, bytes):
             return b64encode(o).decode()
-        model_dump = getattr(o, "model_dump", None)
-        if callable(model_dump):
-            return model_dump()
         return super().default(o)
 
 
