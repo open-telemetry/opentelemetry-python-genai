@@ -50,8 +50,22 @@ from .stream import (
 
 _logger = logging.getLogger(__name__)
 
+
 BEDROCK_RUNTIME = "bedrock-runtime"
 BEDROCK_AGENT_RUNTIME = "bedrock-agent-runtime"
+
+
+def _extract_request(
+    extract: Callable[..., None], *args: Any, **kwargs: Any
+) -> None:
+    # Request extraction runs before botocore validates the parameters, so a
+    # malformed request must not raise here and leave the invocation open.
+    try:
+        extract(*args, **kwargs)
+    except Exception:  # pylint: disable=broad-exception-caught
+        _logger.debug(
+            "Failed to extract Bedrock request attributes", exc_info=True
+        )
 
 
 def _handle_converse(
@@ -78,8 +92,11 @@ def _handle_converse(
         operation_name=GenAiOperationNameValues.CHAT.value,
     )
     capture_content = handler.should_capture_content()
-    extract_converse_request(
-        api_params, invocation, capture_content=capture_content
+    _extract_request(
+        extract_converse_request,
+        api_params,
+        invocation,
+        capture_content=capture_content,
     )
     try:
         response: Any = wrapped(*args, **kwargs)
@@ -131,8 +148,11 @@ async def _handle_async_converse(
         operation_name=GenAiOperationNameValues.CHAT.value,
     )
     capture_content = handler.should_capture_content()
-    extract_converse_request(
-        api_params, invocation, capture_content=capture_content
+    _extract_request(
+        extract_converse_request,
+        api_params,
+        invocation,
+        capture_content=capture_content,
     )
     try:
         response: Any = await wrapped(*args, **kwargs)
@@ -183,7 +203,7 @@ def _handle_invoke_model(
             server_address=server_address,
             server_port=server_port,
         )
-        extract_embedding_request(api_params, invocation)
+        _extract_request(extract_embedding_request, api_params, invocation)
         try:
             response: Any = wrapped(*args, **kwargs)
             raw_bytes = b""
@@ -212,8 +232,11 @@ def _handle_invoke_model(
         server_port=server_port,
     )
     capture_content = handler.should_capture_content()
-    extract_invoke_model_request(
-        api_params, invocation, capture_content=capture_content
+    _extract_request(
+        extract_invoke_model_request,
+        api_params,
+        invocation,
+        capture_content=capture_content,
     )
     try:
         response = wrapped(*args, **kwargs)
@@ -277,7 +300,7 @@ async def _handle_async_invoke_model(
             server_address=server_address,
             server_port=server_port,
         )
-        extract_embedding_request(api_params, invocation)
+        _extract_request(extract_embedding_request, api_params, invocation)
         try:
             response: Any = await wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -323,8 +346,11 @@ async def _handle_async_invoke_model(
         server_port=server_port,
     )
     capture_content = handler.should_capture_content()
-    extract_invoke_model_request(
-        api_params, invocation, capture_content=capture_content
+    _extract_request(
+        extract_invoke_model_request,
+        api_params,
+        invocation,
+        capture_content=capture_content,
     )
     try:
         response = await wrapped(*args, **kwargs)
@@ -401,7 +427,8 @@ def _start_invoke_agent(
     if raw_agent_id:
         invocation.agent_id = str(raw_agent_id)
 
-    extract_invoke_agent_request(
+    _extract_request(
+        extract_invoke_agent_request,
         api_params,
         invocation,
         capture_content=invocation.should_capture_content,
@@ -443,7 +470,8 @@ def _start_retrieve(
         server_address=server_address,
         server_port=server_port,
     )
-    extract_retrieve_request(
+    _extract_request(
+        extract_retrieve_request,
         api_params,
         invocation,
         capture_content=invocation.should_capture_content,
