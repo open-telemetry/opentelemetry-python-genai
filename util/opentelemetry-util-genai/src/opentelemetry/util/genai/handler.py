@@ -43,12 +43,17 @@ from opentelemetry._logs import (
     LoggerProvider,
     get_logger,
 )
-from opentelemetry.context import Context
+from opentelemetry.context import Context, get_value
 from opentelemetry.metrics import Meter, MeterProvider, get_meter
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
     TracerProvider,
     get_tracer,
+)
+from opentelemetry.util.genai._inference_invocation import (
+    CLIENT_INFERENCE_CONTEXT_KEY,
+    InferenceData,
+    SuppressedInferenceInvocation,
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import (
@@ -227,7 +232,15 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return InferenceInvocation(
+        invocation_cls: type[InferenceInvocation] = (
+            SuppressedInferenceInvocation
+            if isinstance(
+                get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context),
+                InferenceData,
+            )
+            else InferenceInvocation
+        )
+        return invocation_cls(
             self._tracer,
             self._instruments,
             self._logger,
