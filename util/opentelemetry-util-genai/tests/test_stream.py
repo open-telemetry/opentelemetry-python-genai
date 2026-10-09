@@ -2199,6 +2199,78 @@ def test_default_execution_context_without_suspended_flag_is_a_noop():
     assert list(wrapper) == ["a"]
 
 
+def _suspended_tool_invocation():
+    """A real invocation started under a caller span, then suspended as a stream wrapper expects."""
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(
+        SimpleSpanProcessor(InMemorySpanExporter())
+    )
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="abandoned_tool",
+    )
+    invocation.suspend()
+    return invocation
+
+
+@pytest.mark.parametrize(
+    "wrapper_cls", [_TestSyncStreamWrapper, SyncToolStreamWrapper]
+)
+def test_abandoned_sync_stream_finalizes_inside_execution_context(wrapper_cls):
+    invocation = _suspended_tool_invocation()
+    spans_at_finalize = []
+
+    class _RecordingWrapper(wrapper_cls):
+        def _on_stream_error(self, error):
+            spans_at_finalize.append(get_current_span())
+            super()._on_stream_error(error)
+
+    wrapper = _RecordingWrapper(iter(["a", "b"]), invocation)
+    with pytest.raises(RuntimeError):
+        for _ in wrapper:
+            raise RuntimeError("caller error")
+
+    del wrapper
+    gc.collect()
+
+    assert spans_at_finalize == [invocation.span]
+    assert get_current_span() is not invocation.span
+
+
+@pytest.mark.parametrize(
+    "wrapper_cls", [_TestAsyncStreamWrapper, AsyncToolStreamWrapper]
+)
+def test_abandoned_async_stream_finalizes_inside_execution_context(
+    wrapper_cls,
+):
+    invocation = _suspended_tool_invocation()
+    spans_at_finalize = []
+
+    class _RecordingWrapper(wrapper_cls):
+        def _on_stream_error(self, error):
+            spans_at_finalize.append(get_current_span())
+            super()._on_stream_error(error)
+
+    async def chunks():
+        yield "a"
+        yield "b"
+
+    async def exercise():
+        wrapper = _RecordingWrapper(chunks(), invocation)
+        with pytest.raises(RuntimeError):
+            async for _ in wrapper:
+                raise RuntimeError("caller error")
+
+    asyncio.run(exercise())
+    gc.collect()
+
+    assert spans_at_finalize == [invocation.span]
+    assert get_current_span() is not invocation.span
+
+
 def test_default_execution_context_leaves_suppressed_inference_invocation_alone():
     """A nested inference invocation never attached itself, so reads don't activate it."""
     from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=import-outside-toplevel

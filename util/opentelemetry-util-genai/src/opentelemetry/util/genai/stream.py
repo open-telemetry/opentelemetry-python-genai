@@ -134,7 +134,8 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
         if getattr(self, "_self_finalized", True):
             return
         try:
-            self._finalize_failure(AbandonedStreamError())
+            with self._execution_context():
+                self._finalize_failure(AbandonedStreamError())
         except BaseException:  # pylint: disable=broad-exception-caught
             _logger.debug(
                 "GenAI stream finalization error for abandoned stream",
@@ -520,9 +521,10 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
 
     def __del__(self) -> None:
         try:
-            self._finalize_failure(
-                GeneratorExit("Stream garbage collected before completion")
-            )
+            with self._execution_context():
+                self._finalize_failure(
+                    GeneratorExit("Stream garbage collected before completion")
+                )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
@@ -563,9 +565,10 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
 
     def __del__(self) -> None:
         try:
-            self._finalize_failure(
-                GeneratorExit("Stream garbage collected before completion")
-            )
+            with self._execution_context():
+                self._finalize_failure(
+                    GeneratorExit("Stream garbage collected before completion")
+                )
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
