@@ -3,6 +3,9 @@
 
 # pylint: disable=too-many-locals,too-many-lines
 
+import json
+
+import httpx
 import pytest
 from openai import (
     APIConnectionError,
@@ -1760,3 +1763,109 @@ async def async_chat_completion_multiple_tools_streaming(
         assert_message_in_logs(
             logs[2], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_messages_generator_reaches_sdk(
+    span_exporter, instrument_with_content
+):
+    """Async: a one-shot ``messages`` iterator must still reach the SDK."""
+    seen = {}
+    test_messages = [
+        {"role": "user", "content": "Hello from async generator"},
+    ]
+
+    async def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-async-generator-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = AsyncOpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=(msg for msg in test_messages),
+    )
+
+    assert seen["body"]["messages"] == test_messages
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.input.messages" in spans[0].attributes
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_tools_generator_reaches_sdk(
+    span_exporter, instrument_with_content
+):
+    """Async: a one-shot ``tools`` iterator must still reach the SDK."""
+    seen = {}
+    test_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    async def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-async-generator-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = AsyncOpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Weather?"}],
+        tools=(tool for tool in [test_tool]),
+    )
+
+    assert seen["body"]["tools"] == [test_tool]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.tool.definitions" in spans[0].attributes

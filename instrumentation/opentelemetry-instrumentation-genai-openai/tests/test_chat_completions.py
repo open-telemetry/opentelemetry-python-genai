@@ -7,6 +7,7 @@ import json
 import logging
 import os
 
+import httpx
 import pytest
 from openai import (
     NOT_GIVEN,
@@ -2018,3 +2019,122 @@ def chat_completion_multiple_tools_streaming(
 
 def assert_no_invalid_type_warning(caplog):
     assert "Invalid type" not in caplog.text
+
+
+def test_chat_completion_messages_generator_reaches_sdk(
+    span_exporter, instrument_with_content
+):
+    """A one-shot ``messages`` iterator must still reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+    test_messages = [
+        {"role": "user", "content": "Hello from generator"},
+    ]
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-generator-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=(msg for msg in test_messages),
+    )
+
+    assert seen["body"]["messages"] == test_messages
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.input.messages" in spans[0].attributes
+    assert json.loads(spans[0].attributes["gen_ai.input.messages"]) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Hello from generator"}],
+            "name": None,
+        }
+    ]
+
+
+def test_chat_completion_tools_generator_reaches_sdk(
+    span_exporter, instrument_with_content
+):
+    """A one-shot ``tools`` iterator must still reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+    test_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-generator-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Weather?"}],
+        tools=(tool for tool in [test_tool]),
+    )
+
+    assert seen["body"]["tools"] == [test_tool]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.tool.definitions" in spans[0].attributes
