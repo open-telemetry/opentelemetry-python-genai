@@ -326,6 +326,44 @@ def test_extract_converse_request_no_content(tracer_provider) -> None:
         assert invocation.temperature == 0.5
 
 
+def test_extract_converse_request_tuple_arrays(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    messages = (
+        {"role": "user", "content": ({"text": "hello"},)},
+    )
+    system = ({"text": "Be concise"},)
+    tool_config = {
+        "tools": (
+            {
+                "toolSpec": {
+                    "name": "get_weather",
+                    "inputSchema": {"json": {"type": "object"}},
+                }
+            },
+        )
+    }
+
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {"messages": messages, "system": system, "toolConfig": tool_config},
+            invocation,
+        )
+
+        assert invocation.input_messages is not None
+        assert len(invocation.input_messages) == 1
+        input_message = invocation.input_messages[0]
+        assert input_message.role == "user"
+        assert len(input_message.parts) == 1
+        assert isinstance(input_message.parts[0], TextPart)
+        assert input_message.parts[0].content == "hello"
+        assert invocation.system_instruction is not None
+        assert len(invocation.system_instruction) == 1
+        assert isinstance(invocation.system_instruction[0], TextPart)
+        assert invocation.system_instruction[0].content == "Be concise"
+        assert len(invocation.tool_definitions) == 1
+        assert invocation.tool_definitions[0].name == "get_weather"
+
+
 def test_extract_converse_response_no_content(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     with handler.inference(provider="aws.bedrock") as invocation:
