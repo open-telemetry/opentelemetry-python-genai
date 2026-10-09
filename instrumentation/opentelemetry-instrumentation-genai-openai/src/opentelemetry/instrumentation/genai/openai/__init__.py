@@ -104,8 +104,9 @@ def _is_parse_supported():
 
 
 class OpenAIInstrumentor(BaseInstrumentor):
-    def __init__(self):
-        self._parse_supported = False
+    # BaseInstrumentor is a singleton and __init__ re-runs on the existing
+    # instance, so this default lives on the class instead of in __init__.
+    _parse_supported: bool = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
