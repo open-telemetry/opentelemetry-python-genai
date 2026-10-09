@@ -21,6 +21,9 @@ from opentelemetry.instrumentation.genai.agno.patch import (
     _fail_tool_invocation,
     _set_tool_invocation_output,
 )
+from opentelemetry.util.genai._conversation_context import (
+    get_ambient_conversation_id,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -300,11 +303,16 @@ def test_team_run_error_path(
         model=MockModel(id="mock-model"),
         session_id="instance-session",
     )
+
+    def fail_team_initialization(*args: Any, **kwargs: Any) -> None:
+        assert get_ambient_conversation_id() == "call-session"
+        raise RuntimeError("team failure")
+
     with (
         patch.object(
             Team,
             "initialize_team",
-            side_effect=RuntimeError("team failure"),
+            side_effect=fail_team_initialization,
         ),
         pytest.raises(RuntimeError, match="team failure"),
     ):
@@ -434,9 +442,14 @@ def test_workflow_run_error_path(
     workflow = Workflow(
         name="test-workflow", steps=[], session_id="workflow-instance-session"
     )
+
+    def fail_workflow_execution(*args: Any, **kwargs: Any) -> None:
+        assert get_ambient_conversation_id() == "workflow-instance-session"
+        raise RuntimeError("workflow failure")
+
     with (
         patch.object(
-            Workflow, "_execute", side_effect=RuntimeError("workflow failure")
+            Workflow, "_execute", side_effect=fail_workflow_execution
         ),
         pytest.raises(RuntimeError, match="workflow failure"),
     ):
