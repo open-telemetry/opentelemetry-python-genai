@@ -14,7 +14,7 @@ import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.tools import Toolkit
-from agno.tools.function import Function, FunctionCall
+from agno.tools.function import Function, FunctionCall, ToolResult
 from tests.mock_model import MockModel
 
 from opentelemetry.instrumentation.genai.agno.utils import (
@@ -836,6 +836,101 @@ def test_tool_call_aexecute_streaming_non_string_chunks(
     assert json.loads(
         span.attributes[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT]
     ) == [{"index": 0}, {"index": 1}]
+
+
+def test_tool_call_execute_streaming_model_chunks(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    chunks = [ToolResult(content="first"), ToolResult(content="second")]
+
+    def stream_results() -> Iterator[ToolResult]:
+        yield from chunks
+
+    call = FunctionCall(
+        function=Function.from_callable(stream_results),
+        arguments={},
+        call_id="call_stream_models_sync",
+    )
+    result = call.execute()
+    assert list(result.result) == chunks
+
+    span = span_exporter.get_finished_spans()[0]
+    assert json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT]
+    ) == [chunk.model_dump() for chunk in chunks]
+
+
+def test_tool_call_aexecute_streaming_model_chunks(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    chunks = [ToolResult(content="first"), ToolResult(content="second")]
+
+    async def stream_results() -> AsyncIterator[ToolResult]:
+        for chunk in chunks:
+            yield chunk
+
+    call = FunctionCall(
+        function=Function.from_callable(stream_results),
+        arguments={},
+        call_id="call_stream_models_async",
+    )
+
+    async def _test() -> None:
+        result = await call.aexecute()
+        assert [chunk async for chunk in result.result] == chunks
+
+    asyncio.run(_test())
+
+    span = span_exporter.get_finished_spans()[0]
+    assert json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT]
+    ) == [chunk.model_dump() for chunk in chunks]
+
+
+def test_tool_call_execute_streaming_content_capture_disabled(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    def stream_results() -> Iterator[str]:
+        yield "first"
+        yield "second"
+
+    call = FunctionCall(
+        function=Function.from_callable(stream_results),
+        arguments={},
+        call_id="call_stream_no_content_sync",
+    )
+    result = call.execute()
+    assert list(result.result) == ["first", "second"]
+
+    span = span_exporter.get_finished_spans()[0]
+    assert GenAIAttributes.GEN_AI_TOOL_CALL_RESULT not in span.attributes
+
+
+def test_tool_call_aexecute_streaming_content_capture_disabled(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    async def stream_results() -> AsyncIterator[str]:
+        yield "first"
+        yield "second"
+
+    call = FunctionCall(
+        function=Function.from_callable(stream_results),
+        arguments={},
+        call_id="call_stream_no_content_async",
+    )
+
+    async def _test() -> None:
+        result = await call.aexecute()
+        assert [chunk async for chunk in result.result] == ["first", "second"]
+
+    asyncio.run(_test())
+
+    span = span_exporter.get_finished_spans()[0]
+    assert GenAIAttributes.GEN_AI_TOOL_CALL_RESULT not in span.attributes
 
 
 def test_tool_stream_mid_iteration_error(
