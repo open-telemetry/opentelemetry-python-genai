@@ -104,8 +104,12 @@ def _is_parse_supported():
 
 
 class OpenAIInstrumentor(BaseInstrumentor):
+    # BaseInstrumentor is a singleton: __init__ re-runs on the existing
+    # instance, so state needed for uninstrumentation lives on the class.
+    _parse_supported: bool = False
+
     def __init__(self):
-        self._parse_supported = False
+        super().__init__()
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -217,6 +221,7 @@ class OpenAIInstrumentor(BaseInstrumentor):
         if self._parse_supported:
             unwrap(openai.resources.chat.completions.Completions, "parse")
             unwrap(openai.resources.chat.completions.AsyncCompletions, "parse")
+            self._parse_supported = False
         responses_module = _get_responses_module()
         if responses_module is not None:
             unwrap(responses_module.Responses, "create")

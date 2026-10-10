@@ -1,0 +1,1 @@
+Preserve uninstrumentation state on OpenAIInstrumentor singleton re-instantiation.

@@ -60,10 +60,13 @@ class _Dispatcher(Protocol):
 class LlamaIndexInstrumentor(BaseInstrumentor):
     """OpenTelemetry instrumentor for LlamaIndex agents and tools."""
 
+    # BaseInstrumentor is a singleton: __init__ re-runs on the existing
+    # instance, so state needed for uninstrumentation lives on the class.
+    _handler: TelemetryHandler | None = None
+    _span_handler: LlamaIndexSpanHandler | None = None
+
     def __init__(self) -> None:
         super().__init__()
-        self._handler: TelemetryHandler | None = None
-        self._span_handler: LlamaIndexSpanHandler | None = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
