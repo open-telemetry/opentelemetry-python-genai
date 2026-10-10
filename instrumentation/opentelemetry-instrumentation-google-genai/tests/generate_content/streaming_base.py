@@ -4,6 +4,7 @@
 import unittest
 
 from google.genai.types import (
+    GenerateContentConfig,
     GenerateContentResponseUsageMetadata,
     MediaModality,
     ModalityTokenCount,
@@ -32,6 +33,46 @@ class StreamingTestCase(TestCase):
     @property
     def expected_function_name(self):
         raise NotImplementedError("Must implement 'expected_function_name'.")
+
+    def test_tuple_contents(self):
+        self.configure_valid_response(text="Yep, it works!")
+        response = self.generate_content(
+            model="gemini-2.0-flash", contents=("Hello", "world")
+        )
+        for _ in response:
+            pass
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
+    def test_empty_tuple_contents_mimics_sdk_error(self):
+        with self.assertRaises(ValueError):
+            response = self.generate_content(
+                model="gemini-2.0-flash", contents=()
+            )
+            for _ in response:
+                pass
+
+    def test_tuple_system_instruction(self):
+        self.configure_valid_response(text="Yep, it works!")
+        response = self.generate_content(
+            model="gemini-2.0-flash",
+            contents="Hello",
+            config=GenerateContentConfig(system_instruction=("Be polite",)),
+        )
+        for _ in response:
+            pass
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
+    def test_mixed_tuple_contents(self):
+        self.configure_valid_response(text="Yep, it works!")
+        from google.genai.types import Part
+
+        response = self.generate_content(
+            model="gemini-2.0-flash",
+            contents=("Hello", Part.from_text(text="world")),
+        )
+        for _ in response:
+            pass
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
 
     def test_instrumentation_does_not_break_core_functionality(self):
         self.configure_valid_response(text="Yep, it works!")
