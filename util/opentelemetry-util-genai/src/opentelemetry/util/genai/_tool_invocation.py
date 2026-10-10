@@ -12,25 +12,14 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
-from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
-    gen_ai_json_dumps,
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    _json_dumps_unless_str,
 )
+from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AnyValue, AttributeValue
-
-
-def _any_value_to_attribute_value(value: AnyValue) -> AttributeValue | None:
-    """Serialize an AnyValue to an AttributeValue for OTel span attributes."""
-    if value is None:
-        return None
-    if isinstance(value, (bool, str, bytes, int, float)):
-        return value
-    try:
-        return gen_ai_json_dumps(value)
-    except (TypeError, ValueError):
-        return str(value)
 
 
 class ToolInvocation(GenAIInvocation):
@@ -133,14 +122,14 @@ class ToolInvocation(GenAIInvocation):
             (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
-                _any_value_to_attribute_value(self.arguments)
-                if capture_content_on_span and self.arguments is not None
+                _json_dumps_unless_str(self.arguments)
+                if capture_content_on_span
                 else None,
             ),
             (
                 GenAI.GEN_AI_TOOL_CALL_RESULT,
-                _any_value_to_attribute_value(self.tool_result)
-                if capture_content_on_span and self.tool_result is not None
+                _json_dumps_unless_str(self.tool_result)
+                if capture_content_on_span
                 else None,
             ),
         )

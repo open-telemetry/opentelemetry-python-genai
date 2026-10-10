@@ -1,0 +1,1 @@
+Add `object_to_any_value` and `tool_arguments_to_any_value` to convert arbitrary objects (models, dataclasses, datetimes, UUIDs, enums, objects with a custom `__str__`) into OpenTelemetry `AnyValue`, dropping values that cannot be converted. For example, `object_to_any_value({"when": date(2026, 1, 1), "cb": print})` returns `{"when": "2026-01-01"}`.

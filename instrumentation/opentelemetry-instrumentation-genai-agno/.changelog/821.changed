@@ -1,0 +1,1 @@
+Record tool call arguments and dict results as compact JSON. Previously they included spaces, e.g. `{"a": 3, "b": 4}`, now `{"a":3,"b":4}`.

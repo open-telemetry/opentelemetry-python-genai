@@ -39,7 +39,10 @@ from opentelemetry.util.genai.types import (
     RetrievalDocument,
     TextPart,
 )
-from opentelemetry.util.genai.utils import bind_arguments
+from opentelemetry.util.genai.utils import (
+    bind_arguments,
+    object_to_any_value,
+)
 
 _REACT_MODULE = "dspy.predict.react"
 _REACT_CLASS = "ReAct"
@@ -348,7 +351,9 @@ def _start_tool_invocation(
     if tool_desc is not None:
         invocation.tool_description = str(tool_desc)
     if handler.should_capture_content():
-        invocation.arguments = _extract_tool_arguments(instance, args, kwargs)
+        invocation.arguments = object_to_any_value(
+            _extract_tool_arguments(instance, args, kwargs)
+        )
     return invocation
 
 
@@ -366,7 +371,7 @@ def _tool_call(handler: TelemetryHandler) -> Callable[..., Any]:
         with invocation:
             result = wrapped(*args, **kwargs)
             if handler.should_capture_content():
-                invocation.tool_result = result
+                invocation.tool_result = object_to_any_value(result)
             return result
 
     return traced_method
@@ -386,7 +391,7 @@ def _tool_acall(handler: TelemetryHandler) -> Callable[..., Any]:
         with invocation:
             result = await wrapped(*args, **kwargs)
             if handler.should_capture_content():
-                invocation.tool_result = result
+                invocation.tool_result = object_to_any_value(result)
             return result
 
     return traced_method

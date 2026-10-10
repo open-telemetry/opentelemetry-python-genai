@@ -71,6 +71,8 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+from opentelemetry.util.genai.utils import object_to_any_value
+from opentelemetry.util.types import AnyValue
 
 _logger = logging.getLogger(__name__)
 
@@ -533,7 +535,7 @@ def _set_workflow_output(invocation: WorkflowInvocation, result: Any) -> None:
 
 def _tool_arguments(
     tool: FunctionTool, bound_args: inspect.BoundArguments
-) -> dict[str, Any]:
+) -> AnyValue:
     """Bind tool arguments to user-facing parameter names.
 
     LlamaIndex exposes positional values under ``args`` and may inject a
@@ -559,7 +561,7 @@ def _tool_arguments(
         arguments = {"args": list(args), **kwargs}
     if tool.ctx_param_name:
         arguments.pop(tool.ctx_param_name, None)
-    return arguments
+    return object_to_any_value(arguments)
 
 
 class _LlamaIndexInvocation(BaseSpan):
@@ -1028,8 +1030,8 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             tool_invocation.tool_call_id = tool_call.tool_id
             tool_invocation.tool_description = tool_description
             if tool_invocation.should_capture_content:
-                tool_invocation.arguments = cast(
-                    dict[str, Any], cast(Any, tool_call).tool_kwargs
+                tool_invocation.arguments = object_to_any_value(
+                    cast(Any, tool_call).tool_kwargs
                 )
             invocation = tool_invocation
             if parent is not None and isinstance(
@@ -1218,7 +1220,9 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
                             tool_output,
                         )
                 if span._invocation.should_capture_content:
-                    span._invocation.tool_result = tool_output.raw_output
+                    span._invocation.tool_result = object_to_any_value(
+                        tool_output.raw_output
+                    )
                 if tool_output.is_error:
                     # LlamaIndex reports failures such as unknown tools without an
                     # exception, so provide one to record error telemetry:
