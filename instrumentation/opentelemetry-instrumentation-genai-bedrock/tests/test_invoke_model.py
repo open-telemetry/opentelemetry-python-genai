@@ -456,6 +456,55 @@ def test_extract_invoke_model_request_zero_values(tracer_provider) -> None:
         assert invocation.seed == 0
 
 
+def test_extract_invoke_model_request_file_like_body(tracer_provider) -> None:
+    """A seekable file-like body is parsed like bytes, and left unread."""
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    body = io.BytesIO(
+        json.dumps(
+            {
+                "max_tokens": 50,
+                "temperature": 0.3,
+                "top_p": 0.9,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi"}],
+                    }
+                ],
+            }
+        ).encode()
+    )
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_request({"body": body}, invocation)
+        assert invocation.max_tokens == 50
+        assert invocation.temperature == 0.3
+        assert invocation.top_p == 0.9
+        assert invocation.input_messages
+    assert body.tell() == 0
+
+
+def test_extract_invoke_model_request_unseekable_body(tracer_provider) -> None:
+    """A body that cannot be re-read is skipped rather than consumed."""
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    body = _UnseekableBody(json.dumps({"max_tokens": 50}).encode())
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_invoke_model_request({"body": body}, invocation)
+        assert invocation.max_tokens is None
+    assert body.read_calls == 0
+
+
+class _UnseekableBody:
+    """A one-shot stream, as `read()` without the `seek()` botocore requires."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+        self.read_calls = 0
+
+    def read(self) -> bytes:
+        self.read_calls += 1
+        return self._data
+
+
 def test_invoke_model_anthropic_tool_call_and_result(
     bedrock_client,
     instrument_with_content,
