@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     )
 
 try:
+    from openai._models import (  # pylint: disable=no-name-in-module
+        construct_type,
+    )
     from openai.types.responses.response import Response
     from openai.types.responses.response_function_tool_call import (
         ResponseFunctionToolCall,
@@ -56,6 +59,7 @@ try:
     )
     from openai.types.responses.response_usage import ResponseUsage
 except ImportError:
+    construct_type = None
     Response = None
     ResponseFunctionToolCall = None
     ResponseOutputMessage = None
@@ -183,6 +187,21 @@ def _extract_output_type_from_value(text_config: object) -> str | None:
     return None
 
 
+def _extract_output_type_from_text_format(text_format: object) -> str | None:
+    """Map ``Responses.parse(text_format=...)`` onto an output type.
+
+    ``parse()`` takes the caller's Pydantic model (or dataclass) as
+    ``text_format`` and only turns it into a JSON-schema ``text.format``
+    inside the SDK, after this wrapper has read the request kwargs, so the
+    ``text`` mapping alone misses it (issue #659). Mirror the
+    ``chat.completions.parse`` handling: a structured-output type means JSON.
+    Only the format metadata is recorded -- never the caller's schema.
+    """
+    if isinstance(text_format, type):
+        return GenAIAttributes.GenAiOutputTypeValues.JSON.value
+    return None
+
+
 def _extract_conversation_id(conversation: object) -> str | None:
     """Return the conversation id the ``conversation`` parameter names."""
     if isinstance(conversation, str):
@@ -204,6 +223,7 @@ def extract_params(
     service_tier: str | None = None,
     temperature: float | None = None,
     text: object | None = None,
+    text_format: object | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
     **_kwargs: object,
@@ -231,7 +251,10 @@ def extract_params(
             else None
         ),
         temperature=_get_float(temperature),
-        output_type=_extract_output_type_from_value(text),
+        output_type=(
+            _extract_output_type_from_value(text)
+            or _extract_output_type_from_text_format(text_format)
+        ),
         tools=_get_tools(tools),
         top_p=_get_float(top_p),
     )
@@ -895,12 +918,33 @@ def _parse_raw_response(
     response: object,
     request_kwargs: dict[str, object] | None,
 ) -> object:
-    """Return the payload of a non-streaming ``with_raw_response`` result."""
+    """Return the payload of a non-streaming ``with_raw_response`` result.
+
+    The payload is rebuilt from the raw JSON body instead of calling the raw
+    response's ``parse()``: the SDK's parser runs the caller's ``text_format``
+    post-parser (including their Pydantic validators) as soon as it is
+    invoked, so calling it here would surface validation errors during the
+    API call where the uninstrumented SDK leaves validation deferred until
+    the caller parses the raw response themselves. Telemetry extraction is
+    best-effort -- a body that cannot be read or rebuilt is skipped rather
+    than raised.
+    """
     if is_streamed_raw_response(request_kwargs) or not isinstance(
         response, ParsableResponse
     ):
         return response
-    return response.parse()
+    http_response = getattr(response, "http_response", None)
+    content = getattr(http_response, "content", None)
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if Response is None or construct_type is None:
+        return None
+    try:
+        return construct_type(type_=Response, value=payload)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
 
 
 def set_invocation_response_attributes(
