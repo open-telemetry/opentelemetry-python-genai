@@ -2497,6 +2497,8 @@ async def test_async_messages_text_stream_early_exit_preserves_snapshot_and_cont
 
     assert received == text
 
+    assert snapshot.usage.output_tokens == output_tokens == 0
+
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
@@ -2518,7 +2520,6 @@ async def test_async_messages_text_stream_early_exit_preserves_snapshot_and_cont
             "name": None,
         }
     ]
-    assert snapshot.usage.output_tokens == output_tokens == 0
 
 
 @pytest.mark.asyncio

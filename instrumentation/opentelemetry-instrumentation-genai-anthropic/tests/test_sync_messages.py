@@ -2831,6 +2831,7 @@ def test_sync_messages_text_stream_early_exit_preserves_snapshot_and_content(
         client.close()
 
     assert received == text
+    assert snapshot.usage.output_tokens == output_tokens == 0
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -2853,7 +2854,6 @@ def test_sync_messages_text_stream_early_exit_preserves_snapshot_and_content(
             "name": None,
         }
     ]
-    assert snapshot.usage.output_tokens == output_tokens == 0
 
 
 def test_sync_messages_stream_accessor_transition_preserves_text(
