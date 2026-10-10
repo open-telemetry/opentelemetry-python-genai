@@ -200,7 +200,7 @@ def test_stream_wrapper_finalization_records_thinking_tokens(
             "opentelemetry.instrumentation.genai.anthropic"
         ),
     )
-    invocation = handler.start_inference(
+    invocation = handler.inference(
         provider="anthropic",
         request_model="claude-sonnet-4-20250514",
     )

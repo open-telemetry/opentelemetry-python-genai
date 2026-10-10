@@ -112,15 +112,6 @@ class ToolInvocation(GenAIInvocation):
         self._tool_type: str | None = tool_type
         self._agent_name: str | None = agent_name
 
-    @property
-    def should_capture_content_on_span(self) -> bool:
-        """Returns whether content capture is enabled on spans.
-
-        .. deprecated:: 1.2b0
-            Use :attr:`should_capture_content` instead.
-        """
-        return self._should_capture_content_on_span
-
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_TOOL_NAME: self._name,

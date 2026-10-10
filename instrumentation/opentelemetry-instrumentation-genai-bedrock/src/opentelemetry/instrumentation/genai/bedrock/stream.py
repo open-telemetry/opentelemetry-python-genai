@@ -8,10 +8,13 @@ from collections.abc import AsyncIterator
 from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
-_logger = getLogger(__name__)
-
-from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.invocation import (
+    EmbeddingInvocation,
+    InferenceInvocation,
+    RemoteAgentInvocation,
+)
 from opentelemetry.util.genai.stream import (
+    AbandonedStreamError,
     AsyncStreamWrapper,
     SyncStreamWrapper,
 )
@@ -30,9 +33,12 @@ from .extractors import (
     _is_list,
     _parse_body,
     _safe_int,
+    extract_embedding_response,
     extract_invoke_model_response,
     map_finish_reason,
 )
+
+_logger = getLogger(__name__)
 
 if TYPE_CHECKING:
 
@@ -539,7 +545,7 @@ class AsyncBedrockInvokeModelStreamWrapper(
 class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
     """Wrapper for aiobotocore's AioStreamingBody that handles telemetry."""
 
-    _self_invocation: InferenceInvocation
+    _self_invocation: InferenceInvocation | EmbeddingInvocation
     _self_response: dict[str, Any]
     _self_capture_content: bool
     _self_chunks: list[bytes]
@@ -551,7 +557,7 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
     def __init__(
         self,
         body: Any,
-        invocation: InferenceInvocation,
+        invocation: InferenceInvocation | EmbeddingInvocation,
         response: dict[str, Any],
         *,
         capture_content: bool = True,
@@ -585,12 +591,19 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
         self._self_finalized = True
         self._self_chunks.clear()
         try:
-            extract_invoke_model_response(
-                self._self_response,
-                full_bytes,
-                self._self_invocation,
-                capture_content=self._self_capture_content,
-            )
+            if isinstance(self._self_invocation, EmbeddingInvocation):
+                extract_embedding_response(
+                    self._self_response,
+                    full_bytes,
+                    self._self_invocation,
+                )
+            else:
+                extract_invoke_model_response(
+                    self._self_response,
+                    full_bytes,
+                    self._self_invocation,
+                    capture_content=self._self_capture_content,
+                )
         except Exception:
             _logger.debug(
                 "Error extracting Bedrock invoke_model response",
@@ -671,17 +684,21 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
                 await self.__wrapped__.aclose()
             elif hasattr(self.__wrapped__, "close"):
                 self.__wrapped__.close()
-        finally:
-            if not self._self_finalized:
-                self._finalize(b"".join(self._self_chunks))
+        except BaseException as exc:
+            self._finalize_error(exc)
+            raise
+        if not self._self_finalized:
+            self._finalize(b"".join(self._self_chunks))
 
     def close(self) -> None:
         try:
             if hasattr(self.__wrapped__, "close"):
                 self.__wrapped__.close()
-        finally:
-            if not self._self_finalized:
-                self._finalize(b"".join(self._self_chunks))
+        except BaseException as exc:
+            self._finalize_error(exc)
+            raise
+        if not self._self_finalized:
+            self._finalize(b"".join(self._self_chunks))
 
     async def __aexit__(
         self,
@@ -696,13 +713,97 @@ class AsyncBedrockStreamingBodyWrapper(_ObjectProxy):
                 await self.__wrapped__.aclose()
             elif hasattr(self.__wrapped__, "close"):
                 self.__wrapped__.close()
-        finally:
-            if exc_val is not None:
-                self._finalize_error(exc_val)
-            elif not self._self_finalized:
-                self._finalize(b"".join(self._self_chunks))
+        except BaseException as close_exc:
+            self._finalize_error(exc_val if exc_val is not None else close_exc)
+            raise
+        if exc_val is not None:
+            self._finalize_error(exc_val)
+        elif not self._self_finalized:
+            self._finalize(b"".join(self._self_chunks))
 
     def __del__(self) -> None:
-        if not getattr(self, "_self_finalized", True):
-            chunks = getattr(self, "_self_chunks", [])
-            self._finalize(b"".join(chunks))
+        if getattr(self, "_self_finalized", True):
+            return
+        try:
+            self._finalize_error(AbandonedStreamError())
+        except BaseException:  # pylint: disable=broad-exception-caught
+            # Mirrors _StreamTelemetry.__del__: suppress errors during GC or
+            # interpreter shutdown so sys.unraisablehook is not triggered.
+            pass
+
+
+class _BedrockAgentEventStreamMixin:
+    _self_invocation: RemoteAgentInvocation
+    _self_capture_content: bool
+    _self_accumulated_text: list[str]
+
+    def _init_agent_stream(
+        self,
+        invocation: RemoteAgentInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        self._self_invocation = invocation
+        self._self_capture_content = capture_content
+        self._self_accumulated_text = []
+
+    def _process_chunk(self, chunk: dict[str, Any]) -> None:
+        if not self._self_capture_content or not _is_dict(chunk):
+            return
+        chunk_obj = chunk.get("chunk")
+        if _is_dict(chunk_obj):
+            raw_bytes = chunk_obj.get("bytes")
+            if isinstance(raw_bytes, (bytes, bytearray)):
+                self._self_accumulated_text.append(
+                    bytes(raw_bytes).decode("utf-8", errors="replace")
+                )
+            elif isinstance(raw_bytes, str):
+                self._self_accumulated_text.append(raw_bytes)
+
+    def _on_stream_end(self) -> None:
+        if self._self_capture_content and self._self_accumulated_text:
+            content = "".join(self._self_accumulated_text)
+            self._self_invocation.output_messages = [
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[TextPart(content=content)],
+                )
+            ]
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
+
+
+class BedrockAgentEventStreamWrapper(
+    _BedrockAgentEventStreamMixin,
+    SyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for Bedrock invoke_agent EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: RemoteAgentInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_agent_stream(invocation, capture_content=capture_content)
+
+
+class AsyncBedrockAgentEventStreamWrapper(
+    _BedrockAgentEventStreamMixin,
+    AsyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for async Bedrock invoke_agent EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: RemoteAgentInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_agent_stream(invocation, capture_content=capture_content)

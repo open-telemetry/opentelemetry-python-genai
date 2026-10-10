@@ -32,7 +32,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai._inference_invocation import LLMInvocation
+from opentelemetry.util.genai._inference_invocation import _should_emit_event
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
@@ -55,7 +55,6 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
-    _should_emit_event,
     bind_arguments,
     decode_base64,
     gen_ai_json_dumps,
@@ -63,8 +62,6 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
     get_signature,
     image_from_url,
-    should_capture_content_on_spans,
-    should_emit_event,
 )
 
 
@@ -269,37 +266,8 @@ class TestShouldEmitEvent(unittest.TestCase):
                 is False
             )
 
-    def test_deprecated_should_emit_event(self):  # pylint: disable=no-self-use
-        with patch.dict(
-            os.environ,
-            {
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-                "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "",
-            },
-        ):
-            assert should_emit_event() is True
-
 
 class TestShouldCaptureContent(unittest.TestCase):
-    def test_should_capture_content_on_spans_against_various_env_var_combinations(
-        self,
-    ):  # pylint: disable=no-self-use
-        for content_capture, span_content_enabled in [
-            ("NO_CONTENT", False),
-            ("EVENT_ONLY", False),
-            ("SPAN_ONLY", True),
-            ("SPAN_AND_EVENT", True),
-        ]:
-            with patch.dict(
-                os.environ,
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
-                },
-            ):
-                assert (
-                    should_capture_content_on_spans() is span_content_enabled
-                )
-
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
         for content_capture, expected_content_capturing in [
             ("NO_CONTENT", ContentCapturingMode.NO_CONTENT),
@@ -517,26 +485,6 @@ class TestTelemetryHandler(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
-        },
-    )
-    def test_start_llm_captures_content_on_span(self):
-        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
-        inv = LLMInvocation(request_model="legacy-model")
-        handler.start_llm(inv)
-        inv.input_messages = [_create_input_message("hi")]
-        inv.output_messages = [_create_output_message("hello")]
-        handler.stop_llm(inv)
-
-        span = _get_single_span(self.span_exporter)
-        attrs = _get_span_attributes(span)
-        assert GenAI.GEN_AI_INPUT_MESSAGES in attrs
-        assert GenAI.GEN_AI_OUTPUT_MESSAGES in attrs
-
-    @patch.dict(
-        os.environ,
-        {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
             "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
@@ -554,7 +502,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
-    def test_start_inference_passes_sampling_attributes_at_span_creation(self):
+    def test_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
         captured_attributes = {}
 
@@ -634,7 +582,7 @@ class TestTelemetryHandler(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
 
-    def test_start_inference_sampler_can_drop_span_based_on_attributes(self):
+    def test_inference_sampler_can_drop_span_based_on_attributes(self):
         """Verify that a sampler can reject spans based on attributes passed at creation time."""
 
         class ModelRejectingSampler:  # pylint: disable=no-self-use
@@ -685,7 +633,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert len(spans) == 1
         assert spans[0].name == "chat accepted-model"
 
-    def test_start_embedding_passes_sampling_attributes_at_span_creation(self):
+    def test_embedding_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time for embeddings."""
         captured_attributes = {}
 
@@ -864,25 +812,22 @@ class TestTelemetryHandler(unittest.TestCase):
         message = _create_input_message("hi")
         chat_generation = _create_output_message("ok")
 
-        with self.telemetry_handler.inference(
-            "test-provider", request_model="parent-model"
-        ) as parent_invocation:
-            parent_invocation.input_messages = [message]
+        with self.telemetry_handler.workflow(name="parent-workflow"):
             with self.telemetry_handler.inference(
                 "test-provider", request_model="child-model"
             ) as child_invocation:
                 child_invocation.input_messages = [message]
                 # Stop child first by exiting inner context
                 child_invocation.output_messages = [chat_generation]
-            # Then stop parent by exiting outer context
-            parent_invocation.output_messages = [chat_generation]
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
 
         # Identify spans irrespective of export order
         child_span = next(s for s in spans if s.name == "chat child-model")
-        parent_span = next(s for s in spans if s.name == "chat parent-model")
+        parent_span = next(
+            s for s in spans if s.name == "invoke_workflow parent-workflow"
+        )
 
         # Same trace
         assert child_span.context.trace_id == parent_span.context.trace_id

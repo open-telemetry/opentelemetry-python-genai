@@ -1,0 +1,1 @@
+Add support for Bedrock Embeddings (Amazon Titan, Cohere, etc.) and Bedrock Agent Runtime (invoke_agent and retrieve) in synchronous and asynchronous calls.
