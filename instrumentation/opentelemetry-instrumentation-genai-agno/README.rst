@@ -30,9 +30,9 @@ Supported Operations
 
 The instrumentation automatically traces:
 
-* ``Agent.run`` and ``Agent.arun``
-* ``Team.run`` and ``Team.arun``
-* ``Workflow.run`` and ``Workflow.arun``
+* ``Agent.run``, ``Agent.arun``, ``Agent.continue_run``, and ``Agent.acontinue_run``
+* ``Team.run``, ``Team.arun``, ``Team.continue_run``, and ``Team.acontinue_run``
+* ``Workflow.run``, ``Workflow.arun``, ``Workflow.continue_run``, and ``Workflow.acontinue_run``
 * ``FunctionCall.execute`` and ``FunctionCall.aexecute``
 * ``Knowledge.search`` and ``Knowledge.asearch``
 
