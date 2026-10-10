@@ -243,7 +243,9 @@ def test_converse_stream_no_content_tool_call(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS in (span.attributes or {})
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in (
+        span.attributes or {}
+    )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in (span.attributes or {})
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in (
         span.attributes or {}

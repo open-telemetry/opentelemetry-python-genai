@@ -92,7 +92,14 @@ class GenAITracingProcessor(TracingProcessor):
         # "Agent workflow"). Callers customize it via the agents library's
         # own ``Runner.run(..., run_config=RunConfig(workflow_name=...))``;
         # we don't expose a second knob.
-        invocation = self._handler.workflow(name=trace.name)
+        #
+        # ``group_id`` is public on ``TraceImpl`` but not declared on the
+        # ``Trace`` ABC, hence the getattr.
+        group_id: str | None = getattr(trace, "group_id", None)
+        invocation = self._handler.workflow(
+            name=trace.name,
+            conversation_id=group_id,
+        )
         if trace.name:
             invocation.attributes[_WORKFLOW_NAME_ATTR] = trace.name
         self._invocations[trace] = invocation

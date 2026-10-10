@@ -7,6 +7,7 @@
 import inspect
 import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,12 +53,23 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
+from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.types import OutputMessage, TextPart
+
+from .conftest import (
+    assert_multimodal_input,
+    multimodal_input_message,
+)
 
 # Detect whether the installed anthropic SDK supports tools / thinking params.
 # Older SDK versions (e.g. 0.16.0) do not accept these keyword arguments.
 _create_params = set(inspect.signature(_Messages.create).parameters)
 _has_tools_param = "tools" in _create_params
 _has_thinking_param = "thinking" in _create_params
+_usage_fields = getattr(Usage, "model_fields", None)
+if _usage_fields is None:
+    _usage_fields = getattr(Usage, "__fields__", {})
+_has_output_tokens_details = "output_tokens_details" in _usage_fields
 
 
 @pytest.mark.parametrize(
@@ -499,6 +511,83 @@ def test_sync_messages_create_captures_content(
     assert output_messages[0]["parts"][0]["type"] == "text"
 
 
+def test_sync_messages_create_captures_multimodal_content(
+    span_exporter,
+    anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_sync_messages_create_captures_multimodal_content.yaml"
+    ):
+        anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
+
+
+def test_sync_messages_create_preserves_generator_document_content(
+    instrument_with_content,
+):
+    received_content = None
+
+    def handle_request(request):
+        nonlocal received_content
+        body = json.loads(request.content)
+        received_content = body["messages"][0]["content"][0]["source"][
+            "content"
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_generator_content",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "Received."}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    def document_content():
+        yield {"type": "text", "text": "First"}
+        yield {"type": "text", "text": "Second"}
+
+    transport = httpx.MockTransport(handle_request)
+    with httpx.Client(transport=transport) as http_client:
+        client = Anthropic(http_client=http_client)
+        client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "content",
+                                "content": document_content(),
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+    assert received_content == [
+        {"type": "text", "text": "First"},
+        {"type": "text", "text": "Second"},
+    ]
+
+
 @pytest.mark.vcr()
 def test_sync_messages_create_with_all_params(
     span_exporter, anthropic_client, instrument_no_content
@@ -846,6 +935,29 @@ def test_sync_messages_stream_records_tool_definitions(
     _assert_weather_tool_definitions(spans[0])
 
 
+def test_sync_messages_create_streaming_captures_multimodal_content(
+    span_exporter,
+    anthropic_client,
+    instrument_with_content,
+    vcr,
+):
+    with vcr.use_cassette(
+        "test_sync_messages_create_streaming_captures_multimodal_content.yaml"
+    ):
+        with anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            messages=[multimodal_input_message()],
+            stream=True,
+        ) as stream:
+            for _ in stream:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_multimodal_input(spans[0])
+
+
 @pytest.mark.vcr()
 def test_sync_messages_stream(  # pylint: disable=too-many-locals
     request, span_exporter, anthropic_client, instrument_no_content
@@ -1005,17 +1117,26 @@ def test_sync_messages_stream_api_error(
 
 
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream_interrupted_mid_iteration")
+@pytest.mark.parametrize("capture_content", [True, False])
+@pytest.mark.parametrize("fail_after", [0, 1, 3])
 def test_sync_messages_stream_interrupted_mid_iteration(
     request,
     span_exporter,
     anthropic_client,
-    instrument_no_content,
+    capture_content,
+    fail_after,
     monkeypatch,
 ):
     """Mid-stream network errors from Messages.stream propagate and record error."""
-    _skip_if_cassette_missing_and_no_real_key(request)
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_content
+        else "instrument_no_content"
+    )
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "Say hello in one word."}]
+    error = ConnectionError("connection reset during stream")
 
     class ErrorInjectingStreamDelegate:
         def __init__(self, inner):
@@ -1026,8 +1147,8 @@ def test_sync_messages_stream_interrupted_mid_iteration(
             return self
 
         def __next__(self):
-            if self._count == 1:
-                raise ConnectionError("connection reset during stream")
+            if self._count >= fail_after:
+                raise error
             self._count += 1
             return next(self._inner)
 
@@ -1039,7 +1160,7 @@ def test_sync_messages_stream_interrupted_mid_iteration(
 
     with pytest.raises(
         ConnectionError, match="connection reset during stream"
-    ):
+    ) as raised:
         with anthropic_client.messages.stream(
             model=model,
             max_tokens=100,
@@ -1053,11 +1174,38 @@ def test_sync_messages_stream_interrupted_mid_iteration(
             for _ in stream:
                 pass
 
+    assert raised.value is error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
+    if fail_after:
+        assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+        assert isinstance(
+            span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+        )
+    else:
+        assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+    has_output = capture_content and fail_after == 3
+    if has_output:
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello!")],
+                    finish_reason=None,
+                )
+            )
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.vcr()
@@ -1318,7 +1466,7 @@ def test_sync_messages_create_captures_thinking_content(
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "What is 17*19? Think first."}]
 
-    anthropic_client.messages.create(
+    response = anthropic_client.messages.create(
         model=model,
         max_tokens=16000,
         messages=messages,
@@ -1337,6 +1485,16 @@ def test_sync_messages_create_captures_thinking_content(
         for message in output_messages
         for part in message.get("parts", [])
     )
+    if _has_output_tokens_details:
+        assert response.usage.output_tokens_details is not None
+        thinking_tokens = response.usage.output_tokens_details.thinking_tokens
+        assert thinking_tokens > 0
+        assert (
+            span.attributes[
+                GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+            ]
+            == thinking_tokens
+        )
 
 
 @pytest.mark.vcr()
@@ -1514,12 +1672,20 @@ def test_sync_messages_create_streaming_aggregates_cache_tokens(
 
 
 @pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_create_stream_propagation_error")
+@pytest.mark.parametrize("capture_content", [True, False])
 def test_sync_messages_create_stream_propagation_error(
-    span_exporter, anthropic_client, instrument_no_content, monkeypatch
+    request, span_exporter, anthropic_client, capture_content, monkeypatch
 ):
     """Mid-stream errors from the underlying iterator must propagate and record error on span."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_content
+        else "instrument_no_content"
+    )
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "Say hello in one word."}]
+    error = ConnectionError("connection reset during stream")
 
     stream = anthropic_client.messages.create(
         model=model,
@@ -1539,9 +1705,8 @@ def test_sync_messages_create_stream_propagation_error(
             return self
 
         def __next__(self):
-            # Fail after yielding one chunk so this exercises a mid-stream error.
-            if self._count == 1:
-                raise ConnectionError("connection reset during stream")
+            if self._count >= 3:
+                raise error
             self._count += 1
             return next(self._inner)
 
@@ -1557,16 +1722,39 @@ def test_sync_messages_create_stream_propagation_error(
 
     with pytest.raises(
         ConnectionError, match="connection reset during stream"
-    ):
+    ) as raised:
         with stream:
             for _ in stream:
                 pass
 
+    assert raised.value is error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+    )
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
+    if capture_content:
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello!")],
+                    finish_reason=None,
+                )
+            )
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
 
 
 @pytest.mark.vcr()
@@ -2644,23 +2832,53 @@ def test_sync_messages_stream_until_done_records_response(
 
 @pytest.mark.vcr()
 @pytest.mark.cassette("test_sync_messages_stream")
+@pytest.mark.parametrize("capture_content", [True, False])
 def test_sync_messages_stream_text_stream_user_exception(
-    span_exporter, anthropic_client, instrument_no_content
+    request, span_exporter, anthropic_client, capture_content
 ):
     """A caller error while reading ``text_stream`` propagates and is recorded."""
+    request.getfixturevalue(
+        "instrument_with_content"
+        if capture_content
+        else "instrument_no_content"
+    )
     model = "claude-sonnet-4-20250514"
+    error = ValueError("caller failed")
 
-    with pytest.raises(ValueError, match="caller failed"):
+    with pytest.raises(ValueError, match="caller failed") as raised:
         with anthropic_client.messages.stream(
             model=model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         ) as stream:
             for _ in stream.text_stream:
-                raise ValueError("caller failed")
+                raise error
 
+    assert raised.value is error
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
+    assert isinstance(
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS], int
+    )
+    assert (
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in span.attributes
+    )
+    if capture_content:
+        assert _load_span_messages(
+            span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+        ) == [
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello!")],
+                    finish_reason=None,
+                )
+            )
+        ]
+    else:
+        assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes

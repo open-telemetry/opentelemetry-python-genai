@@ -1,0 +1,1 @@
+Set `gen_ai.conversation.id` on agents created without a name, and pass the conversation id to child spans through the OTel context.

@@ -140,10 +140,11 @@ def test_retrieval_span_attributes(
             == "What is the capital of France?"
         )
         docs_attr = attrs[gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS]
-        assert docs_attr is not None
-        assert "Paris is the capital of France." in docs_attr
-        assert "doc-1" in docs_attr
-        assert "Berlin is the capital of Germany." in docs_attr
+        assert type(docs_attr) is str
+        assert json.loads(docs_attr) == [
+            {"id": "doc-1", "score": None},
+            {"id": None, "score": None},
+        ]
     else:
         assert gen_ai_attributes.GEN_AI_RETRIEVAL_QUERY_TEXT not in attrs
         assert gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS not in attrs
@@ -369,7 +370,7 @@ def test_document_without_id_in_span_content(
     docs_attr = spans[0].attributes[
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     ]
-    assert "no id here" in docs_attr
+    assert json.loads(docs_attr) == [{"id": None, "score": None}]
     instrumentor.uninstrument()
 
 
@@ -406,7 +407,7 @@ def test_document_metadata_not_in_span_content(
         docs_attr = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        assert "text" in docs_attr
+        assert "content" not in docs_attr
         assert "wiki" not in docs_attr
         assert "alice" not in docs_attr
     finally:
@@ -476,7 +477,7 @@ def test_retriever_documents_with_attribute_score(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 1
-        assert parsed[0]["content"] == "text"
+        assert set(parsed[0]) == {"id", "score"}
         assert parsed[0]["id"] == "doc-1"
         assert parsed[0]["score"] == 0.85
     finally:
@@ -515,7 +516,7 @@ def test_retriever_documents_with_metadata_score(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 1
-        assert parsed[0]["content"] == "text"
+        assert set(parsed[0]) == {"id", "score"}
         assert parsed[0]["id"] == "doc-2"
         assert parsed[0]["score"] == 0.92
     finally:
@@ -630,7 +631,7 @@ def test_retriever_documents_without_score(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 1
-        assert "score" not in parsed[0]
+        assert parsed[0]["score"] is None
     finally:
         instrumentor.uninstrument()
 
@@ -711,7 +712,7 @@ def test_retriever_documents_with_non_finite_scores(
         parsed = json.loads(docs_attr)
         assert len(parsed) == 4
         for item in parsed:
-            assert "score" not in item
+            assert item["score"] is None
     finally:
         instrumentor.uninstrument()
 
@@ -752,7 +753,7 @@ def test_retriever_documents_with_metadata_relevance_score(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 1
-        assert parsed[0]["content"] == "contextual content"
+        assert set(parsed[0]) == {"id", "score"}
         assert parsed[0]["id"] == "doc-rerank-1"
         assert parsed[0]["score"] == 0.88
     finally:
@@ -807,6 +808,7 @@ async def test_async_retriever_documents_with_scores(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 3
+        assert all(set(doc) == {"id", "score"} for doc in parsed)
 
         assert parsed[0]["id"] == "doc-kb"
         assert parsed[0]["score"] == 0.95
@@ -815,7 +817,7 @@ async def test_async_retriever_documents_with_scores(
         assert parsed[1]["score"] == 0.82
 
         assert parsed[2]["id"] == "doc-plain"
-        assert "score" not in parsed[2]
+        assert parsed[2]["score"] is None
     finally:
         instrumentor.uninstrument()
 
@@ -868,10 +870,9 @@ async def test_retriever_grounded_knowledge_base_sync_and_async(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 1
-        assert (
-            parsed[0]["content"]
-            == "Amazon Bedrock Knowledge Bases provides managed RAG."
-        )
+        assert set(parsed[0]) == {"id", "score"}
+        assert type(parsed[0]["id"]) is str
+        assert type(parsed[0]["score"]) is float
         assert parsed[0]["id"] == "kb-result-1"
         assert parsed[0]["score"] == 0.89
     finally:
@@ -926,7 +927,9 @@ async def test_retriever_grounded_contextual_compression_sync_and_async(
         ]
         parsed = json.loads(docs_attr)
         assert len(parsed) == 1
-        assert parsed[0]["content"] == "High relevance chunk after reranking."
+        assert set(parsed[0]) == {"id", "score"}
+        assert type(parsed[0]["id"]) is str
+        assert type(parsed[0]["score"]) is float
         assert parsed[0]["id"] == "rerank-1"
         assert parsed[0]["score"] == 0.94
     finally:

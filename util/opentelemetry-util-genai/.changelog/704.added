@@ -1,1 +1,0 @@
-Add `context` property to `GenAIInvocation` and optional `context` parameter to `TelemetryHandler.tool`.

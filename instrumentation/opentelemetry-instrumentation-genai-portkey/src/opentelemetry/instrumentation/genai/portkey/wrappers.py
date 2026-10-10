@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from opentelemetry.instrumentation.genai.portkey.utils import (
     get_property_value,
+    set_usage_properties,
 )
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.stream import (
@@ -88,8 +89,6 @@ class _PortkeyStreamMixin:
     _self_capture_content: bool
     _self_choice_buffers: list[ChoiceBuffer]
     _self_response_id: str | None
-    _self_prompt_tokens: int | None
-    _self_completion_tokens: int | None
 
     def _process_chunk(self, chunk: Any) -> None:
         if not self._self_response_id:
@@ -102,14 +101,9 @@ class _PortkeyStreamMixin:
             if model:
                 self._self_invocation.response_model_name = str(model)
 
-        usage = get_property_value(chunk, "usage")
-        if usage is not None:
-            prompt_tokens = get_property_value(usage, "prompt_tokens")
-            if prompt_tokens is not None:
-                self._self_prompt_tokens = int(prompt_tokens)
-            completion_tokens = get_property_value(usage, "completion_tokens")
-            if completion_tokens is not None:
-                self._self_completion_tokens = int(completion_tokens)
+        set_usage_properties(
+            self._self_invocation, get_property_value(chunk, "usage")
+        )
 
         choices = get_property_value(chunk, "choices")
         if choices is not None and isinstance(choices, Iterable):
@@ -191,8 +185,6 @@ class _PortkeyStreamMixin:
 
     def _cleanup(self, error: BaseException | None = None) -> None:
         self._self_invocation.response_id = self._self_response_id
-        self._self_invocation.input_tokens = self._self_prompt_tokens
-        self._self_invocation.output_tokens = self._self_completion_tokens
         self._self_invocation.finish_reasons = [
             choice.finish_reason
             for choice in self._self_choice_buffers
@@ -221,8 +213,6 @@ class PortkeyStreamWrapper(_PortkeyStreamMixin, SyncStreamWrapper[Any]):
         self._self_capture_content = capture_content
         self._self_choice_buffers = []
         self._self_response_id = None
-        self._self_prompt_tokens = None
-        self._self_completion_tokens = None
 
 
 class AsyncPortkeyStreamWrapper(_PortkeyStreamMixin, AsyncStreamWrapper[Any]):
@@ -239,8 +229,6 @@ class AsyncPortkeyStreamWrapper(_PortkeyStreamMixin, AsyncStreamWrapper[Any]):
         self._self_capture_content = capture_content
         self._self_choice_buffers = []
         self._self_response_id = None
-        self._self_prompt_tokens = None
-        self._self_completion_tokens = None
 
 
 __all__ = [

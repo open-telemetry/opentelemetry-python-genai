@@ -439,6 +439,48 @@ def test_on_tool_start_and_end_creates_span(monkeypatch):
     )
 
 
+def test_on_tool_start_parents_to_parent_run_context():
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    handler = _make_callback_handler(
+        tracer_provider, logger_provider, meter_provider
+    )
+
+    parent_id = uuid4()
+    child_id = uuid4()
+
+    handler.on_chain_start(
+        serialized={"name": "LangGraph"},
+        inputs={},
+        run_id=parent_id,
+        parent_run_id=None,
+    )
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("ambient") as ambient_span:
+        handler.on_tool_start(
+            serialized={"name": "multiply"},
+            input_str="",
+            run_id=child_id,
+            parent_run_id=parent_id,
+            inputs={"a": 3, "b": 4},
+        )
+    output = MagicMock()
+    output.content = "12"
+    handler.on_tool_end(output=output, run_id=child_id)
+    handler.on_chain_end(outputs={}, run_id=parent_id)
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = next(s for s in spans if s.name == "execute_tool multiply")
+    workflow_span = next(
+        s for s in spans if s.name == "invoke_workflow LangGraph"
+    )
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == workflow_span.context.span_id
+    assert tool_span.parent.span_id != ambient_span.get_span_context().span_id
+    assert tool_span.context.trace_id == workflow_span.context.trace_id
+
+
 def test_on_tool_start_omits_conversation_id():
     """semconv does not define gen_ai.conversation.id for execute_tool."""
     tracer_provider, span_exporter, logger_provider, meter_provider = (

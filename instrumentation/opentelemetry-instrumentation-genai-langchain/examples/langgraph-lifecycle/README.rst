@@ -93,10 +93,12 @@ writes.
 instrumentation, but it is determined by LangGraph, not chosen: the resume event
 supplies a checkpoint id and nothing else.
 
-``GenAIInvocation.emit_event`` is byte-identical to the hunk in open PR #507,
-saved as ``util/opentelemetry-util-genai/tests/fixtures/pr507_emit_event.py.txt``
-and checked by a test, and is dropped when rebasing onto that PR. It is not a
-competing API.
+``GenAIInvocation.emit_event`` is the hunk from open PR #507, saved as
+``util/opentelemetry-util-genai/tests/fixtures/pr507_emit_event.py.txt`` and
+checked by a test, and is dropped when rebasing onto that PR. It is not a
+competing API. One line differs: it checks ``_finished`` instead of
+``_context_token``, because main no longer attaches a context token for async
+invocations, so the #507 check would drop every event from ``ainvoke``.
 
 Checkpoint volume
 ~~~~~~~~~~~~~~~~~

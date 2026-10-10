@@ -696,6 +696,52 @@ def test_chat_openai_responses_api_input_image_llm_call(
     assert _REAL_PNG_B64 in input_message
 
 
+def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
+    span_exporter,
+    start_instrumentation,
+    chat_openai_legacy_functions,
+    vcr,
+):
+    functions = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name",
+                    },
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    llm_with_functions = chat_openai_legacy_functions.bind(
+        functions=functions,
+        function_call={"name": "get_current_weather"},
+    )
+
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the weather in Paris?"),
+    ]
+
+    payload = chat_openai_legacy_functions._get_request_payload([], stop=None)
+    cassette_suffix = "_old" if "n" in payload else ""
+
+    with vcr.use_cassette(
+        f"test_chat_openai_legacy_function_call{cassette_suffix}"
+    ):
+        llm_with_functions.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in span.attributes
+
+
 # span_exporter, start_instrumentation, gemini are coming from fixtures defined in conftest.py
 def test_gemini(span_exporter, start_instrumentation, gemini, vcr):
     messages = [

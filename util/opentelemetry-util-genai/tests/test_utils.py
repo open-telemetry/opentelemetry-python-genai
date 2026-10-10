@@ -32,7 +32,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai._inference_invocation import LLMInvocation
+from opentelemetry.util.genai._inference_invocation import _should_emit_event
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
@@ -43,6 +43,7 @@ from opentelemetry.util.genai.types import (
     GenericPart,
     InputMessage,
     MessagePart,
+    Modality,
     OutputMessage,
     Reasoning,
     ReasoningPart,
@@ -54,12 +55,13 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    bind_arguments,
     decode_base64,
     gen_ai_json_dumps,
+    get_argument,
     get_content_capturing_mode,
+    get_signature,
     image_from_url,
-    should_capture_content_on_spans,
-    should_emit_event,
 )
 
 
@@ -194,7 +196,10 @@ class TestShouldEmitEvent(unittest.TestCase):
                     "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": emit_event,
                 },
             ):
-                assert should_emit_event() is expected
+                assert (
+                    _should_emit_event(get_content_capturing_mode())
+                    is expected
+                )
 
     @patch.dict(
         os.environ,
@@ -209,7 +214,7 @@ class TestShouldEmitEvent(unittest.TestCase):
         # When invalid value is set, should fall back to default based on content_capturing_mode
         # EVENT_ONLY should default to True
         with self.assertLogs(level="WARNING") as cm:
-            result = should_emit_event()
+            result = _should_emit_event(ContentCapturingMode.EVENT_ONLY)
             assert result is True, (
                 f"Expected True but got {result} (EVENT_ONLY should default to True)"
             )
@@ -231,34 +236,38 @@ class TestShouldEmitEvent(unittest.TestCase):
     ):  # pylint: disable=no-self-use
         # When invalid value is set with SPAN_ONLY, should default to False
         with self.assertLogs(level="WARNING") as cm:
-            result = should_emit_event()
+            result = _should_emit_event(ContentCapturingMode.SPAN_ONLY)
             assert result is False, (
                 f"Expected False but got {result} (SPAN_ONLY should default to False)"
             )
         self.assertEqual(len(cm.output), 1)
         self.assertIn("invalid_value is not a valid option for", cm.output[0])
 
+    def test_should_emit_event_with_explicit_mode(self):  # pylint: disable=no-self-use
+        assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is False
+        assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is False
+        assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is True
+        assert _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"},
+        ):
+            assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is True
+            assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is True
+
+        with patch.dict(
+            os.environ,
+            {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"},
+        ):
+            assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is False
+            assert (
+                _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT)
+                is False
+            )
+
 
 class TestShouldCaptureContent(unittest.TestCase):
-    def test_should_capture_content_on_spans_against_various_env_var_combinations(
-        self,
-    ):  # pylint: disable=no-self-use
-        for content_capture, span_content_enabled in [
-            ("NO_CONTENT", False),
-            ("EVENT_ONLY", False),
-            ("SPAN_ONLY", True),
-            ("SPAN_AND_EVENT", True),
-        ]:
-            with patch.dict(
-                os.environ,
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capture,
-                },
-            ):
-                assert (
-                    should_capture_content_on_spans() is span_content_enabled
-                )
-
     def test_get_content_capturing_mode(self):  # pylint: disable=no-self-use
         for content_capture, expected_content_capturing in [
             ("NO_CONTENT", ContentCapturingMode.NO_CONTENT),
@@ -476,26 +485,6 @@ class TestTelemetryHandler(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
-        },
-    )
-    def test_start_llm_captures_content_on_span(self):
-        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
-        inv = LLMInvocation(request_model="legacy-model")
-        handler.start_llm(inv)
-        inv.input_messages = [_create_input_message("hi")]
-        inv.output_messages = [_create_output_message("hello")]
-        handler.stop_llm(inv)
-
-        span = _get_single_span(self.span_exporter)
-        attrs = _get_span_attributes(span)
-        assert GenAI.GEN_AI_INPUT_MESSAGES in attrs
-        assert GenAI.GEN_AI_OUTPUT_MESSAGES in attrs
-
-    @patch.dict(
-        os.environ,
-        {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
             "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
@@ -513,7 +502,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
-    def test_start_inference_passes_sampling_attributes_at_span_creation(self):
+    def test_inference_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time."""
         captured_attributes = {}
 
@@ -567,7 +556,7 @@ class TestTelemetryHandler(unittest.TestCase):
     def test_inference_conversation_id_on_span_but_not_metrics(self):
         """conversation id is high cardinality, so it must stay off metrics.
 
-        `_get_metric_attributes()` builds on `_get_start_attributes()`, so
+        `_get_metric_attributes()` builds on `_start_attributes`, so
         setting it at span creation would make it a dimension on the duration
         and token histograms.
         """
@@ -593,7 +582,7 @@ class TestTelemetryHandler(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
 
-    def test_start_inference_sampler_can_drop_span_based_on_attributes(self):
+    def test_inference_sampler_can_drop_span_based_on_attributes(self):
         """Verify that a sampler can reject spans based on attributes passed at creation time."""
 
         class ModelRejectingSampler:  # pylint: disable=no-self-use
@@ -644,7 +633,7 @@ class TestTelemetryHandler(unittest.TestCase):
         assert len(spans) == 1
         assert spans[0].name == "chat accepted-model"
 
-    def test_start_embedding_passes_sampling_attributes_at_span_creation(self):
+    def test_embedding_passes_sampling_attributes_at_span_creation(self):
         """Verify that sampling-relevant attributes are available at start_span() time for embeddings."""
         captured_attributes = {}
 
@@ -688,6 +677,28 @@ class TestTelemetryHandler(unittest.TestCase):
             == "embed.example.com"
         )
         assert captured_attributes[server_attributes.SERVER_PORT] == 443
+
+    def test_start_attributes_initialized_in_init(self):
+        """Verify that start attributes are initialized upon construction."""
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        assert invocation.span.is_recording()
+        assert invocation.context is not None
+
+        assert (
+            invocation._start_attributes[GenAI.GEN_AI_OPERATION_NAME]
+            == GenAI.GenAiOperationNameValues.CHAT.value
+        )
+        assert (
+            invocation._start_attributes[GenAI.GEN_AI_PROVIDER_NAME]
+            == "test-provider"
+        )
+        assert (
+            invocation._start_attributes[GenAI.GEN_AI_REQUEST_MODEL]
+            == "test-model"
+        )
+        invocation.stop()
 
     def test_llm_span_finish_reasons_without_output_messages(self):
         invocation = self.telemetry_handler.inference(
@@ -801,25 +812,22 @@ class TestTelemetryHandler(unittest.TestCase):
         message = _create_input_message("hi")
         chat_generation = _create_output_message("ok")
 
-        with self.telemetry_handler.inference(
-            "test-provider", request_model="parent-model"
-        ) as parent_invocation:
-            parent_invocation.input_messages = [message]
+        with self.telemetry_handler.workflow(name="parent-workflow"):
             with self.telemetry_handler.inference(
                 "test-provider", request_model="child-model"
             ) as child_invocation:
                 child_invocation.input_messages = [message]
                 # Stop child first by exiting inner context
                 child_invocation.output_messages = [chat_generation]
-            # Then stop parent by exiting outer context
-            parent_invocation.output_messages = [chat_generation]
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
 
         # Identify spans irrespective of export order
         child_span = next(s for s in spans if s.name == "chat child-model")
-        parent_span = next(s for s in spans if s.name == "chat parent-model")
+        parent_span = next(
+            s for s in spans if s.name == "invoke_workflow parent-workflow"
+        )
 
         # Same trace
         assert child_span.context.trace_id == parent_span.context.trace_id
@@ -898,6 +906,110 @@ class TestTelemetryHandler(unittest.TestCase):
         assert child_span.parent is not None
         assert child_span.parent.span_id == parent_span.context.span_id
         assert parent_span.parent is None
+
+    def test_inference_with_explicit_context(self):
+        parent_inv = self.telemetry_handler.inference(
+            "test-provider", request_model="parent-model"
+        )
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.telemetry_handler.inference(
+                "test-provider",
+                request_model="child-model",
+                context=parent_inv.context,
+            )
+            child_inv.stop()
+
+        spans = self.span_exporter.get_finished_spans()
+        child_span = next(s for s in spans if s.name == "chat child-model")
+        parent_span = next(s for s in spans if s.name == "chat parent-model")
+        assert child_span.parent is not None
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert (
+            child_span.parent.span_id
+            != ambient_span.get_span_context().span_id
+        )
+        assert child_span.context.trace_id == parent_span.context.trace_id
+
+    def test_inference_with_attach_to_context_false(self):
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.telemetry_handler.inference(
+                "test-provider",
+                request_model="detached-model",
+                _attach_to_context=False,
+            )
+            # Ambient context should not have changed
+            assert get_current_span() == ambient_span
+            inv.stop()
+            assert get_current_span() == ambient_span
+
+        spans = self.span_exporter.get_finished_spans()
+        detached_span = next(
+            s for s in spans if s.name == "chat detached-model"
+        )
+        # Should still parent to ambient span because context was not passed
+        assert detached_span.parent is not None
+        assert (
+            detached_span.parent.span_id
+            == ambient_span.get_span_context().span_id
+        )
+
+    def test_embedding_with_explicit_context(self):
+        parent_inv = self.telemetry_handler.embedding(
+            "test-provider", request_model="parent-model"
+        )
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self.telemetry_handler.embedding(
+                "test-provider",
+                request_model="child-model",
+                context=parent_inv.context,
+            )
+            child_inv.stop()
+
+        spans = self.span_exporter.get_finished_spans()
+        child_span = next(
+            s for s in spans if s.name == "embeddings child-model"
+        )
+        parent_span = next(
+            s for s in spans if s.name == "embeddings parent-model"
+        )
+        assert child_span.parent is not None
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert (
+            child_span.parent.span_id
+            != ambient_span.get_span_context().span_id
+        )
+        assert child_span.context.trace_id == parent_span.context.trace_id
+
+    def test_embedding_with_attach_to_context_false(self):
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self.telemetry_handler.embedding(
+                "test-provider",
+                request_model="detached-embed-model",
+                _attach_to_context=False,
+            )
+            assert get_current_span() == ambient_span
+            inv.stop()
+            assert get_current_span() == ambient_span
+
+        spans = self.span_exporter.get_finished_spans()
+        detached_span = next(
+            s for s in spans if s.name == "embeddings detached-embed-model"
+        )
+        assert detached_span.parent is not None
+        assert (
+            detached_span.parent.span_id
+            == ambient_span.get_span_context().span_id
+        )
 
     def test_llm_context_manager_error_path_records_error_status_and_attrs(
         self,
@@ -1176,6 +1288,107 @@ class TestTelemetryHandler(unittest.TestCase):
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert attrs["gen_ai.usage.audio.input_tokens"] == 11
 
+    def test_set_modality_tokens_accepts_standard_enums(self) -> None:
+        invocation = self.telemetry_handler.inference(
+            "test-provider", request_model="test-model"
+        )
+        entries = [
+            (Modality.TEXT, 10),
+            (Modality.IMAGE, 20),
+            (Modality.AUDIO, 30),
+            (Modality.VIDEO, 40),
+            (Modality.DOCUMENT, 50),
+            ("vendor_custom", 60),
+        ]
+        invocation.set_input_tokens(entries)
+        invocation.set_output_tokens(entries)
+        invocation.set_cache_read_input_tokens(entries)
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        usage = {
+            key: value
+            for key, value in attrs.items()
+            if key.startswith("gen_ai.usage.")
+        }
+        assert usage == {
+            f"gen_ai.usage.{modality}.{bucket}": count
+            for modality, count in (("text", 10), ("image", 20), ("audio", 30))
+            for bucket in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read.input_tokens",
+            )
+        }
+        assert all(type(value) is int for value in usage.values())
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_modality_content_on_spans_and_events(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        modalities = [*Modality, "image", "vendor_custom"]
+        parts = [
+            part
+            for modality in modalities
+            for part in (
+                BlobPart(
+                    mime_type=None, modality=modality, content=b"content"
+                ),
+                FilePart(mime_type=None, modality=modality, file_id="file-id"),
+                UriPart(
+                    mime_type=None,
+                    modality=modality,
+                    uri="https://example.com/content",
+                ),
+            )
+        ]
+        with handler.inference(
+            "test-provider", request_model="test-model"
+        ) as invocation:
+            invocation.input_messages = [
+                InputMessage(role=Role.USER, parts=parts)
+            ]
+            invocation.output_messages = [
+                OutputMessage(role=Role.ASSISTANT, parts=parts)
+            ]
+
+        span_attrs = self.span_exporter.get_finished_spans()[0].attributes
+        event_attrs = self.log_exporter.get_finished_logs()[
+            0
+        ].log_record.attributes
+        expected = [
+            modality
+            for modality in (
+                "text",
+                "image",
+                "video",
+                "audio",
+                "document",
+                "image",
+                "vendor_custom",
+            )
+            for _ in range(3)
+        ]
+        for key in (
+            GenAI.GEN_AI_INPUT_MESSAGES,
+            GenAI.GEN_AI_OUTPUT_MESSAGES,
+        ):
+            with self.subTest(key=key):
+                span_parts = json.loads(span_attrs[key])[0]["parts"]
+                event_parts = event_attrs[key][0]["parts"]
+                for recorded_parts in (span_parts, event_parts):
+                    values = [part["modality"] for part in recorded_parts]
+                    assert values == expected
+                    assert all(isinstance(value, str) for value in values)
+
     def test_set_modality_tokens_replaces_rather_than_merges(self):
         invocation = self.telemetry_handler.inference(
             "test-provider", request_model="test-model"
@@ -1383,6 +1596,34 @@ class TestRole(unittest.TestCase):
         self.assertEqual(serialized["role"], "assistant")
 
 
+class TestModality(unittest.TestCase):
+    def test_values(self) -> None:
+        self.assertEqual(
+            {modality.name: modality.value for modality in Modality},
+            {
+                "TEXT": "text",
+                "IMAGE": "image",
+                "VIDEO": "video",
+                "AUDIO": "audio",
+                "DOCUMENT": "document",
+            },
+        )
+
+    def test_members_behave_as_strings(self) -> None:
+        for modality in Modality:
+            with self.subTest(modality=modality):
+                self.assertIsInstance(modality, str)
+                self.assertEqual(modality, modality.value)
+                self.assertEqual(hash(modality), hash(modality.value))
+                self.assertEqual(str(modality), modality.value)
+                self.assertEqual(
+                    f"{modality}_tokens", f"{modality.value}_tokens"
+                )
+                self.assertEqual(
+                    json.loads(gen_ai_json_dumps(modality)), modality.value
+                )
+
+
 class TestMessageModels(unittest.TestCase):
     def test_output_message_optional_finish_reason(self):
         message = OutputMessage(
@@ -1427,6 +1668,13 @@ class TestMessageModels(unittest.TestCase):
         self.assertEqual(
             json.loads(gen_ai_json_dumps(asdict(generic_part))),
             {"type": "custom"},
+        )
+
+    def test_gen_ai_json_dumps_dataclass(self):
+        text_part = TextPart(content="hello")
+        self.assertEqual(
+            json.loads(gen_ai_json_dumps(text_part)),
+            {"type": "text", "content": "hello"},
         )
 
 
@@ -1493,6 +1741,20 @@ class TestMediaHelpers(unittest.TestCase):
         self.assertIsInstance(uri_part, UriPart)
         self.assertEqual(uri_part.modality, "audio")
 
+    def test_image_from_url_accepts_enum_and_custom_modalities(self) -> None:
+        for modality in (Modality.AUDIO, "vendor_custom"):
+            for url in (
+                "data:application/octet-stream;base64,QUJD",
+                "https://example.com/content",
+            ):
+                with self.subTest(modality=modality, url=url):
+                    part = image_from_url(url, modality=modality)
+                    self.assertEqual(part.modality, modality)
+                    self.assertEqual(
+                        json.loads(gen_ai_json_dumps(part))["modality"],
+                        str(modality),
+                    )
+
     def test_image_from_url_percent_encoded_data_url(self):
         part = image_from_url("data:image/svg+xml,%3Csvg%2F%3E")
         self.assertIsInstance(part, BlobPart)
@@ -1553,3 +1815,214 @@ class TestMediaHelpers(unittest.TestCase):
         corrupted = _REAL_PNG_B64[:-4] + "!!!!"
         part = image_from_url(f"data:image/png;base64,{corrupted}")
         self.assertIsNone(part)
+
+
+class _SampleService:
+    def execute(self, task: str):
+        pass
+
+
+class TestArgumentBinding(unittest.TestCase):
+    def test_bind_arguments_positional_and_keyword(self):
+        def sample_func(
+            a: int, b: str, c: bool = False, *extra: int, **kw: str
+        ):
+            pass
+
+        bound = bind_arguments(
+            sample_func, (1, "foo"), {"c": True, "custom": "val"}
+        )
+        self.assertEqual(bound["a"], 1)
+        self.assertEqual(bound["b"], "foo")
+        self.assertEqual(bound["c"], True)
+        self.assertEqual(bound["kw"], {"custom": "val"})
+
+    def test_bind_arguments_with_defaults(self):
+        def sample_func(x: int, y: str = "default_y", z: bool = True):
+            pass
+
+        bound_without_defaults = bind_arguments(sample_func, (42,), {})
+        self.assertEqual(bound_without_defaults, {"x": 42})
+
+        bound_with_defaults = bind_arguments(
+            sample_func, (42,), {}, apply_defaults=True
+        )
+        self.assertEqual(
+            bound_with_defaults, {"x": 42, "y": "default_y", "z": True}
+        )
+
+    def test_bind_arguments_bound_method(self):
+        class Greeter:
+            def greet(self, name: str, greeting: str = "Hello"):
+                return f"{greeting}, {name}"
+
+        g = Greeter()
+        bound = bind_arguments(g.greet, ("Alice",), {})
+        self.assertNotIn("self", bound)
+        self.assertEqual(bound["name"], "Alice")
+
+        bound_kw = bind_arguments(
+            g.greet, (), {"name": "Bob", "greeting": "Hi"}
+        )
+        self.assertNotIn("self", bound_kw)
+        self.assertEqual(bound_kw["name"], "Bob")
+        self.assertEqual(bound_kw["greeting"], "Hi")
+
+    def test_bind_arguments_invalid_args_falls_back_to_kwargs(self):
+        def sample_func(x: int):
+            pass
+
+        # Passing too many positional arguments causes TypeError in bind_partial
+        bound = bind_arguments(sample_func, (1, 2, 3), {"extra": "kept"})
+        self.assertEqual(bound, {"extra": "kept"})
+
+    def test_get_argument_fast_path_in_kwargs(self):
+        def sample_func(user_id: str, session_id: str):
+            pass
+
+        val = get_argument(
+            "user_id", sample_func, ("pos_user",), {"user_id": "kw_user"}
+        )
+        self.assertEqual(val, "kw_user")
+
+    def test_get_argument_positional(self):
+        def sample_func(user_id: str, session_id: str = "default_sess"):
+            pass
+
+        val = get_argument("user_id", sample_func, ("pos_user",), {})
+        self.assertEqual(val, "pos_user")
+
+        val_sess = get_argument(
+            "session_id", sample_func, ("pos_user", "pos_sess"), {}
+        )
+        self.assertEqual(val_sess, "pos_sess")
+
+    def test_get_argument_default_value(self):
+        def sample_func(user_id: str):
+            pass
+
+        val = get_argument(
+            "missing", sample_func, ("pos_user",), {}, default="fallback"
+        )
+        self.assertEqual(val, "fallback")
+
+    def test_get_argument_with_apply_defaults(self):
+        def sample_func(user_id: str, background: bool = False):
+            pass
+
+        val_no_defaults = get_argument(
+            "background", sample_func, ("user1",), {}
+        )
+        self.assertIsNone(val_no_defaults)
+
+        val_with_defaults = get_argument(
+            "background", sample_func, ("user1",), {}, apply_defaults=True
+        )
+        self.assertEqual(val_with_defaults, False)
+
+    def test_get_signature_caching(self):
+        s1 = _SampleService()
+        s2 = _SampleService()
+
+        sig1 = get_signature(s1.execute)
+        sig2 = get_signature(s2.execute)
+        self.assertIs(sig1, sig2)
+        self.assertNotIn("self", sig1.parameters)
+
+        sig_unbound = get_signature(_SampleService.execute)
+        self.assertIn("self", sig_unbound.parameters)
+        self.assertIsNot(sig1, sig_unbound)
+
+        sig_fn1 = get_signature(decode_base64)
+        sig_fn2 = get_signature(decode_base64)
+        self.assertIs(sig_fn1, sig_fn2)
+
+    def test_get_signature_local_function_not_cached(self):
+        from opentelemetry.util.genai.utils import _cached_signature
+
+        def local_fn(x: int):
+            pass
+
+        info_before = _cached_signature.cache_info()
+        sig1 = get_signature(local_fn)
+        sig2 = get_signature(local_fn)
+        info_after = _cached_signature.cache_info()
+        self.assertEqual(info_before.misses, info_after.misses)
+        self.assertEqual(info_before.hits, info_after.hits)
+        self.assertEqual(sig1, sig2)
+
+    def test_get_signature_local_method_not_cached(self):
+        from opentelemetry.util.genai.utils import _cached_signature
+
+        class LocalService:
+            def execute(self, x: int):
+                pass
+
+        svc = LocalService()
+        info_before = _cached_signature.cache_info()
+        sig1 = get_signature(svc.execute)
+        sig2 = get_signature(svc.execute)
+        info_after = _cached_signature.cache_info()
+        self.assertEqual(info_before.misses, info_after.misses)
+        self.assertEqual(info_before.hits, info_after.hits)
+        self.assertEqual(sig1, sig2)
+
+    def test_cached_signature_lru_eviction(self):
+        from functools import lru_cache
+
+        from opentelemetry.util.genai.utils import _cached_signature
+
+        cached_fn = lru_cache(maxsize=2)(_cached_signature.__wrapped__)
+
+        def f1(a: int):
+            pass
+
+        def f2(b: int):
+            pass
+
+        def f3(c: int):
+            pass
+
+        cached_fn(f1, False)
+        cached_fn(f2, False)
+        self.assertEqual(cached_fn.cache_info().currsize, 2)
+
+        # Accessing f3 evicts f1
+        cached_fn(f3, False)
+        self.assertEqual(cached_fn.cache_info().currsize, 2)
+
+        # Accessing f2 is a hit
+        cached_fn(f2, False)
+        self.assertEqual(cached_fn.cache_info().hits, 1)
+
+        # Accessing f1 is a miss (was evicted)
+        cached_fn(f1, False)
+        self.assertEqual(cached_fn.cache_info().misses, 4)
+
+    def test_get_signature_unhashable_callable(self):
+        class UnhashableCallable:
+            __hash__ = None
+
+            def __call__(self, x: int):
+                pass
+
+        obj = UnhashableCallable()
+        sig = get_signature(obj)
+        self.assertIn("x", sig.parameters)
+
+    def test_get_argument_skips_binding_when_no_args_or_defaults(self):
+        def sample_func(user_id: str | None = None):
+            pass
+
+        with patch(
+            "opentelemetry.util.genai.utils.bind_arguments"
+        ) as mock_bind:
+            val = get_argument(
+                "user_id",
+                sample_func,
+                (),
+                {"other": "val"},
+                default="fallback",
+            )
+            self.assertEqual(val, "fallback")
+            mock_bind.assert_not_called()

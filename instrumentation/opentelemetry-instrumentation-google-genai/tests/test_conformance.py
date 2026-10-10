@@ -24,6 +24,7 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.embedding import EmbeddingScenario
+from .conformance.fetch_response import FetchResponseScenario
 from .conformance.generate_content import GenerateContentScenario
 from .conformance.inference import InferenceScenario
 from .conformance.server_tool_calling import (
@@ -40,6 +41,7 @@ from .conformance.tool_calling import ToolCallingScenario
         EmbeddingScenario(),
         GenerateContentScenario(),
         ToolCallingScenario(),
+        FetchResponseScenario(),
         GenerateContentServerToolCallingScenario(),
         InteractionsServerToolCallingScenario(),
     ],

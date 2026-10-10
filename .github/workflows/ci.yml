@@ -17,7 +17,7 @@ jobs:
   # new tox env automatically extends CI without editing workflow YAML.
   prepare:
     name: prepare-matrix
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     outputs:
       test_matrix: ${{ steps.gen.outputs.test_matrix }}
@@ -33,7 +33,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Generate matrix JSON from tox -l
         id: gen
@@ -54,7 +54,7 @@ jobs:
       - prepare
       - misc
       - tests
-    runs-on: cncf-ubuntu-2-8-x86
+    runs-on: ubuntu-slim
     steps:
       - if: |
           needs.prepare.result != 'success' ||

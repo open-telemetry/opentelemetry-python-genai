@@ -201,5 +201,13 @@ class TestEmitEventMatchesPR507(unittest.TestCase):
         source = (
             tests_dir.parent / "src/opentelemetry/util/genai/_invocation.py"
         ).read_text()
-        for fragment in stored.read_text().split("\n\n", 1):
-            assert fragment.strip("\n") in source
+        # The one intended difference: main no longer attaches a context token
+        # for async invocations, so "still running" is checked with
+        # ``_finished``, the same guard ``record_stream_chunk`` uses.
+        reference = stored.read_text().replace(
+            "if self._context_token is None:", "if self._finished:"
+        )
+        # The stored import line predates main widening that import, so only
+        # the method itself is compared.
+        _, method = reference.split("\n\n", 1)
+        assert method.strip("\n") in source

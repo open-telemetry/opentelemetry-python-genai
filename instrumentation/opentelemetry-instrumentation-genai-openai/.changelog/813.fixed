@@ -1,0 +1,1 @@
+Record `max_completion_tokens` as `gen_ai.request.max_tokens` on chat completion spans, whether passed as a keyword argument or via `extra_body`.

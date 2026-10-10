@@ -1,1 +1,0 @@
-Add retrieval span instrumentation for LlamaIndex ``BaseRetriever`` operations.

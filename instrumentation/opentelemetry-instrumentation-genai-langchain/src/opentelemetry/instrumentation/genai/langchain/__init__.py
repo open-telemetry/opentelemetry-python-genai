@@ -28,7 +28,8 @@ API
 from collections.abc import Callable, Collection
 from typing import Any
 
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import BaseCallbackManager
+from langchain_core.callbacks.manager import AsyncCallbackManager
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.langchain.agent_context import (
@@ -37,6 +38,9 @@ from opentelemetry.instrumentation.genai.langchain.agent_context import (
 )
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
+)
+from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
+    _InvocationManager,
 )
 from opentelemetry.instrumentation.genai.langchain.lifecycle import (
     instrument_checkpointers,
@@ -82,20 +86,29 @@ class LangChainInstrumentor(BaseInstrumentor):
             instrumentation_scope_name=__package__,
             instrumentation_scope_version=__version__,
         )
-        otel_callback_handler = OpenTelemetryLangChainCallbackHandler(
+        invocation_manager = _InvocationManager()
+        sync_handler = OpenTelemetryLangChainCallbackHandler(
             telemetry_handler=telemetry_handler,
+            _attach_to_context=True,
+            invocation_manager=invocation_manager,
+        )
+        async_handler = OpenTelemetryLangChainCallbackHandler(
+            telemetry_handler=telemetry_handler,
+            _attach_to_context=False,
+            invocation_manager=invocation_manager,
         )
 
         wrap_function_wrapper(
             "langchain_core.callbacks",
             "BaseCallbackManager.__init__",
-            _BaseCallbackManagerInitWrapper(otel_callback_handler),
+            _BaseCallbackManagerInitWrapper(sync_handler, async_handler),
         )
         self._instrument_agent_entry_points()
 
         # LangGraph only: report every checkpoint the graph's saver persists.
-        # No-op when LangGraph is not installed.
-        instrument_checkpointers(otel_callback_handler)
+        # No-op when LangGraph is not installed. Both handlers share one
+        # invocation manager, so either can resolve the run a write belongs to.
+        instrument_checkpointers(sync_handler)
 
     @staticmethod
     def _instrument_agent_entry_points() -> None:
@@ -132,21 +145,44 @@ class _BaseCallbackManagerInitWrapper:
     """
 
     def __init__(
-        self, callback_handler: OpenTelemetryLangChainCallbackHandler
+        self,
+        sync_handler: OpenTelemetryLangChainCallbackHandler,
+        async_handler: OpenTelemetryLangChainCallbackHandler,
     ):
-        self._otel_handler = callback_handler
+        self._sync_handler = sync_handler
+        self._async_handler = async_handler
 
     def __call__(
         self,
         wrapped: Callable[..., None],
-        instance: BaseCallbackHandler,
+        instance: BaseCallbackManager,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ):
         wrapped(*args, **kwargs)
-        # Ensure our OTel callback is present if not already.
-        for handler in instance.inheritable_handlers:  # type: ignore
-            if isinstance(handler, type(self._otel_handler)):
-                break
-        else:
-            instance.add_handler(self._otel_handler, inherit=True)  # type: ignore
+        target_handler = (
+            self._async_handler
+            if isinstance(instance, AsyncCallbackManager)
+            else self._sync_handler
+        )
+        other_handler = (
+            self._sync_handler
+            if isinstance(instance, AsyncCallbackManager)
+            else self._async_handler
+        )
+        if other_handler in instance.handlers:
+            instance.handlers = [
+                target_handler if h is other_handler else h
+                for h in instance.handlers
+            ]
+        if other_handler in instance.inheritable_handlers:
+            instance.inheritable_handlers = [
+                target_handler if h is other_handler else h
+                for h in instance.inheritable_handlers
+            ]
+        if target_handler not in instance.inheritable_handlers:
+            for handler in instance.inheritable_handlers:
+                if isinstance(handler, OpenTelemetryLangChainCallbackHandler):
+                    break
+            else:
+                instance.add_handler(target_handler, inherit=True)

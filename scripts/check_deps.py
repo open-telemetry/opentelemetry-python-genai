@@ -23,7 +23,7 @@
      - If a workspace dependency floor in pyproject.toml is from a previous release cycle,
        it resolves and tests from PyPI; it must NOT be installed from local paths in
        oldest requirements.
-     - If a workspace dependency floor matches the current unreleased workspace dev version,
+     - If a workspace dependency floor matches the current workspace cycle (either .dev or finalized),
        tests/requirements.oldest.txt must install it locally so tests can run against
        the local development version.
 
@@ -203,8 +203,11 @@ def check_workspace_dependencies(
             )
             continue
 
+        floor_target = Version(floor_version.public.split(".dev")[0])
+        current_target = Version(current_version.public.split(".dev")[0])
+
         # Floor is from a previous cycle, published on PyPI (e.g. 1.0b0, 1.1b0, 1.1b0.dev)
-        if floor_version < current_version:
+        if floor_target < current_target:
             if canonical_name in local_pkgs:
                 reported_locals.add(canonical_name)
                 errors.append(
@@ -212,8 +215,8 @@ def check_workspace_dependencies(
                     f"but tests/requirements.oldest.txt installs it locally with '{local_pkgs[canonical_name]}'. "
                     f"Remove the local/editable install so tests run against the declared floor from PyPI."
                 )
-        # Floor is the current unreleased workspace dev version (e.g. 1.2b0.dev)
-        elif floor_version == current_version:
+        # Floor targets the current unreleased workspace cycle (e.g. 1.2b0.dev or 1.2b0)
+        elif floor_target == current_target:
             if canonical_name not in local_pkgs:
                 errors.append(
                     f"{pkg_dir.name}: declared floor for '{req.name}' is unreleased '{lower_bound_str}', "
@@ -233,7 +236,7 @@ def check_workspace_dependencies(
         if name not in valid_locals and name not in reported_locals:
             errors.append(
                 f"{pkg_dir.name}: '{line}' in tests/requirements.oldest.txt is not permitted. "
-                f"Local/editable installs in oldest requirements are only allowed for workspace dependencies declaring an unreleased .dev floor."
+                f"Local/editable installs in oldest requirements are only allowed for workspace dependencies whose floor targets the current unreleased version."
             )
 
     return errors

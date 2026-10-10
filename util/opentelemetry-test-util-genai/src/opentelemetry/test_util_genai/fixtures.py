@@ -52,6 +52,7 @@ from unittest.mock import patch
 
 import pytest
 
+from opentelemetry.context import attach, detach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -77,6 +78,21 @@ from opentelemetry.util.genai.environment_variables import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import ContentCapturingMode
+
+
+@pytest.fixture(autouse=True)
+def _isolate_context() -> Iterator[None]:
+    """Isolate the active OpenTelemetry context per test.
+
+    Restores the previous context after each test, preventing context
+    attached during a test from leaking into subsequent tests.
+    """
+    token = attach(get_current())
+    try:
+        yield
+    finally:
+        detach(token)
+
 
 # ─── In-memory exporters and providers ──────────────────────────────────────
 
