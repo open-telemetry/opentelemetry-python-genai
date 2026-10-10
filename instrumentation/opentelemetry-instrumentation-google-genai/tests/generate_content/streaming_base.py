@@ -10,6 +10,7 @@ from google.genai.types import (
 )
 
 from opentelemetry import context as context_api
+from opentelemetry import trace
 from opentelemetry.instrumentation.google_genai import (
     GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
 )
@@ -65,6 +66,14 @@ class StreamingTestCase(TestCase):
             )
         finally:
             context_api.detach(tok)
+
+    def test_malformed_contents_do_not_leave_the_invocation_open(self):
+        self.configure_valid_response(text="Yep, it works!")
+        # Content capture converts `contents` before the SDK sees them, and
+        # that conversion raises on None.
+        self.generate_content(model="gemini-2.0-flash", contents=None)
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+        self.assertFalse(trace.get_current_span().get_span_context().is_valid)
 
     def test_handles_multiple_responses(self):
         self.configure_valid_response(text="First response")

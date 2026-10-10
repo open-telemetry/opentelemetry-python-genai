@@ -17,6 +17,7 @@ try:
 except ImportError:
     AsyncPortkey = None  # type: ignore[assignment,misc]
 
+from opentelemetry import context as context_api
 from opentelemetry.instrumentation.genai.portkey import PortkeyInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -491,6 +492,42 @@ def test_sync_chat_completions_error_handling(
         assert len(spans) == 1
         span = spans[0]
         assert span.status.status_code == StatusCode.ERROR
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )
+
+
+def test_sync_chat_completions_bad_parameter_reaches_the_client(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        if hasattr(p.chat.completions, "openai_client"):
+            p.chat.completions.openai_client = MagicMock()
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = RuntimeError(
+                "Portkey rejected the request"
+            )
+        p.chat.completions._post = MagicMock(
+            side_effect=RuntimeError("Portkey rejected the request")
+        )
+
+        # Request extraction converts temperature with float(), which raises
+        # on this value before the client sees it.
+        before = context_api.get_current()
+        with pytest.raises(RuntimeError, match="Portkey rejected the request"):
+            p.chat.completions.create(
+                messages=[{"role": "user", "content": "Hello"}],
+                model="gpt-4o",
+                temperature="high",
+            )
+        assert context_api.get_current() is before
+
+        (span,) = span_exporter.get_finished_spans()
         assert (
             span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
         )

@@ -33,6 +33,7 @@ from anthropic.types import (
     Usage,
 )
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.anthropic import (
     AnthropicInstrumentor,
     _raw_response,
@@ -701,6 +702,34 @@ def test_sync_messages_create_connection_error(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert ErrorAttributes.ERROR_TYPE in span.attributes
     assert "APIConnectionError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"messages": [{"content": "Hello"}]},
+        {"messages": [{"role": "user", "content": "Hi"}], "system": ["s"]},
+    ],
+    ids=["message_without_role", "system_as_strings"],
+)
+def test_sync_messages_create_malformed_request_reaches_the_client(
+    span_exporter, instrument_with_content, kwargs
+):
+    client = Anthropic(base_url="http://localhost:9999", max_retries=0)
+
+    # Content capture reads the messages and system prompt before the client
+    # sees them; these shapes make that extraction raise.
+    with pytest.raises(APIConnectionError):
+        client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=100,
+            timeout=0.1,
+            **kwargs,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert "APIConnectionError" in span.attributes[ErrorAttributes.ERROR_TYPE]
+    assert not trace.get_current_span().get_span_context().is_valid
 
 
 @pytest.mark.vcr()

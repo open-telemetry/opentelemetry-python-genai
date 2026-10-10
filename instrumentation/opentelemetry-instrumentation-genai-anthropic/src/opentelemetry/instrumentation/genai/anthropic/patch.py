@@ -16,6 +16,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.utils import suppress_extraction_errors
 
 from ._raw_response import wrap_raw_response
 from .messages_extractors import (
@@ -259,16 +260,14 @@ def _create_invocation(
         server_address=server_address,
         server_port=server_port,
     )
-    invocation.input_messages = (
-        get_input_messages(params.messages) if capture_content else []
-    )
-    invocation.system_instruction = (
-        get_system_instruction(params.system) if capture_content else []
-    )
-    invocation.tool_definitions = (
-        get_tool_definitions(params.tools) if capture_content else None
-    )
     invocation.attributes = attributes
+    if capture_content:
+        with suppress_extraction_errors():
+            invocation.input_messages = get_input_messages(params.messages)
+            invocation.system_instruction = get_system_instruction(
+                params.system
+            )
+            invocation.tool_definitions = get_tool_definitions(params.tools)
     return invocation
 
 

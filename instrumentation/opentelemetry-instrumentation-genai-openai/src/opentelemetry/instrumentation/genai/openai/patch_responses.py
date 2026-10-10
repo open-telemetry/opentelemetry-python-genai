@@ -11,7 +11,10 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import FetchResponseInvocation
-from opentelemetry.util.genai.utils import get_argument
+from opentelemetry.util.genai.utils import (
+    get_argument,
+    suppress_extraction_errors,
+)
 
 from ._raw_response import wrap_stream_result
 from .response_extractors import (
@@ -218,7 +221,8 @@ def _start_fetch_response_invocation(
     invocation = handler.fetch_response(
         **get_fetch_response_creation_kwargs(response_id, instance),
     )
-    invocation.stream_cursor = _get_stream_cursor(kwargs)
+    with suppress_extraction_errors():
+        invocation.stream_cursor = _get_stream_cursor(kwargs)
     invocation.attributes[OpenAIAttributes.OPENAI_API_TYPE] = (
         OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )

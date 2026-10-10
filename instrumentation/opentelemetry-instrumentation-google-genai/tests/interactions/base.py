@@ -35,6 +35,7 @@ except ImportError:
         create = None
 
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -159,6 +160,21 @@ class TestCase(CommonTestCaseBase):
         self.configure_valid_interaction()
         self.run_interaction(model="gemini-2.5-flash", input="Does this work?")
         self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+
+    def test_request_extraction_error_does_not_leave_the_invocation_open(
+        self,
+    ) -> None:
+        self.configure_valid_interaction()
+        with patch(
+            "opentelemetry.instrumentation.google_genai.interactions._interactions_input_to_messages",
+            side_effect=TypeError("unhashable type: 'list'"),
+        ) as extractor:
+            self.run_interaction(
+                model="gemini-2.5-flash", input="Does this work?"
+            )
+        extractor.assert_called_once()
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        self.assertFalse(trace.get_current_span().get_span_context().is_valid)
 
     def test_model_reflected_into_span_name(self) -> None:
         self.configure_valid_interaction()

@@ -27,6 +27,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import suppress_extraction_errors
 
 if TYPE_CHECKING:
     from portkey_ai import AsyncPortkey, Portkey
@@ -239,6 +240,7 @@ def _prepare_output_messages(
     return output_messages
 
 
+@suppress_extraction_errors()
 def _apply_request_parameters(
     invocation: InferenceInvocation,
     kwargs: dict[str, Any],
@@ -341,10 +343,11 @@ def create_inference_invocation(
         server_port=port,
     )
     if is_prompt:
-        if prompt_id := get_value(kwargs.get("prompt_id")):
-            invocation.attributes[GenAIAttributes.GEN_AI_PROMPT_NAME] = str(
-                prompt_id
-            )
+        with suppress_extraction_errors():
+            if prompt_id := get_value(kwargs.get("prompt_id")):
+                invocation.attributes[GenAIAttributes.GEN_AI_PROMPT_NAME] = (
+                    str(prompt_id)
+                )
 
     _apply_request_parameters(invocation, kwargs, capture_content)
     return invocation
