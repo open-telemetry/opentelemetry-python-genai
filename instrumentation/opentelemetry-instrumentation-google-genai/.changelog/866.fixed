@@ -1,0 +1,1 @@
+Keep a request attribute extraction error in `generate_content` and `interactions.create` from failing the call or leaving its invocation open.
