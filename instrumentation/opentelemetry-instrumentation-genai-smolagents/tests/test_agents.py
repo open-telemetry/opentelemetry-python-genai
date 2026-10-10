@@ -656,6 +656,50 @@ def test_interrupted_agent_recording_ends_the_span(
     assert lifecycle.leaked == []
 
 
+def test_a_failed_agent_request_conversion_does_not_fail_the_run(
+    instrument_with_content, span_exporter, lifecycle, monkeypatch
+) -> None:
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+
+    def _raise(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("unexpected tool shape")
+
+    monkeypatch.setattr(patch_module, "to_tool_definitions", _raise)
+
+    agent.run("Test question")
+
+    (agent_span,) = spans_by_operation(
+        span_exporter.get_finished_spans(), "invoke_agent"
+    )
+    assert agent_span.status.status_code == StatusCode.UNSET
+    assert lifecycle.leaked == []
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_failed_task_conversion_does_not_fail_the_run(
+    instrument_with_content, span_exporter, lifecycle, monkeypatch, stream
+) -> None:
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+
+    def _raise(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("unexpected task shape")
+
+    # additional_args makes the run convert the task again after the call.
+    monkeypatch.setattr(patch_module, "task_to_input_messages", _raise)
+
+    result = agent.run(
+        "Test question", additional_args={"city": "Paris"}, stream=stream
+    )
+    if stream:
+        list(result)
+
+    (agent_span,) = spans_by_operation(
+        span_exporter.get_finished_spans(), "invoke_agent"
+    )
+    assert agent_span.status.status_code == StatusCode.UNSET
+    assert lifecycle.leaked == []
+
+
 @pytest.fixture
 def signature_calls(monkeypatch) -> Generator[list[str], None, None]:
     from opentelemetry.util.genai import utils as util_genai_utils

@@ -133,6 +133,7 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+from opentelemetry.util.genai.utils import suppress_extraction_errors
 
 # Interaction.status values that differ from the gen_ai.response.status value
 # set. `in_progress`, `completed`, `failed`, `cancelled` and `incomplete` are
@@ -1153,19 +1154,20 @@ def _start_interactions_invocation(
             server_address=server_address,
             error_type_resolver=resolve_error_type,
         )
-    invocation.tool_definitions = _maybe_get_tool_definitions(
-        _get_field(request, "tools")
-    )
-    _apply_interaction_request_attributes(invocation, request)
-
-    if telemetry_handler.should_capture_content():
-        invocation.input_messages = _interactions_input_to_messages(
-            _get_field(request, "input")
+    with suppress_extraction_errors():
+        invocation.tool_definitions = _maybe_get_tool_definitions(
+            _get_field(request, "tools")
         )
-        if system_instruction := _get_field(request, "system_instruction"):
-            invocation.system_instruction = [
-                TextPart(content=system_instruction)
-            ]
+        _apply_interaction_request_attributes(invocation, request)
+
+        if telemetry_handler.should_capture_content():
+            invocation.input_messages = _interactions_input_to_messages(
+                _get_field(request, "input")
+            )
+            if system_instruction := _get_field(request, "system_instruction"):
+                invocation.system_instruction = [
+                    TextPart(content=system_instruction)
+                ]
 
     return invocation
 

@@ -9,7 +9,8 @@ import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from functools import lru_cache, partial
 from typing import Any
@@ -119,6 +120,24 @@ def fq_exception_type(exception: BaseException) -> str:
     if module and module != "builtins":
         return f"{module}.{qualname}"
     return qualname
+
+
+@contextmanager
+def suppress_extraction_errors() -> Iterator[None]:
+    """Log and drop an exception raised while copying request data onto an invocation.
+
+    Instrumentations fill in request attributes after the invocation has
+    started and before the wrapped call's error handling, so an unexpected
+    request shape must not escape from there and leave the invocation open.
+    Wrap only the extraction, never the wrapped call itself. Attributes set
+    before the error stay, and the caller still finishes the invocation. As a
+    decorator it only covers synchronous functions; exceptions from awaiting a
+    coroutine escape it.
+    """
+    try:
+        yield
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.debug("Failed to extract request attributes", exc_info=True)
 
 
 class _GenAiJsonEncoder(json.JSONEncoder):

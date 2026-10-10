@@ -38,6 +38,7 @@ from opentelemetry.util.genai.types import (
     ModalityTokens,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import suppress_extraction_errors
 from opentelemetry.util.types import AttributeValue
 
 from ._error_type import resolve_error_type
@@ -506,28 +507,31 @@ def _create_instrumented_generate_content(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             ) as invocation:
-                _apply_request_attributes(
-                    wrapped_config,
-                    generate_content_config_key_allowlist,
-                    invocation,
-                )
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
-                )
-                invocation.tool_definitions = _maybe_get_tool_definitions(
-                    wrapped_config
-                )
-
-                if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
+                with suppress_extraction_errors():
+                    _apply_request_attributes(
+                        wrapped_config,
+                        generate_content_config_key_allowlist,
+                        invocation,
                     )
-                    if wrapped_config.system_instruction:
-                        invocation.system_instruction = to_system_instructions(
-                            content=transformers.t_contents(
-                                wrapped_config.system_instruction
-                            )[0]
+                    invocation.attributes.update(
+                        _get_extra_generate_content_attributes()
+                    )
+                    invocation.tool_definitions = _maybe_get_tool_definitions(
+                        wrapped_config
+                    )
+
+                    if telemetry_handler.should_capture_content():
+                        invocation.input_messages = to_input_messages(
+                            contents=transformers.t_contents(contents)
                         )
+                        if wrapped_config.system_instruction:
+                            invocation.system_instruction = (
+                                to_system_instructions(
+                                    content=transformers.t_contents(
+                                        wrapped_config.system_instruction
+                                    )[0]
+                                )
+                            )
                 candidates = []
                 try:
                     response = wrapped(
@@ -665,28 +669,29 @@ def _create_instrumented_generate_content_stream(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             )
-            _apply_request_attributes(
-                wrapped_config,
-                generate_content_config_key_allowlist,
-                invocation,
-            )
-            invocation.attributes.update(
-                _get_extra_generate_content_attributes()
-            )
-            invocation.tool_definitions = _maybe_get_tool_definitions(
-                wrapped_config
-            )
-
-            if telemetry_handler.should_capture_content():
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
+            with suppress_extraction_errors():
+                _apply_request_attributes(
+                    wrapped_config,
+                    generate_content_config_key_allowlist,
+                    invocation,
                 )
-                if wrapped_config.system_instruction:
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(
-                            wrapped_config.system_instruction
-                        )[0]
+                invocation.attributes.update(
+                    _get_extra_generate_content_attributes()
+                )
+                invocation.tool_definitions = _maybe_get_tool_definitions(
+                    wrapped_config
+                )
+
+                if telemetry_handler.should_capture_content():
+                    invocation.input_messages = to_input_messages(
+                        contents=transformers.t_contents(contents)
                     )
+                    if wrapped_config.system_instruction:
+                        invocation.system_instruction = to_system_instructions(
+                            content=transformers.t_contents(
+                                wrapped_config.system_instruction
+                            )[0]
+                        )
             return GenerateContentStreamWrapper(
                 wrapped(
                     model=model,
@@ -737,28 +742,31 @@ def _create_instrumented_async_generate_content(
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             ) as invocation:
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
-                )
-                _apply_request_attributes(
-                    wrapped_config,
-                    generate_content_config_key_allowlist,
-                    invocation,
-                )
-                invocation.tool_definitions = (
-                    await _maybe_get_tool_definitions_async(wrapped_config)
-                )
-
-                if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
+                with suppress_extraction_errors():
+                    invocation.attributes.update(
+                        _get_extra_generate_content_attributes()
                     )
-                    if wrapped_config.system_instruction:
-                        invocation.system_instruction = to_system_instructions(
-                            content=transformers.t_contents(
-                                wrapped_config.system_instruction
-                            )[0]
+                    _apply_request_attributes(
+                        wrapped_config,
+                        generate_content_config_key_allowlist,
+                        invocation,
+                    )
+                    invocation.tool_definitions = (
+                        await _maybe_get_tool_definitions_async(wrapped_config)
+                    )
+
+                    if telemetry_handler.should_capture_content():
+                        invocation.input_messages = to_input_messages(
+                            contents=transformers.t_contents(contents)
                         )
+                        if wrapped_config.system_instruction:
+                            invocation.system_instruction = (
+                                to_system_instructions(
+                                    content=transformers.t_contents(
+                                        wrapped_config.system_instruction
+                                    )[0]
+                                )
+                            )
                 candidates = []
                 try:
                     response = await wrapped(
@@ -820,28 +828,29 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 server_address=server_address,
                 error_type_resolver=resolve_error_type,
             )
-            invocation.attributes.update(
-                _get_extra_generate_content_attributes()
-            )
-            _apply_request_attributes(
-                wrapped_config,
-                generate_content_config_key_allowlist,
-                invocation,
-            )
-            invocation.tool_definitions = (
-                await _maybe_get_tool_definitions_async(wrapped_config)
-            )
-
-            if telemetry_handler.should_capture_content():
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
+            with suppress_extraction_errors():
+                invocation.attributes.update(
+                    _get_extra_generate_content_attributes()
                 )
-                if wrapped_config.system_instruction:
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(
-                            wrapped_config.system_instruction
-                        )[0]
+                _apply_request_attributes(
+                    wrapped_config,
+                    generate_content_config_key_allowlist,
+                    invocation,
+                )
+                invocation.tool_definitions = (
+                    await _maybe_get_tool_definitions_async(wrapped_config)
+                )
+
+                if telemetry_handler.should_capture_content():
+                    invocation.input_messages = to_input_messages(
+                        contents=transformers.t_contents(contents)
                     )
+                    if wrapped_config.system_instruction:
+                        invocation.system_instruction = to_system_instructions(
+                            content=transformers.t_contents(
+                                wrapped_config.system_instruction
+                            )[0]
+                        )
             return AsyncGenerateContentStreamWrapper(
                 await wrapped(
                     model=model,

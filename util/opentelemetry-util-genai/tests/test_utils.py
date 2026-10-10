@@ -62,6 +62,7 @@ from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
     get_signature,
     image_from_url,
+    suppress_extraction_errors,
 )
 
 
@@ -2026,3 +2027,38 @@ class TestArgumentBinding(unittest.TestCase):
             )
             self.assertEqual(val, "fallback")
             mock_bind.assert_not_called()
+
+
+class TestSuppressExtractionErrors(unittest.TestCase):
+    def test_logs_and_drops_an_exception(self):
+        error = KeyError("role")
+        with self.assertLogs(
+            "opentelemetry.util.genai.utils", "DEBUG"
+        ) as logs:
+            with suppress_extraction_errors():
+                raise error
+        (record,) = logs.records
+        self.assertEqual(record.levelname, "DEBUG")
+        self.assertEqual(
+            record.getMessage(), "Failed to extract request attributes"
+        )
+        self.assertIs(record.exc_info[1], error)
+
+    def test_keeps_attributes_set_before_the_exception(self):
+        values = []
+        with suppress_extraction_errors():
+            values.append("model")
+            raise TypeError("unhashable type: 'list'")
+        self.assertEqual(values, ["model"])
+
+    def test_works_as_a_decorator(self):
+        @suppress_extraction_errors()
+        def extract():
+            raise ValueError("could not convert string to float: 'high'")
+
+        self.assertIsNone(extract())
+
+    def test_lets_base_exceptions_through(self):
+        with self.assertRaises(KeyboardInterrupt):
+            with suppress_extraction_errors():
+                raise KeyboardInterrupt

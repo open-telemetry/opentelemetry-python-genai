@@ -11,12 +11,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from portkey_ai import Portkey
+from portkey_ai.api_resources.apis import generation
 
 try:
     from portkey_ai import AsyncPortkey
 except ImportError:
     AsyncPortkey = None  # type: ignore[assignment,misc]
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.portkey import PortkeyInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -289,3 +291,42 @@ async def test_async_prompt_completions_error_handling(
         assert (
             span.attributes.get(ErrorAttributes.ERROR_TYPE) == "TimeoutError"
         )
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise ValueError("no string form")
+
+
+def test_sync_prompt_completions_unprintable_prompt_id_reaches_the_client(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    monkeypatch,
+):
+    sdk_error = ConnectionError("Prompt API unreachable")
+    calls = []
+
+    def create(self, **kwargs):
+        calls.append(kwargs)
+        raise sdk_error
+
+    # The SDK formats prompt_id into its URL before _post, so stub create
+    # itself and let the instrumentor wrap the stub.
+    monkeypatch.setattr(generation.Completions, "create", create)
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk")
+        with pytest.raises(ConnectionError) as raised:
+            p.prompts.completions.create(prompt_id=_Unprintable())
+
+        assert raised.value is sdk_error
+        assert len(calls) == 1
+        (span,) = span_exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.ERROR
+        assert not trace.get_current_span().get_span_context().is_valid

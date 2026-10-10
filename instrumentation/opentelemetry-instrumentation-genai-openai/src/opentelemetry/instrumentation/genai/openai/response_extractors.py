@@ -14,6 +14,7 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
+from opentelemetry.util.genai.utils import suppress_extraction_errors
 
 from ._raw_response import ParsableResponse
 from .utils import (
@@ -806,6 +807,7 @@ def get_fetch_response_creation_kwargs(
     return creation_kwargs
 
 
+@suppress_extraction_errors()
 def apply_request_attributes(
     invocation,
     params: ResponseRequestParams,
