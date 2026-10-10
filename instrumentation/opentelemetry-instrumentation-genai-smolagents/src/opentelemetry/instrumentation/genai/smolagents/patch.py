@@ -38,7 +38,10 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.types import OutputMessage, Role, TextPart
-from opentelemetry.util.genai.utils import bind_arguments
+from opentelemetry.util.genai.utils import (
+    bind_arguments,
+    suppress_extraction_errors,
+)
 
 from ._messages import (
     final_answer_parts,
@@ -214,6 +217,7 @@ def _apply_token_usage(
     invocation.output_tokens = token_usage.output_tokens
 
 
+@suppress_extraction_errors()
 def _record_request(
     handler: TelemetryHandler,
     invocation: InferenceInvocation,
@@ -482,6 +486,7 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
         self._finish_once(error)
 
 
+@suppress_extraction_errors()
 def _record_agent(
     invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
@@ -511,9 +516,10 @@ def _record_agent_run(
     """Record a finished run or wrap a streamed run until it is drained."""
     if capture_content and bound.get("additional_args"):
         # ``run()`` appends ``additional_args`` to ``agent.task``.
-        invocation.input_messages = task_to_input_messages(
-            agent.task or bound.get("task"), bound.get("images")
-        )
+        with suppress_extraction_errors():
+            invocation.input_messages = task_to_input_messages(
+                agent.task or bound.get("task"), bound.get("images")
+            )
 
     if bound.get("stream") and isinstance(result, Generator):
         return _AgentRunStreamWrapper(

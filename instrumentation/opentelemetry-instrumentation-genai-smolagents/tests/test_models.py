@@ -246,33 +246,44 @@ def test_bad_tool_does_not_leak_a_span(
     assert lifecycle.leaked == []
 
 
-@pytest.mark.parametrize(
-    ("method", "conversion"),
-    [
-        ("generate", "to_input_messages"),
-        ("generate", "to_output_message"),
-        ("generate_stream", "to_input_messages"),
-    ],
-)
-def test_a_failed_conversion_finalizes_the_span(
+@pytest.mark.parametrize("method", ["generate", "generate_stream"])
+def test_a_failed_request_conversion_does_not_fail_the_call(
     instrument_with_content,
     span_exporter,
     lifecycle,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
-    conversion: str,
 ) -> None:
     def raise_error(*args: Any, **kwargs: Any) -> Any:
         raise ValueError("unexpected message shape")
 
-    monkeypatch.setattr(patch_module, conversion, raise_error)
+    monkeypatch.setattr(patch_module, "to_input_messages", raise_error)
+
+    model = transformers_model()
+    if method == "generate_stream":
+        list(model.generate_stream(messages=MESSAGES))
+    else:
+        model.generate(messages=MESSAGES)
+
+    (span,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
+    assert span.status.status_code == StatusCode.UNSET
+    assert lifecycle.leaked == []
+
+
+def test_a_failed_response_conversion_finalizes_the_span(
+    instrument_with_content,
+    span_exporter,
+    lifecycle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_error(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("unexpected message shape")
+
+    monkeypatch.setattr(patch_module, "to_output_message", raise_error)
 
     model = transformers_model()
     with pytest.raises(ValueError, match="unexpected message shape"):
-        if method == "generate_stream":
-            model.generate_stream(messages=MESSAGES)
-        else:
-            model.generate(messages=MESSAGES)
+        model.generate(messages=MESSAGES)
 
     (span,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
     assert span.status.status_code == StatusCode.ERROR
