@@ -12,3 +12,8 @@ opentelemetry-instrumentation @ git+https://github.com/open-telemetry/openteleme
 opentelemetry-exporter-otlp-proto-grpc @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=exporter/opentelemetry-exporter-otlp-proto-grpc
 opentelemetry-exporter-otlp-proto-common @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=exporter/opentelemetry-exporter-otlp-proto-common
 opentelemetry-proto @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=opentelemetry-proto
+# The opentelemetry-exporter-otlp meta package (and its proto-http leg) is
+# required by some instrumented libraries (e.g. agentscope, a qwenpaw
+# dependency); pin it from the same commit so the stack stays resolvable.
+opentelemetry-exporter-otlp @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=exporter/opentelemetry-exporter-otlp
+opentelemetry-exporter-otlp-proto-http @ git+https://github.com/open-telemetry/opentelemetry-python@fcbbeb8e4eeb785519c7d2efbe367e8fd79dd0b3#subdirectory=exporter/opentelemetry-exporter-otlp-proto-http

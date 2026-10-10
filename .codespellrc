@@ -4,4 +4,5 @@
 check-hidden = true
 # skipping auto generated folders
 skip = ./.git,./.tox,./.venv,./.mypy_cache,./docs/_build,./target,*/LICENSE,./venv,*/cassettes
-ignore-words-list = ot
+# astroid: a locked transitive dependency name, flagged as "asteroid" in uv.lock
+ignore-words-list = astroid,ot
