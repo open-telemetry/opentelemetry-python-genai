@@ -5,11 +5,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     format_content,
+)
+from opentelemetry.semconv._incubating.attributes.user_attributes import (
+    USER_ID,
 )
 from opentelemetry.util.genai.invocation import (
     LocalAgentInvocation,
@@ -45,8 +49,18 @@ class _AgentStreamMixin:
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
-        if session_id and not self._self_agent_invocation.conversation_id:
+        if (
+            session_id is not None
+            and not self._self_agent_invocation.conversation_id
+        ):
             self._self_agent_invocation.conversation_id = str(session_id)
+
+        user_id = getattr(chunk, "user_id", None)
+        if (
+            user_id is not None
+            and USER_ID not in self._self_agent_invocation.attributes
+        ):
+            self._self_agent_invocation.attributes[USER_ID] = str(user_id)
 
         metrics = getattr(chunk, "metrics", None)
         if metrics is not None:
@@ -185,11 +199,22 @@ class _WorkflowStreamMixin:
     _self_content_parts: list[str]
     _self_completed_content: str | None
     _self_finish_reason: str
+    _self_on_close: Callable[[], Any] | None
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
-        if session_id and not self._self_workflow_invocation.conversation_id:
+        if (
+            session_id is not None
+            and not self._self_workflow_invocation.conversation_id
+        ):
             self._self_workflow_invocation.conversation_id = str(session_id)
+
+        user_id = getattr(chunk, "user_id", None)
+        if (
+            user_id is not None
+            and USER_ID not in self._self_workflow_invocation.attributes
+        ):
+            self._self_workflow_invocation.attributes[USER_ID] = str(user_id)
 
         event_name = str(getattr(chunk, "event", ""))
         chunk_type = type(chunk).__name__
@@ -260,6 +285,9 @@ class _WorkflowStreamMixin:
         else:
             self._self_workflow_invocation.stop()
 
+        if self._self_on_close is not None:
+            self._self_on_close()
+
     def _on_stream_end(self) -> None:
         self._finalize()
 
@@ -275,6 +303,8 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         stream: Any,
         invocation: WorkflowInvocation,
         capture_content: bool,
+        *,
+        on_close: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_workflow_invocation = invocation
@@ -282,6 +312,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_on_close = on_close
 
 
 class AsyncAgnoWorkflowStreamWrapper(
@@ -294,6 +325,8 @@ class AsyncAgnoWorkflowStreamWrapper(
         stream: Any,
         invocation: WorkflowInvocation,
         capture_content: bool,
+        *,
+        on_close: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_workflow_invocation = invocation
@@ -301,3 +334,4 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_on_close = on_close
