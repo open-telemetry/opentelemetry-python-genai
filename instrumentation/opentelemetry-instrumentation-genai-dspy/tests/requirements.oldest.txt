@@ -3,4 +3,5 @@
 
 # The oldest tox factor resolves declared dependencies from pyproject.toml
 # with UV_RESOLUTION=lowest-direct. Pin here only test-only deps.
+# DSPy Embedder requires numpy when called (dspy.clients.embedding.np).
 numpy >= 1.26.0
