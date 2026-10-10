@@ -7,11 +7,13 @@ import asyncio
 import inspect
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from botocore.exceptions import ParamValidationError
 from botocore.stub import Stubber
 
+from opentelemetry import context as context_api
 from opentelemetry.instrumentation.genai.bedrock import patch
 from opentelemetry.instrumentation.genai.bedrock.patch import (
     _handle_converse,
@@ -117,6 +119,41 @@ def _raise(*_args: Any, **_kwargs: Any) -> None:
     raise TypeError("unexpected request shape")
 
 
+def _call_and_check_context(
+    handle: Any, api_params: dict[str, Any], handler: TelemetryHandler
+) -> None:
+    """Call ``handle`` and assert it restores the context it started in.
+
+    The async check runs inside the task, since asyncio.run() discards the
+    task's context.
+    """
+    if not inspect.iscoroutinefunction(handle):
+        before = context_api.get_current()
+        try:
+            handle(
+                _failing_call, _bedrock_client(), (), {}, api_params, handler
+            )
+        finally:
+            assert context_api.get_current() is before
+        return
+
+    async def run() -> None:
+        before = context_api.get_current()
+        try:
+            await handle(
+                _async_failing_call,
+                _bedrock_client(),
+                (),
+                {},
+                api_params,
+                handler,
+            )
+        finally:
+            assert context_api.get_current() is before
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "handle, extractor, api_params",
     [
@@ -175,26 +212,39 @@ def _raise(*_args: Any, **_kwargs: Any) -> None:
 def test_request_extraction_error_does_not_fail_the_call(
     tracer_provider, span_exporter, monkeypatch, handle, extractor, api_params
 ) -> None:
-    monkeypatch.setattr(patch, extractor, _raise)
+    failing_extractor = Mock(side_effect=TypeError("unexpected request shape"))
+    monkeypatch.setattr(patch, extractor, failing_extractor)
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    is_async = inspect.iscoroutinefunction(handle)
 
     with pytest.raises(_SdkError) as raised:
-        result = handle(
-            _async_failing_call if is_async else _failing_call,
-            _bedrock_client(),
-            (),
-            {},
-            api_params,
-            handler,
-        )
-        if is_async:
-            asyncio.run(result)
+        _call_and_check_context(handle, api_params, handler)
+
+    assert raised.value is _SDK_ERROR
+    failing_extractor.assert_called_once()
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes[ErrorAttributes.ERROR_TYPE].endswith("_SdkError")
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise ValueError("no string form")
+
+
+@pytest.mark.parametrize(
+    "handle", [patch._handle_invoke_agent, patch._handle_async_invoke_agent]
+)
+def test_unprintable_agent_id_does_not_fail_the_call(
+    tracer_provider, span_exporter, handle
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    with pytest.raises(_SdkError) as raised:
+        _call_and_check_context(handle, {"agentId": _Unprintable()}, handler)
 
     assert raised.value is _SDK_ERROR
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
-    assert span.attributes[ErrorAttributes.ERROR_TYPE].endswith("_SdkError")
 
 
 def test_request_extraction_error_keeps_a_successful_call(
@@ -236,10 +286,12 @@ def test_converse_malformed_request_reaches_botocore_validation(
             ],
         }
     ]
+    before = context_api.get_current()
     with pytest.raises(ParamValidationError):
         bedrock_client.converse(
             modelId="amazon.nova-micro-v1:0", messages=messages
         )
+    assert context_api.get_current() is before
 
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
