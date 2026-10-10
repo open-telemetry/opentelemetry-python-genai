@@ -13,7 +13,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.util.genai.completion_hook import _NoOpCompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
@@ -25,7 +24,6 @@ from opentelemetry.util.genai.types import (
 
 _CAPTURE_EVENT_ENV = {
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY",
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT: "true",
 }
 
 

@@ -265,6 +265,7 @@ def fixture_enable_completion_hook(request):
 
 @pytest.fixture(name="internal_instrumentation_setup", autouse=True)
 def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
+    orig_env = os.environ.copy()
     if enable_completion_hook == "enable_completion_hook":
         os.environ.update(
             {
@@ -275,6 +276,8 @@ def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
     instrumentor.instrument()
     yield
     instrumentor.uninstrument()
+    os.environ.clear()
+    os.environ.update(orig_env)
 
 
 @pytest.fixture(name="otel_mocker", autouse=True)
@@ -477,7 +480,10 @@ def fixture_generate_content_stream(client, is_async):
 )
 @pytest.mark.vcr
 def test_upload_hook_non_streaming(
-    model, generate_content, otel_mocker: OTelMocker
+    model,
+    generate_content,
+    setup_content_recording,
+    otel_mocker: OTelMocker,
 ):
     expected_input = [
         {
@@ -509,14 +515,22 @@ def test_upload_hook_non_streaming(
     )
     time.sleep(2)
 
-    event = otel_mocker.get_event_named(
-        "gen_ai.client.inference.operation.details"
-    )
-    assert_fsspec_equal(
-        event.attributes["gen_ai.input.messages_ref"], expected_input
-    )
+    if setup_content_recording == "SPAN_AND_EVENT":
+        event = otel_mocker.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        assert_fsspec_equal(
+            event.attributes["gen_ai.input.messages_ref"], expected_input
+        )
+    else:
+        otel_mocker.assert_does_not_have_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
 
     span = otel_mocker.get_span_named(f"generate_content {model}")
+    assert_fsspec_equal(
+        span.attributes["gen_ai.input.messages_ref"], expected_input
+    )
     assert_fsspec_equal(
         span.attributes["gen_ai.output.messages_ref"], expected_output
     )

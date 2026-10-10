@@ -221,6 +221,5 @@ def instrument_event_only(tracer_provider, logger_provider, meter_provider):
         logger_provider=logger_provider,
         meter_provider=meter_provider,
         content_capture="EVENT_ONLY",
-        emit_event=True,
     ) as instrumentor:
         yield instrumentor

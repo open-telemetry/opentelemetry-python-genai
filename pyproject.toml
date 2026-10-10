@@ -34,12 +34,12 @@ package = false # https://docs.astral.sh/uv/reference/settings/#package
 required-version = ">=0.6.0"
 # crewai hard-pins the OpenTelemetry core stack to a narrow window
 # (opentelemetry-api/-sdk >=1.42,<1.43) that can't coexist with this
-# workspace's ~=1.43 floor. Override crewai's caps so the workspace lock
+# workspace's ~=1.45 floor. Override crewai's caps so the workspace lock
 # resolves against the versions the util packages require. This is the
 # lock-time analog of the conformance-only UV_OVERRIDE wired in tox.ini.
 override-dependencies = [
-  "opentelemetry-api ~= 1.43",
-  "opentelemetry-sdk ~= 1.43",
+  "opentelemetry-api ~= 1.45",
+  "opentelemetry-sdk ~= 1.45",
 ]
 
 # https://docs.astral.sh/uv/reference/settings/#sources
