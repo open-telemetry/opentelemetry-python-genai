@@ -93,6 +93,7 @@ class TelemetryHandler:
         completion_hook: CompletionHook | None = None,
         instrumentation_scope_name: str | None = None,
         instrumentation_scope_version: str | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
     ):
         """Creates a new telemetry handler.
 
@@ -104,6 +105,9 @@ class TelemetryHandler:
                 backwards compatibility.
             instrumentation_scope_version: the version of the instrumentation
                 library, reported as the instrumentation scope version.
+            content_capturing_mode: overrides the environment-configured
+                content-capturing mode. When None, the value is read from
+                OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
         """
         schema_url = Schemas.V1_37_0.value
         # The scope name and version must describe the same library, so a
@@ -132,7 +136,11 @@ class TelemetryHandler:
             logger_provider,
             schema_url=schema_url,
         )
-        self._content_capturing_mode = get_content_capturing_mode()
+        self._content_capturing_mode = (
+            get_content_capturing_mode()
+            if content_capturing_mode is None
+            else content_capturing_mode
+        )
         if completion_hook is None or isinstance(
             completion_hook, (_NoOpCompletionHook, _SafeCompletionHook)
         ):
