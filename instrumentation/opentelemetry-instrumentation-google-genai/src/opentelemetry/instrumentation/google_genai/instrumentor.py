@@ -5,6 +5,7 @@ from collections.abc import Collection
 from typing import Any
 
 from opentelemetry._logs import get_logger_provider
+from opentelemetry.instrumentation.google_genai.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.metrics import get_meter_provider
 from opentelemetry.trace import get_tracer_provider
@@ -27,12 +28,16 @@ from .interactions import (
 
 
 class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
+    # BaseInstrumentor is a singleton: __init__ re-runs on the existing
+    # instance, so snapshots live on the class and are never reset here.
+    _generate_content_snapshot: object | None = None
+    _interactions_snapshot: object | None = None
+    _embedding_snapshot: object | None = None
+
     def __init__(
         self, generate_content_config_key_allowlist: AllowList | None = None
     ):
-        self._generate_content_snapshot = None
-        self._interactions_snapshot = None
-        self._embedding_snapshot = None
+        super().__init__()
         self._generate_content_config_key_allowlist = (
             generate_content_config_key_allowlist
             or AllowList.from_env(
@@ -62,6 +67,8 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             meter_provider=meter_provider,
             logger_provider=logger_provider,
             completion_hook=completion_hook,
+            instrumentation_scope_name=__package__,
+            instrumentation_scope_version=__version__,
         )
         self._generate_content_snapshot = instrument_generate_content(
             telemetry_handler,
@@ -73,6 +80,12 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
         self._embedding_snapshot = instrument_embeddings(telemetry_handler)
 
     def _uninstrument(self, **kwargs: Any):
-        uninstrument_generate_content(self._generate_content_snapshot)
-        uninstrument_interactions(self._interactions_snapshot)
-        uninstrument_embeddings(self._embedding_snapshot)
+        if self._generate_content_snapshot is not None:
+            uninstrument_generate_content(self._generate_content_snapshot)
+            self._generate_content_snapshot = None
+        if self._interactions_snapshot is not None:
+            uninstrument_interactions(self._interactions_snapshot)
+            self._interactions_snapshot = None
+        if self._embedding_snapshot is not None:
+            uninstrument_embeddings(self._embedding_snapshot)
+            self._embedding_snapshot = None

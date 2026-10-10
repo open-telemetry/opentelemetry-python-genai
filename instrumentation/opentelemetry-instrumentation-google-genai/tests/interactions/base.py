@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 import unittest.mock
 from typing import Any
@@ -39,7 +40,11 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 
 from ..common.base import TestCase as CommonTestCaseBase
-from .util import create_mock_completed_event, create_mock_interaction
+from .util import (
+    create_mock_completed_event,
+    create_mock_content_event,
+    create_mock_interaction,
+)
 
 
 class TestCase(CommonTestCaseBase):
@@ -69,10 +74,12 @@ class TestCase(CommonTestCaseBase):
         interaction = create_mock_interaction(**kwargs)
         self._interactions.append(interaction)
 
-    def configure_exception(self, e: Exception) -> None:
+    def configure_exception(self, e: BaseException) -> None:
         self._create_and_install_mocks(e)
 
-    def _create_and_install_mocks(self, e: Exception | None = None) -> None:
+    def _create_and_install_mocks(
+        self, e: BaseException | None = None
+    ) -> None:
         if self._create_mock is not None:
             return
         self.reset_client()
@@ -81,7 +88,7 @@ class TestCase(CommonTestCaseBase):
         self._install_mocks()
 
     def _create_mock_impl(
-        self, e: Exception | None = None
+        self, e: BaseException | None = None
     ) -> unittest.mock.MagicMock:
         mock = unittest.mock.MagicMock()
 
@@ -94,8 +101,9 @@ class TestCase(CommonTestCaseBase):
                 self._interaction_index += 1
 
             if kwargs.get("stream"):
+                content_event = create_mock_content_event()
                 completed_event = create_mock_completed_event(result)
-                return [completed_event]
+                return [content_event, completed_event]
             return result
 
         mock.side_effect = e or _default_impl
@@ -209,6 +217,73 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(span.attributes["error.type"], "ValueError")
         self.assertEqual(event.attributes["error.type"], "ValueError")
 
+    def test_streaming_request_exception_records_error(self) -> None:
+        self.configure_exception(ValueError("stream request failed"))
+        with self.assertRaises(ValueError):
+            self.run_streaming_interaction(
+                model="gemini-2.5-flash",
+                input="Does this work?",
+                stream=True,
+            )
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(span.attributes["error.type"], "ValueError")
+        self.assertEqual(event.attributes["error.type"], "ValueError")
+
+    def test_cancelled_request_records_error(self) -> None:
+        self.configure_exception(asyncio.CancelledError())
+        with self.assertRaises(asyncio.CancelledError):
+            self.run_interaction(
+                model="gemini-2.5-flash", input="Does this work?"
+            )
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            span.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+        self.assertEqual(
+            event.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+
+    def test_cancelled_streaming_request_records_error(self) -> None:
+        self.configure_exception(asyncio.CancelledError())
+        with self.assertRaises(asyncio.CancelledError):
+            self.run_streaming_interaction(
+                model="gemini-2.5-flash",
+                input="Does this work?",
+                stream=True,
+            )
+        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.otel.assert_has_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertEqual(
+            span.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+        self.assertEqual(
+            event.attributes["error.type"],
+            "asyncio.exceptions.CancelledError",
+        )
+
     def test_generated_span_has_vertex_ai_system_when_configured(self) -> None:
         self.set_use_vertex(True)
         self.configure_valid_interaction()
@@ -229,6 +304,38 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 15)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 25)
 
+    def test_generated_span_counts_modality_tokens(self) -> None:
+        self.configure_valid_interaction(
+            input_tokens=15,
+            output_tokens=25,
+            input_tokens_by_modality=[
+                {"modality": "text", "tokens": 10},
+                {"modality": "image", "tokens": 5},
+            ],
+            output_tokens_by_modality=[
+                {"modality": "text", "tokens": 20},
+                {"modality": "audio", "tokens": 5},
+            ],
+            cached_tokens_by_modality=[
+                {"modality": "text", "tokens": 3},
+            ],
+        )
+        self.run_interaction(model="gemini-2.5-flash", input="Some input")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 15)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 25)
+        self.assertEqual(span.attributes["gen_ai.usage.text.input_tokens"], 10)
+        self.assertEqual(span.attributes["gen_ai.usage.image.input_tokens"], 5)
+        self.assertEqual(
+            span.attributes["gen_ai.usage.text.output_tokens"], 20
+        )
+        self.assertEqual(
+            span.attributes["gen_ai.usage.audio.output_tokens"], 5
+        )
+        self.assertEqual(
+            span.attributes["gen_ai.usage.text.cache_read.input_tokens"], 3
+        )
+
     @patch.dict(
         "os.environ",
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
@@ -245,11 +352,11 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello interactions!","type":"text"}]}]',
+            '[{"role":"user","parts":[{"content":"Hello interactions!","type":"text"}],"name":null}]',
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":"stop"}]',
+            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":"stop","name":null}]',
         )
 
     @patch.dict(
@@ -285,13 +392,19 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].interaction.id, "stream-id-1")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].interaction.id, "stream-id-1")
 
         self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_to_first_chunk"
+        )
+        self.otel.assert_has_metrics_data_named(
+            "gen_ai.client.operation.time_per_output_chunk"
+        )
 
     def test_generates_agent_span(self) -> None:
         self.configure_valid_interaction()
@@ -320,8 +433,8 @@ class TestCase(CommonTestCaseBase):
             input="Streaming test",
             stream=True,
         )
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].interaction.id, "stream-id-2")
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].interaction.id, "stream-id-2")
 
         self.otel.assert_has_span_named("invoke_agent my_agent")
         span = self.otel.get_span_named("invoke_agent my_agent")
@@ -384,6 +497,28 @@ class TestCase(CommonTestCaseBase):
             span.attributes["gen_ai.tool.definitions"],
             '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
         )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"},
+    )
+    def test_tool_definitions_omitted_without_content_capture(
+        self,
+    ) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input="Test dict tool",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "dict_tool",
+                    "description": "Dict tool desc",
+                }
+            ],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertNotIn("gen_ai.tool.definitions", span.attributes)
 
     def test_interaction_with_builtin_tools_records_definitions(
         self,

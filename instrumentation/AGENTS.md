@@ -65,3 +65,9 @@ Before emitting an inference (`chat`) or `embeddings` span, ask:
 - **Yes** → emit an `invoke_workflow` span around the library API that runs the workflow.
 - **No** → don't emit a workflow span. A single agent run or a plain chain of calls is not an AI
   workflow.
+
+## Exception handling
+
+- When catching exceptions from an underlying library after starting telemetry,
+  catch `BaseException`, not `Exception`, so cancellation and interrupts
+  finalize the invocation before the original exception is re-raised.

@@ -4,7 +4,10 @@
 import functools
 import inspect
 import json
+import logging
 from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from google.genai.types import (
@@ -14,8 +17,11 @@ from google.genai.types import (
 )
 
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.utils import bind_arguments
+from opentelemetry.util.types import AnyValue
 
 ToolFunction = Callable[..., Any]
+_logger = logging.getLogger(__name__)
 
 
 def _is_primitive(value):
@@ -39,76 +45,86 @@ def _to_otel_value(python_value):
     return repr(python_value)
 
 
-# There is no canonical way to serialize a Python object to a span attribute value.
-# Span attribute values currently must be one of the primitive types, or a homogeneous list of primitive types.
-# In the future the value will be expanded to include None, heterogeneous lists of primitive types, and a Map of these types.
-# See https://github.com/open-telemetry/opentelemetry-specification/pull/4485
-def _get_function_args(wrapped_function, function_args, function_kwargs):
-    """Records the details about a function invocation as span attributes."""
-    function_arg_attr = {}
-    signature = inspect.signature(wrapped_function)
-    params = list(signature.parameters.values())
-    for index, entry in enumerate(function_args):
-        param_name = f"args[{index}]"
-        if index < len(params):
-            param_name = params[index].name
-        function_arg_attr[f"code.function.parameters.{param_name}.type"] = (
-            type(entry).__name__
+def _snapshot_tool_arguments(
+    tool_function: ToolFunction,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> dict[str, AnyValue] | None:
+    # ToolInvocation serializes at span end, after the tool may mutate its inputs.
+    try:
+        bound = deepcopy(
+            bind_arguments(tool_function, args, kwargs, apply_defaults=False)
         )
-        function_arg_attr[f"code.function.parameters.{param_name}.value"] = (
-            _to_otel_value(entry)
-        )
-    for key, value in function_kwargs.items():
-        function_arg_attr[f"code.function.parameters.{key}.type"] = type(
-            value
-        ).__name__
-        function_arg_attr[f"code.function.parameters.{key}.value"] = (
-            _to_otel_value(value)
-        )
-    return function_arg_attr
+        return {
+            name: _normalize_tool_argument(value)
+            for name, value in bound.items()
+        }
+    except Exception:
+        _logger.warning("Failed to snapshot tool arguments", exc_info=True)
+        return None
+
+
+def _normalize_tool_argument(value: object) -> AnyValue:
+    if value is None or isinstance(value, (str, int, bool, float, bytes)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_normalize_tool_argument(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _normalize_tool_argument(item) for key, item in value.items()
+        }
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _normalize_tool_argument(model_dump())
+    if is_dataclass(value) and not isinstance(value, type):
+        return _normalize_tool_argument(asdict(value))
+    if hasattr(value, "__dict__"):
+        return _normalize_tool_argument(value.__dict__)
+    return _to_otel_value(value)
 
 
 def _wrap_tool_function(
     tool_function: ToolFunction,
     telemetry_handler: TelemetryHandler,
-):
+) -> ToolFunction:
     if inspect.iscoroutinefunction(tool_function):
 
         @functools.wraps(tool_function)
-        async def wrapped_function(*args, **kwargs):
-            # Always json.dumps. First we convert args / result to something that we can serialize, then we serialize.
-            # The return value of _to_otel_value could be a dict, which currently cannot be a span attribute..
-            # In the future that could change (see https://github.com/open-telemetry/opentelemetry-specification/pull/4485), and we could possibly stop using json.dumps here.
+        async def async_wrapped_function(
+            *args: object, **kwargs: object
+        ) -> Any:
             with telemetry_handler.tool(
                 tool_function.__name__,
-                tool_description=tool_function.__doc__,
             ) as tool_invocation:
+                tool_invocation.tool_description = tool_function.__doc__
                 # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.arguments = json.dumps(
-                        _get_function_args(tool_function, args, kwargs)
+                if tool_invocation.should_capture_content:
+                    tool_invocation.arguments = _snapshot_tool_arguments(
+                        tool_function, args, kwargs
                     )
                 result = await tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.tool_result = json.dumps(
                         _to_otel_value(result)
                     )
             return result
+
+        return async_wrapped_function
     else:
 
         @functools.wraps(tool_function)
-        def wrapped_function(*args, **kwargs):
+        def wrapped_function(*args: object, **kwargs: object) -> Any:
             with telemetry_handler.tool(
                 tool_function.__name__,
-                tool_description=tool_function.__doc__,
             ) as tool_invocation:
+                tool_invocation.tool_description = tool_function.__doc__
                 # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.arguments = json.dumps(
-                        _get_function_args(tool_function, args, kwargs)
+                if tool_invocation.should_capture_content:
+                    tool_invocation.arguments = _snapshot_tool_arguments(
+                        tool_function, args, kwargs
                     )
                 result = tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
+                if tool_invocation.should_capture_content:
                     tool_invocation.tool_result = json.dumps(
                         _to_otel_value(result)
                     )

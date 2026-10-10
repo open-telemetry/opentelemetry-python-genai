@@ -22,7 +22,9 @@ from opentelemetry.instrumentation.genai.anthropic import AnthropicInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 

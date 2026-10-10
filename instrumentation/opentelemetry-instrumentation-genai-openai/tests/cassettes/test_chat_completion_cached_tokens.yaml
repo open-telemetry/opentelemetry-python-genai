@@ -1,0 +1,166 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. "
+          },
+          {
+            "role": "user",
+            "content": "Reply with OK only."
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "max_tokens": 8,
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "OK",
+                "refusal": null,
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789061303,
+          "id": "chatcmpl-EMcrPvGU3rnb43ElTShh8cQiv4Bdj",
+          "model": "gpt-4o-mini-2024-07-18",
+          "object": "chat.completion",
+          "service_tier": "default",
+          "system_fingerprint": "fp_861cf8a3da",
+          "usage": {
+            "completion_tokens": 2,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "prompt_tokens": 1457,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 0
+            },
+            "total_tokens": 1459
+          }
+        }
+    headers:
+      Content-Type:
+      - application/json
+      Set-Cookie: test_set_cookie
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      x-request-id:
+      - req_cache_read
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. This is stable context for an OpenTelemetry prompt caching test. "
+          },
+          {
+            "role": "user",
+            "content": "Reply with OK only."
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "max_tokens": 8,
+        "stream": false
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "message": {
+                "annotations": [],
+                "content": "OK",
+                "refusal": null,
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1789061305,
+          "id": "chatcmpl-EMcrRZBuVtBoHrjD1Ek14aYtTeB11",
+          "model": "gpt-4o-mini-2024-07-18",
+          "object": "chat.completion",
+          "service_tier": "default",
+          "system_fingerprint": "fp_861cf8a3da",
+          "usage": {
+            "completion_tokens": 2,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": 0,
+              "audio_tokens": 0,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "prompt_tokens": 1457,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "cached_tokens": 1408
+            },
+            "total_tokens": 1459
+          }
+        }
+    headers:
+      Content-Type:
+      - application/json
+      Set-Cookie: test_set_cookie
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+      x-request-id:
+      - req_cache_read
+    status:
+      code: 200
+      message: OK
+version: 1

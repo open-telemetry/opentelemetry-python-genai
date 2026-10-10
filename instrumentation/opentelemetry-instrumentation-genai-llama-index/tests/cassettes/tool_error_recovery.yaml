@@ -1,0 +1,351 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run the tool"
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "parallel_tool_calls": true,
+        "stream": false,
+        "temperature": 0.1,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "broken_tool",
+              "description": "broken_tool() -> 'None'\nRaise a tool failure.",
+              "parameters": {
+                "properties": {},
+                "type": "object",
+                "additionalProperties": false
+              },
+              "strict": false
+            }
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '376'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 2.50.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 2.50.0
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.2
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-EGE9sQCRcNNeGqWVmvtbvRMFbA1aU",
+          "object": "chat.completion",
+          "created": 1787536380,
+          "model": "gpt-4o-mini-2024-07-18",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "call_yvt773Eu9Wi7e4E9CuMAAkUm",
+                    "type": "function",
+                    "function": {
+                      "name": "broken_tool",
+                      "arguments": "{}"
+                    }
+                  }
+                ],
+                "refusal": null,
+                "annotations": []
+              },
+              "logprobs": null,
+              "finish_reason": "tool_calls"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 46,
+            "completion_tokens": 11,
+            "total_tokens": 57,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": "fp_e7eb9f2bc2"
+        }
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a2feb88269c9f797-EWR
+      connection:
+      - keep-alive
+      content-length:
+      - '1066'
+      content-type:
+      - application/json
+      date:
+      - Mon, 24 Aug 2026 01:53:01 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '626'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9999'
+      x-ratelimit-remaining-tokens:
+      - '199995'
+      x-ratelimit-reset-requests:
+      - 8.64s
+      x-ratelimit-reset-tokens:
+      - 1ms
+      x-request-id:
+      - req_dc95609f9091421fb844b426358173a3
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run the tool"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "type": "function",
+                "function": {
+                  "name": "broken_tool",
+                  "arguments": "{}"
+                },
+                "id": "call_yvt773Eu9Wi7e4E9CuMAAkUm"
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "tool failed",
+            "tool_call_id": "call_yvt773Eu9Wi7e4E9CuMAAkUm"
+          }
+        ],
+        "model": "gpt-4o-mini",
+        "parallel_tool_calls": true,
+        "stream": false,
+        "temperature": 0.1,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "broken_tool",
+              "description": "broken_tool() -> 'None'\nRaise a tool failure.",
+              "parameters": {
+                "properties": {},
+                "type": "object",
+                "additionalProperties": false
+              },
+              "strict": false
+            }
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - Bearer test_openai_api_key
+      connection:
+      - keep-alive
+      content-length:
+      - '622'
+      content-type:
+      - application/json
+      cookie:
+      - test_cookie
+      host:
+      - api.openai.com
+      user-agent:
+      - AsyncOpenAI/Python 2.50.0
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 2.50.0
+      x-stainless-read-timeout:
+      - '60.0'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.2
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "id": "chatcmpl-EGE9t6hhyFiwTO5eVk3dLOvcyIWEs",
+          "object": "chat.completion",
+          "created": 1787536381,
+          "model": "gpt-4o-mini-2024-07-18",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "It seems that the tool is currently unavailable due to a failure. If you have any other requests or need assistance with something else, feel free to let me know!",
+                "refusal": null,
+                "annotations": []
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 67,
+            "completion_tokens": 34,
+            "total_tokens": 101,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": "fp_e7eb9f2bc2"
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a2feb88fbb61f797-EWR
+      connection:
+      - keep-alive
+      content-length:
+      - '970'
+      content-type:
+      - application/json
+      date:
+      - Mon, 24 Aug 2026 01:53:02 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '821'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '10000'
+      x-ratelimit-limit-tokens:
+      - '200000'
+      x-ratelimit-remaining-requests:
+      - '9998'
+      x-ratelimit-remaining-tokens:
+      - '199990'
+      x-ratelimit-reset-requests:
+      - 15.919s
+      x-ratelimit-reset-tokens:
+      - 3ms
+      x-request-id:
+      - req_4dbef0040f5449ddba51b7f2c126fb49
+    status:
+      code: 200
+      message: OK
+version: 1

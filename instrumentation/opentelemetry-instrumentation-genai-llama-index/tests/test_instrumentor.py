@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from llama_index.core.instrumentation import get_dispatcher
+
 from opentelemetry.instrumentation.genai.llama_index import (
     LlamaIndexInstrumentor,
 )
@@ -21,6 +23,7 @@ def test_instrument_initializes_handler() -> None:
     instrumentor.instrument()
     try:
         assert instrumentor._handler is not None
+        assert instrumentor._span_handler in get_dispatcher().span_handlers
     finally:
         instrumentor.uninstrument()
 
@@ -41,3 +44,11 @@ def test_double_uninstrument_is_noop() -> None:
     instrumentor.instrument()
     instrumentor.uninstrument()
     instrumentor.uninstrument()
+
+
+def test_uninstrument_removes_span_handler() -> None:
+    instrumentor = LlamaIndexInstrumentor()
+    instrumentor.instrument()
+    span_handler = instrumentor._span_handler
+    instrumentor.uninstrument()
+    assert span_handler not in get_dispatcher().span_handlers

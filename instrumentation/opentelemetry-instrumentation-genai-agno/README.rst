@@ -25,6 +25,17 @@ Usage
     # Instrument Agno
     AgnoInstrumentor().instrument()
 
+Supported Operations
+--------------------
+
+The instrumentation automatically traces:
+
+* ``Agent.run`` and ``Agent.arun``
+* ``Team.run`` and ``Team.arun``
+* ``Workflow.run`` and ``Workflow.arun``
+* ``FunctionCall.execute`` and ``FunctionCall.aexecute``
+* ``Knowledge.search`` and ``Knowledge.asearch``
+
 Configuration
 -------------
 

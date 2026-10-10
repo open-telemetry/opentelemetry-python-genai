@@ -10,11 +10,12 @@
   "pip_requirements": {
     // Default pip_requirements fileMatch only allows [\w-]* between
     // "requirements" and ".txt", so per-instrumentation
-    // requirements.latest.txt and requirements.<lib>-v<N>.txt files are
+    // requirements.latest.txt and requirements.v<N>.txt files are
     // skipped without this.
     "managerFilePatterns": [
       "/(^|/)requirements\\.txt$/",
       "/(^|/)requirements\\.latest\\.txt$/",
+      "/(^|/)requirements\\.v\\d+\\.txt$/",
       "/(^|/)requirements\\.[\\w-]+-v\\d+\\.txt$/"
     ]
   },
@@ -56,13 +57,6 @@
       "schedule": ["before 8am every weekday"]
     },
     {
-      // jiter >= 0.13 bumps PyO3 to 0.28, which drops PyPy 3.10 support.
-      // Our openai-latest test matrix still includes PyPy 3.10, so pin
-      // jiter to the 0.11.x line until PyPy 3.10 is removed from the matrix.
-      "matchPackageNames": ["jiter"],
-      "allowedVersions": "<0.12"
-    },
-    {
       // pydantic 2.13 bumps PyO3 to 0.28 (via pydantic-core), which drops
       // PyPy 3.10 support. Our openai-latest test matrix still includes
       // PyPy 3.10, so pin pydantic to the 2.12.x line until PyPy 3.10 is
@@ -71,12 +65,20 @@
       "allowedVersions": "<2.13"
     },
     {
-      // requirements.<lib>-v<N>.txt tests the newest release of an older
+      // requirements.<lib>-v<N>.txt or requirements.v<N>.txt tests the newest release of an older
       // major of <lib>, so <lib> itself must stay on that major while the
       // rest of the file keeps updating. Add one rule per such file.
-      "matchFileNames": ["**/requirements.openai-v2.txt"],
+      "matchFileNames": ["**/requirements.v2.txt"],
       "matchPackageNames": ["openai"],
       "allowedVersions": "<3"
+    },
+    {
+      // Keep coverage on the last google-genai release with the legacy Interactions API.
+      "matchFileNames": [
+        "instrumentation/opentelemetry-instrumentation-google-genai/tests/requirements.v2.txt"
+      ],
+      "matchPackageNames": ["google-genai"],
+      "allowedVersions": "<2.9"
     },
     {
       "matchUpdateTypes": ["minor", "major"],

@@ -32,7 +32,9 @@ the openai SDK directly and produces those.
 
 from __future__ import annotations
 
+import json
 import weakref
+from collections.abc import Mapping
 from typing import Any
 
 from agents.tracing import Span, Trace, TracingProcessor
@@ -41,23 +43,30 @@ from agents.tracing.span_data import (
     FunctionSpanData,
 )
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    GenAIInvocation,
+    LocalAgentInvocation,
     ToolInvocation,
+    WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import Error
+from opentelemetry.util.types import AnyValue
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
 # only puts the name in the span name, not as an attribute.
 _WORKFLOW_NAME_ATTR = "gen_ai.workflow.name"
+
+
+def _tool_arguments(raw: str) -> AnyValue:
+    try:
+        parsed: AnyValue = json.loads(raw)
+    except ValueError:
+        return raw
+    return parsed if isinstance(parsed, Mapping) else raw
 
 
 class GenAITracingProcessor(TracingProcessor):
@@ -74,16 +83,23 @@ class GenAITracingProcessor(TracingProcessor):
     def __init__(self, handler: TelemetryHandler, provider: str) -> None:
         self._handler = handler
         self._provider = provider
-        self._invocations: weakref.WeakKeyDictionary[Any, GenAIInvocation] = (
-            weakref.WeakKeyDictionary()
-        )
+        self._invocations: weakref.WeakKeyDictionary[
+            Any, WorkflowInvocation | LocalAgentInvocation | ToolInvocation
+        ] = weakref.WeakKeyDictionary()
 
     def on_trace_start(self, trace: Trace) -> None:
         # ``trace.name`` comes from ``RunConfig.workflow_name`` (default
         # "Agent workflow"). Callers customize it via the agents library's
         # own ``Runner.run(..., run_config=RunConfig(workflow_name=...))``;
         # we don't expose a second knob.
-        invocation = self._handler.workflow(name=trace.name)
+        #
+        # ``group_id`` is public on ``TraceImpl`` but not declared on the
+        # ``Trace`` ABC, hence the getattr.
+        group_id: str | None = getattr(trace, "group_id", None)
+        invocation = self._handler.workflow(
+            name=trace.name,
+            conversation_id=group_id,
+        )
         if trace.name:
             invocation.attributes[_WORKFLOW_NAME_ATTR] = trace.name
         self._invocations[trace] = invocation
@@ -106,15 +122,6 @@ class GenAITracingProcessor(TracingProcessor):
                 name=span_data.name,
                 tool_type="function",
             )
-
-            invocation.arguments = span_data.input
-
-            # ToolInvocation does not include provider in metric attributes
-            # by default; set it so gen_ai.client.operation.duration carries
-            # the required gen_ai.provider.name attribute.
-            invocation.metric_attributes[GenAI.GEN_AI_PROVIDER_NAME] = (
-                self._provider
-            )
             self._invocations[span] = invocation
             return
         # Other span_data types (GenerationSpanData, ResponseSpanData,
@@ -126,9 +133,14 @@ class GenAITracingProcessor(TracingProcessor):
         invocation = self._invocations.pop(span, None)
         if invocation is None:
             return
-        if isinstance(invocation, ToolInvocation) and isinstance(
-            span.span_data, FunctionSpanData
+        if (
+            isinstance(invocation, ToolInvocation)
+            and isinstance(span.span_data, FunctionSpanData)
+            and invocation.should_capture_content
         ):
+            arguments = span.span_data.input
+            if arguments:
+                invocation.arguments = _tool_arguments(arguments)
             output = span.span_data.output
             if output is not None:
                 invocation.tool_result = (

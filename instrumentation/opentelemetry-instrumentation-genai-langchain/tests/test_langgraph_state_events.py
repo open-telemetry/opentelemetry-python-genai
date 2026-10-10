@@ -18,10 +18,13 @@ class _State(TypedDict, total=False):
     approval_status: str
 
 
-def test_persisted_node_delta_emits_correlated_state_event(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["invoke", "ainvoke", "stream", "astream"])
+async def test_persisted_node_delta_emits_correlated_state_event(
     start_instrumentation,
     log_exporter,
     span_exporter,
+    mode,
 ):
     def approve(state: _State) -> _State:
         return {"approval_status": "accepted"}
@@ -33,7 +36,23 @@ def test_persisted_node_delta_emits_correlated_state_event(
     graph = builder.compile(checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "state-event-test"}}
 
-    assert graph.invoke({}, config=config) == {"approval_status": "accepted"}
+    if mode == "ainvoke":
+        result = await graph.ainvoke({}, config=config)
+    elif mode == "invoke":
+        result = graph.invoke({}, config=config)
+    elif mode == "stream":
+        result = list(graph.stream({}, config=config, stream_mode="updates"))
+    else:
+        result = [
+            delta
+            async for delta in graph.astream(
+                {}, config=config, stream_mode="updates"
+            )
+        ]
+    expected = {"approval_status": "accepted"}
+    assert result == (
+        [{"approve": expected}] if mode in ("stream", "astream") else expected
+    )
     assert graph.get_state(config).values == {"approval_status": "accepted"}
 
     state_events = [

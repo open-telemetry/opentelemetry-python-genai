@@ -1,0 +1,86 @@
+interactions:
+- request:
+    body: '{"messages":[{"role":"user","content":"A farmer has 17 sheep and all but
+      9 run away. How many sheep remain? Explain your reasoning."}],"model":"gpt-5.1","max_completion_tokens":1024,"reasoning_effort":"medium","stream":false}'
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '225'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      x-stainless-arch:
+      - other:amd64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Windows
+      x-stainless-package-version:
+      - 3.7.0
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.13.15
+    method: POST
+    uri: https://api.openai.com/v1/chat/completions
+  response:
+    body:
+      string: "{\"choices\":[{\"content_filter_result\":{\"error\":{\"code\":\"content_filter_error\",\"message\":\"The
+        contents are not filtered\"}},\"content_filter_results\":{},\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"annotations\":[],\"content\":\"9
+        sheep remain.\\n\\nReasoning:  \\nThe phrase \u201Call but 9 run away\u201D
+        means that every sheep except 9 of them ran away. So those 9 that did *not*
+        run away are still there.\\n\\nSo the number of sheep remaining is simply
+        9.\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1789141569,\"id\":\"chatcmpl-EMxk1qy1a6rROWsi1Q5cstW9NuvKo\",\"model\":\"gpt-5.1-2025-11-13\",\"object\":\"chat.completion\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"defender_for_ai\":{\"detected\":false,\"filtered\":false,\"details\":{}},\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}],\"routing\":{\"serving_pipereplica\":\"d20260816213152-b4d160c8-default-r2-dp0-default\"},\"service_tier\":\"default\",\"system_fingerprint\":null,\"usage\":{\"completion_tokens\":85,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":19,\"rejected_prediction_tokens\":0},\"latency_checkpoint\":{\"engine_tbt_ms\":10,\"engine_ttft_ms\":310,\"engine_ttlt_ms\":1137,\"pre_inference_ms\":309,\"service_tbt_ms\":10,\"service_ttft_ms\":1235,\"service_ttlt_ms\":2057,\"user_visible_ttft_ms\":926},\"prompt_tokens\":29,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0},\"total_tokens\":114}}\n"
+    headers:
+      content-length:
+      - '1592'
+      content-type:
+      - application/json
+      date:
+      - Fri, 11 Sep 2026 15:46:11 GMT
+      skip-error-remapping:
+      - 'true'
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      x-accel-buffering:
+      - 'no'
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-abusepenalty-active:
+      - 'False'
+      x-ratelimit-key:
+      - gpt-5.1
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '500000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '499971'
+      x-ratelimit-renewalperiod-requests:
+      - '60'
+      x-ratelimit-renewalperiod-tokens:
+      - '60'
+      x-ratelimit-reset-requests:
+      - '0'
+      x-ratelimit-reset-tokens:
+      - '0'
+      x-request-id:
+      - 7fb6ffe3-5fec-4a7a-aafd-0f0657d53f5a
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -18,8 +18,13 @@ from opentelemetry.test_util_genai.conformance import (
     run_conformance,
 )
 
+from .conformance.embedding import EmbeddingScenario
 from .conformance.inference import InferenceScenario
 from .conformance.inference_streaming import InferenceStreamingScenario
+from .conformance.invoke_agent import InvokeAgentScenario
+from .conformance.invoke_model import InvokeModelScenario
+from .conformance.invoke_model_streaming import InvokeModelStreamingScenario
+from .conformance.retrieve import RetrieveScenario
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -29,6 +34,11 @@ from .conformance.tool_calling import ToolCallingScenario
         InferenceScenario(),
         InferenceStreamingScenario(),
         ToolCallingScenario(),
+        InvokeModelScenario(),
+        InvokeModelStreamingScenario(),
+        EmbeddingScenario(),
+        InvokeAgentScenario(),
+        RetrieveScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

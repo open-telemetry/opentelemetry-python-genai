@@ -36,10 +36,6 @@ for the client library instead:
      - the instrumentation or built-in telemetry of the client library the model
        calls (``huggingface_hub``, ``litellm``)
 
-Agent runs (``invoke_agent``) and tool calls (``execute_tool``) are not
-instrumented yet. A model call made inside an agent run still gets a ``chat``
-span, but no agent span sits above it.
-
 ``TransformersModel`` is the only instrumented class with a ``generate_stream``.
 A streamed call gets a ``chat`` span that stays open until the caller drains the
 deltas. This covers both ``stream_outputs=True`` on an agent and a direct
@@ -50,6 +46,10 @@ call also records the
 
 Known gaps:
 
+* A managed agent called from the generated code of a ``CodeAgent`` runs in a
+  worker thread of the local Python executor. That worker does not carry the
+  calling context, so the managed agent's ``invoke_agent`` span starts a trace
+  of its own instead of nesting under the manager's span.
 * A subclass that inherits ``generate`` or ``generate_stream`` from one of the
   three classes above is instrumented. A subclass that overrides one is not: the
   override shadows the patched method, so the call produces no ``chat`` span.
@@ -57,6 +57,7 @@ Known gaps:
   ``gen_ai.response.model``, no ``gen_ai.response.finish_reasons`` and no
   ``server.address``. A runtime in this process returns the generated text and
   the token counts, nothing more. It also listens on no socket.
+* Tool calls (``execute_tool``) are not instrumented yet.
 
 Installation
 ------------
@@ -73,21 +74,13 @@ Usage
     from opentelemetry.instrumentation.genai.smolagents import (
         SmolagentsInstrumentor,
     )
-    from smolagents import TransformersModel
+    from smolagents import CodeAgent, TransformersModel
 
     SmolagentsInstrumentor().instrument()
 
     model = TransformersModel(model_id="HuggingFaceTB/SmolLM2-135M-Instruct")
-    model.generate(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "How many seconds are in a week?"}
-                ],
-            }
-        ]
-    )
+    agent = CodeAgent(tools=[], model=model)
+    agent.run("How many seconds are in a week?")
 
 Configuration
 -------------

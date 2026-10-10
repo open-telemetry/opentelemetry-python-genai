@@ -70,9 +70,6 @@ def _apply_embedding_response_attributes(
         first_embedding = response.embeddings[0]
         if first_embedding.values:
             invocation.dimension_count = len(first_embedding.values)
-            invocation.metric_attributes[
-                GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
-            ] = invocation.dimension_count
 
     # In the future we can get rid of this and the monkey patching of the
     # requests, and use the parsed SDK response instead. See:

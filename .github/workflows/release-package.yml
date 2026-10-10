@@ -7,8 +7,11 @@ on:
         options:
         - opentelemetry-instrumentation-genai-agno
         - opentelemetry-instrumentation-genai-anthropic
+        - opentelemetry-instrumentation-genai-bedrock
+        - opentelemetry-instrumentation-genai-dspy
         - opentelemetry-instrumentation-google-genai
         - opentelemetry-instrumentation-genai-langchain
+        - opentelemetry-instrumentation-genai-llama-index
         - opentelemetry-instrumentation-genai-openai-agents
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-portkey
@@ -25,7 +28,7 @@ run-name: "Release: ${{ inputs.package }}"
 
 jobs:
   build:
-    uses: ./.github/workflows/_release-build.yml
+    uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ inputs.package }}
 
@@ -51,7 +54,7 @@ jobs:
     needs: publish
     permissions:
       contents: write
-    uses: ./.github/workflows/_release-finalize.yml
+    uses: $/.github/workflows/_release-finalize.yml
     with:
       package: ${{ inputs.package }}
       bump_after_release: true

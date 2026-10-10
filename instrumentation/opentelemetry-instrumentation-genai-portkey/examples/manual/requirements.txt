@@ -1,4 +1,4 @@
-portkey-ai>=1.0.0
+portkey-ai>=2.3.4
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp

@@ -20,8 +20,11 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.util.genai.handler import get_telemetry_handler
-from opentelemetry.util.genai.types import Error
+from opentelemetry.util.genai._inference_invocation import (
+    InferenceInvocation,
+)
+from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import ContentCapturingMode, Error
 
 from .test_utils import (
     _create_input_message,
@@ -46,15 +49,15 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(self.log_exporter)
         )
-        self.telemetry_handler = get_telemetry_handler(
+        self.tracer_provider = tracer_provider
+        self.logger_provider = logger_provider
+        self.telemetry_handler = TelemetryHandler(
             tracer_provider=tracer_provider, logger_provider=logger_provider
         )
 
     def tearDown(self):
         self.span_exporter.clear()
         self.log_exporter.clear()
-        if hasattr(get_telemetry_handler, "_default_handler"):
-            delattr(get_telemetry_handler, "_default_handler")
 
     @patch.dict(
         os.environ,
@@ -64,7 +67,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event(self):
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="event-model"
         )
         invocation.input_messages = [_create_input_message("test query")]
@@ -138,6 +145,12 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(log_record.trace_id, span.context.trace_id)
         self.assertEqual(log_record.span_id, span.context.span_id)
 
+        # In EVENT_ONLY mode, messages must not be attached to span
+        span_attrs = span.attributes or {}
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, span_attrs)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, span_attrs)
+        self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, span_attrs)
+
     @patch.dict(
         os.environ,
         {
@@ -150,7 +163,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         chat_generation = _create_output_message("combined response")
         system_instruction = _create_system_instruction("System prompt here")
 
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="combined-model"
         )
         invocation.input_messages = [message]
@@ -208,8 +225,12 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         class TestError(RuntimeError):
             pass
 
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
         message = _create_input_message("error test")
-        invocation = self.telemetry_handler.inference(
+        invocation = handler.inference(
             "test-provider", request_model="error-model"
         )
         invocation.input_messages = [message]
@@ -242,10 +263,14 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_does_not_emit_llm_event_when_emit_event_false(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
         message = _create_input_message("emit false test")
         chat_generation = _create_output_message("emit false response")
 
-        invocation = self.telemetry_handler.inference(
+        invocation = handler.inference(
             "test-provider", request_model="emit-false-model"
         )
         invocation.input_messages = [message]
@@ -264,7 +289,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
     )
     def test_does_not_emit_llm_event_by_default_for_no_content(self):
         """Test that event is not emitted by default when content_capturing is NO_CONTENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="default-model"
         )
         invocation.input_messages = [_create_input_message("default test")]
@@ -285,7 +314,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
     )
     def test_does_not_emit_llm_event_by_default_for_span_only(self):
         """Test that event is not emitted by default when content_capturing is SPAN_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="default-model"
         )
         invocation.input_messages = [_create_input_message("default test")]
@@ -305,8 +338,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event_by_default_for_event_only(self):
-        """Test that event is emitted by default when content_capturing is EVENT_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="default-model"
         )
         invocation.input_messages = [_create_input_message("default test")]
@@ -335,7 +371,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         chat_generation = _create_output_message("span and event response")
         system_instruction = _create_system_instruction("System prompt")
 
-        invocation = self.telemetry_handler.inference(
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
             "test-provider", request_model="span-and-event-model"
         )
         invocation.input_messages = [message]
@@ -356,3 +396,86 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             log_record.event_name, "gen_ai.client.inference.operation.details"
         )
         self.assertIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
+        },
+    )
+    def test_emit_event_determined_at_construction_time(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
+            "test-provider", request_model="event-model"
+        )
+        invocation.input_messages = [_create_input_message("test")]
+        invocation.output_messages = [_create_output_message("response")]
+
+        # Changing os.environ after construction should have no effect
+        with patch.dict(
+            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"}
+        ):
+            invocation.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 1)
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+        },
+    )
+    def test_emit_event_disabled_at_construction_time_not_affected_by_env_change(
+        self,
+    ):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        invocation = handler.inference(
+            "test-provider", request_model="event-model"
+        )
+        invocation.input_messages = [_create_input_message("test")]
+        invocation.output_messages = [_create_output_message("response")]
+
+        # Changing os.environ after construction should not cause event emission
+        with patch.dict(
+            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"}
+        ):
+            invocation.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 0)
+
+    def test_inference_invocation_derives_emit_event_from_content_capturing_mode(
+        self,
+    ):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        inv_enabled = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            self.logger_provider.get_logger("test"),
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        self.assertTrue(inv_enabled._emit_event)
+
+        inv_disabled = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            self.logger_provider.get_logger("test"),
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertFalse(inv_disabled._emit_event)

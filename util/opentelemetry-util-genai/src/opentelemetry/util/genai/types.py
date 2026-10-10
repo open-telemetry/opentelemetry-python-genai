@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
@@ -36,17 +36,14 @@ class ContentCapturingMode(Enum):
 
 @dataclass()
 class GenericPart:
-    """Used for provider-specific message part types that don't match
-    the standard MessagePart types defined in semantic conventions. Set ``type``
-    to the provider-specific type discriminator and carry the payload in
-    ``value`` to explicitly opt-in to non-standard types.
-    This will be removed in a future version when all instrumentations use core types.
+    """Represents an arbitrary message part with any type and properties.
+    This allows for extensibility with custom message part types.
 
-    Per the semconv message schema, ``type`` is a free-form string (the
-    provider's own type name), not a fixed literal."""
+    This model is specified as part of semconv in `GenAI messages Python models - GenericPart
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
 
     type: str
-    value: Any
 
 
 @dataclass()
@@ -157,7 +154,33 @@ class CompactionPart:
     type: Literal["compaction"] = "compaction"
 
 
-Modality = Literal["image", "video", "audio", "document"]
+class Modality(str, Enum):
+    """Well-known content and token modalities.
+
+    Based on the `GenAI messages Python models - Modality
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    Token setters record only ``TEXT``, ``IMAGE``, and ``AUDIO``; other
+    modalities are ignored. Message parts accept all members and plain
+    strings for provider-specific modalities.
+    """
+
+    TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    DOCUMENT = "document"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+ModalityTokens: TypeAlias = Iterable[tuple[Modality | str, int | None]]
+"""A per-modality token breakdown, as ``(modality, token count)`` pairs.
+
+The modality may be a plain string or an enum member carrying one as its
+``value``, so a provider SDK's own enum can be passed straight through.
+Token setters record only text, image, and audio; other modalities are ignored.
+"""
 
 
 @dataclass()
@@ -296,21 +319,47 @@ MessagePart = Union[
 
 
 FinishReason = Literal[
-    "content_filter", "error", "length", "stop", "tool_calls", "compaction"
+    "content_filter", "error", "length", "stop", "tool_call", "compaction"
 ]
+
+
+# Semconv schemas: model/gen-ai/gen-ai-{input,output}-messages.json (pinned by SEMCONV_GENAI_REF).
+class Role(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
+SystemInstructionPart = Union[TextPart, GenericPart]
 
 
 @dataclass()
 class InputMessage:
     role: str
     parts: list[MessagePart]
+    name: str | None = None
 
 
 @dataclass()
 class OutputMessage:
     role: str
     parts: list[MessagePart]
-    finish_reason: str | FinishReason
+    finish_reason: str | FinishReason | None = None
+    """Deprecated. Report finish reasons in ``gen_ai.response.finish_reasons`` instead."""
+    name: str | None = None
+
+
+@dataclass()
+class RetrievalDocument:
+    """Represents a document retrieved from a vector database or search system.
+
+    Mirrors the `GenAI retrieval Python model - RetrievalDocument
+    <https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py>`__.
+    """
+
+    id: str | None = None
+    score: float | None = None
 
 
 # Callback an instrumentor may supply to derive the error.type attribute from a
@@ -342,6 +391,8 @@ class Error:
         )
 
         error_type = type_resolver(exception) if type_resolver else None
+        if error_type is None and hasattr(exception, "_gen_ai_error_type"):
+            error_type = getattr(exception, "_gen_ai_error_type")
         return cls(
             message=str(exception),
             type=error_type or fq_exception_type(exception),

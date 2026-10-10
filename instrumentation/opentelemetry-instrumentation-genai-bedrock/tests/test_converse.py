@@ -14,6 +14,9 @@ from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_converse_response,
 )
 from opentelemetry.semconv._incubating.attributes import (
+    aws_attributes as AwsAttributes,
+)
+from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -24,6 +27,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import GenericPart, TextPart
 
 
 @pytest.mark.vcr
@@ -264,7 +268,9 @@ def test_converse_tool_call_no_content(
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "tool_call",
     )
-    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS in (span.attributes or {})
+    assert GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in (
+        span.attributes or {}
+    )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in (span.attributes or {})
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in (
         span.attributes or {}
@@ -301,85 +307,101 @@ def test_converse_with_invalid_model(
 
 def test_extract_converse_request_no_content(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    invocation = handler.inference(provider="aws.bedrock")
-    extract_converse_request(
-        {
-            "messages": [{"role": "user", "content": [{"text": "hello"}]}],
-            "system": [{"text": "system instruction"}],
-            "inferenceConfig": {"temperature": 0.5},
-            "toolConfig": {
-                "tools": [{"toolSpec": {"name": "get_weather"}}],
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "messages": [{"role": "user", "content": [{"text": "hello"}]}],
+                "system": [{"text": "system instruction"}],
+                "inferenceConfig": {"temperature": 0.5},
+                "toolConfig": {
+                    "tools": [{"toolSpec": {"name": "get_weather"}}],
+                },
             },
-        },
-        invocation,
-        capture_content=False,
-    )
-    assert not invocation.input_messages
-    assert not invocation.system_instruction
-    assert invocation.tool_definitions
-    assert invocation.temperature == 0.5
+            invocation,
+            capture_content=False,
+        )
+        assert not invocation.input_messages
+        assert not invocation.system_instruction
+        assert invocation.tool_definitions
+        assert invocation.temperature == 0.5
 
 
 def test_extract_converse_response_no_content(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    invocation = handler.inference(provider="aws.bedrock")
-    extract_converse_response(
-        {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": "hi"}],
-                }
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_response(
+            {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hi"}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {
+                    "inputTokens": 5,
+                    "outputTokens": 2,
+                    "cacheReadInputTokens": 3,
+                    "cacheWriteInputTokens": 7,
+                },
             },
-            "stopReason": "end_turn",
-            "usage": {
-                "inputTokens": 5,
-                "outputTokens": 2,
-                "cacheReadInputTokens": 3,
-                "cacheWriteInputTokens": 7,
-            },
-        },
-        invocation,
-        capture_content=False,
-    )
-    assert not invocation.output_messages
-    assert invocation.finish_reasons == ["stop"]
-    assert invocation.input_tokens == 5
-    assert invocation.output_tokens == 2
-    assert invocation.cache_read_input_tokens == 3
-    assert invocation.cache_creation_input_tokens == 7
+            invocation,
+            capture_content=False,
+        )
+        assert not invocation.output_messages
+        assert invocation.finish_reasons == ["stop"]
+        assert invocation.input_tokens == 5
+        assert invocation.output_tokens == 2
+        assert invocation.cache_read_input_tokens == 3
+        assert invocation.cache_creation_input_tokens == 7
 
 
 def test_extract_converse_request_top_k_and_seed(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    invocation = handler.inference(provider="aws.bedrock")
-    extract_converse_request(
-        {
-            "inferenceConfig": {"topK": 40, "seed": 123},
-        },
-        invocation,
-    )
-    assert invocation.top_k == 40.0
-    assert invocation.seed == 123
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "inferenceConfig": {"topK": 40, "seed": 123},
+            },
+            invocation,
+        )
+        assert invocation.top_k == 40
+        assert isinstance(invocation.top_k, int)
+        assert invocation.seed == 123
 
-    invocation2 = handler.inference(provider="aws.bedrock")
-    extract_converse_request(
-        {
-            "additionalModelRequestFields": {"top_k": 250, "seed": 456},
-        },
-        invocation2,
-    )
-    assert invocation2.top_k == 250.0
-    assert invocation2.seed == 456
+    with handler.inference(provider="aws.bedrock") as invocation2:
+        extract_converse_request(
+            {
+                "additionalModelRequestFields": {"top_k": 250, "seed": 456},
+            },
+            invocation2,
+        )
+        assert invocation2.top_k == 250
+        assert isinstance(invocation2.top_k, int)
+        assert invocation2.seed == 456
 
-    invocation3 = handler.inference(provider="aws.bedrock")
-    extract_converse_request(
-        {
-            "additionalModelRequestFields": {"inferenceConfig": {"topK": 20}},
-        },
-        invocation3,
-    )
-    assert invocation3.top_k == 20.0
+    with handler.inference(provider="aws.bedrock") as invocation3:
+        extract_converse_request(
+            {
+                "additionalModelRequestFields": {
+                    "inferenceConfig": {"topK": 20}
+                },
+            },
+            invocation3,
+        )
+        assert invocation3.top_k == 20
+        assert isinstance(invocation3.top_k, int)
+
+    with handler.inference(provider="aws.bedrock") as invocation4:
+        extract_converse_request(
+            {
+                "inferenceConfig": {"topK": 0, "seed": 0},
+            },
+            invocation4,
+        )
+        assert invocation4.top_k == 0
+        assert isinstance(invocation4.top_k, int)
+        assert invocation4.seed == 0
 
 
 def test_extract_content_block_reasoning() -> None:
@@ -466,3 +488,160 @@ def test_extract_content_block_generic_parts() -> None:
         part = extract_content_block({key: {"foo": "bar"}})
         assert part is not None
         assert part.type == key
+
+
+def test_extract_content_block_anthropic_blocks() -> None:
+    # Anthropic tool_use block
+    tool_use_part = extract_content_block(
+        {
+            "type": "tool_use",
+            "id": "toolu_123",
+            "name": "get_weather",
+            "input": {"city": "Paris"},
+        }
+    )
+    assert tool_use_part is not None
+    assert tool_use_part.type == "tool_call"
+    assert getattr(tool_use_part, "id") == "toolu_123"
+    assert getattr(tool_use_part, "name") == "get_weather"
+    assert getattr(tool_use_part, "arguments") == {"city": "Paris"}
+
+    # Anthropic tool_result block
+    tool_result_part = extract_content_block(
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_123",
+            "content": "20 degrees",
+        }
+    )
+    assert tool_result_part is not None
+    assert tool_result_part.type == "tool_call_response"
+    assert getattr(tool_result_part, "id") == "toolu_123"
+    assert getattr(tool_result_part, "response") == "20 degrees"
+
+    # Anthropic thinking block
+    thinking_part = extract_content_block(
+        {"type": "thinking", "thinking": "Thinking about the weather"}
+    )
+    assert thinking_part is not None
+    assert thinking_part.type == "reasoning"
+    assert getattr(thinking_part, "content") == "Thinking about the weather"
+
+    # Anthropic base64 image block
+    image_part = extract_content_block(
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "QUJD",
+            },
+        }
+    )
+    assert image_part is not None
+    assert image_part.type == "blob"
+    assert getattr(image_part, "mime_type") == "image/png"
+    assert getattr(image_part, "content") == b"ABC"
+
+
+def test_extract_converse_request_guardrail_and_prompt_variables(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "guardrailConfig": {
+                    "guardrailIdentifier": "sgi5gkybzqak",
+                    "guardrailVersion": "1",
+                },
+                "outputConfig": {"textFormat": "json"},
+                "promptVariables": {
+                    "user_name": {"text": "Alice"},
+                    "language": {"text": "French"},
+                },
+            },
+            invocation,
+            capture_content=True,
+        )
+
+        assert (
+            invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
+            == "sgi5gkybzqak"
+        )
+        assert invocation.output_type == "json"
+        assert (
+            invocation.attributes.get("gen_ai.prompt.variable.user_name")
+            == "Alice"
+        )
+        assert (
+            invocation.attributes.get("gen_ai.prompt.variable.language")
+            == "French"
+        )
+
+
+def test_extract_converse_request_prompt_variables_no_content(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "guardrailConfig": {
+                    "guardrailIdentifier": "sgi5gkybzqak",
+                },
+                "promptVariables": {
+                    "user_name": {"text": "Alice"},
+                },
+            },
+            invocation,
+            capture_content=False,
+        )
+
+        assert (
+            invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
+            == "sgi5gkybzqak"
+        )
+        assert "gen_ai.prompt.variable.user_name" not in invocation.attributes
+
+
+def test_extract_converse_request_system_instruction(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "system": [
+                    {"text": "Be concise"},
+                    {"text": "Answer politely"},
+                ],
+            },
+            invocation,
+        )
+
+        assert invocation.system_instruction == [
+            TextPart(content="Be concise"),
+            TextPart(content="Answer politely"),
+        ]
+
+
+def test_extract_converse_request_system_instruction_generic(
+    tracer_provider,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "system": [
+                    {"text": "Be concise"},
+                    {"guardContent": {"guardrailIdentifier": "gr-123"}},
+                    {"cachePoint": {"type": "default"}},
+                ],
+            },
+            invocation,
+        )
+
+        assert invocation.system_instruction == [
+            TextPart(content="Be concise"),
+            GenericPart(type="guardContent"),
+            GenericPart(type="cachePoint"),
+        ]

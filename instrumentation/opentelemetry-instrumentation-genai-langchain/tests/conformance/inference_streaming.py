@@ -38,8 +38,8 @@ class InferenceStreamingScenario(Scenario):
         "gen_ai.client.operation.time_per_output_chunk",
     )
     # langchain can't populate server.address on chat spans.
-    # TODO: response id and model come from LLMResult.llm_output, which
-    # streaming never sets — drop those two entries once that is fixed.
+    # gen_ai.response.id is absent because the langchain-openai streaming path
+    # does not surface the id the provider sends on every chunk.
     expected_violations = (
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",
@@ -48,10 +48,6 @@ class InferenceStreamingScenario(Scenario):
         ExpectedViolation(
             advice_id="genai_expected_attribute_missing",
             message_substring="gen_ai.response.id",
-        ),
-        ExpectedViolation(
-            advice_id="genai_expected_attribute_missing",
-            message_substring="gen_ai.response.model",
         ),
     )
 

@@ -27,14 +27,6 @@ import yaml
 from google.genai import types
 from vcr.record_mode import RecordMode
 
-try:
-    # These modules are only supported in python >= 3.10
-    from aiohttp.client_exceptions import ClientConnectionError
-    from vcr.stubs import aiohttp_stubs
-except ImportError:
-    ClientConnectionError = None
-    aiohttp_stubs = None
-
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
 )
@@ -261,48 +253,6 @@ def setup_vcr(vcr):
     return vcr
 
 
-@pytest.fixture(name="patch_vcr_aiohttp_stream", scope="module", autouse=True)
-def fixture_patch_vcr_aiohttp_stream():
-    # Allows the async tests to not be stuck in infinite loop when streaming
-    # a VCR cassette with aiohttp stubs.
-    # https://github.com/kevin1024/vcrpy/issues/927
-    if ClientConnectionError is None or aiohttp_stubs is None:
-        return
-
-    class _ReplayMockStream(aiohttp_stubs.MockStream):
-        # Keep vcrpy's stream behavior, but ignore aiohttp's
-        # close-time ClientConnectionError("Connection closed") during
-        # cassette replay, where the full response is already buffered
-        # and this condition should be treated as normal EOF.
-        def set_exception(self, exc):
-            if isinstance(exc, ClientConnectionError) and exc.args == (
-                "Connection closed",
-            ):
-                return
-            super().set_exception(exc)
-
-    class _ReplayMockClientResponse(aiohttp_stubs.MockClientResponse):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._mock_content_stream = None
-
-        @property
-        def content(self):
-            # vcrpy's aiohttp MockClientResponse.content creates a fresh stream object
-            # on every property access. google-genai async streaming repeatedly reads
-            # response.content.readline() and expects the same stream instance until EOF is
-            # reached.
-            if self._mock_content_stream is None:
-                body = self._body or b""
-                stream = _ReplayMockStream()
-                stream.feed_data(body)
-                stream.feed_eof()
-                self._mock_content_stream = stream
-            return self._mock_content_stream
-
-    aiohttp_stubs.MockClientResponse = _ReplayMockClientResponse
-
-
 @pytest.fixture(name="instrumentor")
 def fixture_instrumentor():
     return GoogleGenAiSdkInstrumentor()
@@ -340,9 +290,9 @@ def fixture_otel_mocker():
     autouse=True,
     params=["SPAN_AND_EVENT", "NO_CONTENT"],
 )
-def fixture_setup_content_recording(request):
-    os.environ[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
-        request.param
+def fixture_setup_content_recording(request, monkeypatch):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, request.param
     )
     return request.param
 
@@ -538,6 +488,7 @@ def test_upload_hook_non_streaming(
                 }
             ],
             "role": "user",
+            "name": None,
         }
     ]
     expected_output = [
@@ -550,6 +501,7 @@ def test_upload_hook_non_streaming(
                 }
             ],
             "finish_reason": "stop",
+            "name": None,
         }
     ]
     _ = generate_content(

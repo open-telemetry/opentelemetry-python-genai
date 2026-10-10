@@ -3,16 +3,7 @@
 
 """Provision advice policies and the semconv registry for weaver.
 
-The registry source is ``open-telemetry/semantic-conventions-genai``,
-whose ``model/manifest.yaml`` depends on a filtered copy of the upstream
-``open-telemetry/semantic-conventions`` registry with the migrated GenAI
-subdirectories and groups stripped out (so Weaver doesn't see duplicate
-group ids). This module reproduces the genai repo's ``make filter-upstream``
-target in Python.
-
-Once https://github.com/open-telemetry/weaver/issues/1455 is fixed and the
-genai repo drops its ``.build/sc-upstream-filtered`` workaround, the
-filter step and migration tables below become dead code.
+The registry source is ``open-telemetry/semantic-conventions-genai``.
 """
 
 from __future__ import annotations
@@ -30,12 +21,6 @@ from pathlib import Path
 # Bounds the fetch of the registry tarballs so a slow/unreachable
 # GitHub doesn't hang conformance runs until the OS-level socket timeout.
 _FETCH_TIMEOUT_SECONDS = 60
-
-# Mirrors `SC_UPSTREAM_MIGRATED_{DIRS,GROUPS}` in the genai repo's Makefile.
-_MIGRATED_DIRS: tuple[str, ...] = ("gen-ai", "mcp", "openai")
-_MIGRATED_GROUPS: tuple[tuple[str, str], ...] = (
-    ("aws/registry.yaml", "registry.aws.bedrock"),
-)
 
 logger = logging.getLogger(__name__)
 
@@ -111,78 +96,38 @@ def _download_and_extract(url: str, target: Path, label: str) -> None:
         shutil.move(str(entries[0]), str(target))
 
 
-def _strip_group_block(text: str, group_id: str) -> str:
-    """Drop the YAML block for ``- id: <group_id>`` from a Weaver registry file."""
-    keep: list[str] = []
-    skip = False
-    prefix = "  - id: "
-    target_line = prefix + group_id
-    for line in text.splitlines(keepends=True):
-        if line.startswith(prefix):
-            skip = line.rstrip("\r\n") == target_line
-        if not skip:
-            keep.append(line)
-    return "".join(keep)
+def _localize_manifest_dependencies(
+    genai_root: Path, cache_root: Path
+) -> None:
+    """Download git dependencies as tarballs and rewrite registry_path to local dirs.
 
-
-def _materialize_filtered_upstream(
-    genai_root: Path, upstream_root: Path
-) -> Path:
-    """Build ``<genai_root>/.build/sc-upstream-filtered`` from ``upstream_root``."""
-    filtered = genai_root / ".build" / "sc-upstream-filtered"
-    filtered.parent.mkdir(parents=True, exist_ok=True)
-    if filtered.exists():
-        shutil.rmtree(filtered)
-    shutil.copytree(upstream_root / "model", filtered)
-
-    for migrated in _MIGRATED_DIRS:
-        migrated_path = filtered / migrated
-        if migrated_path.exists():
-            shutil.rmtree(migrated_path)
-
-    for relative_file, group_id in _MIGRATED_GROUPS:
-        target = filtered / relative_file
-        if not target.is_file():
-            continue
-        original = target.read_text(encoding="utf-8")
-        stripped = _strip_group_block(original, group_id)
-        if stripped == original:
-            logger.warning(
-                "Migrated group %r not found in %s — list may be stale",
-                group_id,
-                relative_file,
-            )
-        target.write_text(stripped, encoding="utf-8")
-    return filtered
-
-
-def _rewrite_manifest_dependency(genai_root: Path, filtered: Path) -> None:
-    """Bake an absolute ``registry_path`` into ``model/manifest.yaml``.
-
-    Weaver resolves the manifest's relative ``./.build/sc-upstream-filtered``
-    against the *current working directory*, not the manifest file, so a
-    relative path only works when weaver is invoked from the genai repo root.
+    Avoids Weaver cloning dependencies over git/HTTPS at runtime, which can
+    hit network throttling or exceed WeaverLiveCheck startup timeouts in CI.
     """
     manifest = genai_root / "model" / "manifest.yaml"
+    text = manifest.read_text(encoding="utf-8")
     pattern = re.compile(
-        r"^(\s*registry_path:\s*)\./\.build/sc-upstream-filtered\s*$",
-        re.MULTILINE,
+        r"registry_path:\s*https://github\.com/open-telemetry/([^/]+)\.git@([^\s\[]+)(?:\[([^\]]+)\])?"
     )
-    abs_path = filtered.resolve().as_posix()
-    new_text, count = pattern.subn(
-        lambda m: f"{m.group(1)}{abs_path}",
-        manifest.read_text(encoding="utf-8"),
-    )
-    if count != 1:
-        raise RuntimeError(
-            f"Expected exactly one filtered-upstream registry_path entry in "
-            f"{manifest}, found {count}."
-        )
-    manifest.write_text(new_text, encoding="utf-8")
+
+    def _replace(match: re.Match[str]) -> str:
+        repo_name = match.group(1)
+        tag = match.group(2)
+        subpath = match.group(3) or ""
+        target = cache_root / f"{repo_name}-{tag}"
+        if not target.is_dir():
+            url = f"https://github.com/open-telemetry/{repo_name}/archive/refs/tags/{tag}.tar.gz"
+            _download_and_extract(url, target, label=f"{repo_name}-{tag}")
+        local_path = (target / subpath).resolve().as_posix()
+        return f"registry_path: {local_path}"
+
+    new_text, count = pattern.subn(_replace, text)
+    if count > 0:
+        manifest.write_text(new_text, encoding="utf-8")
 
 
 def _provision_genai_root() -> Path:
-    """Fetch the pinned genai registry, materialize its upstream dependency, return its root."""
+    """Fetch the pinned genai registry and return its root."""
     pins = _load_version_pins(_workspace_root() / "versions.env")
     try:
         genai_ref = pins["SEMCONV_GENAI_REF"]
@@ -205,27 +150,7 @@ def _provision_genai_root() -> Path:
     _download_and_extract(
         genai_archive_url, genai_target, label="genai-semconv"
     )
-
-    upstream_pins = _load_version_pins(genai_target / "versions.env")
-    try:
-        upstream_version = upstream_pins["SEMCONV_VERSION"]
-    except KeyError as missing:
-        raise RuntimeError(
-            f"genai repo's versions.env is missing {missing!s}"
-        ) from missing
-
-    upstream_target = cache_root / f"upstream-{upstream_version}"
-    if not (upstream_target / "model").is_dir():
-        upstream_archive_url = (
-            "https://github.com/open-telemetry/semantic-conventions/"
-            f"archive/refs/tags/{upstream_version}.tar.gz"
-        )
-        _download_and_extract(
-            upstream_archive_url, upstream_target, label="upstream-semconv"
-        )
-
-    filtered = _materialize_filtered_upstream(genai_target, upstream_target)
-    _rewrite_manifest_dependency(genai_target, filtered)
+    _localize_manifest_dependencies(genai_target, cache_root)
     stamp.touch()
     return genai_target
 

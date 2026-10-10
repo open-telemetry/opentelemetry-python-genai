@@ -1,0 +1,58 @@
+interactions:
+- request:
+    body: ''
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.23.0 gl-python/3.14.2
+    method: GET
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions/interaction-missing?stream=false
+  response:
+    body:
+      string: |-
+        {
+          "error": {
+            "message": "Invalid interaction name: interactions/interaction-missing",
+            "code": "invalid_request"
+          }
+        }
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '107'
+      content-type:
+      - application/json; charset=UTF-8
+      date:
+      - Sun, 20 Sep 2026 18:11:21 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=94
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 400
+      message: Bad Request
+version: 1

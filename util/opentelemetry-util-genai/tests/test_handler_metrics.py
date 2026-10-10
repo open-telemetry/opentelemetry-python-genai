@@ -20,7 +20,7 @@ SCOPE = "opentelemetry.util.genai.handler"
 
 
 class TelemetryHandlerMetricsTest(TestBase):
-    def test_stop_llm_records_duration_and_tokens(self) -> None:
+    def test_inference_stop_records_duration_and_tokens(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             meter_provider=self.meter_provider,
@@ -74,7 +74,7 @@ class TelemetryHandlerMetricsTest(TestBase):
             places=3,
         )
 
-    def test_stop_llm_records_duration_and_tokens_with_additional_attributes(
+    def test_inference_stop_records_duration_and_tokens_with_additional_attributes(
         self,
     ) -> None:
         handler = TelemetryHandler(
@@ -114,7 +114,7 @@ class TelemetryHandlerMetricsTest(TestBase):
             )
             self.assertIsNone(point.attributes.get("should not be on metrics"))
 
-    def test_fail_llm_records_error_and_available_tokens(self) -> None:
+    def test_inference_fail_records_error_and_available_tokens(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             meter_provider=self.meter_provider,
@@ -156,7 +156,7 @@ class TelemetryHandlerMetricsTest(TestBase):
         )
         self.assertAlmostEqual(token_point.sum, 11.0, places=3)
 
-    def test_fail_llm_error_type_uses_supplied_resolver(self) -> None:
+    def test_inference_fail_error_type_uses_supplied_resolver(self) -> None:
         # An instrumentor-supplied error_type_resolver derives error.type from
         # the raw exception (e.g. surfacing a provider's canonical status).
         handler = TelemetryHandler(
@@ -178,7 +178,7 @@ class TelemetryHandlerMetricsTest(TestBase):
             "429",
         )
 
-    def test_fail_llm_error_type_falls_back_when_resolver_returns_none(
+    def test_inference_fail_error_type_falls_back_when_resolver_returns_none(
         self,
     ) -> None:
         # Resolver returning None falls back to the exception class name.
@@ -568,21 +568,25 @@ class TelemetryHandlerToolMetricsTest(TestBase):
             meter_provider=self.meter_provider,
         )
         with patch("timeit.default_timer", return_value=1000.0):
-            invocation = handler.tool("get_weather")
+            invocation = handler.tool("get_weather", tool_type="function")
         invocation.metric_attributes = {"custom.key": "custom_value"}
 
         with patch("timeit.default_timer", return_value=1002.5):
             invocation.stop()
 
         metrics = self._harvest_metrics()
-        self.assertIn("gen_ai.client.operation.duration", metrics)
-        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertIn("gen_ai.execute_tool.duration", metrics)
+        duration_points = metrics["gen_ai.execute_tool.duration"]
         self.assertEqual(len(duration_points), 1)
         duration_point = duration_points[0]
 
         self.assertEqual(
-            duration_point.attributes[GenAI.GEN_AI_OPERATION_NAME],
-            "execute_tool",
+            duration_point.attributes[GenAI.GEN_AI_TOOL_NAME],
+            "get_weather",
+        )
+        self.assertEqual(
+            duration_point.attributes[GenAI.GEN_AI_TOOL_TYPE],
+            "function",
         )
         self.assertEqual(
             duration_point.attributes["custom.key"], "custom_value"
@@ -603,8 +607,8 @@ class TelemetryHandlerToolMetricsTest(TestBase):
             invocation.fail(error)
 
         metrics = self._harvest_metrics()
-        self.assertIn("gen_ai.client.operation.duration", metrics)
-        duration_points = metrics["gen_ai.client.operation.duration"]
+        self.assertIn("gen_ai.execute_tool.duration", metrics)
+        duration_points = metrics["gen_ai.execute_tool.duration"]
         self.assertEqual(len(duration_points), 1)
         duration_point = duration_points[0]
 
@@ -612,11 +616,26 @@ class TelemetryHandlerToolMetricsTest(TestBase):
             duration_point.attributes["error.type"], "RuntimeError"
         )
         self.assertEqual(
-            duration_point.attributes[GenAI.GEN_AI_OPERATION_NAME],
-            "execute_tool",
+            duration_point.attributes[GenAI.GEN_AI_TOOL_NAME],
+            "failing_tool",
         )
         self.assertAlmostEqual(duration_point.sum, 1.5, places=3)
         self.assertNotIn("gen_ai.client.token.usage", metrics)
+
+    def test_stop_tool_records_agent_name(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        handler.tool("get_weather", agent_name="weather_agent").stop()
+
+        metrics = self._harvest_metrics()
+        duration_points = metrics["gen_ai.execute_tool.duration"]
+        self.assertEqual(len(duration_points), 1)
+        self.assertEqual(
+            duration_points[0].attributes[GenAI.GEN_AI_AGENT_NAME],
+            "weather_agent",
+        )
 
 
 class TelemetryHandlerRetrievalMetricsTest(TestBase):

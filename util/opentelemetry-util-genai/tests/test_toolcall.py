@@ -4,10 +4,11 @@
 """Tests for ToolCallRequestPart and ToolInvocation inheritance structure"""
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -17,12 +18,19 @@ from opentelemetry.sdk.trace.sampling import Decision, SamplingResult
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.trace import SpanKind
+from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.trace import (
+    SpanKind,
+    get_current_span,
+    set_span_in_context,
+)
+from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import GenAIInvocation
+from opentelemetry.util.genai.invocation import GenAIInvocation, ToolInvocation
 from opentelemetry.util.genai.types import (
     CompactionPart,
     InputMessage,
@@ -197,8 +205,8 @@ def test_tool_span_is_internal_kind():
     assert span_exporter.get_finished_spans()[0].kind == SpanKind.INTERNAL
 
 
-def test_start_tool_passes_sampling_attributes_at_span_creation():
-    """Verify that sampling-relevant attributes are available at start_span() time for tools."""
+def test_tool_passes_sampling_attributes_at_span_creation():
+    """Verify that only sampling-relevant attributes are available at start_span() time for tools."""
     captured_attributes = {}
 
     class AttributeCapturingSampler:  # pylint: disable=no-self-use
@@ -232,12 +240,28 @@ def test_start_tool_passes_sampling_attributes_at_span_creation():
 
     assert captured_attributes[GenAI.GEN_AI_OPERATION_NAME] == "execute_tool"
     assert captured_attributes[GenAI.GEN_AI_TOOL_NAME] == "get_weather"
-    assert captured_attributes[GenAI.GEN_AI_TOOL_CALL_ID] == "call_123"
     assert captured_attributes[GenAI.GEN_AI_TOOL_TYPE] == "function"
+    assert GenAI.GEN_AI_TOOL_CALL_ID not in captured_attributes
+    assert GenAI.GEN_AI_TOOL_DESCRIPTION not in captured_attributes
+
+    finished_attrs = span_exporter.get_finished_spans()[0].attributes
+    assert finished_attrs[GenAI.GEN_AI_TOOL_CALL_ID] == "call_123"
     assert (
-        captured_attributes[GenAI.GEN_AI_TOOL_DESCRIPTION]
+        finished_attrs[GenAI.GEN_AI_TOOL_DESCRIPTION]
         == "Gets weather for a location"
     )
+
+
+def test_tool_call_id_and_description_on_invocation_instance():
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("get_weather", tool_type="function")
+    invocation.tool_call_id = "call_456"
+    invocation.tool_description = "Weather info"
+    invocation.stop()
+
+    finished_attrs = span_exporter.get_finished_spans()[0].attributes
+    assert finished_attrs[GenAI.GEN_AI_TOOL_CALL_ID] == "call_456"
+    assert finished_attrs[GenAI.GEN_AI_TOOL_DESCRIPTION] == "Weather info"
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +349,306 @@ def test_arguments_omitted_when_content_capture_disabled():
 
     attrs = span_exporter.get_finished_spans()[0].attributes
     assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+
+
+# ---------------------------------------------------------------------------
+# agent_name propagation onto execute_tool spans (semconv Conditionally
+# Required "When applicable")
+# ---------------------------------------------------------------------------
+
+
+def test_tool_span_carries_agent_name_when_set():
+    """When agent_name is passed, `gen_ai.agent.name` is on the execute_tool span."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    handler.tool("get_weather", agent_name="weather_agent").stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
+
+
+def test_tool_span_omits_agent_name_when_absent():
+    """`gen_ai.agent.name` must not appear on the span when no agent context."""
+    span_exporter, handler = _make_span_exporter_and_handler()
+    handler.tool("get_weather").stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert GenAI.GEN_AI_AGENT_NAME not in attrs
+
+
+def test_tool_start_attributes_omit_agent_name_at_sampling_time():
+    """`gen_ai.agent.name` is not sampling-relevant for `execute_tool` in
+    current semconv"""
+    captured_attributes: dict[str, object] = {}
+
+    class AttributeCapturingSampler:  # pylint: disable=no-self-use
+        def should_sample(
+            self,
+            parent_context,
+            trace_id,
+            name,
+            kind=None,
+            attributes=None,
+            links=None,
+        ):
+            captured_attributes.update(attributes or {})
+            return SamplingResult(Decision.RECORD_AND_SAMPLE, attributes)
+
+        def get_description(self):
+            return "AttributeCapturingSampler"
+
+    span_exporter = InMemorySpanExporter()
+    sampler_provider = TracerProvider(sampler=AttributeCapturingSampler())
+    sampler_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=sampler_provider)
+
+    handler.tool("get_weather", agent_name="weather_agent").stop()
+
+    assert GenAI.GEN_AI_AGENT_NAME not in captured_attributes
+    finalized = span_exporter.get_finished_spans()[0].attributes
+    assert finalized[GenAI.GEN_AI_AGENT_NAME] == "weather_agent"
+
+
+def test_tool_should_capture_content_defaults_to_false():
+    handler = _make_handler()
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is False
+    invocation.stop()
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_tool_should_capture_content_enabled():
+    handler = _make_handler()
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    invocation.stop()
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+)
+def test_tool_content_not_on_span_in_event_only_mode():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    invocation.arguments = {"city": "Paris"}
+    invocation.tool_result = "sunny"
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+
+
+def test_tool_content_not_on_span_with_completion_hook():
+    mock_hook = MagicMock(spec=CompletionHook)
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=mock_hook
+    )
+    invocation = handler.tool("get_weather")
+    assert invocation.should_capture_content is True
+    invocation.arguments = {"city": "Paris"}
+    invocation.tool_result = "sunny"
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_direct_invocation_instantiation_falls_back_to_env():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    tracer = tracer_provider.get_tracer(__name__)
+    meter_provider = MeterProvider()
+    meter = meter_provider.get_meter(__name__)
+    mock_logger = MagicMock()
+    mock_hook = MagicMock(spec=CompletionHook)
+
+    invocation = ToolInvocation(
+        tracer=tracer,
+        instruments=_Instruments(meter),
+        logger=mock_logger,
+        completion_hook=mock_hook,
+        name="direct_tool",
+    )
+    assert invocation.should_capture_content is True
+    invocation.arguments = {"arg": "val"}
+    invocation.stop()
+
+    finished = span_exporter.get_finished_spans()
+    assert len(finished) == 1
+    attrs = finished[0].attributes or {}
+    assert GenAI.GEN_AI_TOOL_CALL_ARGUMENTS in attrs
+
+
+def _invocation_with_exporter():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="ctx_tool",
+    )
+    return invocation, span_exporter
+
+
+def test_suspend_restores_caller_context_and_activate_reinstates_it():
+    caller_span = get_current_span()
+    invocation, span_exporter = _invocation_with_exporter()
+    assert get_current_span() is invocation.span
+
+    invocation.suspend()
+    assert get_current_span() is caller_span
+
+    with invocation.activate():
+        assert get_current_span() is invocation.span
+    assert get_current_span() is caller_span
+
+    # Suspending does not finish the invocation.
+    assert not span_exporter.get_finished_spans()
+    invocation.stop()
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_suspend_is_idempotent():
+    caller_span = get_current_span()
+    invocation, _ = _invocation_with_exporter()
+
+    invocation.suspend()
+    invocation.suspend()
+
+    assert get_current_span() is caller_span
+
+
+def test_activate_is_reentrant():
+    caller_span = get_current_span()
+    invocation, _ = _invocation_with_exporter()
+    invocation.suspend()
+
+    with invocation.activate():
+        with invocation.activate():
+            assert get_current_span() is invocation.span
+        # The inner block leaves restoring to the outer one.
+        assert get_current_span() is invocation.span
+    assert get_current_span() is caller_span
+
+
+def test_stop_inside_activate_restores_caller_context():
+    caller_span = get_current_span()
+    invocation, span_exporter = _invocation_with_exporter()
+    invocation.suspend()
+
+    with invocation.activate():
+        invocation.stop()
+
+    assert get_current_span() is caller_span
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_activate_is_noop_after_finish():
+    invocation, _ = _invocation_with_exporter()
+    invocation.stop()
+    caller_span = get_current_span()
+
+    with invocation.activate():
+        assert get_current_span() is caller_span
+
+
+def test_suspended_invocation_still_finishes():
+    invocation, span_exporter = _invocation_with_exporter()
+    invocation.suspend()
+
+    invocation.stop()
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_suspended_invocation_still_fails():
+    invocation, span_exporter = _invocation_with_exporter()
+    invocation.suspend()
+
+    invocation.fail(ValueError("boom"))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes[error_attributes.ERROR_TYPE] == "ValueError"
+
+
+def test_tool_invocation_context_property():
+    handler = _make_handler()
+    invocation = handler.tool("test_tool")
+    try:
+        assert invocation.context is not None
+        span = get_current_span(invocation.context)
+        assert span == invocation.span
+        assert span.is_recording()
+    finally:
+        invocation.stop()
+
+
+def test_tool_invocation_explicit_context():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("parent_span") as parent_span:
+        parent_context = set_span_in_context(parent_span)
+
+    with tracer.start_as_current_span("ambient_span"):
+        tool_invocation = handler.tool("child_tool", context=parent_context)
+        tool_invocation.stop()
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = [s for s in spans if s.name == "execute_tool child_tool"][0]
+    assert (
+        tool_span.context.trace_id == parent_span.get_span_context().trace_id
+    )
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == parent_span.get_span_context().span_id
+
+
+def test_tool_invocation_attach_to_context_false():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    tracer = tracer_provider.get_tracer("test")
+    with tracer.start_as_current_span("ambient_span") as ambient_span:
+        tool_invocation = handler.tool(
+            "detached_tool", _attach_to_context=False
+        )
+        assert get_current_span() == ambient_span
+        tool_invocation.stop()
+        assert get_current_span() == ambient_span
+
+    spans = span_exporter.get_finished_spans()
+    tool_span = next(
+        s for s in spans if s.name == "execute_tool detached_tool"
+    )
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == ambient_span.get_span_context().span_id

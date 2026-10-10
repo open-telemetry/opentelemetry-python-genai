@@ -1,7 +1,9 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import unittest
+from unittest.mock import patch
 
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -13,7 +15,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
 from opentelemetry.trace import INVALID_SPAN
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     InputMessage,
@@ -26,8 +34,8 @@ class TestWorkflowInvocation(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
         self.log_exporter = InMemoryLogRecordExporter()
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
         logger_provider = LoggerProvider()
@@ -35,7 +43,7 @@ class TestWorkflowInvocation(unittest.TestCase):
             SimpleLogRecordProcessor(self.log_exporter)
         )
         self.handler = TelemetryHandler(
-            tracer_provider=tracer_provider,
+            tracer_provider=self.tracer_provider,
             logger_provider=logger_provider,
         )
 
@@ -110,6 +118,41 @@ class TestWorkflowInvocation(unittest.TestCase):
 
         assert self.log_exporter.get_finished_logs() == ()
 
+    def test_emit_event_without_attached_context(self):
+        invocation = self.handler.workflow(
+            name="stateful_workflow", _attach_to_context=False
+        )
+        invocation.emit_event("test.event", {})
+        invocation.stop()
+
+        records = self.log_exporter.get_finished_logs()
+        assert len(records) == 1
+        record = records[0].log_record
+        assert record.trace_id == invocation.span.get_span_context().trace_id
+        assert record.span_id == invocation.span.get_span_context().span_id
+
+    def test_emit_event_while_suspended(self):
+        invocation = self.handler.workflow(name="stateful_workflow")
+        invocation.suspend()
+        invocation.emit_event("test.event", {})
+        invocation.stop()
+
+        records = self.log_exporter.get_finished_logs()
+        assert len(records) == 1
+        assert (
+            records[0].log_record.span_id
+            == invocation.span.get_span_context().span_id
+        )
+
+    def test_emit_event_after_failure_is_ignored(self):
+        invocation = self.handler.workflow(
+            name="stateful_workflow", _attach_to_context=False
+        )
+        invocation.fail(ValueError("failed"))
+        invocation.emit_event("test.event", {})
+
+        assert self.log_exporter.get_finished_logs() == ()
+
     def test_default_lists_are_independent(self):
         """Ensure separate invocations get separate list instances."""
         inv1 = self.handler.workflow(name=None)
@@ -142,3 +185,40 @@ class TestWorkflowInvocation(unittest.TestCase):
         assert len(invocation.input_messages) == 1
         assert len(invocation.output_messages) == 1
         assert invocation.output_messages[0].parts[0].content == "answer"
+
+    def test_with_conversation_id(self):
+        from opentelemetry.semconv._incubating.attributes import (
+            gen_ai_attributes as GenAI,
+        )
+
+        invocation = self.handler.workflow(name="test")
+        invocation.conversation_id = "conv-123"
+        invocation.stop()
+        spans = self.span_exporter.get_finished_spans()
+        assert spans[0].attributes is not None
+        assert spans[0].attributes[GenAI.GEN_AI_CONVERSATION_ID] == "conv-123"
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+    )
+    def test_messages_omitted_from_span_in_event_only_mode(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.workflow(name="test")
+        assert invocation.should_capture_content is True
+        invocation.input_messages = [
+            InputMessage(role="user", parts=[TextPart(content="query")])
+        ]
+        invocation.output_messages = [
+            OutputMessage(
+                role="assistant",
+                parts=[TextPart(content="answer")],
+                finish_reason="stop",
+            )
+        ]
+        invocation.stop()
+
+        span = self.span_exporter.get_finished_spans()[0]
+        attrs = span.attributes or {}
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs

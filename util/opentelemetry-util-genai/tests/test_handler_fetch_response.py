@@ -60,8 +60,9 @@ class _FetchResponseTestBase(TestCase):
         )
 
     def _fetch_response(self, **kwargs) -> FetchResponseInvocation:
+        response_id = kwargs.pop("response_id", RESPONSE_ID)
         return self.handler.fetch_response(
-            "openai", response_id=RESPONSE_ID, **kwargs
+            "openai", response_id=response_id, **kwargs
         )
 
     def _get_finished_spans(self):
@@ -263,14 +264,76 @@ class TelemetryHandlerFetchResponseTest(_FetchResponseTestBase):
         self.assertEqual(span.status.status_code, StatusCode.ERROR)
         self.assertEqual(span.attributes["error.type"], "ValueError")
 
+    def test_fetch_response_with_explicit_context(self) -> None:
+        parent_inv = self._fetch_response(response_id="parent_resp")
+        parent_inv.stop()
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            child_inv = self._fetch_response(
+                response_id="child_resp", context=parent_inv.context
+            )
+            child_inv.stop()
+
+        spans = self._get_finished_spans()
+        child_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_RESPONSE_ID) == "child_resp"
+        )
+        parent_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_RESPONSE_ID) == "parent_resp"
+        )
+        self.assertEqual(
+            child_span.parent.span_id, parent_span.context.span_id
+        )
+        self.assertNotEqual(
+            child_span.parent.span_id, ambient_span.get_span_context().span_id
+        )
+        self.assertEqual(
+            child_span.context.trace_id, parent_span.context.trace_id
+        )
+
+    def test_fetch_response_with_attach_to_context_false(self) -> None:
+        from opentelemetry.trace import get_current_span
+
+        tracer = self.tracer_provider.get_tracer(__name__)
+        with tracer.start_as_current_span("ambient") as ambient_span:
+            inv = self._fetch_response(
+                response_id="detached_resp", _attach_to_context=False
+            )
+            self.assertEqual(get_current_span(), ambient_span)
+            inv.stop()
+            self.assertEqual(get_current_span(), ambient_span)
+
+        spans = self._get_finished_spans()
+        detached_span = next(
+            s
+            for s in spans
+            if s.attributes.get(GenAI.GEN_AI_RESPONSE_ID) == "detached_resp"
+        )
+        self.assertIsNotNone(detached_span.parent)
+        self.assertEqual(
+            detached_span.parent.span_id,
+            ambient_span.get_span_context().span_id,
+        )
+
 
 class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
     # ------------------------------------------------------------------
     # opt-in content
     # ------------------------------------------------------------------
 
-    def _fetch_with_content(self) -> None:
-        invocation = self._fetch_response()
+    def _fetch_with_content(
+        self, handler: TelemetryHandler | None = None
+    ) -> None:
+        if handler is not None:
+            invocation = handler.fetch_response(
+                "openai", response_id=RESPONSE_ID
+            )
+        else:
+            invocation = self._fetch_response()
         invocation.output_messages = [
             OutputMessage(
                 role="assistant",
@@ -293,7 +356,11 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
             os.environ,
             {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
         ):
-            self._fetch_with_content()
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                meter_provider=self.meter_provider,
+            )
+            self._fetch_with_content(handler)
 
         attrs = self._get_finished_spans()[0].attributes
         self.assertEqual(
@@ -303,6 +370,7 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
                     "role": "assistant",
                     "parts": [{"content": "This is a test.", "type": "text"}],
                     "finish_reason": "stop",
+                    "name": None,
                 }
             ],
         )
@@ -315,6 +383,21 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
 
     def test_content_suppressed_on_span_when_disabled(self) -> None:
         self._fetch_with_content()
+
+        attrs = self._get_finished_spans()[0].attributes
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, attrs)
+        self.assertNotIn(GenAI.GEN_AI_SYSTEM_INSTRUCTIONS, attrs)
+
+    def test_content_suppressed_on_span_in_event_only_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "EVENT_ONLY"},
+        ):
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                meter_provider=self.meter_provider,
+            )
+            self._fetch_with_content(handler)
 
         attrs = self._get_finished_spans()[0].attributes
         self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, attrs)

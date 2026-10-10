@@ -15,6 +15,25 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.2b0 (2026-09-24)
+
+### Changed
+
+- Bump the minimum `opentelemetry-util-genai` version to 1.2b0.
+  ([#365](https://github.com/open-telemetry/opentelemetry-python-genai/pull/365))
+- Record metrics `gen_ai.invoke_agent.duration` and
+  `gen_ai.execute_tool.duration` instead of `gen_ai.client.operation.duration`.
+  ([#616](https://github.com/open-telemetry/opentelemetry-python-genai/pull/616))
+
+### Fixed
+
+- Emit telemetry under the `opentelemetry.instrumentation.genai.qwen_agent`
+  instrumentation scope instead of `opentelemetry.util.genai.handler`
+  ([#632](https://github.com/open-telemetry/opentelemetry-python-genai/pull/632))
+- Record failed Qwen Agent tool invocations when cancellation raises a
+  `BaseException`.
+  ([#656](https://github.com/open-telemetry/opentelemetry-python-genai/pull/656))
+
 ## Version 1.1b0 (2026-08-20)
 
 ### Added

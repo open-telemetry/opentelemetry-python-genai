@@ -4,14 +4,16 @@
 from __future__ import annotations
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import Error, GenAIInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 
@@ -24,7 +26,7 @@ class EmbeddingInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -32,12 +34,25 @@ class EmbeddingInvocation(GenAIInvocation):
         request_model: str | None = None,
         server_address: str | None = None,
         server_port: int | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.embedding(provider) rather than calling this directly."""
         _operation_name = GenAI.GenAiOperationNameValues.EMBEDDINGS.value
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_REQUEST_MODEL, request_model),
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
-            metrics_recorder,
+            instruments,
             logger,
             completion_hook,
             operation_name=_operation_name,
@@ -45,6 +60,10 @@ class EmbeddingInvocation(GenAIInvocation):
             if request_model
             else _operation_name,
             span_kind=SpanKind.CLIENT,
+            start_attributes=start_attributes,
+            content_capturing_mode=content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
         )
         # e.g., azure.ai.openai, openai, aws.bedrock
         self._provider: str = provider
@@ -57,20 +76,6 @@ class EmbeddingInvocation(GenAIInvocation):
         self.input_tokens: int | None = None
         self.dimension_count: int | None = None
         self.response_model_name: str | None = None
-        self._start(self._get_start_attributes())
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return sampling-relevant attributes available at span creation time."""
-        optional_attrs = (
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
@@ -106,4 +111,4 @@ class EmbeddingInvocation(GenAIInvocation):
             self._apply_error_attributes(error)
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()

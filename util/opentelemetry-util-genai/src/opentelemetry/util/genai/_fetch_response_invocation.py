@@ -6,24 +6,27 @@ from __future__ import annotations
 from typing import Final
 
 from opentelemetry._logs import Logger
+from opentelemetry.context import Context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.metrics import InvocationMetricsRecorder
 from opentelemetry.util.genai.types import (
     ErrorTypeResolver,
     MessagePart,
     OutputMessage,
+    SystemInstructionPart,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AttributeValue
 
 # TODO: Migrate to gen_ai_attributes constants once available in the semconv
@@ -77,7 +80,7 @@ class FetchResponseInvocation(GenAIInvocation):
     def __init__(
         self,
         tracer: Tracer,
-        metrics_recorder: InvocationMetricsRecorder,
+        instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
         provider: str,
@@ -87,11 +90,25 @@ class FetchResponseInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
     ) -> None:
         """Use handler.fetch_response() rather than calling this directly."""
+        start_attributes: dict[str, AttributeValue] = {
+            k: v
+            for k, v in (
+                (GenAI.GEN_AI_PROVIDER_NAME, provider),
+                (GenAI.GEN_AI_RESPONSE_ID, response_id),
+                (GenAI.GEN_AI_REQUEST_STREAM, request_stream),
+                (server_attributes.SERVER_ADDRESS, server_address),
+                (server_attributes.SERVER_PORT, server_port),
+            )
+            if v is not None
+        }
         super().__init__(
             tracer,
-            metrics_recorder,
+            instruments,
             logger,
             completion_hook,
             operation_name=_FETCH_RESPONSE_OPERATION_NAME,
@@ -100,6 +117,10 @@ class FetchResponseInvocation(GenAIInvocation):
             span_name=_FETCH_RESPONSE_OPERATION_NAME,
             span_kind=SpanKind.CLIENT,
             error_type_resolver=error_type_resolver,
+            start_attributes=start_attributes,
+            content_capturing_mode=content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
         )
         self._provider: str = provider
         self._response_id: str = response_id
@@ -111,32 +132,16 @@ class FetchResponseInvocation(GenAIInvocation):
         self.finish_reasons: list[str] | None = None
         self.stream_cursor: str | None = None
         self.output_messages: list[OutputMessage] = []
-        self.system_instruction: list[MessagePart] = []
+        self.system_instruction: (
+            list[SystemInstructionPart] | list[MessagePart]
+        ) = []
+        """System instructions for the model. Passing ``MessagePart`` is deprecated; use ``SystemInstructionPart``."""
         self.tool_definitions: list[ToolDefinition] | None = None
-        self._start(self._get_start_attributes())
 
     @property
     def response_id(self) -> str:
         """The identifier of the response being fetched."""
         return self._response_id
-
-    def _get_start_attributes(self) -> dict[str, AttributeValue]:
-        """Return attributes known at span creation time."""
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
-        )
-        return {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            GenAI.GEN_AI_PROVIDER_NAME: self._provider,
-            GenAI.GEN_AI_RESPONSE_ID: self._response_id,
-            **(
-                {GenAI.GEN_AI_REQUEST_STREAM: self._request_stream}
-                if self._request_stream is not None
-                else {}
-            ),
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         # response_id intentionally excluded — high cardinality.
@@ -178,11 +183,12 @@ class FetchResponseInvocation(GenAIInvocation):
                 system_instruction=self.system_instruction,
                 tool_definitions=self.tool_definitions,
                 for_span=True,
+                content_capturing_mode=self._content_capturing_mode,
             )
         )
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._metrics_recorder.record(self)
+        self._record_client_metrics()
         self._call_completion_hook(
             outputs=self.output_messages,
             system_instruction=self.system_instruction,

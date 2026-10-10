@@ -127,11 +127,19 @@ uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
 uv run tox -e typecheck
+
+# Check util-genai for public API breaks against main
+uv run tox -e check-util-api
 ```
 
 Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, and the changed package's
 test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
 the CI gates.
+
+If you change `util/opentelemetry-util-genai`, also run `uv run tox -e check-util-api`. Released
+instrumentations accept any util version below 2, so removing or changing a public object can
+break them on import. If the break is intended, say in the PR which released instrumentations you
+checked. A maintainer then adds the `Approve Public API check` label to skip the CI job.
 
 tox reuses cached envs and won't re-resolve dependencies on its own, so pass `--recreate` (`-r`)
 after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound — otherwise the
@@ -191,6 +199,12 @@ Apply to packages under `instrumentation/`.
 - Spans, logs, metrics, and events should go through `opentelemetry-util-genai`. Do not call OTel
   `Tracer`/`Meter`/`Logger` directly, and import only its public surface — never an
   `opentelemetry.util.genai._*` module.
+- Construct the `TelemetryHandler` with the dotted instrumentation package path as
+  `instrumentation_scope_name` and the package's `__version__` as
+  `instrumentation_scope_version`. Use `__package__` when it resolves to that exact package path;
+  do not use a submodule's `__name__`. Import `__version__` from the package's `version` module.
+  Subclass `opentelemetry.test_util_genai.scope.TelemetryHandlerScopeTest` in each package to verify
+  its exact name and version on spans, metrics, and logs.
 - Content capture, hooks, and configuration are owned by the util. Don't add instrumentation-local
   env vars or settings.
 - Models describing complex attributes are owned by `opentelemetry.util.genai.types`. Land new type
@@ -208,8 +222,7 @@ as the reference:
 
 - In `_instrument(**kwargs)`, resolve the hook as
   `kwargs.get("completion_hook") or load_completion_hook()` and pass it to the handler
-  (`TelemetryHandler(..., completion_hook=...)` or
-  `get_telemetry_handler(..., completion_hook=...)`). `load_completion_hook()` returns the hook
+  (`TelemetryHandler(..., completion_hook=...)`). `load_completion_hook()` returns the hook
   named by `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` (e.g. `upload`) via its entry point, or a
   no-op. An explicit `instrument(completion_hook=…)` argument takes precedence over the env var.
 - Don't define your own hook interface, call `on_completion` yourself, or wrap it in `try/except` —

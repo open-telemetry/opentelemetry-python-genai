@@ -1,22 +1,27 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+import inspect
 import json
 import logging
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
-from functools import partial
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, is_dataclass
+from functools import lru_cache, partial
 from typing import Any
 
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.types import (
     BlobPart,
     ContentCapturingMode,
     MessagePart,
+    Modality,
     UriPart,
 )
 
@@ -54,14 +59,19 @@ def decode_base64(data: str) -> bytes | None:
         return None
 
 
-def image_from_url(url: str, *, modality: str = "image") -> MessagePart | None:
-    """Return a media part for an image ``url``.
+def image_from_url(
+    url: str, *, modality: Modality | str = Modality.IMAGE
+) -> MessagePart | None:
+    """Return a media part for a ``url``, defaulting to the image modality.
+
+    Override ``modality`` for other standard or provider-specific media,
+    such as audio or documents.
 
     A ``data:<mime>;base64,<payload>`` URL is decoded into a
     :class:`~opentelemetry.util.genai.types.BlobPart`; a ``data:`` URL without
     base64 encoding has its percent-encoded payload decoded into bytes; any
     other URL becomes a :class:`~opentelemetry.util.genai.types.UriPart`. Shared
-    by instrumentations that parse provider image blocks.
+    by instrumentations that parse provider media blocks.
 
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
@@ -93,47 +103,6 @@ def is_experimental_mode() -> bool:
     return True
 
 
-def should_emit_event() -> bool:
-    """Check if event emission is enabled.
-
-    Returns True if event emission is enabled, False otherwise.
-
-    If the environment variable OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is explicitly set,
-    its value takes precedence. Otherwise, the default value is determined by
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT:
-    - NO_CONTENT or SPAN_ONLY: defaults to False
-    - EVENT_ONLY or SPAN_AND_EVENT: defaults to True
-    """
-    # If explicitly set (and not empty), use the user's value (highest priority)
-    if (
-        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
-        .lower()
-        .strip()
-    ):
-        if envvar == "true":
-            return True
-        if envvar == "false":
-            return False
-        logger.warning(
-            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
-            envvar,
-            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-        )
-    # EVENT_ONLY and SPAN_AND_EVENT require events, so default to True
-    return get_content_capturing_mode() in (
-        ContentCapturingMode.EVENT_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-
-def should_capture_content_on_spans() -> bool:
-    """Returns whether capture content is enabled on spans."""
-    return get_content_capturing_mode() in (
-        ContentCapturingMode.SPAN_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-
 def fq_exception_type(exception: BaseException) -> str:
     """Return the fully qualified name of an exception's type.
 
@@ -154,6 +123,8 @@ def fq_exception_type(exception: BaseException) -> str:
 
 class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
+        if is_dataclass(o) and not isinstance(o, type):
+            return asdict(o)
         if isinstance(o, bytes):
             return b64encode(o).decode()
         return super().default(o)
@@ -170,3 +141,76 @@ gen_ai_json_dumps = partial(
 )
 """Should be used by GenAI instrumentations when serializing objects that may contain
 bytes, datetimes, etc. for GenAI observability."""
+
+
+_SIGNATURE_CACHE_MAX_SIZE = 1024
+_inspect_signature = inspect.signature
+
+
+@lru_cache(maxsize=_SIGNATURE_CACHE_MAX_SIZE)
+def _cached_signature(
+    fn: Callable[..., object], drop_first: bool
+) -> inspect.Signature:
+    sig = _inspect_signature(fn)
+    if drop_first:
+        params = list(sig.parameters.values())[1:]
+        sig = sig.replace(parameters=params)
+    return sig
+
+
+def get_signature(func: Callable[..., object]) -> inspect.Signature:
+    """Return the inspect.Signature for a callable, caching long-lived definitions.
+
+    Bound methods are new objects on every attribute access, so key on the
+    underlying function. Only long-lived definitions are cached; per-call
+    closures and callable instances would otherwise be pinned in the cache.
+    """
+    try:
+        underlying = getattr(func, "__func__", None)
+        if (
+            underlying is not None
+            and getattr(func, "__self__", None) is not None
+            and "<locals>" not in getattr(underlying, "__qualname__", "")
+        ):
+            return _cached_signature(underlying, True)
+        if inspect.isfunction(func) and "<locals>" not in func.__qualname__:
+            return _cached_signature(func, False)
+    except TypeError:
+        pass
+    return _inspect_signature(func)
+
+
+def bind_arguments(
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    *,
+    apply_defaults: bool = False,
+) -> dict[str, object]:
+    """Bind positional and keyword arguments to func's parameters by name."""
+    try:
+        sig = get_signature(func)
+        bound = sig.bind_partial(*args, **kwargs)
+        if apply_defaults:
+            bound.apply_defaults()
+        return dict(bound.arguments)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+
+
+def get_argument(
+    name: str,
+    func: Callable[..., object],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    default: object = None,
+    *,
+    apply_defaults: bool = False,
+) -> object:
+    """Extract a named argument from kwargs or args via signature binding."""
+    if name in kwargs:
+        return kwargs[name]
+    if not args and not apply_defaults:
+        return default
+    bound = bind_arguments(func, args, kwargs, apply_defaults=apply_defaults)
+    return bound.get(name, default)
