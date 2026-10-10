@@ -7,7 +7,9 @@ import inspect
 import logging
 import timeit
 from abc import ABCMeta, abstractmethod
-from collections.abc import AsyncIterable, Callable, Iterable
+from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
+from contextlib import AbstractContextManager, nullcontext
+from functools import wraps
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -91,6 +93,10 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
 
     _self_finalized: bool
 
+    def _execution_context(self) -> AbstractContextManager[None]:
+        """Scope stream reads and cleanup, restoring context before returning a chunk."""
+        return nullcontext()
+
     def _finalize_success(self) -> None:
         if self._self_finalized:
             return
@@ -146,9 +152,10 @@ class SyncStreamWrapper(
 
     Subclass this when wrapping a provider SDK stream that is consumed with
     normal iteration. The subclass should pass the SDK stream to
-    ``super().__init__(stream)`` and implement the three telemetry hooks:
-    ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for successful
-    finalization, and ``_on_stream_error`` for failure finalization.
+    ``super().__init__(stream)`` and implement the four telemetry hooks:
+    ``_execution_context`` for the context active around each read and
+    cleanup, ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
+    successful finalization, and ``_on_stream_error`` for failure finalization.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -194,27 +201,29 @@ class SyncStreamWrapper(
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
-        if exc_val is not None:
-            self._finalize_failure(exc_val)
-            try:
-                self._self_stream.close()
-            except Exception:  # pylint: disable=broad-exception-caught
-                _logger.debug(
-                    "GenAI stream close error after user exception",
-                    exc_info=True,
-                )
+        with self._execution_context():
+            if exc_val is not None:
+                self._finalize_failure(exc_val)
+                try:
+                    self._self_stream.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _logger.debug(
+                        "GenAI stream close error after user exception",
+                        exc_info=True,
+                    )
+                return False
+
+            self.close()
             return False
 
-        self.close()
-        return False
-
     def close(self) -> None:
-        try:
-            self._self_stream.close()
-        except BaseException as error:
-            self._finalize_failure(error)
-            raise
-        self._finalize_success()
+        with self._execution_context():
+            try:
+                self._self_stream.close()
+            except BaseException as error:
+                self._finalize_failure(error)
+                raise
+            self._finalize_success()
 
     def __iter__(self):
         # Override ``ObjectProxy.__iter__`` so iteration drives ``__next__``
@@ -223,21 +232,40 @@ class SyncStreamWrapper(
         return self
 
     def __next__(self) -> ChunkT:
-        try:
-            chunk = next(self._self_iterator)
-        except StopIteration:
-            self._finalize_success()
-            raise
-        except BaseException as error:
-            self._finalize_failure(error)
-            raise
-        invocation = self._self_invocation
-        chunk_at = timeit.default_timer() if invocation is not None else None
-        self._process_chunk(chunk)
-        # Record after _process_chunk so response.model is on the metrics.
-        if invocation is not None and chunk_at is not None:
-            invocation._on_stream_chunk(chunk_at)
-        return chunk
+        return self._advance(lambda: next(self._self_iterator))
+
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            method = getattr(self.__wrapped__, name)
+            if name not in ("send", "throw"):
+                return method
+
+            @wraps(method)
+            def advance(*args: Any, **kwargs: Any) -> ChunkT:
+                return self._advance(lambda: method(*args, **kwargs))
+
+            return advance
+
+    def _advance(self, read: Callable[[], ChunkT]) -> ChunkT:
+        with self._execution_context():
+            try:
+                chunk = read()
+            except StopIteration:
+                self._finalize_success()
+                raise
+            except BaseException as error:
+                self._finalize_failure(error)
+                raise
+            invocation = self._self_invocation
+            chunk_at = (
+                timeit.default_timer() if invocation is not None else None
+            )
+            self._process_chunk(chunk)
+            # Record after _process_chunk so response.model is on the metrics.
+            if invocation is not None and chunk_at is not None:
+                invocation._on_stream_chunk(chunk_at)
+            return chunk
 
 
 class AsyncStreamWrapper(
@@ -250,9 +278,10 @@ class AsyncStreamWrapper(
 
     Subclass this when wrapping a provider SDK stream that is consumed with
     async iteration. The subclass should pass the SDK stream to
-    ``super().__init__(stream)`` and implement the three telemetry hooks:
-    ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for successful
-    finalization, and ``_on_stream_error`` for failure finalization.
+    ``super().__init__(stream)`` and implement the four telemetry hooks:
+    ``_execution_context`` for the context active around each read and
+    cleanup, ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
+    successful finalization, and ``_on_stream_error`` for failure finalization.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
@@ -296,19 +325,20 @@ class AsyncStreamWrapper(
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
-        if exc_val is not None:
-            self._finalize_failure(exc_val)
-            try:
-                await self._close_stream()
-            except Exception:  # pylint: disable=broad-exception-caught
-                _logger.debug(
-                    "GenAI stream close error after user exception",
-                    exc_info=True,
-                )
-            return False
+        with self._execution_context():
+            if exc_val is not None:
+                self._finalize_failure(exc_val)
+                try:
+                    await self._close_stream()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _logger.debug(
+                        "GenAI stream close error after user exception",
+                        exc_info=True,
+                    )
+                return False
 
-        await self._close()
-        return False
+            await self._close()
+            return False
 
     async def _close_stream(self) -> None:
         """Close the wrapped stream, whichever close method it exposes.
@@ -339,45 +369,48 @@ class AsyncStreamWrapper(
         Reached through ``aclose`` or an async ``close`` on the wrapped stream;
         see ``__getattr__``.
         """
-        try:
-            await self._close_stream()
-        except BaseException as error:
-            self._finalize_failure(error)
-            _logger.debug(
-                "GenAI stream close error during close",
-                exc_info=True,
-            )
-            raise
-        self._finalize_success()
+        with self._execution_context():
+            try:
+                await self._close_stream()
+            except BaseException as error:
+                self._finalize_failure(error)
+                _logger.debug(
+                    "GenAI stream close error during close",
+                    exc_info=True,
+                )
+                raise
+            self._finalize_success()
 
     async def _await_close(self, close_awaitable: Any) -> Any:
-        try:
-            res = await close_awaitable
-        except BaseException as error:
-            self._finalize_failure(error)
-            _logger.debug(
-                "GenAI stream close error during close",
-                exc_info=True,
-            )
-            raise
-        self._finalize_success()
-        return res
+        with self._execution_context():
+            try:
+                res = await close_awaitable
+            except BaseException as error:
+                self._finalize_failure(error)
+                _logger.debug(
+                    "GenAI stream close error during close",
+                    exc_info=True,
+                )
+                raise
+            self._finalize_success()
+            return res
 
     def _sync_close(self) -> Any:
         """Close a stream exposing a synchronous ``close`` and finalize telemetry."""
-        try:
-            res = self._self_stream.close()
-        except BaseException as error:
-            self._finalize_failure(error)
-            _logger.debug(
-                "GenAI stream close error during close",
-                exc_info=True,
-            )
-            raise
-        if inspect.isawaitable(res):
-            return self._await_close(res)
-        self._finalize_success()
-        return res
+        with self._execution_context():
+            try:
+                res = self._self_stream.close()
+            except BaseException as error:
+                self._finalize_failure(error)
+                _logger.debug(
+                    "GenAI stream close error during close",
+                    exc_info=True,
+                )
+                raise
+            if inspect.isawaitable(res):
+                return self._await_close(res)
+            self._finalize_success()
+            return res
 
     if TYPE_CHECKING:
         # Declared for type checkers only. Defining them for real would make
@@ -407,7 +440,15 @@ class AsyncStreamWrapper(
                 if inspect.iscoroutinefunction(getattr(wrapped, name)):
                     return self._close
                 return self._sync_close
-            return getattr(wrapped, name)
+            method = getattr(wrapped, name)
+            if name in ("asend", "athrow"):
+
+                @wraps(method)
+                async def advance(*args: Any, **kwargs: Any) -> ChunkT:
+                    return await self._advance(lambda: method(*args, **kwargs))
+
+                return advance
+            return method
 
     def __aiter__(self):
         # Override ``ObjectProxy.__aiter__`` so iteration drives ``__anext__``
@@ -416,22 +457,28 @@ class AsyncStreamWrapper(
         return self
 
     async def __anext__(self) -> ChunkT:
-        try:
-            chunk = await anext(self._self_aiter)
-        except StopAsyncIteration:
-            self._finalize_success()
-            raise
-        except BaseException as error:
-            self._finalize_failure(error)
-            raise
+        return await self._advance(lambda: anext(self._self_aiter))
 
-        invocation = self._self_invocation
-        chunk_at = timeit.default_timer() if invocation is not None else None
-        self._process_chunk(chunk)
-        # Record after _process_chunk so response.model is on the metrics.
-        if invocation is not None and chunk_at is not None:
-            invocation._on_stream_chunk(chunk_at)
-        return chunk
+    async def _advance(self, read: Callable[[], Awaitable[ChunkT]]) -> ChunkT:
+        with self._execution_context():
+            try:
+                chunk = await read()
+            except StopAsyncIteration:
+                self._finalize_success()
+                raise
+            except BaseException as error:
+                self._finalize_failure(error)
+                raise
+
+            invocation = self._self_invocation
+            chunk_at = (
+                timeit.default_timer() if invocation is not None else None
+            )
+            self._process_chunk(chunk)
+            # Record after _process_chunk so response.model is on the metrics.
+            if invocation is not None and chunk_at is not None:
+                invocation._on_stream_chunk(chunk_at)
+            return chunk
 
 
 class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
@@ -455,22 +502,8 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
         invocation.suspend()
         self._self_chunks: list[Any] = []
 
-    def __next__(self) -> ChunkT:
-        with self._self_tool_invocation.activate():
-            return super().__next__()
-
-    def close(self) -> None:
-        with self._self_tool_invocation.activate():
-            super().close()
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> Literal[False]:
-        with self._self_tool_invocation.activate():
-            return super().__exit__(exc_type, exc_val, exc_tb)
+    def _execution_context(self) -> AbstractContextManager[None]:
+        return self._self_tool_invocation.activate()
 
     def __del__(self) -> None:
         try:
@@ -523,22 +556,8 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
         except BaseException:  # pylint: disable=broad-exception-caught
             pass
 
-    async def __anext__(self) -> ChunkT:
-        with self._self_tool_invocation.activate():
-            return await super().__anext__()
-
-    async def _close(self) -> None:
-        with self._self_tool_invocation.activate():
-            await super()._close()
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> Literal[False]:
-        with self._self_tool_invocation.activate():
-            return await super().__aexit__(exc_type, exc_val, exc_tb)
+    def _execution_context(self) -> AbstractContextManager[None]:
+        return self._self_tool_invocation.activate()
 
     def _process_chunk(self, chunk: ChunkT) -> None:
         if self._self_tool_invocation.should_capture_content:
@@ -558,32 +577,46 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
         self._self_tool_invocation.fail(error)
 
 
+_ExecutionContextFactory = Callable[[], AbstractContextManager[None]]
+
+
 class _CloseFinalizingProxy(_ObjectProxy):
-    def __init__(self, wrapped: object, finalize: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        wrapped: object,
+        finalize: Callable[[], None],
+        execution_context: _ExecutionContextFactory | None,
+    ) -> None:
         super().__init__(wrapped)
         self._self_finalize = finalize
+        self._self_execution_context = execution_context
+
+    def _scope(self) -> AbstractContextManager[None]:
+        if self._self_execution_context is None:
+            return nullcontext()
+        return self._self_execution_context()
 
     def close(self) -> None:
-        try:
-            self.__wrapped__.close()
-        finally:
-            self._self_finalize()
+        with self._scope():
+            try:
+                self.__wrapped__.close()
+            finally:
+                self._self_finalize()
 
 
-class _AcloseFinalizingProxy(_ObjectProxy):
-    def __init__(self, wrapped: object, finalize: Callable[[], None]) -> None:
-        super().__init__(wrapped)
-        self._self_finalize = finalize
-
+class _AcloseFinalizingProxy(_CloseFinalizingProxy):
     async def aclose(self) -> None:
-        try:
-            await self.__wrapped__.aclose()
-        finally:
-            self._self_finalize()
+        with self._scope():
+            try:
+                await self.__wrapped__.aclose()
+            finally:
+                self._self_finalize()
 
 
 def finalize_on_close(
-    wrapped: WrappedT, finalize: Callable[[], None]
+    wrapped: WrappedT,
+    finalize: Callable[[], None],
+    execution_context: _ExecutionContextFactory | None = None,
 ) -> WrappedT:
     """Proxy ``wrapped`` so closing it also finalizes telemetry.
 
@@ -592,15 +625,26 @@ def finalize_on_close(
     ``stream.response`` -- where a ``close()`` means the caller is done and the
     invocation should be finalized. Everything but ``close`` forwards
     unchanged.
+
+    ``execution_context`` is entered around the close and the finalizer, the
+    same way the stream wrapper scopes its own ``close``; a stream wrapper
+    passes its ``_execution_context`` so this cleanup path finalizes in the
+    same context as the others.
     """
-    return cast(WrappedT, _CloseFinalizingProxy(wrapped, finalize))
+    return cast(
+        WrappedT, _CloseFinalizingProxy(wrapped, finalize, execution_context)
+    )
 
 
 def finalize_on_aclose(
-    wrapped: WrappedT, finalize: Callable[[], None]
+    wrapped: WrappedT,
+    finalize: Callable[[], None],
+    execution_context: _ExecutionContextFactory | None = None,
 ) -> WrappedT:
     """Async counterpart of ``finalize_on_close``, hooking ``aclose``."""
-    return cast(WrappedT, _AcloseFinalizingProxy(wrapped, finalize))
+    return cast(
+        WrappedT, _AcloseFinalizingProxy(wrapped, finalize, execution_context)
+    )
 
 
 class SyncStreamManagerWrapper(
@@ -663,24 +707,34 @@ class SyncStreamManagerWrapper(
     ) -> bool | None:
         stream_wrapper = self._self_stream_wrapper
         self._self_stream_wrapper = None
-        try:
-            suppressed = self.__wrapped__.__exit__(exc_type, exc_val, exc_tb)
-        except BaseException as error:
-            if stream_wrapper is not None:
-                stream_wrapper.__exit__(
-                    type(error), error, error.__traceback__
+        # The SDK manager closes its stream on exit, so that runs in the
+        # stream wrapper's execution context like every other cleanup.
+        with (
+            nullcontext()
+            if stream_wrapper is None
+            else stream_wrapper._execution_context()
+        ):
+            try:
+                suppressed = self.__wrapped__.__exit__(
+                    exc_type, exc_val, exc_tb
                 )
-            elif self._self_invocation is not None:
-                self._self_invocation.fail(error)
-            raise
-        if stream_wrapper is not None:
-            if suppressed:
-                # The manager swallowed the caller's exception, so the stream
-                # ended successfully as far as telemetry is concerned.
-                stream_wrapper.__exit__(None, None, None)
-            else:
-                stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
-        return suppressed
+            except BaseException as error:
+                if stream_wrapper is not None:
+                    stream_wrapper.__exit__(
+                        type(error), error, error.__traceback__
+                    )
+                elif self._self_invocation is not None:
+                    self._self_invocation.fail(error)
+                raise
+            if stream_wrapper is not None:
+                if suppressed:
+                    # The manager swallowed the caller's exception, so the
+                    # stream ended successfully as far as telemetry is
+                    # concerned.
+                    stream_wrapper.__exit__(None, None, None)
+                else:
+                    stream_wrapper.__exit__(exc_type, exc_val, exc_tb)
+            return suppressed
 
 
 class AsyncStreamManagerWrapper(
@@ -730,25 +784,30 @@ class AsyncStreamManagerWrapper(
     ) -> bool | None:
         stream_wrapper = self._self_stream_wrapper
         self._self_stream_wrapper = None
-        try:
-            suppressed = await self.__wrapped__.__aexit__(
-                exc_type, exc_val, exc_tb
-            )
-        except BaseException as error:
-            if stream_wrapper is not None:
-                await stream_wrapper.__aexit__(
-                    type(error), error, error.__traceback__
+        # See SyncStreamManagerWrapper.__exit__.
+        with (
+            nullcontext()
+            if stream_wrapper is None
+            else stream_wrapper._execution_context()
+        ):
+            try:
+                suppressed = await self.__wrapped__.__aexit__(
+                    exc_type, exc_val, exc_tb
                 )
-            elif self._self_invocation is not None:
-                self._self_invocation.fail(error)
-            raise
-        if stream_wrapper is not None:
-            if suppressed:
-                # See SyncStreamManagerWrapper.__exit__.
-                await stream_wrapper.__aexit__(None, None, None)
-            else:
-                await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
-        return suppressed
+            except BaseException as error:
+                if stream_wrapper is not None:
+                    await stream_wrapper.__aexit__(
+                        type(error), error, error.__traceback__
+                    )
+                elif self._self_invocation is not None:
+                    self._self_invocation.fail(error)
+                raise
+            if stream_wrapper is not None:
+                if suppressed:
+                    await stream_wrapper.__aexit__(None, None, None)
+                else:
+                    await stream_wrapper.__aexit__(exc_type, exc_val, exc_tb)
+            return suppressed
 
 
 __all__ = [

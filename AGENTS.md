@@ -237,14 +237,20 @@ as the reference:
 
 A streamed response only finishes once the caller has drained the stream, so the invocation must
 stay open until then. Do **not** call `invocation.stop()` when the SDK returns the stream — the
-span would close before any chunks arrive.
+span would close before any chunks arrive. The invocation's span must also not stay current in
+the caller's context while the stream is unconsumed: call `invocation.suspend()` before returning
+the stream, and re-activate the invocation only while a chunk is being read.
 
 Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
 `opentelemetry.util.genai.stream` (the public, supported helpers). The base class proxies the
 underlying SDK stream, drives iteration, and finalizes telemetry exactly once on success, error,
-or `close()`. Subclasses pass the SDK stream to `super().__init__(stream)` and implement three
+or `close()`. Subclasses pass the SDK stream to `super().__init__(stream)` and implement four
 hooks:
 
+- `_execution_context()` — return a fresh context manager for each stream read and cleanup
+  operation; for invocation-backed streams return `invocation.activate()`. Context is restored
+  before the chunk is returned to the consumer, so the token is created and released in the
+  same frame.
 - `_process_chunk(chunk)` — accumulate per-chunk state (e.g. response model, finish reasons,
   token usage, streamed content) onto the invocation.
 - `_on_stream_end()` — finalize on success; set the accumulated response attributes and call
@@ -256,7 +262,11 @@ class MyStreamWrapper(SyncStreamWrapper[Chunk]):
     def __init__(self, stream, invocation, capture_content):
         super().__init__(stream)
         self._self_invocation = invocation
+        invocation.suspend()
         ...
+
+    def _execution_context(self):
+        return self._self_invocation.activate()
 
     def _process_chunk(self, chunk): ...  # accumulate state
     def _on_stream_end(self):

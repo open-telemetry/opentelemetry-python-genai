@@ -20,8 +20,22 @@
 # pyproject floors by UV_RESOLUTION=lowest-direct on the oldest tox factor, so they are NOT pinned
 # here to avoid drift between the declared bound and the tested version.
 
+# langchain-core is transitive, so lowest-direct does not floor it: pin the floor that
+# langchain 0.3.22 declares, which is the oldest core with the set_config_context boundary.
+langchain-core==0.3.49
+# LangGraph is optional and has no bound in pyproject.toml: 0.3.18 is the oldest release with
+# the node boundary (langgraph.utils.runnable.set_config_context) the instrumentation wraps.
+langgraph==0.3.18
 langchain-openai==0.2.0
 langchain-aws==0.2.2
 langchain-google-genai==2.0.0
 langchain-anthropic==0.3.0
 boto3==1.37.0
+
+opentelemetry-instrumentation-httpx >= 0.64b0, <1
+-e instrumentation/opentelemetry-instrumentation-genai-openai[instruments]
+# The oldest OpenAI client still passes the removed httpx proxies argument.
+httpx==0.27.2
+
+# The stream execution hook is in the unreleased workspace util package.
+-e util/opentelemetry-util-genai

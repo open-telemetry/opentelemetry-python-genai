@@ -7,6 +7,10 @@ import asyncio
 import gc
 import inspect
 import timeit
+from collections.abc import AsyncGenerator, Generator, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextvars import ContextVar
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1006,6 +1010,77 @@ def test_finalize_on_aclose_finalizes_when_aclose_raises():
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("close_error", [None, RuntimeError("close failure")])
+def test_finalize_on_close_runs_inside_execution_context(close_error):
+    active = ContextVar("active", default=False)
+    seen: list[bool] = []
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class Closable(_FakeClosable):
+        def close(self):
+            seen.append(active.get())
+            super().close()
+
+    proxy = finalize_on_close(
+        Closable(close_error=close_error),
+        lambda: seen.append(active.get()),
+        execution_context=scope,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="close failure")
+        if close_error
+        else nullcontext()
+    ):
+        proxy.close()
+
+    assert seen == [True, True]
+    assert not active.get()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_error", [None, RuntimeError("close failure")])
+async def test_finalize_on_aclose_runs_inside_execution_context(close_error):
+    active = ContextVar("active", default=False)
+    seen: list[bool] = []
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class Closable(_FakeClosable):
+        async def aclose(self):
+            seen.append(active.get())
+            await super().aclose()
+
+    proxy = finalize_on_aclose(
+        Closable(close_error=close_error),
+        lambda: seen.append(active.get()),
+        execution_context=scope,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="close failure")
+        if close_error
+        else nullcontext()
+    ):
+        await proxy.aclose()
+
+    assert seen == [True, True]
+    assert not active.get()
+
+
 class _FakeInvocation:
     def __init__(self):
         self.stop_count = 0
@@ -1813,3 +1888,250 @@ def test_async_tool_stream_wrapper_finalizes_failure_on_del():
         assert spans[0].attributes["error.type"] == "GeneratorExit"
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_sync_execution_scope_includes_send_throw_and_close(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    closed: list[bool] = []
+    error = ConnectionError("stream failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestSyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+        def _process_chunk(self, chunk: Any) -> None:
+            assert active.get()
+            super()._process_chunk(chunk)
+
+        def _on_stream_end(self) -> None:
+            assert active.get()
+            super()._on_stream_end()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            assert active.get()
+            super()._on_stream_error(error)
+
+    def produce() -> Generator[str, str, None]:
+        assert active.get()
+        try:
+            value = yield "first"
+            assert active.get()
+            assert value == "sent"
+            try:
+                yield "second"
+            except ConnectionError as caught:
+                assert caught is error
+                assert active.get()
+                if failure:
+                    raise
+                yield "recovered"
+        finally:
+            assert active.get()
+            closed.append(True)
+
+    wrapper = ScopedWrapper(produce())
+    assert next(wrapper) == "first"
+    assert not active.get()
+    assert wrapper.send("sent") == "second"
+    assert not active.get()
+    if failure:
+        with pytest.raises(ConnectionError) as raised:
+            wrapper.throw(error)
+        assert raised.value is error
+        assert wrapper._self_failures == [error]
+    else:
+        assert wrapper.throw(error) == "recovered"
+    assert not active.get()
+    wrapper.close()
+    assert not active.get()
+    assert closed == [True]
+    assert wrapper._self_stop_count == (0 if failure else 1)
+    assert not hasattr(ScopedWrapper(_FakeSyncStream()), "send")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_async_execution_scope_includes_asend_athrow_and_close(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    closed: list[bool] = []
+    error = ConnectionError("stream failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+        def _process_chunk(self, chunk: Any) -> None:
+            assert active.get()
+            super()._process_chunk(chunk)
+
+        def _on_stream_end(self) -> None:
+            assert active.get()
+            super()._on_stream_end()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            assert active.get()
+            super()._on_stream_error(error)
+
+    async def produce() -> AsyncGenerator[str, str]:
+        assert active.get()
+        try:
+            value = yield "first"
+            assert active.get()
+            assert value == "sent"
+            try:
+                yield "second"
+            except ConnectionError as caught:
+                assert caught is error
+                assert active.get()
+                if failure:
+                    raise
+                yield "recovered"
+        finally:
+            assert active.get()
+            closed.append(True)
+
+    wrapper = ScopedWrapper(produce())
+    assert await anext(wrapper) == "first"
+    assert not active.get()
+    assert await wrapper.asend("sent") == "second"
+    assert not active.get()
+    if failure:
+        with pytest.raises(ConnectionError) as raised:
+            await wrapper.athrow(error)
+        assert raised.value is error
+        assert wrapper._self_failures == [error]
+    else:
+        assert await wrapper.athrow(error) == "recovered"
+    assert not active.get()
+    await wrapper.aclose()
+    assert not active.get()
+    assert closed == [True]
+    assert wrapper._self_stop_count == (0 if failure else 1)
+    assert not hasattr(ScopedWrapper(_FakeAsyncStream()), "asend")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_sync_manager_exit_runs_inside_stream_execution_scope(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    exits: list[bool] = []
+    error = RuntimeError("exit failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestSyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    class ScopedManagerWrapper(SyncStreamManagerWrapper):
+        def _wrap_stream(self, stream, invocation):
+            return ScopedWrapper(stream, invocation=invocation)
+
+    class Manager(_FakeSyncManager):
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            # The SDK closes its stream here, so this is stream cleanup.
+            exits.append(active.get())
+            return super().__exit__(exc_type, exc_val, exc_tb)
+
+    stream = _FakeSyncStream(chunks=["a"])
+    manager = Manager(stream, exit_error=error if failure else None)
+    wrapper = ScopedManagerWrapper(manager, _FakeInvocation)
+    invocation = None
+
+    with pytest.raises(RuntimeError) if failure else nullcontext():
+        with wrapper as stream_wrapper:
+            invocation = stream_wrapper._self_invocation
+            assert not active.get()
+            assert next(stream_wrapper) == "a"
+            assert not active.get()
+
+    assert exits == [True]
+    assert not active.get()
+    assert invocation is not None
+    if failure:
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+    else:
+        assert invocation.failures == []
+        assert invocation.stop_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_async_manager_exit_runs_inside_stream_execution_scope(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    exits: list[bool] = []
+    error = RuntimeError("exit failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    class ScopedManagerWrapper(AsyncStreamManagerWrapper):
+        def _wrap_stream(self, stream, invocation):
+            return ScopedWrapper(stream, invocation=invocation)
+
+    class Manager(_FakeAsyncManager):
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            exits.append(active.get())
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+
+    stream = _FakeAsyncStream(chunks=["a"])
+    manager = Manager(stream, exit_error=error if failure else None)
+    wrapper = ScopedManagerWrapper(manager, _FakeInvocation)
+    invocation = None
+
+    with pytest.raises(RuntimeError) if failure else nullcontext():
+        async with wrapper as stream_wrapper:
+            invocation = stream_wrapper._self_invocation
+            assert not active.get()
+            assert await anext(stream_wrapper) == "a"
+            assert not active.get()
+
+    assert exits == [True]
+    assert not active.get()
+    assert invocation is not None
+    if failure:
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+    else:
+        assert invocation.failures == []
+        assert invocation.stop_count == 1
