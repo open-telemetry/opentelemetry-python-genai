@@ -1,0 +1,1 @@
+Unwrap `chat.completions.parse` when calling `OpenAIInstrumentor().uninstrument()`.
