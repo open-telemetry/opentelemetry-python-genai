@@ -28,16 +28,14 @@ from .utils import (
 if TYPE_CHECKING:
     from openai.types.responses.response import Response
     from openai.types.responses.response_output_item import ResponseOutputItem
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+    )
+    from openai.types.responses.response_reasoning_item_param import (
+        ResponseReasoningItemParam,
+    )
     from openai.types.responses.response_usage import ResponseUsage
     from openai.types.responses.tool_param import ToolParam
-
-    from opentelemetry.util.genai.types import (
-        Error,
-        InputMessage,
-        OutputMessage,
-        TextPart,
-        ToolDefinition,
-    )
 
 try:
     from openai.types.responses.response import Response
@@ -75,36 +73,23 @@ except ImportError:
     ResponseCustomToolCall = None
 
 
-try:
-    from opentelemetry.util.genai.types import (
-        Error,
-        FunctionToolDefinition,
-        GenericToolDefinition,
-        InputMessage,
-        OutputMessage,
-        ReasoningPart,
-        Role,
-        ServerToolCallPart,
-        ServerToolCallResponsePart,
-        TextPart,
-        ToolCallResponsePart,
-    )
-    from opentelemetry.util.genai.types import (
-        ToolCallRequestPart as ToolCall,
-    )
-except ImportError:
-    Error = None
-    FunctionToolDefinition = None
-    GenericToolDefinition = None
-    InputMessage = None
-    OutputMessage = None
-    ReasoningPart = None
-    Role = None
-    ServerToolCallPart = None
-    ServerToolCallResponsePart = None
-    TextPart = None
-    ToolCall = None
-    ToolCallResponsePart = None
+from opentelemetry.util.genai.types import (
+    Error,
+    FunctionToolDefinition,
+    GenericToolDefinition,
+    InputMessage,
+    OutputMessage,
+    ReasoningPart,
+    Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
+    TextPart,
+    ToolCallResponsePart,
+    ToolDefinition,
+)
+from opentelemetry.util.genai.types import (
+    ToolCallRequestPart as ToolCall,
+)
 
 
 @dataclass
@@ -264,6 +249,22 @@ def _get_call_id(item: object) -> str | None:
     )
 
 
+def _extract_reasoning_parts(
+    item: ResponseReasoningItem | ResponseReasoningItemParam,
+) -> list[ReasoningPart]:
+    parts: list[ReasoningPart] = []
+    for block in _get_sequence(_get_field(item, "summary")):
+        text = _get_field(block, "text")
+        if isinstance(text, str):
+            parts.append(ReasoningPart(content=text))
+    for block in _get_sequence(_get_field(item, "content")):
+        if _get_field(block, "type") == "reasoning_text":
+            text = _get_field(block, "text")
+            if isinstance(text, str):
+                parts.append(ReasoningPart(content=text))
+    return parts
+
+
 # Client-side tool calls, by the field holding the call's arguments. A custom
 # tool takes free-form text where a function takes a JSON arguments string.
 _TOOL_CALL_ARGUMENT_FIELDS = {
@@ -311,6 +312,15 @@ def _get_input_message(item: object) -> InputMessage | None:
                     ),
                 )
             ],
+        )
+
+    if item_type == "reasoning":
+        parts = _extract_reasoning_parts(item)
+        if not parts:
+            return None
+        return InputMessage(
+            role=Role.ASSISTANT.value,
+            parts=parts,
         )
 
     role = _get_field(item, "role")
@@ -383,24 +393,6 @@ def _extract_output_parts(content_blocks: Sequence[object]) -> list[TextPart]:
             parts.append(TextPart(content=block.text))
         elif isinstance(block, ResponseOutputRefusal):
             parts.append(TextPart(content=block.refusal))
-    return parts
-
-
-def _extract_reasoning_parts(
-    item: ResponseReasoningItem,
-) -> list[ReasoningPart]:
-    if ReasoningPart is None:
-        return []
-
-    parts: list[ReasoningPart] = []
-    for block in item.summary:
-        if isinstance(block.text, str):
-            parts.append(ReasoningPart(content=block.text))
-    for block in item.content or []:
-        if getattr(block, "type", None) == "reasoning_text" and isinstance(
-            getattr(block, "text", None), str
-        ):
-            parts.append(ReasoningPart(content=block.text))
     return parts
 
 

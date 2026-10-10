@@ -24,6 +24,7 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
     LLMInvocation,
+    ReasoningPart,
     ServerToolCallPart,
     ServerToolCallResponsePart,
     TextPart,
@@ -627,6 +628,163 @@ def test_extract_input_messages_without_tool_part_types(loaded_module):
         mock.patch.object(loaded_module, "ToolCallResponsePart", None),
     ):
         assert loaded_module.get_input_messages(tool_items) == []
+
+
+def test_extract_input_messages_maps_reasoning_dict_with_summary(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Thought step"}],
+                "content": None,
+            }
+        ]
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert len(messages[0].parts) == 1
+    part = messages[0].parts[0]
+    assert isinstance(part, ReasoningPart)
+    assert part.type == "reasoning"
+    assert part.content == "Thought step"
+
+
+def test_extract_input_messages_maps_reasoning_dict_with_content(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [],
+                "content": [
+                    {"type": "reasoning_text", "text": "Deep thought"}
+                ],
+            }
+        ]
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert len(messages[0].parts) == 1
+    part = messages[0].parts[0]
+    assert isinstance(part, ReasoningPart)
+    assert part.type == "reasoning"
+    assert part.content == "Deep thought"
+
+
+def test_extract_input_messages_skips_empty_reasoning(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [],
+                "content": [],
+                "encrypted_content": "gAAAAABqnmzMN9RqmH9jGxjmoJdoO3La",
+            }
+        ]
+    )
+
+    assert messages == []
+
+
+def test_extract_input_messages_maps_reasoning_sdk_model(loaded_module):
+    if loaded_module.ResponseReasoningItem is None:
+        pytest.skip("openai SDK too old to support ResponseReasoningItem")
+
+    item = loaded_module.ResponseReasoningItem.model_validate(
+        {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "SDK thought"}],
+            "content": [
+                {"type": "reasoning_text", "text": "SDK deep thought"}
+            ],
+            "status": "completed",
+        }
+    )
+    messages = loaded_module.get_input_messages([item])
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert len(messages[0].parts) == 2
+    assert isinstance(messages[0].parts[0], ReasoningPart)
+    assert messages[0].parts[0].content == "SDK thought"
+    assert isinstance(messages[0].parts[1], ReasoningPart)
+    assert messages[0].parts[1].content == "SDK deep thought"
+
+
+def test_extract_input_messages_reasoning_not_merged_with_tool_calls(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "f1",
+                "arguments": "{}",
+            },
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning..."}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "f2",
+                "arguments": "{}",
+            },
+        ]
+    )
+
+    assert len(messages) == 3
+    assert [m.role for m in messages] == [
+        "assistant",
+        "assistant",
+        "assistant",
+    ]
+    assert messages[0].parts[0].type == "tool_call"
+    assert messages[1].parts[0].type == "reasoning"
+    assert messages[1].parts[0].content == "Planning..."
+    assert messages[2].parts[0].type == "tool_call"
+
+
+def test_extract_input_messages_reasoning_before_parallel_tool_calls(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning..."}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "f1",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "f2",
+                "arguments": "{}",
+            },
+        ]
+    )
+
+    assert [m.role for m in messages] == ["assistant", "assistant"]
+    assert [p.type for p in messages[0].parts] == ["reasoning"]
+    assert [p.id for p in messages[1].parts] == ["call_1", "call_2"]
 
 
 def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
