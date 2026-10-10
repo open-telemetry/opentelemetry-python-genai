@@ -1,0 +1,1 @@
+Report caller-abandoned Anthropic streams as incomplete instead of finalizing placeholder tool use data.

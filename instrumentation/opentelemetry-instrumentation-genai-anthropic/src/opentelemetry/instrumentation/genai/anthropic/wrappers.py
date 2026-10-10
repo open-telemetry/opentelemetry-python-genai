@@ -28,8 +28,15 @@ from opentelemetry.util.genai.stream import (
     finalize_on_aclose,
     finalize_on_close,
 )
+from opentelemetry.util.genai.types import OutputMessage
 
 from .messages_extractors import set_invocation_response_attributes
+from .utils import (
+    StreamBlockState,
+    create_stream_block_state,
+    stream_block_state_to_part,
+    update_stream_block_state,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -58,8 +65,6 @@ if TYPE_CHECKING:
     from anthropic.types.parsed_message import ParsedMessage
 
     from opentelemetry.util.genai.invocation import InferenceInvocation
-
-
 ResponseFormatT = TypeVar("ResponseFormatT")
 accumulate_event = cast("Callable[..., Message] | None", _sdk_accumulate_event)
 
@@ -113,6 +118,44 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     _self_capture_content: bool
     _self_message_telemetry_finalized: bool
     _self_json_bufs: dict[int, bytes]
+    _self_block_states: dict[int, StreamBlockState]
+    _self_seen_message_stop: bool
+    _self_stop_reason: str | None
+    _self_output_tokens: int | None
+
+    def _is_incomplete_response(self) -> bool:
+        stop_reason = self._self_stop_reason
+        if stop_reason is None and self._self_message is not None:
+            raw_stop_reason = getattr(self._self_message, "stop_reason", None)
+            stop_reason = (
+                raw_stop_reason if isinstance(raw_stop_reason, str) else None
+            )
+        return (
+            self._self_message is not None
+            and not self._self_seen_message_stop
+            and stop_reason is None
+        )
+
+    def _partial_output_messages(self) -> list[OutputMessage] | None:
+        if not self._self_block_states:
+            return None
+
+        parts = [
+            part
+            for _, state in sorted(self._self_block_states.items())
+            if (part := stream_block_state_to_part(state)) is not None
+        ]
+        if not parts:
+            return None
+
+        role = getattr(self._self_message, "role", "assistant")
+        return [
+            OutputMessage(
+                role=role if isinstance(role, str) else "assistant",
+                parts=parts,
+                finish_reason="error",
+            )
+        ]
 
     def _stop(self) -> None:
         if self._self_message_telemetry_finalized:
@@ -120,11 +163,26 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         # text_stream and the get_final_* helpers bypass _process_chunk, so the
         # snapshot can be the only record of the response.
         self._adopt_sdk_snapshot()
+        incomplete_response = self._is_incomplete_response()
+        if self._self_message is not None:
+            usage = getattr(self._self_message, "usage", None)
+            if usage is not None and (
+                incomplete_response or self._self_output_tokens is not None
+            ):
+                usage.output_tokens = self._self_output_tokens
         _set_response_attributes(
             self._self_invocation,
             self._self_message,
-            self._self_capture_content,
+            self._self_capture_content and not incomplete_response,
         )
+        if incomplete_response:
+            self._self_invocation.finish_reasons = ["error"]
+            if (
+                self._self_capture_content
+                and (output_messages := self._partial_output_messages())
+                is not None
+            ):
+                self._self_invocation.output_messages = output_messages
         self._self_invocation.stop()
         self._self_message_telemetry_finalized = True
 
@@ -178,6 +236,7 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     ) -> None:
         """Accumulate a final message snapshot from a streaming chunk."""
         global _accumulation_disabled
+        self._track_partial_response(chunk)
         if self._adopt_sdk_snapshot():
             return
         if accumulate_event is None or _accumulation_disabled:
@@ -206,6 +265,49 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
                 exc_info=True,
             )
 
+    def _track_partial_response(
+        self,
+        chunk: RawMessageStreamEvent
+        | ParsedMessageStreamEvent[ResponseFormatT],
+    ) -> None:
+        chunk_type = getattr(chunk, "type", None)
+        if chunk_type == "content_block_start":
+            index = getattr(chunk, "index", None)
+            content_block = getattr(chunk, "content_block", None)
+            if isinstance(index, int) and content_block is not None:
+                self._self_block_states[index] = create_stream_block_state(
+                    content_block
+                )
+            return
+
+        if chunk_type == "content_block_delta":
+            index = getattr(chunk, "index", None)
+            delta = getattr(chunk, "delta", None)
+            state = (
+                self._self_block_states.get(index)
+                if isinstance(index, int)
+                else None
+            )
+            if state is not None and delta is not None:
+                update_stream_block_state(state, delta)
+            return
+
+        if chunk_type == "message_delta":
+            delta = getattr(chunk, "delta", None)
+            if delta is not None:
+                stop_reason = getattr(delta, "stop_reason", None)
+                if isinstance(stop_reason, str):
+                    self._self_stop_reason = stop_reason
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                output_tokens = getattr(usage, "output_tokens", None)
+                if isinstance(output_tokens, int):
+                    self._self_output_tokens = output_tokens
+            return
+
+        if chunk_type == "message_stop":
+            self._self_seen_message_stop = True
+
 
 class MessagesStreamWrapper(
     _MessagesStreamMixin[ResponseFormatT],
@@ -228,6 +330,10 @@ class MessagesStreamWrapper(
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
         self._self_json_bufs = {}
+        self._self_block_states = {}
+        self._self_seen_message_stop = False
+        self._self_stop_reason = None
+        self._self_output_tokens = None
 
     @property
     def response(self) -> _http_lib.Response:
@@ -269,6 +375,10 @@ class AsyncMessagesStreamWrapper(
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
         self._self_json_bufs = {}
+        self._self_block_states = {}
+        self._self_seen_message_stop = False
+        self._self_stop_reason = None
+        self._self_output_tokens = None
 
     @property
     def response(self) -> _http_lib.Response:

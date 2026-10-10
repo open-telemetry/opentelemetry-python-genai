@@ -235,6 +235,76 @@ _STREAM_SSE_BODY = b"".join(
 )
 
 
+def _partial_tool_use_stream_sse_body() -> bytes:
+    def _event(name: str, payload: dict[str, object]) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    arguments = '{"city": "Chicago", "unit": "celsius"}'
+    return b"".join(
+        [
+            _event(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_partial_tool_use",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                },
+            ),
+            _event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_A",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+            ),
+            *[
+                _event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": character,
+                        },
+                    },
+                )
+                for character in arguments
+            ],
+            _event(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": 0},
+            ),
+            _event(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "tool_use",
+                        "stop_sequence": None,
+                    },
+                    "usage": {"output_tokens": 10},
+                },
+            ),
+            _event("message_stop", {"type": "message_stop"}),
+        ]
+    )
+
+
 def _assert_weather_tool_definitions(span):
     assert _load_span_messages(
         span, GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
@@ -1425,6 +1495,68 @@ def test_sync_messages_stream_tools_generator_is_recorded(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     _assert_weather_tool_definitions(spans[0])
+
+
+@pytest.mark.skipif(
+    not _has_tools_param,
+    reason="anthropic SDK too old to support 'tools' parameter",
+)
+def test_sync_messages_stream_early_exit_marks_incomplete_tool_use(
+    span_exporter, instrument_with_content
+):
+    def respond(_request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_partial_tool_use_stream_sse_body(),
+        )
+
+    client = Anthropic(
+        api_key="test_anthropic_api_key",
+        base_url="http://anthropic.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    received = ""
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": "What is the weather in SF?"}],
+        tools=[_WEATHER_TOOL],
+    ) as stream:
+        for event in stream:
+            if getattr(event, "type", None) != "input_json":
+                continue
+            received += event.partial_json
+            if len(received) >= 15:
+                break
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert received == '{"city": "Chica'
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in span.attributes
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "error",
+    )
+    assert _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    ) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "arguments": '{"city": "Chica',
+                    "name": "get_weather",
+                    "id": "toolu_A",
+                    "type": "tool_call",
+                }
+            ],
+            "finish_reason": "error",
+            "name": None,
+        }
+    ]
 
 
 @pytest.mark.vcr()
