@@ -332,6 +332,362 @@ def test_invoke_agent_sync_caller_error_during_stream(
     assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
 
 
+# --- Sync invoke_inline_agent tests ---
+
+
+def test_invoke_inline_agent_sync_with_content(
+    agent_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "session-inline-123",
+            "completion": [
+                {"chunk": {"bytes": b"Hello from "}},
+                {"chunk": {"bytes": b"inline agent!"}},
+            ],
+        },
+        expected_params={
+            "foundationModel": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0",
+            "instruction": "You are a helpful inline assistant for testing OpenTelemetry.",
+            "sessionId": "session-inline-123",
+            "inputText": "Hi",
+            "agentName": "test-inline-agent",
+            "guardrailConfiguration": {
+                "guardrailIdentifier": "gr-inline-1",
+                "guardrailVersion": "1",
+            },
+            "knowledgeBases": [
+                {
+                    "knowledgeBaseId": "kb-inline-1",
+                    "description": "Test KB description",
+                },
+            ],
+            "actionGroups": [
+                {
+                    "actionGroupName": "CodeInterpreter",
+                    "parentActionGroupSignature": "AMAZON.CodeInterpreter",
+                },
+                {
+                    "actionGroupName": "CustomTools",
+                    "functionSchema": {
+                        "functions": [
+                            {
+                                "name": "get_weather",
+                                "description": "Get weather for a city",
+                                "parameters": {
+                                    "city": {"type": "string"},
+                                },
+                            }
+                        ]
+                    },
+                },
+            ],
+        },
+    )
+
+    with stubber:
+        response = agent_client.invoke_inline_agent(
+            foundationModel="arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0",
+            instruction="You are a helpful inline assistant for testing OpenTelemetry.",
+            sessionId="session-inline-123",
+            inputText="Hi",
+            agentName="test-inline-agent",
+            guardrailConfiguration={
+                "guardrailIdentifier": "gr-inline-1",
+                "guardrailVersion": "1",
+            },
+            knowledgeBases=[
+                {
+                    "knowledgeBaseId": "kb-inline-1",
+                    "description": "Test KB description",
+                },
+            ],
+            actionGroups=[
+                {
+                    "actionGroupName": "CodeInterpreter",
+                    "parentActionGroupSignature": "AMAZON.CodeInterpreter",
+                },
+                {
+                    "actionGroupName": "CustomTools",
+                    "functionSchema": {
+                        "functions": [
+                            {
+                                "name": "get_weather",
+                                "description": "Get weather for a city",
+                                "parameters": {
+                                    "city": {"type": "string"},
+                                },
+                            }
+                        ]
+                    },
+                },
+            ],
+        )
+        chunks = list(response["completion"])
+        assert len(chunks) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "invoke_agent test-inline-agent"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == GenAIAttributes.GenAiOperationNameValues.INVOKE_AGENT.value
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "anthropic.claude-3-5-haiku-20241022-v1:0"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
+        == "test-inline-agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "session-inline-123"
+    )
+    assert (
+        span.attributes.get(aws_attributes.AWS_BEDROCK_GUARDRAIL_ID)
+        == "gr-inline-1"
+    )
+    assert (
+        span.attributes.get(aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID)
+        == "kb-inline-1"
+    )
+    assert (
+        span.attributes.get(ServerAttributes.SERVER_ADDRESS)
+        == "bedrock-agent-runtime.us-east-1.amazonaws.com"
+    )
+
+    # Content capture enabled
+    sys_instruction = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS)
+    )
+    assert len(sys_instruction) == 1
+    assert (
+        sys_instruction[0]["content"]
+        == "You are a helpful inline assistant for testing OpenTelemetry."
+    )
+    assert sys_instruction[0]["type"] == "text"
+    input_msgs = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    )
+    assert len(input_msgs) == 1
+    assert input_msgs[0]["role"] == "user"
+    assert input_msgs[0]["parts"][0]["content"] == "Hi"
+
+    output_msgs = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+    )
+    assert len(output_msgs) == 1
+    assert output_msgs[0]["role"] == "assistant"
+    assert output_msgs[0]["parts"][0]["content"] == "Hello from inline agent!"
+
+    tools = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+    )
+    assert len(tools) == 2
+    assert tools[0]["name"] == "CodeInterpreter"
+    assert tools[0]["type"] == "AMAZON.CodeInterpreter"
+    assert tools[1]["name"] == "get_weather"
+
+
+def test_invoke_inline_agent_sync_no_content(
+    agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "session-inline-no-content",
+            "completion": [{"chunk": {"bytes": b"Secret answer"}}],
+        },
+        expected_params={
+            "foundationModel": "amazon.nova-micro-v1:0",
+            "instruction": (
+                "Secret instruction for testing OpenTelemetry inline agent."
+            ),
+            "sessionId": "session-inline-no-content",
+            "inputText": "Secret prompt",
+        },
+    )
+
+    with stubber:
+        response = agent_client.invoke_inline_agent(
+            foundationModel="amazon.nova-micro-v1:0",
+            instruction=(
+                "Secret instruction for testing OpenTelemetry inline agent."
+            ),
+            sessionId="session-inline-no-content",
+            inputText="Secret prompt",
+        )
+        list(response["completion"])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "invoke_agent"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == GenAIAttributes.GenAiOperationNameValues.INVOKE_AGENT.value
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "amazon.nova-micro-v1:0"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "session-inline-no-content"
+    )
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+def test_invoke_inline_agent_sync_error(
+    agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber.add_client_error(
+        "invoke_inline_agent",
+        service_error_code="ValidationException",
+        service_message="Invalid request",
+    )
+
+    with stubber:
+        with pytest.raises(ClientError):
+            agent_client.invoke_inline_agent(
+                foundationModel="amazon.nova-micro-v1:0",
+                instruction=(
+                    "Test instruction for testing OpenTelemetry inline agent."
+                ),
+                sessionId="session-err",
+                inputText="Hi",
+            )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) in (
+        "ValidationException",
+        "botocore.errorfactory.ValidationException",
+    )
+
+
+def test_invoke_inline_agent_sync_stream_error(
+    agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    class FailingEventStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise ConnectionError("connection lost")
+
+    stubber = Stubber(agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "session-err",
+            "completion": FailingEventStream(),
+        },
+        expected_params={
+            "foundationModel": "amazon.nova-micro-v1:0",
+            "instruction": (
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            "sessionId": "session-err",
+            "inputText": "Hi",
+        },
+    )
+
+    with stubber:
+        response = agent_client.invoke_inline_agent(
+            foundationModel="amazon.nova-micro-v1:0",
+            instruction=(
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            sessionId="session-err",
+            inputText="Hi",
+        )
+        with pytest.raises(ConnectionError):
+            list(response["completion"])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ConnectionError"
+
+
+def test_invoke_inline_agent_sync_caller_error_during_stream(
+    agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "session-caller-err",
+            "completion": [{"chunk": {"bytes": b"chunk 1"}}],
+        },
+        expected_params={
+            "foundationModel": "amazon.nova-micro-v1:0",
+            "instruction": (
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            "sessionId": "session-caller-err",
+            "inputText": "Hi",
+        },
+    )
+
+    with stubber:
+        response = agent_client.invoke_inline_agent(
+            foundationModel="amazon.nova-micro-v1:0",
+            instruction=(
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            sessionId="session-caller-err",
+            inputText="Hi",
+        )
+        with pytest.raises(RuntimeError):
+            with response["completion"] as stream:
+                for _ in stream:
+                    raise RuntimeError("caller error")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+
+
 # --- Sync retrieve tests ---
 
 
@@ -799,6 +1155,376 @@ async def test_async_invoke_agent_caller_error_during_stream(
             agentAliasId="async-alias-1",
             sessionId="async-session-123",
             inputText="Hello async agent",
+        )
+        with pytest.raises(RuntimeError):
+            async with response["completion"] as stream:
+                async for _ in stream:
+                    raise RuntimeError("caller error")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_inline_agent_with_content(
+    async_agent_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "async-session-inline-123",
+            "completion": _MockAsyncEventStream(
+                [
+                    {"chunk": {"bytes": b"Async hello "}},
+                    {"chunk": {"bytes": b"from inline agent!"}},
+                ]
+            ),
+        },
+        expected_params={
+            "foundationModel": "anthropic.claude-3-5-haiku-20241022-v1:0",
+            "instruction": (
+                "You are a helpful async inline assistant for testing"
+                " OpenTelemetry."
+            ),
+            "sessionId": "async-session-inline-123",
+            "inputText": "Hi async",
+            "agentName": "async-inline-agent",
+            "guardrailConfiguration": {
+                "guardrailIdentifier": "gr-async-1",
+                "guardrailVersion": "1",
+            },
+            "knowledgeBases": [
+                {
+                    "knowledgeBaseId": "kb-async-1",
+                    "description": "Async KB description",
+                }
+            ],
+            "actionGroups": [
+                {
+                    "actionGroupName": "CodeInterpreter",
+                    "parentActionGroupSignature": "AMAZON.CodeInterpreter",
+                },
+                {
+                    "actionGroupName": "CustomTools",
+                    "functionSchema": {
+                        "functions": [
+                            {
+                                "name": "get_weather",
+                                "description": "Get weather for a city",
+                                "parameters": {
+                                    "city": {"type": "string"},
+                                },
+                            }
+                        ]
+                    },
+                },
+            ],
+        },
+    )
+
+    with stubber:
+        response = await async_agent_client.invoke_inline_agent(
+            foundationModel="anthropic.claude-3-5-haiku-20241022-v1:0",
+            instruction=(
+                "You are a helpful async inline assistant for testing"
+                " OpenTelemetry."
+            ),
+            sessionId="async-session-inline-123",
+            inputText="Hi async",
+            agentName="async-inline-agent",
+            guardrailConfiguration={
+                "guardrailIdentifier": "gr-async-1",
+                "guardrailVersion": "1",
+            },
+            knowledgeBases=[
+                {
+                    "knowledgeBaseId": "kb-async-1",
+                    "description": "Async KB description",
+                }
+            ],
+            actionGroups=[
+                {
+                    "actionGroupName": "CodeInterpreter",
+                    "parentActionGroupSignature": "AMAZON.CodeInterpreter",
+                },
+                {
+                    "actionGroupName": "CustomTools",
+                    "functionSchema": {
+                        "functions": [
+                            {
+                                "name": "get_weather",
+                                "description": "Get weather for a city",
+                                "parameters": {
+                                    "city": {"type": "string"},
+                                },
+                            }
+                        ]
+                    },
+                },
+            ],
+        )
+        collected = [chunk async for chunk in response["completion"]]
+        assert len(collected) == 2
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "invoke_agent async-inline-agent"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == GenAIAttributes.GenAiOperationNameValues.INVOKE_AGENT.value
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
+        == GenAIAttributes.GenAiProviderNameValues.AWS_BEDROCK.value
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "anthropic.claude-3-5-haiku-20241022-v1:0"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_AGENT_NAME)
+        == "async-inline-agent"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "async-session-inline-123"
+    )
+    assert (
+        span.attributes.get(aws_attributes.AWS_BEDROCK_GUARDRAIL_ID)
+        == "gr-async-1"
+    )
+    assert (
+        span.attributes.get(aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID)
+        == "kb-async-1"
+    )
+    assert (
+        span.attributes.get(ServerAttributes.SERVER_ADDRESS)
+        == "bedrock-agent-runtime.us-east-1.amazonaws.com"
+    )
+
+    # Content capture enabled
+    sys_instruction = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS)
+    )
+    assert len(sys_instruction) == 1
+    assert (
+        sys_instruction[0]["content"]
+        == "You are a helpful async inline assistant for testing OpenTelemetry."
+    )
+    assert sys_instruction[0]["type"] == "text"
+    input_msgs = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+    )
+    assert len(input_msgs) == 1
+    assert input_msgs[0]["role"] == "user"
+    assert input_msgs[0]["parts"][0]["content"] == "Hi async"
+
+    output_msgs = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+    )
+    assert len(output_msgs) == 1
+    assert output_msgs[0]["role"] == "assistant"
+    assert (
+        output_msgs[0]["parts"][0]["content"]
+        == "Async hello from inline agent!"
+    )
+
+    tools = json.loads(
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+    )
+    assert len(tools) == 2
+    assert tools[0]["name"] == "CodeInterpreter"
+    assert tools[0]["type"] == "AMAZON.CodeInterpreter"
+    assert tools[1]["name"] == "get_weather"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_inline_agent_no_content(
+    async_agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "async-session-inline-no-content",
+            "completion": _MockAsyncEventStream(
+                [{"chunk": {"bytes": b"Secret async answer"}}]
+            ),
+        },
+        expected_params={
+            "foundationModel": "amazon.nova-micro-v1:0",
+            "instruction": (
+                "Secret instruction for testing OpenTelemetry inline agent."
+            ),
+            "sessionId": "async-session-inline-no-content",
+            "inputText": "Secret prompt",
+        },
+    )
+
+    with stubber:
+        response = await async_agent_client.invoke_inline_agent(
+            foundationModel="amazon.nova-micro-v1:0",
+            instruction=(
+                "Secret instruction for testing OpenTelemetry inline agent."
+            ),
+            sessionId="async-session-inline-no-content",
+            inputText="Secret prompt",
+        )
+        async for _ in response["completion"]:
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert span.name == "invoke_agent"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == GenAIAttributes.GenAiOperationNameValues.INVOKE_AGENT.value
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL)
+        == "amazon.nova-micro-v1:0"
+    )
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "async-session-inline-no-content"
+    )
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in span.attributes
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_inline_agent_error(
+    async_agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber.add_client_error(
+        "invoke_inline_agent",
+        service_error_code="ValidationException",
+        service_message="Invalid request",
+    )
+
+    with stubber:
+        with pytest.raises(ClientError):
+            await async_agent_client.invoke_inline_agent(
+                foundationModel="amazon.nova-micro-v1:0",
+                instruction=(
+                    "Test instruction for testing OpenTelemetry inline agent."
+                ),
+                sessionId="async-session-err",
+                inputText="Hi",
+            )
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) in (
+        "ValidationException",
+        "botocore.errorfactory.ValidationException",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_inline_agent_stream_error(
+    async_agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "async-session-err",
+            "completion": _FailingAsyncEventStream(
+                [{"chunk": {"bytes": b"chunk 1"}}, {"fail": True}]
+            ),
+        },
+        expected_params={
+            "foundationModel": "amazon.nova-micro-v1:0",
+            "instruction": (
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            "sessionId": "async-session-err",
+            "inputText": "Hi",
+        },
+    )
+
+    with stubber:
+        response = await async_agent_client.invoke_inline_agent(
+            foundationModel="amazon.nova-micro-v1:0",
+            instruction=(
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            sessionId="async-session-err",
+            inputText="Hi",
+        )
+        with pytest.raises(ConnectionError):
+            async for _ in response["completion"]:
+                pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes.get(ErrorAttributes.ERROR_TYPE) == "ConnectionError"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_inline_agent_caller_error_during_stream(
+    async_agent_client,
+    instrument_no_content,
+    span_exporter,
+) -> None:
+    stubber = Stubber(async_agent_client)
+    stubber._validate_response = lambda *args, **kwargs: None
+    stubber.add_response(
+        "invoke_inline_agent",
+        service_response={
+            "contentType": "application/json",
+            "sessionId": "async-session-caller-err",
+            "completion": _MockAsyncEventStream(
+                [{"chunk": {"bytes": b"chunk 1"}}]
+            ),
+        },
+        expected_params={
+            "foundationModel": "amazon.nova-micro-v1:0",
+            "instruction": (
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            "sessionId": "async-session-caller-err",
+            "inputText": "Hi",
+        },
+    )
+
+    with stubber:
+        response = await async_agent_client.invoke_inline_agent(
+            foundationModel="amazon.nova-micro-v1:0",
+            instruction=(
+                "Test instruction for testing OpenTelemetry inline agent."
+            ),
+            sessionId="async-session-caller-err",
+            inputText="Hi",
         )
         with pytest.raises(RuntimeError):
             async with response["completion"] as stream:
