@@ -64,6 +64,7 @@ def test_workflow_background_execution_non_streaming(
     workflow = Workflow(
         name="test-bg-workflow",
         steps=[async_step],
+        telemetry=False,
     )
 
     async def _test() -> None:
@@ -101,6 +102,7 @@ def test_workflow_background_execution_identity(
     workflow = Workflow(
         name="test-bg-id-workflow",
         steps=[quick_step],
+        telemetry=False,
     )
 
     async def _test() -> None:
@@ -119,6 +121,7 @@ def test_workflow_background_execution_identity(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
+    assert span.status.status_code != StatusCode.ERROR
     assert span.attributes.get(USER_ID) == "bg-user-999"
     assert span.attributes.get(GEN_AI_CONVERSATION_ID) == "bg-sess-888"
 
@@ -141,6 +144,7 @@ def test_workflow_background_execution_child_parentage(
     workflow = Workflow(
         name="test-bg-parent-workflow",
         steps=[agent_step],
+        telemetry=False,
     )
 
     async def _test() -> None:
@@ -171,6 +175,8 @@ def test_workflow_background_execution_child_parentage(
     wf_span = wf_spans[0]
     agent_span = agent_spans[0]
 
+    assert wf_span.status.status_code != StatusCode.ERROR
+    assert agent_span.status.status_code != StatusCode.ERROR
     assert agent_span.parent is not None
     assert agent_span.parent.span_id == wf_span.context.span_id
 
@@ -187,6 +193,7 @@ def test_workflow_background_execution_error(
     workflow = Workflow(
         name="test-bg-fail-workflow",
         steps=failing_custom_executor,
+        telemetry=False,
     )
 
     async def _test() -> None:
