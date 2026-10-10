@@ -449,13 +449,45 @@ def _parse_body(body: Any) -> dict[str, Any] | None:
     """Safely parse body into a dictionary."""
     if _is_dict(body):
         return body
-    if isinstance(body, (str, bytes, bytearray)):
+    if not isinstance(body, (str, bytes, bytearray)):
+        # botocore documents the body of invoke_model and
+        # invoke_model_with_response_stream as bytes or a seekable file-like
+        # object, so a stream has to be read before it can be parsed.
+        body = _read_seekable_body(body)
+    if not isinstance(body, (str, bytes, bytearray)):
+        return None
+    try:
+        parsed: object = json.loads(body)
+        return parsed if _is_dict(parsed) else None
+    except Exception:
+        return None
+
+
+def _read_seekable_body(body: Any) -> str | bytes | bytearray | None:
+    """Read a seekable file-like request body without consuming it.
+
+    The position is restored before returning, so the request still receives the
+    payload it was given. A non-seekable stream is skipped: it can only be read
+    once, and reading it here would take the body away from the request.
+    """
+    read = getattr(body, "read", None)
+    if not callable(read):
+        return None
+    try:
+        position = body.tell()
+        body.seek(position)
+    except Exception:
+        return None
+    try:
+        data = read()
+    except Exception:
+        return None
+    finally:
         try:
-            parsed: object = json.loads(body)
-            return parsed if _is_dict(parsed) else None
+            body.seek(position)
         except Exception:
-            return None
-    return None
+            pass
+    return data if isinstance(data, (str, bytes, bytearray)) else None
 
 
 def extract_invoke_model_request(

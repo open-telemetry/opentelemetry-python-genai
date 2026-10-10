@@ -1,0 +1,1 @@
+Record request parameters and input messages for `invoke_model` and `invoke_model_with_response_stream` calls whose `body` is a seekable file-like object.
