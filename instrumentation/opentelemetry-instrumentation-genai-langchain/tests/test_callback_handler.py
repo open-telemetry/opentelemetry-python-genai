@@ -36,6 +36,9 @@ from langchain_core.outputs import (
     LLMResult,
 )
 
+from opentelemetry.instrumentation.genai.langchain.agent_context import (
+    _PendingGraph,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
@@ -139,19 +142,80 @@ class TestOnChainStartWorkflow:
             handler._invocation_manager.get_invocation(run_id) is workflow_inv
         )
 
-    def test_workflow_name_from_serialized(self):
+    def test_workflow_name_from_callback(self):
         handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
-            serialized={"name": "MyLangGraph"},
+            serialized={},
             inputs={},
             run_id=run_id,
             parent_run_id=None,
+            name="MyLangGraph",
         )
 
         telemetry.workflow.assert_called_once_with(
             name="MyLangGraph",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
+        )
+
+    @pytest.mark.parametrize("kwargs", [{}, {"name": None}, {"name": ""}])
+    def test_workflow_name_from_serialized(self, kwargs):
+        handler, telemetry, _, _ = _make_handler()
+
+        handler.on_chain_start(
+            serialized={"name": "MyLangGraph"},
+            inputs={},
+            run_id=_run_id(),
+            **kwargs,
+        )
+
+        telemetry.workflow.assert_called_once_with(
+            name="MyLangGraph",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
+        )
+
+    def test_callback_name_overrides_serialized_name(self):
+        handler, telemetry, _, _ = _make_handler()
+
+        handler.on_chain_start(
+            serialized={"name": "MyLangGraph"},
+            inputs={},
+            run_id=_run_id(),
+            name="callback_name",
+        )
+
+        telemetry.workflow.assert_called_once_with(
+            name="callback_name",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
+        )
+
+    @pytest.mark.parametrize("serialized", [None, {"name": "LangGraph"}])
+    def test_workflow_name_from_graph_announcement(self, serialized):
+        handler, telemetry, _, _ = _make_handler()
+        announcement = _PendingGraph(
+            name="compiled_workflow", is_agent=False, metadata={}
+        )
+
+        with mock.patch(
+            "opentelemetry.instrumentation.genai.langchain."
+            "callback_handler.claim_graph",
+            return_value=announcement,
+        ):
+            handler.on_chain_start(
+                serialized=serialized,
+                inputs={},
+                run_id=_run_id(),
+            )
+
+        telemetry.workflow.assert_called_once_with(
+            name="compiled_workflow",
             context=None,
             conversation_id=None,
             _attach_to_context=True,
