@@ -35,7 +35,9 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
     _embedding_snapshot: object | None = None
 
     def __init__(
-        self, generate_content_config_key_allowlist: AllowList | None = None
+        self,
+        generate_content_config_key_allowlist: AllowList | None = None,
+        embed_content_config_key_allowlist: AllowList | None = None,
     ):
         super().__init__()
         self._generate_content_config_key_allowlist = (
@@ -43,6 +45,13 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             or AllowList.from_env(
                 "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES",
                 excludes_env_var="OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES",
+            )
+        )
+        self._embed_content_config_key_allowlist = (
+            embed_content_config_key_allowlist
+            or AllowList.from_env(
+                "OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES",
+                excludes_env_var="OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_EXCLUDES",
             )
         )
 
@@ -77,7 +86,10 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
         self._interactions_snapshot = instrument_interactions(
             telemetry_handler,
         )
-        self._embedding_snapshot = instrument_embeddings(telemetry_handler)
+        self._embedding_snapshot = instrument_embeddings(
+            telemetry_handler,
+            embed_content_config_key_allowlist=self._embed_content_config_key_allowlist,
+        )
 
     def _uninstrument(self, **kwargs: Any):
         if self._generate_content_snapshot is not None:

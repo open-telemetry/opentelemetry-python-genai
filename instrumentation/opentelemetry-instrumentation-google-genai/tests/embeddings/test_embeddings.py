@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from google.genai.models import AsyncModels, Models
 from google.genai.types import (
     ContentEmbedding,
     ContentEmbeddingStatistics,
+    EmbedContentConfig,
     EmbedContentResponse,
+    HttpOptions,
 )
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -126,6 +128,81 @@ class TestEmbeddings(TestCase):
         self.assertEqual(
             attrs["server.address"],
             "generativelanguage.googleapis.com",
+        )
+
+    def test_embed_content_does_not_capture_config_attributes_by_default(self):
+        self.client.models.embed_content(
+            model="text-embedding-004",
+            contents="hello world",
+            config=EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=256,
+                auto_truncate=True,
+            ),
+        )
+
+        span = self.otel.get_finished_spans()[0]
+        attrs = span.attributes
+        self.assertNotIn("gcp.gen_ai.operation.config.task_type", attrs)
+        self.assertNotIn(
+            "gcp.gen_ai.operation.config.output_dimensionality", attrs
+        )
+        self.assertNotIn("gcp.gen_ai.operation.config.auto_truncate", attrs)
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES": "*"},
+    )
+    def test_async_embed_content_captures_config_attributes(self):
+        async def run_test():
+            await self.client.aio.models.embed_content(
+                model="text-embedding-004",
+                contents="hello world",
+                config={
+                    "taskType": "RETRIEVAL_DOCUMENT",
+                    "outputDimensionality": 128,
+                },
+            )
+
+        asyncio.run(run_test())
+
+        span = self.otel.get_finished_spans()[0]
+        attrs = span.attributes
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.task_type"],
+            "RETRIEVAL_DOCUMENT",
+        )
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.output_dimensionality"], 128
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_GOOGLE_GENAI_EMBED_CONTENT_CONFIG_INCLUDES": "*"},
+    )
+    def test_sync_embed_content_captures_config_without_http_options(self):
+        self.client.models.embed_content(
+            model="text-embedding-004",
+            contents="hello world",
+            config=EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=256,
+                http_options=HttpOptions(headers={"authorization": "secret"}),
+            ),
+        )
+
+        attrs = self.otel.get_finished_spans()[0].attributes
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.task_type"], "RETRIEVAL_QUERY"
+        )
+        self.assertEqual(
+            attrs["gcp.gen_ai.operation.config.output_dimensionality"], 256
+        )
+        self.assertFalse(
+            any(
+                key.startswith("gcp.gen_ai.operation.config.http_options")
+                for key in attrs
+            )
         )
 
     def test_embed_content_multiple_inputs(self):
