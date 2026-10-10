@@ -32,7 +32,6 @@ from opentelemetry.instrumentation.google_genai import (
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
     OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH,
 )
 
@@ -272,7 +271,6 @@ def fixture_setup_instrumentation(instrumentor, enable_completion_hook):
             {
                 OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH: "memory://",
                 "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "upload",
-                OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT: "true",
             }
         )
     instrumentor.instrument()
@@ -482,7 +480,10 @@ def fixture_generate_content_stream(client, is_async):
 )
 @pytest.mark.vcr
 def test_upload_hook_non_streaming(
-    model, generate_content, otel_mocker: OTelMocker
+    model,
+    generate_content,
+    setup_content_recording,
+    otel_mocker: OTelMocker,
 ):
     expected_input = [
         {
@@ -514,14 +515,22 @@ def test_upload_hook_non_streaming(
     )
     time.sleep(2)
 
-    event = otel_mocker.get_event_named(
-        "gen_ai.client.inference.operation.details"
-    )
-    assert_fsspec_equal(
-        event.attributes["gen_ai.input.messages_ref"], expected_input
-    )
+    if setup_content_recording == "SPAN_AND_EVENT":
+        event = otel_mocker.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        assert_fsspec_equal(
+            event.attributes["gen_ai.input.messages_ref"], expected_input
+        )
+    else:
+        otel_mocker.assert_does_not_have_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
 
     span = otel_mocker.get_span_named(f"generate_content {model}")
+    assert_fsspec_equal(
+        span.attributes["gen_ai.input.messages_ref"], expected_input
+    )
     assert_fsspec_equal(
         span.attributes["gen_ai.output.messages_ref"], expected_output
     )

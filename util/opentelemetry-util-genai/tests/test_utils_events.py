@@ -64,7 +64,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event(self):
@@ -157,7 +156,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_and_span(self):
@@ -220,7 +218,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_with_error(self):
@@ -260,37 +257,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
-        },
-    )
-    def test_does_not_emit_llm_event_when_emit_event_false(self):
-        handler = TelemetryHandler(
-            tracer_provider=self.tracer_provider,
-            logger_provider=self.logger_provider,
-        )
-        message = _create_input_message("emit false test")
-        chat_generation = _create_output_message("emit false response")
-
-        invocation = handler.inference(
-            "test-provider", request_model="emit-false-model"
-        )
-        invocation.input_messages = [message]
-        invocation.output_messages = [chat_generation]
-        invocation.stop()
-
-        # Check no event was emitted
-        logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
-
-    @patch.dict(
-        os.environ,
-        {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
         },
     )
     def test_does_not_emit_llm_event_by_default_for_no_content(self):
-        """Test that event is not emitted by default when content_capturing is NO_CONTENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+        """Test that event is not emitted when content_capturing is NO_CONTENT."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -315,7 +286,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_does_not_emit_llm_event_by_default_for_span_only(self):
-        """Test that event is not emitted by default when content_capturing is SPAN_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+        """Test that event is not emitted when content_capturing is SPAN_ONLY."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -368,7 +339,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event_by_default_for_span_and_event(self):
-        """Test that event is emitted by default when content_capturing is SPAN_AND_EVENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+        """Test that event is emitted when content_capturing is SPAN_AND_EVENT."""
         message = _create_input_message("span and event test")
         chat_generation = _create_output_message("span and event response")
         system_instruction = _create_system_instruction("System prompt")
@@ -403,7 +374,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emit_event_determined_at_construction_time(self):
@@ -419,7 +389,10 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         # Changing os.environ after construction should have no effect
         with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"}
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"
+            },
         ):
             invocation.stop()
 
@@ -430,7 +403,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
         },
     )
     def test_emit_event_disabled_at_construction_time_not_affected_by_env_change(
@@ -448,7 +420,10 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         # Changing os.environ after construction should not cause event emission
         with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"}
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY"
+            },
         ):
             invocation.stop()
 
@@ -486,7 +461,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_with_debug_severity(self):
@@ -509,7 +483,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_event_not_emitted_when_logger_disabled(self):
@@ -548,7 +521,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_event_emitted_when_logger_enabled(self):

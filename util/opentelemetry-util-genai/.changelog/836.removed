@@ -1,0 +1,1 @@
+Remove ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable in favor of ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` and logger configuration.
