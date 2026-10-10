@@ -1,0 +1,1 @@
+Add support for Bedrock Agent Runtime (retrieve_and_generate and retrieve_and_generate_stream) in synchronous and asynchronous calls.

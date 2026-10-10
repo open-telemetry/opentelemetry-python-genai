@@ -25,6 +25,10 @@ from .conformance.invoke_agent import InvokeAgentScenario
 from .conformance.invoke_model import InvokeModelScenario
 from .conformance.invoke_model_streaming import InvokeModelStreamingScenario
 from .conformance.retrieve import RetrieveScenario
+from .conformance.retrieve_and_generate import RetrieveAndGenerateScenario
+from .conformance.retrieve_and_generate_streaming import (
+    RetrieveAndGenerateStreamingScenario,
+)
 from .conformance.tool_calling import ToolCallingScenario
 
 
@@ -39,6 +43,8 @@ from .conformance.tool_calling import ToolCallingScenario
         EmbeddingScenario(),
         InvokeAgentScenario(),
         RetrieveScenario(),
+        RetrieveAndGenerateScenario(),
+        RetrieveAndGenerateStreamingScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )
