@@ -58,8 +58,9 @@ API
 ---
 """
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from importlib import import_module
+from typing import Any
 
 from wrapt import wrap_function_wrapper
 
@@ -110,6 +111,25 @@ class OpenAIInstrumentor(BaseInstrumentor):
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
+    def _active(self, wrapper: Callable[..., Any]) -> Callable[..., Any]:
+        """Pass calls through after uninstrument().
+
+        The SDK caches ``with_raw_response`` per client together with the
+        wrapped method, so the wrapper can outlive ``uninstrument()``.
+        """
+
+        def wrapped_if_active(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            if not self._is_instrumented_by_opentelemetry:
+                return wrapped(*args, **kwargs)
+            return wrapper(wrapped, instance, args, kwargs)
+
+        return wrapped_if_active
+
     def _instrument(self, **kwargs):
         """Enable OpenAI instrumentation."""
 
@@ -130,26 +150,26 @@ class OpenAIInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             "openai.resources.chat.completions",
             "Completions.create",
-            chat_completions_create_v_new(handler),
+            self._active(chat_completions_create_v_new(handler)),
         )
 
         wrap_function_wrapper(
             "openai.resources.chat.completions",
             "AsyncCompletions.create",
-            async_chat_completions_create_v_new(handler),
+            self._active(async_chat_completions_create_v_new(handler)),
         )
 
         # Add instrumentation for the embeddings API
         wrap_function_wrapper(
             "openai.resources.embeddings",
             "Embeddings.create",
-            embeddings_create(handler),
+            self._active(embeddings_create(handler)),
         )
 
         wrap_function_wrapper(
             "openai.resources.embeddings",
             "AsyncEmbeddings.create",
-            async_embeddings_create(handler),
+            self._active(async_embeddings_create(handler)),
         )
 
         # parse() wraps create() internally in the OpenAI SDK and returns a
@@ -161,13 +181,13 @@ class OpenAIInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 "openai.resources.chat.completions",
                 "Completions.parse",
-                chat_completions_create_v_new(handler),
+                self._active(chat_completions_create_v_new(handler)),
             )
 
             wrap_function_wrapper(
                 "openai.resources.chat.completions",
                 "AsyncCompletions.parse",
-                async_chat_completions_create_v_new(handler),
+                self._active(async_chat_completions_create_v_new(handler)),
             )
 
         responses_module = _get_responses_module()
@@ -175,22 +195,22 @@ class OpenAIInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
                 "Responses.create",
-                responses_create(handler),
+                self._active(responses_create(handler)),
             )
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
                 "Responses.stream",
-                responses_stream(handler),
+                self._active(responses_stream(handler)),
             )
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
                 "AsyncResponses.create",
-                async_responses_create(handler),
+                self._active(async_responses_create(handler)),
             )
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
                 "AsyncResponses.stream",
-                async_responses_stream(handler),
+                self._active(async_responses_stream(handler)),
             )
 
             # retrieve() fetches a stored response by id. No inference happens
@@ -199,12 +219,12 @@ class OpenAIInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
                 "Responses.retrieve",
-                responses_retrieve(handler),
+                self._active(responses_retrieve(handler)),
             )
             wrap_function_wrapper(
                 "openai.resources.responses.responses",
                 "AsyncResponses.retrieve",
-                async_responses_retrieve(handler),
+                self._active(async_responses_retrieve(handler)),
             )
 
     def _uninstrument(self, **kwargs):
