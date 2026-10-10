@@ -3,6 +3,8 @@
 
 
 import logging
+from collections.abc import Iterator
+from typing import Any, cast
 
 from openai.types import CreateEmbeddingResponse
 
@@ -56,6 +58,21 @@ def _create_embedding_invocation(
     return invocation
 
 
+def _materialize_iterables(kwargs: dict[str, Any]) -> None:
+    """Replace one-shot iterators with lists so both telemetry and SDK see the same data.
+
+    The SDK accepts any Iterable for messages and tools, so a plain
+    Sequence check would drop set- and view-backed collections. An
+    Iterator is materialized rather than skipped: the extractor and the SDK
+    both need to read the data, so we materialize once and mutate kwargs so
+    both paths see the list.
+    """
+    for key in ("messages", "tools"):
+        value = kwargs.get(key)
+        if isinstance(value, Iterator):
+            kwargs[key] = list(cast("Iterator[Any]", value))
+
+
 def chat_completions_create_v_new(
     handler: TelemetryHandler,
 ):
@@ -63,6 +80,8 @@ def chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     def traced_method(wrapped, instance, args, kwargs):
+        if capture_content:
+            _materialize_iterables(kwargs)
         chat_invocation = create_chat_invocation(
             handler, kwargs, instance, capture_content=capture_content
         )
@@ -94,6 +113,8 @@ def async_chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     async def traced_method(wrapped, instance, args, kwargs):
+        if capture_content:
+            _materialize_iterables(kwargs)
         chat_invocation = create_chat_invocation(
             handler, kwargs, instance, capture_content=capture_content
         )
