@@ -5,11 +5,17 @@
 
 import base64
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import yaml
 
 from opentelemetry.instrumentation.genai.openai.utils import (
     _content_to_parts,
@@ -41,7 +47,55 @@ _REAL_PNG_B64 = (
     "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
     "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
 )
+COMPUTER_SCREENSHOT_DATA_URL: str = f"data:image/png;base64,{_REAL_PNG_B64}"
 _REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
+
+
+class _LocalResponsesHTTPServer(ThreadingHTTPServer):
+    response_payloads: list[dict[str, object]]
+    request_payloads: list[dict[str, object]]
+
+    @property
+    def base_url(self) -> str:
+        host, port = self.server_address
+        return f"http://{host}:{port}/v1"
+
+
+class _ResponsesRequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        server = cast("_LocalResponsesHTTPServer", self.server)
+        request_payload = json.loads(
+            self.rfile.read(int(self.headers["Content-Length"]))
+        )
+        server.request_payloads.append(request_payload)
+        response_payload = json.dumps(server.response_payloads.pop(0)).encode(
+            "utf-8"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_payload)))
+        self.end_headers()
+        self.wfile.write(response_payload)
+
+
+@contextmanager
+def local_responses_server(
+    response_payloads: list[dict[str, object]],
+) -> Iterator[_LocalResponsesHTTPServer]:
+    server = _LocalResponsesHTTPServer(
+        ("127.0.0.1", 0), _ResponsesRequestHandler
+    )
+    server.response_payloads = response_payloads
+    server.request_payloads = []
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -649,6 +703,18 @@ def get_responses_custom_tool_loop_input():
             "output": CUSTOM_TOOL_OUTPUT,
         },
     ]
+
+
+def get_recorded_responses_create_response_payload() -> dict[str, object]:
+    cassette_path = (
+        Path(__file__).parent
+        / "cassettes"
+        / "test_responses_create_basic[content_mode0].yaml"
+    )
+    cassette = yaml.safe_load(cassette_path.read_text(encoding="utf-8"))
+    return json.loads(
+        cassette["interactions"][0]["response"]["body"]["string"]
+    )
 
 
 EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES = [

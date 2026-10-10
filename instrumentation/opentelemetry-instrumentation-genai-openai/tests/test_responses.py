@@ -1,9 +1,12 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import importlib.util
 import inspect
 import json
+from pathlib import Path
 
 import pytest
 from openai import (
@@ -13,11 +16,15 @@ from openai import (
     OpenAI,
     Stream,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from vcr import VCR
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
     ResponseStreamManagerWrapper,
+)
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
 )
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -36,6 +43,7 @@ from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    COMPUTER_SCREENSHOT_DATA_URL,
     CUSTOM_TOOL_CALL_ID,
     CUSTOM_TOOL_INPUT,
     CUSTOM_TOOL_MODEL,
@@ -86,6 +94,45 @@ except ImportError:
     _stream_has_service_tier = False
     _has_custom_tool_types = False
 
+_has_computer_call_type: bool
+try:
+    from openai.types.responses.response_computer_tool_call import (
+        ResponseComputerToolCall,
+    )
+
+    _has_computer_call_type = True
+except ImportError:
+    ResponseComputerToolCall = None
+    _has_computer_call_type = False
+
+_has_computer_call_output_input_type: bool
+try:
+    from openai.types.responses.response_input_item_param import (
+        ComputerCallOutput,
+    )
+
+    _has_computer_call_output_input_type = True
+except ImportError:
+    ComputerCallOutput = None
+    _has_computer_call_output_input_type = False
+
+_has_computer_tool_type: bool
+try:
+    _has_computer_tool_type = (
+        importlib.util.find_spec("openai.types.responses.computer_tool_param")
+        is not None
+    )
+except ImportError:
+    _has_computer_tool_type = False
+
+_COMPUTER_CALL_RESPONSE_OUTPUT_ADAPTER: TypeAdapter[object] | None
+try:
+    from openai.types.responses.response_output_item import ResponseOutputItem
+
+    _COMPUTER_CALL_RESPONSE_OUTPUT_ADAPTER = TypeAdapter(ResponseOutputItem)
+except ImportError:
+    _COMPUTER_CALL_RESPONSE_OUTPUT_ADAPTER = None
+
 
 pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_API, reason="Responses API requires a newer openai SDK"
@@ -125,6 +172,54 @@ def _load_span_messages(span, attribute):
     value = span.attributes.get(attribute)
     assert value is not None
     return json.loads(value)
+
+
+def _local_computer_call_response_item() -> dict[str, object]:
+    computer_call = ResponseComputerToolCall(
+        id="ct_local_computer_call",
+        call_id="call_local_computer",
+        pending_safety_checks=[],
+        status="completed",
+        type="computer_call",
+        actions=[
+            {
+                "type": "click",
+                "x": 1,
+                "y": 2,
+                "button": "left",
+            }
+        ],
+    )
+    return computer_call.model_dump(mode="json", exclude_none=True)
+
+
+def _supports_computer_call_response_output() -> bool:
+    if (
+        not _has_computer_call_type
+        or _COMPUTER_CALL_RESPONSE_OUTPUT_ADAPTER is None
+    ):
+        return False
+    try:
+        response_item = _COMPUTER_CALL_RESPONSE_OUTPUT_ADAPTER.validate_python(
+            _local_computer_call_response_item()
+        )
+    except ValidationError:
+        return False
+    return getattr(response_item, "actions", None) is not None
+
+
+def _skip_without_computer_tool_cassette(
+    request: pytest.FixtureRequest,
+) -> None:
+    cassette_path = (
+        Path(__file__).parent / "cassettes" / f"{request.node.name}.yaml"
+    )
+    if not cassette_path.is_file() and not request.config.getoption(
+        "--vcr-record"
+    ):
+        pytest.skip(
+            "No provider cassette; rerun with --vcr-record=once to record it"
+        )
 
 
 def _assert_response_content(span, response, log_exporter):
@@ -1353,6 +1448,97 @@ def test_responses_create_captures_custom_tool_history(
         span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
         EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
     )
+
+
+@pytest.mark.skipif(
+    not _has_computer_call_output_input_type
+    or not _has_computer_tool_type
+    or not _supports_computer_call_response_output(),
+    reason="openai SDK cannot parse the GA computer tool loop",
+)
+def test_responses_create_captures_computer_tool_loop(
+    request: pytest.FixtureRequest,
+    span_exporter: InMemorySpanExporter,
+    openai_client: OpenAI,
+    instrument_with_content: OpenAIInstrumentor,
+    vcr: VCR,
+) -> None:
+    _skip_if_not_latest()
+    _skip_without_computer_tool_cassette(request)
+
+    history = [
+        {"role": "user", "content": "Take a screenshot of the current page."}
+    ]
+    with vcr.use_cassette(f"{request.node.name}.yaml"):
+        first_response = openai_client.responses.create(
+            model="gpt-6-luna",
+            tools=[{"type": "computer"}],
+            input=history,
+            tool_choice="required",
+        )
+        (computer_call,) = [
+            item
+            for item in first_response.output
+            if isinstance(item, ResponseComputerToolCall)
+        ]
+        openai_client.responses.create(
+            model="gpt-6-luna",
+            tools=[{"type": "computer"}],
+            input=[
+                *history,
+                *first_response.output,
+                ComputerCallOutput(
+                    type="computer_call_output",
+                    call_id=computer_call.call_id,
+                    output={
+                        "type": "computer_screenshot",
+                        "image_url": COMPUTER_SCREENSHOT_DATA_URL,
+                    },
+                ),
+            ],
+        )
+
+    first_span, second_span = span_exporter.get_finished_spans()
+    assert first_span.attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_calls",)
+    first_output = _load_span_messages(
+        first_span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    (tool_call,) = [
+        part
+        for message in first_output
+        for part in message["parts"]
+        if part["type"] == "tool_call"
+    ]
+    assert tool_call["name"] == "computer"
+    assert tool_call["id"] == computer_call.call_id
+    assert isinstance(tool_call["arguments"]["actions"], list)
+
+    second_input = _load_span_messages(
+        second_span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert second_input[0]["role"] == "user"
+    assert second_input[1]["role"] == "assistant"
+    assert second_input[1]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": computer_call.call_id,
+            "name": "computer",
+            "arguments": tool_call["arguments"],
+        }
+    ]
+    assert second_input[2]["role"] == "tool"
+    assert second_input[2]["parts"] == [
+        {
+            "type": "tool_call_response",
+            "id": computer_call.call_id,
+            "response": {
+                "type": "computer_screenshot",
+                "image_url": COMPUTER_SCREENSHOT_DATA_URL,
+            },
+        }
+    ]
 
 
 @pytest.mark.vcr()

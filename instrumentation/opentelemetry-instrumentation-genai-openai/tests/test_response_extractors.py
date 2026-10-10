@@ -5,7 +5,7 @@ import datetime
 import importlib.util
 import json
 from dataclasses import asdict
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import openai
@@ -100,6 +100,48 @@ def _make_response(output=None, **overrides):
     }
     payload.update(overrides)
     return Response.model_validate(payload)
+
+
+def _response_accepts_output_item(item):
+    if not HAS_RESPONSES_TYPES:
+        return False
+
+    try:
+        _make_response(output=[item])
+    except Exception:  # pragma: no cover - capability probe
+        return False
+    return True
+
+
+_supports_computer_tool_call = _response_accepts_output_item(
+    {
+        "id": "cc_1",
+        "type": "computer_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "pending_safety_checks": [],
+        "action": {
+            "type": "click",
+            "x": 1,
+            "y": 2,
+            "button": "left",
+        },
+    }
+)
+
+_supports_computer_tool_actions: bool = _response_accepts_output_item(
+    {
+        "id": "cc_1",
+        "type": "computer_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "pending_safety_checks": [],
+        "actions": [
+            {"type": "click", "x": 1, "y": 2, "button": "left"},
+            {"type": "keypress", "keys": ["ENTER"]},
+        ],
+    }
+)
 
 
 class _RawResponse:
@@ -611,6 +653,65 @@ def test_extract_input_messages_records_custom_tool_calls(loaded_module):
     assert tool_response.response == "1 row"
 
 
+def test_extract_input_messages_records_computer_tool_history(
+    loaded_module: ModuleType,
+) -> None:
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "computer_call",
+                "call_id": "call_computer",
+                "action": {"type": "click", "x": 1, "y": 2},
+            },
+            {
+                "type": "computer_call_output",
+                "call_id": "call_computer",
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "data:image/png;base64,AA==",
+                },
+            },
+        ]
+    )
+
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    (tool_call,) = messages[0].parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.id == "call_computer"
+    assert tool_call.name == "computer"
+    assert tool_call.arguments == {"action": {"type": "click", "x": 1, "y": 2}}
+    (tool_response,) = messages[1].parts
+    assert isinstance(tool_response, ToolCallResponsePart)
+    assert tool_response.id == tool_call.id
+    assert tool_response.response == {
+        "type": "computer_screenshot",
+        "image_url": "data:image/png;base64,AA==",
+    }
+
+
+def test_extract_input_messages_preserves_computer_tool_action_lists(
+    loaded_module: ModuleType,
+) -> None:
+    actions: list[dict[str, object]] = [
+        {"type": "click", "x": 1, "y": 2, "button": "left"},
+        {"type": "keypress", "keys": ["ENTER"]},
+    ]
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "computer_call",
+                "call_id": "call_computer",
+                "actions": actions,
+            }
+        ]
+    )
+
+    (tool_call,) = messages[0].parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.name == "computer"
+    assert tool_call.arguments == {"actions": actions}
+
+
 def test_extract_input_messages_without_tool_part_types(loaded_module):
     tool_items = [
         {
@@ -844,32 +945,115 @@ def test_extract_output_messages_maps_server_tools(
     assert part.server_tool_call == expected_payload
 
 
-@pytest.mark.skipif(
-    not _has_tool_search_types,
-    reason="openai SDK too old to support tool_search server tool items",
+@pytest.mark.parametrize(
+    ("item", "expected_id", "expected_payload"),
+    [
+        pytest.param(
+            {
+                "id": "ts_2",
+                "type": "tool_search_output",
+                "call_id": "ts_1",
+                "execution": "server",
+                "status": "completed",
+                "tools": [],
+            },
+            "ts_1",
+            {
+                "execution": "server",
+                "status": "completed",
+                "tools": [],
+                "type": "tool_search",
+            },
+            marks=pytest.mark.skipif(
+                not _has_tool_search_types,
+                reason="openai SDK too old to support tool_search server tool items",
+            ),
+        ),
+    ],
 )
-def test_extract_output_messages_maps_server_tool_search_result(loaded_module):
-    item = {
-        "id": "ts_2",
-        "type": "tool_search_output",
-        "call_id": "ts_1",
-        "execution": "server",
-        "status": "completed",
-        "tools": [],
-    }
+def test_extract_output_messages_maps_server_tool_results(
+    loaded_module, item, expected_id, expected_payload
+):
     response = _make_response(output=[item])
 
     messages = loaded_module.get_output_messages_from_response(response)
 
     part = messages[0].parts[0]
     assert isinstance(part, ServerToolCallResponsePart)
-    assert part.id == "ts_1"
-    assert part.server_tool_call_response == {
-        "execution": "server",
-        "status": "completed",
-        "tools": [],
-        "type": "tool_search",
+    assert part.id == expected_id
+    assert part.server_tool_call_response == expected_payload
+
+
+@pytest.mark.skipif(
+    not _supports_computer_tool_call,
+    reason="openai SDK too old to support computer tool items",
+)
+def test_extract_output_messages_maps_computer_call_as_client_tool_call(
+    loaded_module: ModuleType,
+) -> None:
+    response = _make_response(
+        output=[
+            {
+                "id": "cc_1",
+                "type": "computer_call",
+                "call_id": "call_1",
+                "status": "completed",
+                "pending_safety_checks": [],
+                "action": {
+                    "type": "click",
+                    "x": 1,
+                    "y": 2,
+                    "button": "left",
+                },
+            }
+        ]
+    )
+
+    (message,) = loaded_module.get_output_messages_from_response(response)
+    (tool_call,) = message.parts
+    assert message.finish_reason == "tool_call"
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.id == "call_1"
+    assert tool_call.name == "computer"
+    assert tool_call.arguments == {
+        "action": {
+            "type": "click",
+            "x": 1,
+            "y": 2,
+            "button": "left",
+        }
     }
+    assert loaded_module.extract_finish_reasons(response) == ["tool_calls"]
+
+
+@pytest.mark.skipif(
+    not _supports_computer_tool_actions,
+    reason="openai SDK too old to support computer tool action lists",
+)
+def test_extract_output_messages_preserves_computer_tool_action_lists(
+    loaded_module: ModuleType,
+) -> None:
+    actions: list[dict[str, object]] = [
+        {"type": "click", "x": 1, "y": 2, "button": "left"},
+        {"type": "keypress", "keys": ["ENTER"]},
+    ]
+    response = _make_response(
+        output=[
+            {
+                "id": "cc_1",
+                "type": "computer_call",
+                "call_id": "call_1",
+                "status": "completed",
+                "pending_safety_checks": [],
+                "actions": actions,
+            }
+        ]
+    )
+
+    (message,) = loaded_module.get_output_messages_from_response(response)
+    (tool_call,) = message.parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.arguments == {"actions": actions}
 
 
 @pytest.mark.skipif(

@@ -1,6 +1,8 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import importlib.util
 import inspect
 import json
@@ -15,10 +17,14 @@ from openai import (
     NotFoundError,
 )
 from pydantic import BaseModel
+from vcr import VCR
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
     AsyncResponseStreamManagerWrapper,
+)
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
 )
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -35,8 +41,17 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
-from .test_responses import assert_responses_streaming_timing_metrics
+from .test_responses import (
+    ComputerCallOutput,
+    ResponseComputerToolCall,
+    _has_computer_call_output_input_type,
+    _has_computer_tool_type,
+    _skip_without_computer_tool_cassette,
+    _supports_computer_call_response_output,
+    assert_responses_streaming_timing_metrics,
+)
 from .test_utils import (
+    COMPUTER_SCREENSHOT_DATA_URL,
     CUSTOM_TOOL_MODEL,
     DEFAULT_MODEL,
     EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
@@ -86,7 +101,6 @@ except ImportError:
     _has_conversation_param = False
     _stream_has_service_tier = False
     _has_custom_tool_types = False
-
 
 pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_API, reason="Responses API requires a newer openai SDK"
@@ -1308,6 +1322,98 @@ async def test_async_responses_create_captures_custom_tool_history(
         span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
         EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
     )
+
+
+@pytest.mark.skipif(
+    not _has_computer_call_output_input_type
+    or not _has_computer_tool_type
+    or not _supports_computer_call_response_output(),
+    reason="openai SDK cannot parse the GA computer tool loop",
+)
+@pytest.mark.asyncio()
+async def test_async_responses_create_captures_computer_tool_loop(
+    request: pytest.FixtureRequest,
+    span_exporter: InMemorySpanExporter,
+    async_openai_client: AsyncOpenAI,
+    instrument_with_content: OpenAIInstrumentor,
+    vcr: VCR,
+) -> None:
+    _skip_if_not_latest()
+    _skip_without_computer_tool_cassette(request)
+
+    history = [
+        {"role": "user", "content": "Take a screenshot of the current page."}
+    ]
+    with vcr.use_cassette(f"{request.node.name}.yaml"):
+        first_response = await async_openai_client.responses.create(
+            model="gpt-6-luna",
+            tools=[{"type": "computer"}],
+            input=history,
+            tool_choice="required",
+        )
+        (computer_call,) = [
+            item
+            for item in first_response.output
+            if isinstance(item, ResponseComputerToolCall)
+        ]
+        await async_openai_client.responses.create(
+            model="gpt-6-luna",
+            tools=[{"type": "computer"}],
+            input=[
+                *history,
+                *first_response.output,
+                ComputerCallOutput(
+                    type="computer_call_output",
+                    call_id=computer_call.call_id,
+                    output={
+                        "type": "computer_screenshot",
+                        "image_url": COMPUTER_SCREENSHOT_DATA_URL,
+                    },
+                ),
+            ],
+        )
+
+    first_span, second_span = span_exporter.get_finished_spans()
+    assert first_span.attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_calls",)
+    first_output = _load_span_messages(
+        first_span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    (tool_call,) = [
+        part
+        for message in first_output
+        for part in message["parts"]
+        if part["type"] == "tool_call"
+    ]
+    assert tool_call["name"] == "computer"
+    assert tool_call["id"] == computer_call.call_id
+    assert isinstance(tool_call["arguments"]["actions"], list)
+
+    second_input = _load_span_messages(
+        second_span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert second_input[0]["role"] == "user"
+    assert second_input[1]["role"] == "assistant"
+    assert second_input[1]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": computer_call.call_id,
+            "name": "computer",
+            "arguments": tool_call["arguments"],
+        }
+    ]
+    assert second_input[2]["role"] == "tool"
+    assert second_input[2]["parts"] == [
+        {
+            "type": "tool_call_response",
+            "id": computer_call.call_id,
+            "response": {
+                "type": "computer_screenshot",
+                "image_url": COMPUTER_SCREENSHOT_DATA_URL,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio()
