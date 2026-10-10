@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import logging
-import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import Final
@@ -29,9 +27,6 @@ from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
 )
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-)
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -44,8 +39,6 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
-
-_logger = logging.getLogger(__name__)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -92,20 +85,6 @@ def _should_emit_event(
     content_capturing_mode: ContentCapturingMode,
 ) -> bool:
     """Check if event emission is enabled."""
-    if (
-        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
-        .lower()
-        .strip()
-    ):
-        if envvar == "true":
-            return True
-        if envvar == "false":
-            return False
-        _logger.warning(
-            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
-            envvar,
-            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-        )
     return content_capturing_mode in (
         ContentCapturingMode.EVENT_ONLY,
         ContentCapturingMode.SPAN_AND_EVENT,

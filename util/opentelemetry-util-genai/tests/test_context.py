@@ -195,15 +195,17 @@ class TestInferenceContext(TestBase):
         logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(log_exporter)
         )
-        handler = TelemetryHandler(
-            tracer_provider=self.tracer_provider,
-            meter_provider=self.meter_provider,
-            logger_provider=logger_provider,
-        )
-
         with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"}
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY"
+            },
         ):
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                meter_provider=self.meter_provider,
+                logger_provider=logger_provider,
+            )
             with handler.inference(
                 "openai", request_model="gpt-4o"
             ) as root_inv:

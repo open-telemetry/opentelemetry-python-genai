@@ -95,20 +95,12 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
-To control event emission, you can optionally set ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` to ``true`` or ``false`` (case-insensitive).
-This variable controls whether to emit ``gen_ai.client.inference.operation.details`` events.
-If not explicitly set, the default value is automatically determined by ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``:
-
-- When ``NO_CONTENT`` or ``SPAN_ONLY`` is set: defaults to ``false``
-- When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` is set: defaults to ``true``
-
-If explicitly set, the user's value takes precedence over the default.
-
-When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode is enabled and a LoggerProvider is configured,
-the package also emits ``gen_ai.client.inference.operation.details`` events with structured
-message content (as dictionaries instead of JSON strings). Note that when using ``EVENT_ONLY``
-or ``SPAN_AND_EVENT``, the ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable defaults
-to ``true``, so events will be emitted automatically unless explicitly set to ``false``.
+When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode is enabled and a ``LoggerProvider`` is configured,
+the package emits ``gen_ai.client.inference.operation.details`` events (with ``DEBUG`` severity)
+containing structured message content (as dictionaries instead of JSON strings). To suppress
+these events while keeping a ``LoggerProvider`` active, configure your logger or
+``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
+<https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^

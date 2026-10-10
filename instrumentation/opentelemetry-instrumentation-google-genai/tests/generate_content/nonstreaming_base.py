@@ -419,9 +419,7 @@ class NonStreamingTestCase(TestCase):
     @patch.dict(
         "os.environ",
         {
-            "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "gcp.gen_ai.operation.config.response_schema",
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_log_event_no_content_capture(self):
@@ -439,49 +437,14 @@ class NonStreamingTestCase(TestCase):
                 tools=self.tools,
             ),
         )
-        self.otel.assert_has_event_named(
+        self.otel.assert_does_not_have_event_named(
             "gen_ai.client.inference.operation.details"
         )
-        event = self.otel.get_event_named(
-            "gen_ai.client.inference.operation.details"
-        )
-        self.assertEqual(
-            event.attributes["gen_ai.usage.cache_read.input_tokens"],
-            50,
-        )
-        self.assertNotIn(
-            gen_ai_attributes.GEN_AI_RESPONSE_ID, event.attributes
-        )
-        self.assertEqual(
-            event.attributes["gen_ai.usage.reasoning.output_tokens"],
-            17,
-        )
-        self.assertEqual(
-            event.attributes["gen_ai.usage.output_tokens"],
-            17,
-        )
-        assert (
-            event.attributes["gcp.gen_ai.operation.config.response_schema"]
-            == "<class 'tests.generate_content.nonstreaming_base.ExampleResponseSchema'>"
-        )
-
-        self.assertNotIn(
-            gen_ai_attributes.GEN_AI_INPUT_MESSAGES,
-            event.attributes,
-        )
-        self.assertNotIn(
-            gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES,
-            event.attributes,
-        )
-        self.assertNotIn(
-            gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
-            event.attributes,
-        )
-        self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, event.attributes)
 
     @patch.dict(
         "os.environ",
         {
+            "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "gcp.gen_ai.operation.config.response_schema",
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
         },
     )
@@ -521,6 +484,10 @@ class NonStreamingTestCase(TestCase):
         self.assertEqual(
             event.attributes["gen_ai.usage.output_tokens"],
             17,
+        )
+        assert (
+            event.attributes["gcp.gen_ai.operation.config.response_schema"]
+            == "<class 'tests.generate_content.nonstreaming_base.ExampleResponseSchema'>"
         )
         self.assertEqual(
             event.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
