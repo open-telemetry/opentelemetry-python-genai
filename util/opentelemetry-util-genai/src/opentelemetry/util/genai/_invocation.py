@@ -8,7 +8,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from types import TracebackType
 from typing import Any, TypeAlias, cast
 
@@ -65,6 +65,41 @@ _GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 ContextToken: TypeAlias = Token[Context]
 
 
+class _ContextData:
+    """Base class for invocation context data containers."""
+
+    attributes: dict[str, AttributeValue]
+    metric_attributes: dict[str, AttributeValue]
+
+    def merge(self: Self, other: Self, *, overwrite: bool = True) -> None:
+        """Merge another context data instance into this one.
+
+        Args:
+            other: The context data to merge from.
+            overwrite: If True, values from ``other`` overwrite existing values
+                (used when inner invocations publish to context). If False,
+                existing non-None values in ``self`` are preserved (used when
+                the root invocation enriches from context).
+        """
+        for f in fields(cast(Any, self)):
+            if f.name in ("attributes", "metric_attributes"):
+                continue
+            val = getattr(other, f.name)
+            if val is not None and (
+                overwrite or getattr(self, f.name) is None
+            ):
+                setattr(self, f.name, val)
+
+        if overwrite:
+            self.attributes.update(other.attributes)
+            self.metric_attributes.update(other.metric_attributes)
+        else:
+            for k, v in other.attributes.items():
+                self.attributes.setdefault(k, v)
+            for k, v in other.metric_attributes.items():
+                self.metric_attributes.setdefault(k, v)
+
+
 class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     """
     Base class for all GenAI invocation types. Manages the lifecycle of a single
@@ -73,12 +108,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     Use the factory methods on TelemetryHandler (inference, embedding,
     workflow, tool) rather than constructing invocations directly.
     """
-
-    _context_key: str | None = None
-    """Context key used to attach context data for nested deduplication."""
-
-    _dataclass_class_object: Callable[[], Any] | None = None
-    """Dataclass type instantiated to attach initial context data."""
 
     def __init__(
         self,
@@ -101,7 +130,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         conversation_id: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         start_span: bool = True,
+        context_key: str | None = None,
+        dataclass_class_object: Callable[[], _ContextData] | None = None,
     ) -> None:
+        self._context_key: str | None = context_key
+        self._dataclass_class_object: Callable[[], _ContextData] | None = (
+            dataclass_class_object
+        )
         self._tracer = tracer
         self._instruments: _Instruments = instruments
         self._logger = logger
@@ -136,6 +171,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             GenAI.GEN_AI_OPERATION_NAME: operation_name,
             **(start_attributes or {}),
         }
+        self._start_span: bool = start_span
         if start_span:
             self.span: Span = self._tracer.start_span(
                 name=span_name,
@@ -254,6 +290,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         is_first_chunk = self._ttfc_seconds is None
         if is_first_chunk:
             self._ttfc_seconds = delta
+
+        if not self._start_span:
+            return
 
         attributes = self._get_metric_attributes()
         if is_first_chunk:

@@ -845,18 +845,13 @@ class TestTelemetryHandler(unittest.TestCase):
         },
     )
     def test_embedding_parent_child_span_relationship(self):
-        parent_invocation = self.telemetry_handler.embedding(
-            "test-provider", request_model="embed-parent-model"
-        )
-        parent_invocation.input_tokens = 10
-        assert parent_invocation.span is not None
-        child_invocation = self.telemetry_handler.embedding(
-            "test-provider", request_model="embed-child-model"
-        )
-        child_invocation.input_tokens = 5
-        assert child_invocation.span is not None
-        child_invocation.stop()
-        parent_invocation.stop()
+        with self.telemetry_handler.workflow(name="parent-workflow"):
+            child_invocation = self.telemetry_handler.embedding(
+                "test-provider", request_model="embed-child-model"
+            )
+            child_invocation.input_tokens = 5
+            assert child_invocation.span is not None
+            child_invocation.stop()
 
         spans = self.span_exporter.get_finished_spans()
         assert len(spans) == 2
@@ -864,7 +859,7 @@ class TestTelemetryHandler(unittest.TestCase):
             s for s in spans if s.name == "embeddings embed-child-model"
         )
         parent_span = next(
-            s for s in spans if s.name == "embeddings embed-parent-model"
+            s for s in spans if s.name == "invoke_workflow parent-workflow"
         )
 
         assert child_span.context.trace_id == parent_span.context.trace_id

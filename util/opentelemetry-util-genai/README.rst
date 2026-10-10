@@ -35,6 +35,71 @@ to manage context:
   ambient context is used.
 
 
+Nested Invocation Suppression and Context Enrichment
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When an operation runs inside an active operation of the same type, nested spans, metrics,
+and events are suppressed to prevent duplicate telemetry. Agent and workflow invocations are
+exempt because those are usually legitimately nested.
+
+When using ``TelemetryHandler`` directly, you get this behavior for free—the outer invocation
+places its typed dataclass onto the context, inner invocations suppress telemetry and publish
+their attributes into it, and the outer invocation enriches its span and metrics on finish
+(outer values take precedence).
+
+Alternatively, you can manage suppression and enrichment directly using OpenTelemetry's
+context API with the exported context key and dataclass.
+
+**Outer invocation:**
+
+.. code-block:: python
+
+    from opentelemetry import context
+    from opentelemetry.util.genai.invocation import (
+        CLIENT_INFERENCE_CONTEXT_KEY,
+        InferenceData,
+    )
+
+    data = InferenceData()
+    token = context.attach(context.set_value(CLIENT_INFERENCE_CONTEXT_KEY, data))
+    try:
+        # Inner instrumented call detects data on context, suppresses its span,
+        # and populates attributes onto data
+        execute_operation()
+    finally:
+        context.detach(token)
+
+    # Attributes captured by inner calls are available on data
+    print(data.response_model, data.usage_input_tokens)
+
+**Inner invocation:**
+
+.. code-block:: python
+
+    from opentelemetry import context
+    from opentelemetry.util.genai.invocation import (
+        CLIENT_INFERENCE_CONTEXT_KEY,
+        InferenceData,
+    )
+
+    data = context.get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+    if isinstance(data, InferenceData):
+        # Outer operation is active: suppress span/metrics and publish into shared dataclass
+        data.response_model = "gpt-4o-mini"
+        data.usage_input_tokens = 10
+    else:
+        # Emit telemetry normally
+        ...
+
+Exported from ``opentelemetry.util.genai.invocation``:
+
+- Inference: ``CLIENT_INFERENCE_CONTEXT_KEY``, ``InferenceData``
+- Embedding: ``EMBEDDING_CONTEXT_KEY``, ``EmbeddingData``
+- Fetch Response: ``FETCH_RESPONSE_CONTEXT_KEY``, ``FetchResponseData``
+- Retrieval: ``RETRIEVAL_CONTEXT_KEY``, ``RetrievalData``
+- Tool: ``TOOL_CONTEXT_KEY``, ``ToolData``
+
+
 Modalities
 ----------
 

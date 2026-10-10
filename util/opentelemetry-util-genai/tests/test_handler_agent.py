@@ -284,9 +284,34 @@ class TestLocalAgentInvocation(unittest.TestCase):  # pylint: disable=too-many-p
             agent_name="Constructor Agent"
         )
         invocation.stop()
+        assert invocation.agent_name == "Constructor Agent"
         span = self.span_exporter.get_finished_spans()[0]
         assert span.name == "invoke_agent Constructor Agent"
         assert span.attributes[GenAI.GEN_AI_AGENT_NAME] == "Constructor Agent"
+
+    def test_property_delegation_to_data(self):
+        from opentelemetry.util.genai.invocation import AgentData
+
+        inv = self.handler.invoke_local_agent(
+            agent_name="Delegation Agent", request_model="gpt-4o"
+        )
+        self.assertIsInstance(inv.data, AgentData)
+        self.assertEqual(inv.data.agent_name, "Delegation Agent")
+        self.assertEqual(inv.agent_name, "Delegation Agent")
+        self.assertEqual(inv.data.request_model, "gpt-4o")
+        self.assertEqual(inv.request_model, "gpt-4o")
+
+        inv.agent_description = "A delegated agent"
+        self.assertEqual(inv.data.agent_description, "A delegated agent")
+
+        inv.temperature = 0.5
+        self.assertEqual(inv.data.request_temperature, 0.5)
+
+        inv.input_tokens = 50
+        inv.output_tokens = 100
+        self.assertEqual(inv.data.usage_input_tokens, 50)
+        self.assertEqual(inv.data.usage_output_tokens, 100)
+        inv.stop()
 
     def test_agent_name_at_construction_available_to_sampler(self):
         captured_attributes = {}
@@ -627,6 +652,42 @@ class TestRemoteAgentInvocation(unittest.TestCase):
         assert attrs[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 15
         assert attrs[GenAI.GEN_AI_REQUEST_MODEL] == "gpt-4"
 
+    def test_property_delegation_to_data(self):
+        from opentelemetry.util.genai.invocation import AgentData
+
+        inv = self.handler.invoke_remote_agent(
+            "openai",
+            request_model="gpt-4o",
+            server_address="api.openai.com",
+            server_port=443,
+            agent_name="RemoteDelegation",
+        )
+        self.assertIsInstance(inv.data, AgentData)
+        self.assertEqual(inv.data.provider_name, "openai")
+        self.assertEqual(inv.provider, "openai")
+        self.assertEqual(inv.data.request_model, "gpt-4o")
+        self.assertEqual(inv.data.server_address, "api.openai.com")
+        self.assertEqual(inv.server_address, "api.openai.com")
+        self.assertEqual(inv.data.server_port, 443)
+        self.assertEqual(inv.server_port, 443)
+        self.assertEqual(inv.data.agent_name, "RemoteDelegation")
+        self.assertEqual(inv.agent_name, "RemoteDelegation")
+
+        inv.agent_id = "agent-xyz"
+        self.assertEqual(inv.data.agent_id, "agent-xyz")
+
+        inv.agent_version = "2.0.0"
+        self.assertEqual(inv.data.agent_version, "2.0.0")
+
+        inv.previous_response_id = "prev-resp-1"
+        self.assertEqual(inv.data.request_previous_response_id, "prev-resp-1")
+
+        inv.cache_write_input_tokens = 10
+        inv.cache_read_input_tokens = 20
+        self.assertEqual(inv.data.usage_cache_write_input_tokens, 10)
+        self.assertEqual(inv.data.usage_cache_read_input_tokens, 20)
+        inv.stop()
+
     def test_fail_sets_error_status(self):
         invocation = self.handler.invoke_remote_agent("openai")
         invocation.fail(RuntimeError("remote agent crashed"))
@@ -857,6 +918,18 @@ class TestAgentInvocationMetrics(TestBase):
             duration_point.attributes.get(GenAI.GEN_AI_AGENT_NAME), "ErrAgent"
         )
         self.assertAlmostEqual(duration_point.sum, 1.0, places=3)
+
+    def test_remote_agent_streaming_metrics(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        with handler.invoke_remote_agent("test-provider") as inv:
+            inv.record_stream_chunk()
+            inv.record_stream_chunk()
+        metrics = self._harvest_metrics()
+        self.assertIn("gen_ai.client.operation.time_to_first_chunk", metrics)
+        self.assertIn("gen_ai.client.operation.time_per_output_chunk", metrics)
 
     def _harvest_metrics(self):
         metrics = self.get_sorted_metrics()

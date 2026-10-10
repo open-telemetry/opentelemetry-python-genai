@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
@@ -23,6 +23,7 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
+    _ContextData,
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import (
@@ -118,7 +119,7 @@ CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
 
 
 @dataclass
-class InferenceData:
+class InferenceData(_ContextData):
     """Typed data passed from inner inference invocations to the outer invocation."""
 
     conversation_id: str | None = None
@@ -176,43 +177,12 @@ class InferenceData:
         default_factory=dict[str, AttributeValue]
     )
 
-    def merge(self, other: InferenceData, *, overwrite: bool = True) -> None:
-        """Merge another context data instance into this one.
-
-        Args:
-            other: The context data to merge from.
-            overwrite: If True, values from ``other`` overwrite existing values
-                (used when inner invocations publish to context). If False,
-                existing non-None values in ``self`` are preserved (used when
-                the root invocation enriches from context).
-        """
-        for f in fields(self):
-            if f.name in ("attributes", "metric_attributes"):
-                continue
-            val = getattr(other, f.name)
-            if val is not None and (
-                overwrite or getattr(self, f.name) is None
-            ):
-                setattr(self, f.name, val)
-
-        if overwrite:
-            self.attributes.update(other.attributes)
-            self.metric_attributes.update(other.metric_attributes)
-        else:
-            for k, v in other.attributes.items():
-                self.attributes.setdefault(k, v)
-            for k, v in other.metric_attributes.items():
-                self.metric_attributes.setdefault(k, v)
-
 
 class InferenceInvocation(GenAIInvocation):
     """Represents a single LLM chat/completion call.
 
     Use handler.inference(provider) rather than constructing this directly.
     """
-
-    _context_key = CLIENT_INFERENCE_CONTEXT_KEY
-    _dataclass_class_object = InferenceData
 
     def __init__(
         self,
@@ -276,6 +246,8 @@ class InferenceInvocation(GenAIInvocation):
             _attach_to_context=_attach_to_context,
             attributes=self.data.attributes,
             metric_attributes=self.data.metric_attributes,
+            context_key=CLIENT_INFERENCE_CONTEXT_KEY,
+            dataclass_class_object=InferenceData,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
@@ -1013,17 +985,9 @@ class SuppressedInferenceInvocation(InferenceInvocation):
         )
 
     def _on_stream_chunk(self, chunk_at: float) -> None:
-        last_chunk_at = (
-            self._stream_last_chunk_at
-            if self._stream_last_chunk_at is not None
-            else self._monotonic_start_s
-        )
-        self._stream_last_chunk_at = chunk_at
-        delta = max(chunk_at - last_chunk_at, 0.0)
-        if self._ttfc_seconds is None:
-            self._ttfc_seconds = delta
-            self.data.response_time_to_first_chunk = delta
+        super()._on_stream_chunk(chunk_at)
         self.data.request_stream = True
+        self.data.response_time_to_first_chunk = self._ttfc_seconds
 
     def publish_to_context(self, data: InferenceData) -> None:
         """Publish invocation attributes to the active inference context."""
