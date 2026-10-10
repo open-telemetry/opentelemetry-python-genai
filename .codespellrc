@@ -4,4 +4,4 @@
 check-hidden = true
 # skipping auto generated folders
 skip = ./.git,./.tox,./.venv,./.mypy_cache,./docs/_build,./target,*/LICENSE,./venv,*/cassettes
-ignore-words-list = ot
+ignore-words-list = ot,asend

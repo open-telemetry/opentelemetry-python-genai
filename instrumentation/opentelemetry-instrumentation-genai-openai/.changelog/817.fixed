@@ -1,0 +1,1 @@
+Suspend the chat completion and Responses API invocations while a streamed response is unconsumed and re-activate them only while a chunk is read or the stream is cleaned up: the inference span is no longer current in the caller's context between reads, so spans a caller creates between chunks are siblings of the inference span, not children.
