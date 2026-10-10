@@ -313,6 +313,18 @@ def _set_invocation_input(
             ]
 
 
+def _resolve_conversation_id(
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
+) -> str | None:
+    session_id = get_argument("session_id", wrapped, args, kwargs)
+    if session_id is None:
+        session_id = getattr(instance, "session_id", None)
+    return str(session_id) if session_id is not None else None
+
+
 def _extract_finish_reason(result: object) -> str:
     if "error" in str(getattr(result, "status", "")).lower():
         return "error"
@@ -347,6 +359,7 @@ def _start_agent_invocation(
     wrapped: Callable[..., Any],
 ) -> LocalAgentInvocation:
     agent_name = getattr(instance, "name", None)
+    conversation_id = _resolve_conversation_id(instance, args, kwargs, wrapped)
     model_obj = get_argument("model", wrapped, args, kwargs) or getattr(
         instance, "model", None
     )
@@ -361,6 +374,7 @@ def _start_agent_invocation(
     invocation = handler.invoke_local_agent(
         agent_name=str(agent_name) if agent_name else None,
         request_model=str(request_model) if request_model else None,
+        conversation_id=conversation_id,
     )
     description = getattr(instance, "description", None)
     if description:
@@ -581,7 +595,10 @@ def _start_workflow_invocation(
     wrapped: Callable[..., Any],
 ) -> WorkflowInvocation:
     workflow_name = getattr(instance, "name", None)
-    invocation = handler.workflow(name=workflow_name)
+    conversation_id = _resolve_conversation_id(instance, args, kwargs, wrapped)
+    invocation = handler.workflow(
+        name=workflow_name, conversation_id=conversation_id
+    )
     _set_invocation_input(
         invocation, instance, args, kwargs, capture_content, wrapped
     )
