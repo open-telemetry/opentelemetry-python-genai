@@ -939,3 +939,46 @@ def test_instrument_skips_absent_langgraph(
             )
         )
     ]
+
+
+@pytest.mark.parametrize("module", ["langchain.chains.base", "langchain_classic.chains.base"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_legacy_chain_child_context(
+    module, fail, tracer_provider, meter_provider, logger_provider, span_exporter
+):
+    Chain = pytest.importorskip(module).Chain
+    tracer = tracer_provider.get_tracer("test")
+    error = ConnectionError("chain failed")
+
+    class CustomChain(Chain):
+        @property
+        def input_keys(self) -> list[str]:
+            return ["text"]
+
+        @property
+        def output_keys(self) -> list[str]:
+            return ["result"]
+
+        def _call(self, inputs: dict[str, Any]) -> dict[str, Any]:
+            with tracer.start_as_current_span("child"):
+                if fail:
+                    raise error
+                return {"result": inputs["text"]}
+
+    with instrument(
+        LangChainInstrumentor(), tracer_provider=tracer_provider,
+        meter_provider=meter_provider, logger_provider=logger_provider,
+    ):
+        before = context.get_current()
+        if fail:
+            with pytest.raises(ConnectionError) as raised:
+                CustomChain().invoke({"text": "hello"})
+            assert raised.value is error
+        else:
+            assert CustomChain().invoke({"text": "hello"})["result"] == "hello"
+        assert context.get_current() is before
+
+    child, workflow = span_exporter.get_finished_spans()
+    assert child.name == "child"
+    assert workflow.name == "invoke_workflow CustomChain"
+    assert child.parent == workflow.context

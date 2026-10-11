@@ -285,6 +285,25 @@ class _ExecutionContext:
                     ),
                 )
 
+        for module_name in (
+            "langchain.chains.base",
+            "langchain_classic.chains.base",
+        ):
+            try:
+                import_module(module_name)
+            except ImportError:
+                continue
+            self._patch(
+                module_name,
+                "Chain",
+                "invoke",
+                partial(
+                    _wrap_call,
+                    invocations=self._invocations,
+                    asynchronous=False,
+                ),
+            )
+
         # The default batch runs a single input in the caller's frame.
         for method in ("batch", "abatch"):
             self._patch(
