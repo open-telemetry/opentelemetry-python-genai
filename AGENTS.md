@@ -127,11 +127,19 @@ uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
 uv run tox -e typecheck
+
+# Check util-genai for public API breaks against main
+uv run tox -e check-util-api
 ```
 
 Before opening a PR, run `uv run tox -e precommit`, `uv run tox -e typecheck`, and the changed package's
 test envs (`-oldest` and `-latest`, plus `-conformance` if it ships scenarios) — these mirror
 the CI gates.
+
+If you change `util/opentelemetry-util-genai`, also run `uv run tox -e check-util-api`. Released
+instrumentations accept any util version below 2, so removing or changing a public object can
+break them on import. If the break is intended, say in the PR which released instrumentations you
+checked. A maintainer then adds the `Approve Public API check` label to skip the CI job.
 
 tox reuses cached envs and won't re-resolve dependencies on its own, so pass `--recreate` (`-r`)
 after editing a `tests/requirements.*.txt` or a `pyproject.toml` dependency bound — otherwise the
@@ -229,13 +237,19 @@ as the reference:
 
 A streamed response only finishes once the caller has drained the stream, so the invocation must
 stay open until then. Do **not** call `invocation.stop()` when the SDK returns the stream — the
-span would close before any chunks arrive.
+span would close before any chunks arrive. The invocation's span must also not stay current in
+the caller's context while the stream is unconsumed: call `invocation.suspend()` before returning
+the stream, and re-activate the invocation only while a chunk is being read.
 
 Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
 `opentelemetry.util.genai.stream` (the public, supported helpers). The base class proxies the
 underlying SDK stream, drives iteration, and finalizes telemetry exactly once on success, error,
-or `close()`. Subclasses pass the SDK stream to `super().__init__(stream)` and implement three
-hooks:
+or `close()`. Subclasses pass the SDK stream and the invocation to
+`super().__init__(stream, invocation)`, which also marks the invocation as a streamed request
+(`gen_ai.request.stream`), call `invocation.suspend()` before returning the stream, and implement
+three hooks. The base `_execution_context()` makes a suspended invocation current again for each
+read and cleanup operation and restores the context before the chunk is returned, so
+invocation-backed wrappers don't override it.
 
 - `_process_chunk(chunk)` — accumulate per-chunk state (e.g. response model, finish reasons,
   token usage, streamed content) onto the invocation.
@@ -246,8 +260,8 @@ hooks:
 ```python
 class MyStreamWrapper(SyncStreamWrapper[Chunk]):
     def __init__(self, stream, invocation, capture_content):
-        super().__init__(stream)
-        self._self_invocation = invocation
+        super().__init__(stream, invocation)
+        invocation.suspend()
         ...
 
     def _process_chunk(self, chunk): ...  # accumulate state

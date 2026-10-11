@@ -239,6 +239,13 @@ class StreamWrapperFactory(Protocol):
     ) -> object: ...
 
 
+def _stop_inside(invocation: _StreamingInvocation) -> None:
+    # A response closed without parse() ends the span inside it, as a parsed
+    # stream's cleanup does.
+    with invocation.activate():
+        invocation.stop()
+
+
 def wrap_stream_result(
     wrapper_cls: StreamWrapperFactory,
     result: RawResponseLike | AnyStream,
@@ -256,9 +263,13 @@ def wrap_stream_result(
         if served_model:
             if hasattr(invocation, "response_model_name"):
                 setattr(invocation, "response_model_name", served_model)
+        # The stream wrapper is built only on ``parse()``, possibly in another
+        # context; suspend now so the span isn't current before then and the
+        # context it detaches is the one ``create()`` ran in.
+        invocation.suspend()
         return RawResponseStreamProxy(
             result,
             lambda stream: wrapper_cls(stream, invocation, capture_content),
-            finalize=invocation.stop,
+            finalize=functools.partial(_stop_inside, invocation),
         )
     return wrapper_cls(result, invocation, capture_content)

@@ -1,0 +1,1 @@
+Stream wrappers make a suspended invocation current only while a chunk is read or the stream is cleaned up.

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from types import TracebackType
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
@@ -123,6 +124,8 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
     _self_invocation: _ResponseInvocation
     _self_capture_content: bool
     _self_response_telemetry_finalized: bool
+    # provided by the stream wrapper base class the mixin is combined with
+    _execution_context: Callable[[], AbstractContextManager[None]]
 
     def __init__(
         self,
@@ -132,6 +135,9 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         self._self_invocation = invocation
         self._self_capture_content = capture_content
         self._self_response_telemetry_finalized = False
+        # The stream returns to the caller undrained: leave the caller's
+        # context as it was and make the span current only while reading.
+        invocation.suspend()
 
     def _stop(
         self, result: ParsedResponse[TextFormatT] | Response | None
@@ -199,7 +205,13 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
         response = _get_stream_response(self.stream)
         if response is None:
             return None
-        return finalize_on_close(response, lambda: self._stop(None))
+        # A close through the HTTP response is stream cleanup too: run it and
+        # the finalizer in the same context as the wrapper's own close.
+        return finalize_on_close(
+            response,
+            lambda: self._stop(None),
+            execution_context=self._execution_context,
+        )
 
     def process_event(self, event: ResponseStreamEvent[TextFormatT]) -> None:
         # raw-response stream can be parsed into a caller-defined event type.
@@ -412,7 +424,12 @@ class AsyncResponseStreamWrapper(
         response = _get_stream_response(self.stream)
         if response is None:
             return None
-        return finalize_on_aclose(response, lambda: self._stop(None))
+        # See _ResponseStreamMixin.response.
+        return finalize_on_aclose(
+            response,
+            lambda: self._stop(None),
+            execution_context=self._execution_context,
+        )
 
 
 class AsyncFetchResponseStreamWrapper(

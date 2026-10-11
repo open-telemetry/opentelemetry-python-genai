@@ -122,7 +122,7 @@ jobs:
 
       - name: Bump package version on main after release
         if: inputs.sync_main && inputs.bump_after_release && steps.target.outputs.on_main == 'true'
-        run: uv run ./scripts/version_utils.py bump --dev
+        run: uv run --with packaging ./scripts/version_utils.py bump --dev
 
       - name: Regenerate instrumentations README
         if: inputs.sync_main

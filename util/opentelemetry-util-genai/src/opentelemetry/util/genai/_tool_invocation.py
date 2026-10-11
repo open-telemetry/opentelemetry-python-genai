@@ -161,3 +161,6 @@ class ToolInvocation(GenAIInvocation):
             attributes=self._get_metric_attributes(),
             context=self._span_context,
         )
+
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        """A streamed tool result only scopes context; the conventions define no chunk timing metrics for tools."""
