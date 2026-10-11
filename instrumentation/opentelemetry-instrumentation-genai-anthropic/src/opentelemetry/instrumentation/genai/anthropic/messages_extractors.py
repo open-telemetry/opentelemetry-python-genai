@@ -114,15 +114,12 @@ def extract_usage_tokens(
 
 
 def get_input_messages(
-    messages: Iterable[object] | None,
+    messages: Iterable[MessageParam] | None,
 ) -> list[InputMessage]:
     if messages is None:
         return []
     result: list[InputMessage] = []
     for message in messages:
-        if not isinstance(message, Mapping):
-            continue
-        message = cast("MessageParam", message)
         if "role" not in message or "content" not in message:
             continue
         role = message["role"]
