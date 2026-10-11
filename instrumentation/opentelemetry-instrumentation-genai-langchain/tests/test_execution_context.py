@@ -941,10 +941,17 @@ def test_instrument_skips_absent_langgraph(
     ]
 
 
-@pytest.mark.parametrize("module", ["langchain.chains.base", "langchain_classic.chains.base"])
+@pytest.mark.parametrize(
+    "module", ["langchain.chains.base", "langchain_classic.chains.base"]
+)
 @pytest.mark.parametrize("fail", [False, True])
 def test_legacy_chain_child_context(
-    module, fail, tracer_provider, meter_provider, logger_provider, span_exporter
+    module,
+    fail,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
 ):
     Chain = pytest.importorskip(module).Chain
     tracer = tracer_provider.get_tracer("test")
@@ -966,8 +973,10 @@ def test_legacy_chain_child_context(
                 return {"result": inputs["text"]}
 
     with instrument(
-        LangChainInstrumentor(), tracer_provider=tracer_provider,
-        meter_provider=meter_provider, logger_provider=logger_provider,
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
     ):
         before = context.get_current()
         if fail:
