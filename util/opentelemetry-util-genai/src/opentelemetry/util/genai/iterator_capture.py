@@ -1,14 +1,14 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Observe request iterators without advancing them ahead of the SDK."""
+"""Record request iterator values as the SDK consumes them."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, MutableMapping, Sequence
 from io import IOBase
-from typing import TYPE_CHECKING, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 if TYPE_CHECKING:
 
@@ -21,7 +21,8 @@ else:
     from wrapt import ObjectProxy as _ObjectProxy
 
 _logger = logging.getLogger(__name__)
-_T = TypeVar("_T")
+_InputT = TypeVar("_InputT")
+_ResultT = TypeVar("_ResultT")
 UNCONSUMED: object = object()
 """Snapshot placeholder for an iterator the SDK has not read."""
 
@@ -171,41 +172,53 @@ def _capture(value: object, ancestors: set[int]) -> _Node:
         ancestors.remove(value_id)
 
 
-class IteratorCapture(Generic[_T]):
-    """Capture an object's iterators as the consumer reads them.
+class IteratorCapture:
+    """Capture one request property's iterators as the SDK consumes them.
 
-    Walks built-in dictionaries, lists, and tuples, wrapping nested synchronous
-    iterators with transparent proxies. File objects pass through unchanged,
-    as do other objects, without attribute inspection or conversion.
-    Containers are copied only when a nested iterator needs replacing; the
-    caller's containers are not modified. Snapshot containers are independent
-    copies, including for each mutable item yielded by an iterator.
+    Wrap synchronous iterators in ``kwargs[property_name]``, including those
+    nested in built-in dicts, lists, and tuples. Copy containers that need
+    wrappers; leave the originals, files, and other objects untouched.
+    Store consumed values in memory, copying each yielded container.
 
-    Create only when content capture is enabled. Pass ``wrapped`` to the SDK,
-    then extract telemetry from ``snapshot()`` after request serialization.
-    Capture stores consumed input in memory; it neither drains nor replays
-    iterators. The SDK's exceptions propagate unchanged.
+    Read ``snapshot()`` or ``extract()`` after the SDK call, including on
+    failure. Iterator exceptions propagate unchanged. When disabled or the
+    property is missing, leave kwargs untouched and return ``None`` snapshots.
     """
 
-    def __init__(self, value: _T) -> None:
-        self._node: _Node = _safe_capture(value, set())
-
-    @property
-    def wrapped(self) -> _T:
-        """Input with lazy proxies in place of its iterators."""
-        return cast("_T", self._node.wrapped)
+    def __init__(
+        self,
+        kwargs: MutableMapping[str, object],
+        property_name: str,
+        enabled: bool = True,
+    ) -> None:
+        self.property_name: str = property_name
+        self._node: _Node | None = None
+        if enabled and property_name in kwargs:
+            self._node = _safe_capture(kwargs[property_name], set())
+            kwargs[property_name] = self._node.wrapped
 
     @property
     def complete(self) -> bool:
-        """Whether all observed iterators are exhausted and capture succeeded."""
-        return self._node.complete
+        """True if capture succeeded and all captured iterators are exhausted."""
+        return self._node is not None and self._node.complete
 
     def snapshot(self, *, unconsumed: object = UNCONSUMED) -> object:
-        """Return captured data without advancing iterators.
+        """Return a snapshot without advancing iterators.
 
-        Iterators become lists of consumed items. Unread iterators and failed
-        captures use ``unconsumed``; cycles also use this placeholder. An empty
-        iterator becomes ``[]`` only after the consumer reads it. Partially
-        consumed input is available even when ``complete`` is false.
+        Each iterator becomes a list of items consumed so far. Unread
+        iterators, failed captures, and cycles become ``unconsumed``.
+        Empty iterators become ``[]`` after the SDK reads them.
+        Disabled or missing properties return ``None``.
         """
-        return self._node.snapshot(unconsumed)
+        return self._node.snapshot(unconsumed) if self._node else None
+
+    def extract(
+        self, converter: Callable[[_InputT | None], _ResultT]
+    ) -> _ResultT:
+        """Pass a snapshot to ``converter`` and return its result.
+
+        The converter must accept lists for consumed iterators, ``()`` for
+        unread or unavailable values, and ``None`` for disabled or missing
+        properties.
+        """
+        return converter(cast("_InputT | None", self.snapshot(unconsumed=())))

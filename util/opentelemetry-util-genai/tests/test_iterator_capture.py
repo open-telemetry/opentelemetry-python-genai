@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,106 @@ from opentelemetry.util.genai.iterator_capture import (
     UNCONSUMED,
     IteratorCapture,
 )
+
+
+@pytest.mark.parametrize(
+    "state", ["disabled", "missing", "none", "unread", "empty"]
+)
+def test_extract_converts_snapshot_defaults(state: str) -> None:
+    source = iter(["Hello"] if state != "empty" else [])
+    kwargs: dict[str, Any] = {"messages": source}
+    if state == "missing":
+        kwargs.clear()
+    elif state == "none":
+        kwargs["messages"] = None
+    capture = IteratorCapture(kwargs, "messages", enabled=state != "disabled")
+    if state == "empty":
+        assert list(kwargs["messages"]) == []
+
+    def convert(values: Iterable[str] | None) -> str:
+        return "absent" if values is None else ",".join(values)
+
+    expected = "absent" if state in ("disabled", "missing", "none") else ""
+    assert capture.extract(convert) == expected
+    if state != "empty":
+        assert next(source) == "Hello"
+
+
+def test_extract_converts_partial_nested_input_after_failure() -> None:
+    error = ValueError("request failed")
+    unread = iter(["unread"])
+
+    def generate() -> Iterator[dict[str, Iterator[str]]]:
+        yield {"content": iter(["first", "second"]), "other": unread}
+        raise error
+
+    kwargs = {"messages": generate()}
+    capture = IteratorCapture(kwargs, "messages")
+    message = next(kwargs["messages"])
+    assert next(message["content"]) == "first"
+    with pytest.raises(ValueError) as caught:
+        next(kwargs["messages"])
+    assert caught.value is error
+
+    def convert(
+        messages: Iterable[dict[str, Sequence[str]]] | None,
+    ) -> list[str]:
+        return [
+            text
+            for message in messages or ()
+            for content in message.values()
+            for text in content
+        ]
+
+    assert capture.extract(convert) == ["first"]
+    assert not capture.complete
+    assert next(message["content"]) == "second"
+    assert next(unread) == "unread"
+
+
+def test_disabled_capture_leaves_request_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_capture(value: object, ancestors: set[int]) -> None:
+        pytest.fail("disabled capture must not inspect request values")
+
+    monkeypatch.setattr(
+        "opentelemetry.util.genai.iterator_capture._capture", fail_capture
+    )
+    messages = {"content": iter(["Hello"])}
+    kwargs = {"messages": messages}
+    capture = IteratorCapture(kwargs, "messages", enabled=False)
+    assert kwargs["messages"] is messages
+    assert capture.snapshot() is None
+    assert not capture.complete
+
+
+def test_missing_property_is_not_added() -> None:
+    kwargs: dict[str, object] = {}
+    capture = IteratorCapture(kwargs, "messages")
+    assert kwargs == {}
+    assert capture.snapshot() is None
+    assert not capture.complete
+
+
+def test_captures_are_independent_and_leave_other_properties_untouched() -> None:
+    messages = iter(["Hello", "Goodbye"])
+    tools = iter(["weather"])
+    unrelated = iter(["stop"])
+    kwargs = {"messages": messages, "tools": tools, "stop": unrelated}
+    messages_capture = IteratorCapture(kwargs, "messages")
+    tools_capture = IteratorCapture(kwargs, "tools")
+
+    assert messages_capture.property_name == "messages"
+    assert tools_capture.property_name == "tools"
+    assert kwargs["stop"] is unrelated
+    assert next(kwargs["messages"]) == "Hello"
+    assert messages_capture.snapshot() == ["Hello"]
+    assert tools_capture.snapshot() is UNCONSUMED
+    assert list(kwargs["tools"]) == ["weather"]
+    assert tools_capture.snapshot() == ["weather"]
+    assert tools_capture.complete
+    assert not messages_capture.complete
 
 
 @pytest.mark.parametrize("on_disk", [False, True])
@@ -27,11 +127,12 @@ def test_file_objects_are_preserved(
     else:
         data = BytesIO(b"content") if binary else StringIO("content")
     with data:
-        capture = IteratorCapture({"data": data})
-        assert capture.wrapped["data"] is data
+        kwargs = {"value": {"data": data}}
+        capture = IteratorCapture(kwargs, "value")
+        assert kwargs["value"]["data"] is data
         assert data.tell() == 0
         assert capture.snapshot(unconsumed=()) == {"data": data}
-        assert capture.wrapped["data"].read() == (
+        assert kwargs["value"]["data"].read() == (
             b"content" if binary else "content"
         )
         assert capture.snapshot(unconsumed=()) == {"data": data}
@@ -45,12 +146,13 @@ def test_capture_is_lazy_and_distinguishes_empty_from_unread() -> None:
         reads.append("read")
         yield from ()
 
-    capture = IteratorCapture(generate())
+    kwargs = {"value": generate()}
+    capture = IteratorCapture(kwargs, "value")
     assert reads == []
     assert capture.snapshot() is UNCONSUMED
     assert capture.snapshot(unconsumed=()) == ()
     assert not capture.complete
-    assert list(capture.wrapped) == []
+    assert list(kwargs["value"]) == []
     assert reads == ["read"]
     assert capture.snapshot() == []
     assert capture.complete
@@ -59,8 +161,9 @@ def test_capture_is_lazy_and_distinguishes_empty_from_unread() -> None:
 def test_nested_capture_preserves_containers_and_partial_input() -> None:
     inner = iter(["first", "second"])
     source = {"arbitrary": [{"payload": (inner,)}]}
-    capture = IteratorCapture(source)
-    wrapped = capture.wrapped["arbitrary"][0]["payload"][0]
+    kwargs = {"value": source}
+    capture = IteratorCapture(kwargs, "value")
+    wrapped = kwargs["value"]["arbitrary"][0]["payload"][0]
     assert isinstance(wrapped, type(inner))
     assert wrapped.__class__ is inner.__class__
     assert source["arbitrary"][0]["payload"][0] is inner
@@ -84,8 +187,9 @@ def test_yielded_mutable_objects_are_snapshotted_per_item() -> None:
         yield shared
         shared.clear()
 
-    capture = IteratorCapture(generate())
-    iterator = capture.wrapped
+    kwargs = {"value": generate()}
+    capture = IteratorCapture(kwargs, "value")
+    iterator = kwargs["value"]
     assert next(iterator) is shared
     assert next(iterator) is shared
     assert list(iterator) == []
@@ -99,14 +203,15 @@ def test_nested_iterators_yielded_by_iterators_stay_lazy() -> None:
         reads.append("inner")
         yield "value"
 
-    capture = IteratorCapture(iter([{"data": inner()}]))
-    item = next(capture.wrapped)
+    kwargs = {"value": iter([{"data": inner()}])}
+    capture = IteratorCapture(kwargs, "value")
+    item = next(kwargs["value"])
     assert reads == []
     assert capture.snapshot() == [{"data": UNCONSUMED}]
     assert list(item["data"]) == ["value"]
     assert capture.snapshot() == [{"data": ["value"]}]
     assert not capture.complete
-    assert list(capture.wrapped) == []
+    assert list(kwargs["value"]) == []
     assert capture.complete
 
 
@@ -118,10 +223,11 @@ def test_iterator_errors_propagate_unchanged(error: BaseException) -> None:
         yield "first"
         raise error
 
-    capture = IteratorCapture(generate())
-    assert next(capture.wrapped) == "first"
+    kwargs = {"value": generate()}
+    capture = IteratorCapture(kwargs, "value")
+    assert next(kwargs["value"]) == "first"
     with pytest.raises(type(error)) as caught:
-        next(capture.wrapped)
+        next(kwargs["value"])
     assert caught.value is error
     assert capture.snapshot() == ["first"]
     assert not capture.complete
@@ -141,12 +247,13 @@ def test_generator_protocol_and_return_value() -> None:
         finally:
             closed.append(True)
 
-    capture = IteratorCapture(generate())
-    assert next(capture.wrapped) == "first"
-    assert capture.wrapped.send("sent") == "sent"
-    assert capture.wrapped.throw(ValueError()) == "handled"
+    kwargs = {"value": generate()}
+    capture = IteratorCapture(kwargs, "value")
+    assert next(kwargs["value"]) == "first"
+    assert kwargs["value"].send("sent") == "sent"
+    assert kwargs["value"].throw(ValueError()) == "handled"
     with pytest.raises(StopIteration) as caught:
-        next(capture.wrapped)
+        next(kwargs["value"])
     assert caught.value.value == "finished"
     assert capture.snapshot() == ["first", "sent", "handled"]
     assert capture.complete
@@ -158,25 +265,28 @@ def test_close_does_not_drain_input() -> None:
         yield 1
         pytest.fail("close must not advance the iterator")
 
-    capture = IteratorCapture(generate())
-    assert next(capture.wrapped) == 1
-    capture.wrapped.close()
+    kwargs = {"value": generate()}
+    capture = IteratorCapture(kwargs, "value")
+    assert next(kwargs["value"]) == 1
+    kwargs["value"].close()
     assert capture.snapshot() == [1]
     assert not capture.complete
 
 
 def test_repeated_iterator_reference_does_not_replay_items() -> None:
     iterator = iter([1, 2])
-    capture = IteratorCapture([iterator, iterator])
-    assert list(capture.wrapped[0]) == [1, 2]
-    assert list(capture.wrapped[1]) == []
+    kwargs = {"value": [iterator, iterator]}
+    capture = IteratorCapture(kwargs, "value")
+    assert list(kwargs["value"][0]) == [1, 2]
+    assert list(kwargs["value"][1]) == []
     assert capture.snapshot() == [[1, 2], []]
 
 
 def test_plain_containers_are_not_replaced() -> None:
     source = {"values": [1, {"value": "text"}]}
-    capture = IteratorCapture(source)
-    assert capture.wrapped is source
+    kwargs = {"value": source}
+    capture = IteratorCapture(kwargs, "value")
+    assert kwargs["value"] is source
     snapshot = capture.snapshot()
     source["values"].clear()
     assert snapshot == {"values": [1, {"value": "text"}]}
@@ -192,8 +302,9 @@ def test_opaque_objects_are_not_inspected() -> None:
             pytest.fail("capture must not iterate unknown containers")
 
     value = Opaque()
-    capture = IteratorCapture(value)
-    assert capture.wrapped is value
+    kwargs = {"value": value}
+    capture = IteratorCapture(kwargs, "value")
+    assert kwargs["value"] is value
     assert capture.snapshot() is value
 
 
@@ -201,7 +312,8 @@ def test_capture_failures_do_not_replace_sdk_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     value = {"value": "original"}
-    capture = IteratorCapture(iter([value]))
+    kwargs = {"value": iter([value])}
+    capture = IteratorCapture(kwargs, "value")
 
     def fail_capture(value: object, ancestors: set[int]) -> None:
         raise ValueError("capture failed")
@@ -209,7 +321,7 @@ def test_capture_failures_do_not_replace_sdk_values(
     monkeypatch.setattr(
         "opentelemetry.util.genai.iterator_capture._capture", fail_capture
     )
-    assert next(capture.wrapped) is value
+    assert next(kwargs["value"]) is value
     assert capture.snapshot() == [UNCONSUMED]
     assert not capture.complete
 
@@ -217,7 +329,8 @@ def test_capture_failures_do_not_replace_sdk_values(
 def test_cycles_do_not_break_the_request() -> None:
     value: list[Any] = []
     value.append(value)
-    capture = IteratorCapture(value)
-    assert capture.wrapped is value
+    kwargs = {"value": value}
+    capture = IteratorCapture(kwargs, "value")
+    assert kwargs["value"] is value
     assert capture.snapshot() == [UNCONSUMED]
     assert not capture.complete

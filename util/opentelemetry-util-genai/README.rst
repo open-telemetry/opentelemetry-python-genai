@@ -204,6 +204,34 @@ For embedding invocations, the following attributes are set:
 - ``gen_ai.usage.input_tokens``: Int(24)
 
 
+Capturing request iterators
+--------------------------
+
+Use one ``IteratorCapture`` per request property. It replaces that property's
+value in ``kwargs`` with a lazy proxy and records values as the SDK reads them.
+Disabled captures and missing properties leave ``kwargs`` untouched and return
+``None`` from ``snapshot()``.
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.iterator_capture import IteratorCapture
+
+    messages_capture = IteratorCapture(kwargs, "messages", enabled=capture_content)
+    try:
+        response = sdk_call(**kwargs)
+    finally:
+        messages = messages_capture.extract(get_input_messages)
+
+``extract(converter)`` calls the instrumentation's converter with a snapshot,
+using ``()`` for unread iterators and ``None`` for disabled or missing properties.
+The converter must accept that shape and return the telemetry content. Use
+``snapshot()`` directly when no conversion is needed.
+
+Nested built-in dictionaries, lists, and tuples are supported. File objects
+pass through unchanged. Snapshots contain only the consumed portion of each
+iterator; async iterators and custom containers are not captured.
+
+
 Installation
 ------------
 

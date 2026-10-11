@@ -15,6 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 
 def _make_invocation():
@@ -360,6 +361,9 @@ def test_sync_manager_enter_constructs_stream_wrapper():
         manager=_FakeSyncManager(stream=stream),
         invocation_factory=_make_invocation,
         capture_content=False,
+        messages_capture=IteratorCapture({}, "messages", enabled=False),
+        system_capture=IteratorCapture({}, "system", enabled=False),
+        tools_capture=IteratorCapture({}, "tools", enabled=False),
     )
 
     with wrapper as result:
@@ -376,6 +380,9 @@ def test_sync_manager_does_not_create_invocation_until_enter():
             factory_calls.append(True) or _make_invocation()
         ),
         capture_content=False,
+        messages_capture=IteratorCapture({}, "messages", enabled=False),
+        system_capture=IteratorCapture({}, "system", enabled=False),
+        tools_capture=IteratorCapture({}, "tools", enabled=False),
     )
 
     assert not factory_calls
@@ -538,6 +545,9 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
         manager=_FakeAsyncManager(stream=stream),
         invocation_factory=_make_invocation,
         capture_content=False,
+        messages_capture=IteratorCapture({}, "messages", enabled=False),
+        system_capture=IteratorCapture({}, "system", enabled=False),
+        tools_capture=IteratorCapture({}, "tools", enabled=False),
     )
 
     async with wrapper as result:

@@ -130,31 +130,27 @@ def messages_create(
         | AnthropicStream[RawMessageStreamEvent]
         | MessagesStreamWrapper[None]
     ):
-        iterator_capture = (
-            IteratorCapture(
-                {
-                    key: kwargs[key]
-                    for key in ("messages", "system", "tools")
-                    if key in kwargs
-                }
-            )
-            if capture_content
-            else None
+        messages_capture = IteratorCapture(
+            kwargs, "messages", capture_content
         )
+        system_capture = IteratorCapture(kwargs, "system", capture_content)
+        tools_capture = IteratorCapture(kwargs, "tools", capture_content)
         invocation = _create_invocation(handler, instance, args, kwargs)
-        if iterator_capture is not None:
-            kwargs = {**kwargs, **iterator_capture.wrapped}
         try:
             # ``Any``: through ``with_raw_response`` / ``with_streaming_response``
             # this returns a response object that ``create``'s annotations do
             # not describe, so the checks below cannot be narrowed away.
             result: Any = wrapped(*args, **kwargs)
         except BaseException as exc:
-            set_request_content(invocation, iterator_capture)
+            set_request_content(
+                invocation, messages_capture, system_capture, tools_capture
+            )
             invocation.fail(exc)
             raise
 
-        set_request_content(invocation, iterator_capture)
+        set_request_content(
+            invocation, messages_capture, system_capture, tools_capture
+        )
         if is_anthropic_stream(result):
             return MessagesStreamWrapper(
                 cast("AnthropicStream[RawMessageStreamEvent]", result),
@@ -201,29 +197,25 @@ def async_messages_create(
         | AnthropicAsyncStream[RawMessageStreamEvent]
         | AsyncMessagesStreamWrapper[None]
     ):
-        iterator_capture = (
-            IteratorCapture(
-                {
-                    key: kwargs[key]
-                    for key in ("messages", "system", "tools")
-                    if key in kwargs
-                }
-            )
-            if capture_content
-            else None
+        messages_capture = IteratorCapture(
+            kwargs, "messages", capture_content
         )
+        system_capture = IteratorCapture(kwargs, "system", capture_content)
+        tools_capture = IteratorCapture(kwargs, "tools", capture_content)
         invocation = _create_invocation(handler, instance, args, kwargs)
-        if iterator_capture is not None:
-            kwargs = {**kwargs, **iterator_capture.wrapped}
         try:
             # See ``messages_create`` on why this is Any.
             result: Any = await wrapped(*args, **kwargs)
         except BaseException as exc:
-            set_request_content(invocation, iterator_capture)
+            set_request_content(
+                invocation, messages_capture, system_capture, tools_capture
+            )
             invocation.fail(exc)
             raise
 
-        set_request_content(invocation, iterator_capture)
+        set_request_content(
+            invocation, messages_capture, system_capture, tools_capture
+        )
         if is_anthropic_async_stream(result):
             return AsyncMessagesStreamWrapper(
                 cast("AnthropicAsyncStream[RawMessageStreamEvent]", result),
@@ -284,24 +276,18 @@ def messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> MessagesStreamManagerWrapper[Any]:
-        iterator_capture = (
-            IteratorCapture(
-                {
-                    key: kwargs[key]
-                    for key in ("messages", "system", "tools")
-                    if key in kwargs
-                }
-            )
-            if capture_content
-            else None
+        messages_capture = IteratorCapture(
+            kwargs, "messages", capture_content
         )
-        if iterator_capture is not None:
-            kwargs = {**kwargs, **iterator_capture.wrapped}
+        system_capture = IteratorCapture(kwargs, "system", capture_content)
+        tools_capture = IteratorCapture(kwargs, "tools", capture_content)
         return MessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(handler, instance, args, kwargs),
             capture_content,
-            iterator_capture,
+            messages_capture=messages_capture,
+            system_capture=system_capture,
+            tools_capture=tools_capture,
         )
 
     return cast(
@@ -321,24 +307,18 @@ def async_messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> AsyncMessagesStreamManagerWrapper[Any]:
-        iterator_capture = (
-            IteratorCapture(
-                {
-                    key: kwargs[key]
-                    for key in ("messages", "system", "tools")
-                    if key in kwargs
-                }
-            )
-            if capture_content
-            else None
+        messages_capture = IteratorCapture(
+            kwargs, "messages", capture_content
         )
-        if iterator_capture is not None:
-            kwargs = {**kwargs, **iterator_capture.wrapped}
+        system_capture = IteratorCapture(kwargs, "system", capture_content)
+        tools_capture = IteratorCapture(kwargs, "tools", capture_content)
         return AsyncMessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
             lambda: _create_invocation(handler, instance, args, kwargs),
             capture_content,
-            iterator_capture,
+            messages_capture=messages_capture,
+            system_capture=system_capture,
+            tools_capture=tools_capture,
         )
 
     return cast(

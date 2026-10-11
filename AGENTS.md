@@ -238,8 +238,11 @@ as the reference:
 - Use `opentelemetry.util.genai.iterator_capture.IteratorCapture` for captured request properties
   that may contain iterators, including nested values. Wrap those properties, not all `kwargs`.
   Don't drain or replay them for telemetry.
-- Only enable it for content capture. Pass `capture.wrapped` to the SDK; read `capture.snapshot()`
+- Use one instance per named property: `IteratorCapture(kwargs, "messages", enabled=capture_content)`.
+  It replaces that property in `kwargs`. Use `capture.extract(converter)`
   after SDK consumption, including failures and lazy stream entry.
+  The converter receives a snapshot with `()` for unread iterators and `None`
+  for disabled or missing properties; `capture.snapshot()` exposes the raw snapshot.
 - Preserve file objects. Extend the util for missing support; don't write local wrappers.
 - Test nested generators, partial reads, errors, and files across supported sync/async and
   streaming variants.
@@ -247,15 +250,11 @@ as the reference:
 ```python
 from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
-capture = IteratorCapture(messages) if capture_content else None
+capture = IteratorCapture(kwargs, "messages", enabled=capture_content)
 try:
-    response = sdk_call(
-        messages=capture.wrapped if capture is not None else messages,
-    )
+    response = sdk_call(**kwargs)
 finally:
-    if capture is not None:
-        captured_messages = capture.snapshot(unconsumed=())
-        # Extract telemetry from captured_messages; don't reread messages.
+    captured_messages = capture.extract(get_input_messages)
 ```
 
 #### Streaming responses

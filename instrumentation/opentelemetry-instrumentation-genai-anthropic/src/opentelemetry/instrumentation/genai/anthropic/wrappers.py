@@ -60,8 +60,8 @@ if TYPE_CHECKING:
     )
     from anthropic.types.parsed_message import ParsedMessage
 
-    from opentelemetry.util.genai.iterator_capture import IteratorCapture
     from opentelemetry.util.genai.invocation import InferenceInvocation
+    from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 
 ResponseFormatT = TypeVar("ResponseFormatT")
@@ -311,11 +311,16 @@ class MessagesStreamManagerWrapper(
         manager: MessageStreamManager[ResponseFormatT],
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
-        iterator_capture: IteratorCapture[dict[str, Any]] | None = None,
+        *,
+        messages_capture: IteratorCapture,
+        system_capture: IteratorCapture,
+        tools_capture: IteratorCapture,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
-        self._self_iterator_capture = iterator_capture
+        self._self_messages_capture = messages_capture
+        self._self_system_capture = system_capture
+        self._self_tools_capture = tools_capture
 
     def _enter_manager(
         self, invocation: InferenceInvocation
@@ -323,7 +328,12 @@ class MessagesStreamManagerWrapper(
         try:
             return super()._enter_manager(invocation)
         finally:
-            set_request_content(invocation, self._self_iterator_capture)
+            set_request_content(
+                invocation,
+                self._self_messages_capture,
+                self._self_system_capture,
+                self._self_tools_capture,
+            )
 
     def _wrap_stream(
         self,
@@ -354,11 +364,16 @@ class AsyncMessagesStreamManagerWrapper(
         manager: AsyncMessageStreamManager[ResponseFormatT],
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
-        iterator_capture: IteratorCapture[dict[str, Any]] | None = None,
+        *,
+        messages_capture: IteratorCapture,
+        system_capture: IteratorCapture,
+        tools_capture: IteratorCapture,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
-        self._self_iterator_capture = iterator_capture
+        self._self_messages_capture = messages_capture
+        self._self_system_capture = system_capture
+        self._self_tools_capture = tools_capture
 
     async def _enter_manager(
         self, invocation: InferenceInvocation
@@ -366,7 +381,12 @@ class AsyncMessagesStreamManagerWrapper(
         try:
             return await super()._enter_manager(invocation)
         finally:
-            set_request_content(invocation, self._self_iterator_capture)
+            set_request_content(
+                invocation,
+                self._self_messages_capture,
+                self._self_system_capture,
+                self._self_tools_capture,
+            )
 
     def _wrap_stream(
         self,

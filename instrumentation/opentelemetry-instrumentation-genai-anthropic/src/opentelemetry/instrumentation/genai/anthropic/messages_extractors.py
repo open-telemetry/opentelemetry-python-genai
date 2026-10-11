@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 try:
@@ -22,8 +22,8 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
-from opentelemetry.util.genai.iterator_capture import IteratorCapture
 from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -58,15 +58,15 @@ if TYPE_CHECKING:
 
 def set_request_content(
     invocation: InferenceInvocation,
-    capture: IteratorCapture[dict[str, Any]] | None,
+    messages_capture: IteratorCapture,
+    system_capture: IteratorCapture,
+    tools_capture: IteratorCapture,
 ) -> None:
-    if capture is None:
-        return
-    snapshot = cast("dict[str, Any]", capture.snapshot(unconsumed=()))
-    params = extract_params(**snapshot)
-    invocation.input_messages = get_input_messages(params.messages)
-    invocation.system_instruction = get_system_instruction(params.system)
-    invocation.tool_definitions = get_tool_definitions(params.tools)
+    invocation.input_messages = messages_capture.extract(get_input_messages)
+    invocation.system_instruction = system_capture.extract(
+        get_system_instruction
+    )
+    invocation.tool_definitions = tools_capture.extract(get_tool_definitions)
 
 
 @dataclass
