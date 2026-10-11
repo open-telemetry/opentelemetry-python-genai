@@ -3885,7 +3885,7 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "langchain", marker = "extra == 'instruments'", specifier = ">=0.3.21,<2" },
+    { name = "langchain", marker = "extra == 'instruments'", specifier = ">=0.3.22,<2" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
 ]

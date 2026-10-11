@@ -3,21 +3,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+import logging
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import Context as PythonContext
-from functools import wraps
+from functools import partial, wraps
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError, distribution
 from inspect import iscoroutinefunction, signature
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from wrapt import wrap_function_wrapper
 
-from opentelemetry.context import attach, detach
+from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.langchain._run_context import (
     _astart_run,
+    _RunScope,
     _start_run,
+    _wrap_call,
     _wrap_run,
     _wrap_stream,
 )
@@ -27,6 +31,8 @@ from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
 from opentelemetry.instrumentation.utils import unwrap
 
 __all__ = ["_ExecutionContext"]
+
+_logger = logging.getLogger(__name__)
 
 _METHODS = (
     (
@@ -39,8 +45,6 @@ _METHODS = (
         "BaseChatModel",
         "_agenerate_with_cache",
     ),
-    ("langchain_core.runnables.base", "RunnableLambda", "_invoke"),
-    ("langchain_core.runnables.base", "RunnableLambda", "_ainvoke"),
 )
 
 
@@ -59,7 +63,7 @@ class _ExecutionContext:
     @contextmanager
     def _activate(self, run_id: UUID | None) -> Iterator[None]:
         context = self._invocations.get_parent_context(run_id)
-        if context is None:
+        if context is None or get_current() is context:
             yield
             return
         token = attach(context)
@@ -67,6 +71,45 @@ class _ExecutionContext:
             yield
         finally:
             detach(token)
+
+    def _wrap_batch(self, original: Callable[..., Any]) -> Callable[..., Any]:
+        parameters = signature(original)
+
+        def parent_run_id_for(
+            instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+        ) -> UUID | None:
+            # One input runs in this frame; several run in the executor or
+            # as tasks, each in a copied context that this frame never sees.
+            bound = parameters.bind(instance, *args, **kwargs).arguments
+            if len(bound["inputs"]) != 1:
+                return None
+            config = bound.get("config")
+            if isinstance(config, Sequence):
+                config = cast(Any, config[0]) if config else None
+            callbacks = cast(Any, config or {}).get("callbacks")
+            return getattr(callbacks, "parent_run_id", None)
+
+        @wraps(original)
+        def sync(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            with self._activate(parent_run_id_for(instance, args, kwargs)):
+                return wrapped(*args, **kwargs)
+
+        @wraps(original)
+        async def asynchronous(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            with self._activate(parent_run_id_for(instance, args, kwargs)):
+                return await wrapped(*args, **kwargs)
+
+        return asynchronous if iscoroutinefunction(original) else sync
 
     def _wrap(self, original: Callable[..., Any]) -> Callable[..., Any]:
         parameters = signature(original)
@@ -96,13 +139,23 @@ class _ExecutionContext:
             args: tuple[Any, ...],
             kwargs: dict[str, Any],
         ) -> Any:
-            with self._activate(run_id_for(instance, args, kwargs)):
-                return await wrapped(*args, **kwargs)
+            run_id = run_id_for(instance, args, kwargs)
+            with self._activate(run_id):
+                try:
+                    return await wrapped(*args, **kwargs)
+                except BaseException as error:
+                    # agenerate reports an Exception from its gather results
+                    # and reaches on_llm_error; a cancellation or interrupt
+                    # leaves the gather before that, with no handler around
+                    # the await.
+                    if not isinstance(error, Exception):
+                        _RunScope(run_id, self._invocations).finish(error)
+                    raise
 
         return asynchronous if iscoroutinefunction(original) else sync
 
     @contextmanager
-    def _graph_context(
+    def _config_context(
         self,
         wrapped: Callable[..., Any],
         instance: Any,
@@ -115,22 +168,67 @@ class _ExecutionContext:
             getattr(callbacks, "parent_run_id", None)
         )
         with wrapped(*args, **kwargs) as context:
-            # LangGraph executes nodes in this copied context. Restore the token
-            # in that same context, never in a callback or the consuming task.
-            token = context.run(attach, parent) if parent is not None else None
+            # LangChain runs each child (a sequence step, a parallel branch, a
+            # graph node) in this copied context. Restore the token in that
+            # same context, never in a callback or the consuming task. A child
+            # whose own boundary already attached the parent needs no second
+            # token.
+            token = (
+                context.run(attach, parent)
+                if parent is not None
+                and context.run(get_current) is not parent
+                else None
+            )
             try:
                 yield context
             finally:
                 if token is not None:
                     context.run(detach, token)
 
+    def _patch(
+        self,
+        module_name: str,
+        class_name: str | None,
+        method: str,
+        wrapper_for: Callable[[Callable[..., Any]], Callable[..., Any]],
+        *,
+        fallback_modules: tuple[str, ...] = (),
+    ) -> None:
+        for name in (module_name, *fallback_modules):
+            try:
+                owner: Any = import_module(name)
+                if class_name is not None:
+                    owner = getattr(owner, class_name)
+                original = getattr(owner, method)
+            except (ImportError, AttributeError):
+                continue
+            wrap_function_wrapper(owner, method, wrapper_for(original))
+            self._patched.append((owner, method))
+            return
+        target = ".".join(filter(None, (module_name, class_name, method)))
+        library = module_name.partition(".")[0]
+        try:
+            # The namespace alone proves nothing: langgraph-checkpoint fills
+            # it without the runtime. Look for the distribution instead.
+            distribution(library)
+        except PackageNotFoundError:
+            _logger.debug(
+                "Skipping execution boundary %s: %s is not installed",
+                target,
+                library,
+            )
+        else:
+            # Installed but changed: spans under it will not correlate.
+            _logger.warning(
+                "Skipping execution boundary %s: not found in the "
+                "installed %s, so context is not propagated across it",
+                target,
+                library,
+            )
+
     def instrument(self) -> None:
         for module_name, class_name, method in _METHODS:
-            cls = getattr(import_module(module_name), class_name)
-            wrap_function_wrapper(
-                cls, method, self._wrap(getattr(cls, method))
-            )
-            self._patched.append((cls, method))
+            self._patch(module_name, class_name, method, self._wrap)
 
         for module_name, class_name, methods, on_error in (
             (
@@ -146,35 +244,72 @@ class _ExecutionContext:
                 self._on_retriever_error,
             ),
         ):
-            cls = getattr(import_module(module_name), class_name)
             for method, asynchronous in zip(methods, (False, True)):
-                wrap_function_wrapper(
-                    cls,
+                self._patch(
+                    module_name,
+                    class_name,
                     method,
-                    _wrap_run(
-                        getattr(cls, method),
-                        self._invocations,
-                        on_error,
-                        asynchronous,
+                    partial(
+                        _wrap_run,
+                        invocations=self._invocations,
+                        on_error=on_error,
+                        asynchronous=asynchronous,
                     ),
                 )
-                self._patched.append((cls, method))
+
+        # These start the chain run themselves, so the run id is chosen up
+        # front for _started to match.
+        for module_name, class_name, methods in (
+            (
+                "langchain_core.runnables.base",
+                "Runnable",
+                ("_call_with_config", "_acall_with_config"),
+            ),
+            # RunnableBranch dispatches the chosen branch straight from its
+            # own run, so a branch without a boundary inherits it from here.
+            (
+                "langchain_core.runnables.branch",
+                "RunnableBranch",
+                ("invoke", "ainvoke"),
+            ),
+        ):
+            for method, asynchronous in zip(methods, (False, True)):
+                self._patch(
+                    module_name,
+                    class_name,
+                    method,
+                    partial(
+                        _wrap_call,
+                        invocations=self._invocations,
+                        asynchronous=asynchronous,
+                    ),
+                )
+
+        # The default batch runs a single input in the caller's frame.
+        for method in ("batch", "abatch"):
+            self._patch(
+                "langchain_core.runnables.base",
+                "Runnable",
+                method,
+                self._wrap_batch,
+            )
 
         for class_name, wrapper in (
             ("CallbackManager", _start_run),
             ("AsyncCallbackManager", _astart_run),
         ):
-            cls = getattr(
-                import_module("langchain_core.callbacks.manager"), class_name
-            )
             for method in (
                 "on_chat_model_start",
                 "on_chain_start",
                 "on_tool_start",
                 "on_retriever_start",
             ):
-                wrap_function_wrapper(cls, method, wrapper)
-                self._patched.append((cls, method))
+                self._patch(
+                    "langchain_core.callbacks.manager",
+                    class_name,
+                    method,
+                    lambda _original, wrapper=wrapper: wrapper,
+                )
 
         for module_name, class_name, methods in (
             (
@@ -197,31 +332,44 @@ class _ExecutionContext:
                 "RunnableLambda",
                 ("stream", "astream"),
             ),
+            (
+                "langchain_core.runnables.branch",
+                "RunnableBranch",
+                ("stream", "astream"),
+            ),
             ("langgraph.pregel", "Pregel", ("stream", "astream")),
         ):
-            try:
-                cls = getattr(import_module(module_name), class_name)
-            except ImportError:
-                continue
             for method, asynchronous in zip(methods, (False, True)):
-                wrap_function_wrapper(
-                    cls,
+                self._patch(
+                    module_name,
+                    class_name,
                     method,
-                    _wrap_stream(
-                        getattr(cls, method), self._invocations, asynchronous
+                    partial(
+                        _wrap_stream,
+                        invocations=self._invocations,
+                        asynchronous=asynchronous,
                     ),
                 )
-                self._patched.append((cls, method))
 
-        try:
-            module = import_module("langgraph._internal._runnable")
-        except ImportError:
-            return
-        if hasattr(module, "set_config_context"):
-            wrap_function_wrapper(
-                module, "set_config_context", self._graph_context
+        # Composite runnables drive steps that may start no run of their own
+        # (a plain ``invoke`` override), so the child context is attached where
+        # LangChain and LangGraph enter the step's copied context. Each caller
+        # binds ``set_config_context`` by name at import, so the replacement
+        # goes into the calling modules rather than ``runnables.config``; tools
+        # bind it too, but ``BaseTool.run`` above already covers them.
+        for module_name, fallback_modules in (
+            ("langchain_core.runnables.base", ()),
+            ("langchain_core.runnables.fallbacks", ()),
+            # LangGraph moved the helper into _internal in 0.6.
+            ("langgraph._internal._runnable", ("langgraph.utils.runnable",)),
+        ):
+            self._patch(
+                module_name,
+                None,
+                "set_config_context",
+                lambda _original: self._config_context,
+                fallback_modules=fallback_modules,
             )
-            self._patched.append((module, "set_config_context"))
 
     def uninstrument(self) -> None:
         for owner, name in reversed(self._patched):
