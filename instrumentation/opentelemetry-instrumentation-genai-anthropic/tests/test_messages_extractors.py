@@ -39,6 +39,18 @@ from opentelemetry.util.genai.types import (
 )
 
 
+@pytest.mark.parametrize(
+    "incomplete", [{}, {"role": "user"}, {"content": "Hello"}]
+)
+def test_input_messages_skip_missing_fields(incomplete: dict[str, str]) -> None:
+    messages = get_input_messages(
+        [incomplete, {"role": "user", "content": "Valid"}]
+    )
+    assert len(messages) == 1
+    assert messages[0].role == "user"
+    assert messages[0].parts == [TextPart(content="Valid")]
+
+
 def test_extract_params_reads_sampling_params_from_extra_body():
     params = extract_params(
         extra_body={"temperature": 0.7, "top_p": 0.9, "top_k": 40}

@@ -233,6 +233,31 @@ as the reference:
   `instrument(completion_hook=…)` override) and ship a `custom_hook.py` example mirroring the
   OpenAI package.
 
+#### Capturing properties that may contain iterators
+
+- Use `opentelemetry.util.genai.iterator_capture.IteratorCapture` for captured request properties
+  that may contain iterators, including nested values. Wrap those properties, not all `kwargs`.
+  Don't drain or replay them for telemetry.
+- Only enable it for content capture. Pass `capture.wrapped` to the SDK; read `capture.snapshot()`
+  after SDK consumption, including failures and lazy stream entry.
+- Preserve file objects. Extend the util for missing support; don't write local wrappers.
+- Test nested generators, partial reads, errors, and files across supported sync/async and
+  streaming variants.
+
+```python
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
+
+capture = IteratorCapture(messages) if capture_content else None
+try:
+    response = sdk_call(
+        messages=capture.wrapped if capture is not None else messages,
+    )
+finally:
+    if capture is not None:
+        captured_messages = capture.snapshot(unconsumed=())
+        # Extract telemetry from captured_messages; don't reread messages.
+```
+
 #### Streaming responses
 
 A streamed response only finishes once the caller has drained the stream, so the invocation must

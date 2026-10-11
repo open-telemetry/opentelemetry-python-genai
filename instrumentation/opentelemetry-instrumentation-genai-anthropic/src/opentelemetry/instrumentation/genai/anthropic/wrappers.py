@@ -29,7 +29,10 @@ from opentelemetry.util.genai.stream import (
     finalize_on_close,
 )
 
-from .messages_extractors import set_invocation_response_attributes
+from .messages_extractors import (
+    set_invocation_response_attributes,
+    set_request_content,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -57,6 +60,7 @@ if TYPE_CHECKING:
     )
     from anthropic.types.parsed_message import ParsedMessage
 
+    from opentelemetry.util.genai.iterator_capture import IteratorCapture
     from opentelemetry.util.genai.invocation import InferenceInvocation
 
 
@@ -307,9 +311,19 @@ class MessagesStreamManagerWrapper(
         manager: MessageStreamManager[ResponseFormatT],
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
+        iterator_capture: IteratorCapture[dict[str, Any]] | None = None,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
+        self._self_iterator_capture = iterator_capture
+
+    def _enter_manager(
+        self, invocation: InferenceInvocation
+    ) -> MessageStream[ResponseFormatT]:
+        try:
+            return super()._enter_manager(invocation)
+        finally:
+            set_request_content(invocation, self._self_iterator_capture)
 
     def _wrap_stream(
         self,
@@ -340,9 +354,19 @@ class AsyncMessagesStreamManagerWrapper(
         manager: AsyncMessageStreamManager[ResponseFormatT],
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
+        iterator_capture: IteratorCapture[dict[str, Any]] | None = None,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
+        self._self_iterator_capture = iterator_capture
+
+    async def _enter_manager(
+        self, invocation: InferenceInvocation
+    ) -> AsyncMessageStream[ResponseFormatT]:
+        try:
+            return await super()._enter_manager(invocation)
+        finally:
+            set_request_content(invocation, self._self_iterator_capture)
 
     def _wrap_stream(
         self,

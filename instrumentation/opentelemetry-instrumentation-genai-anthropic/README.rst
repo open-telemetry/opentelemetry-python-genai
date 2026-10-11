@@ -60,6 +60,9 @@ environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to o
 
     export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
 
+One-shot iterators, including generators, in messages, message content, system
+instructions, and tools are captured lazily as the SDK consumes them.
+
 
 Uploading prompts and completions
 *********************************
@@ -85,4 +88,3 @@ References
 * `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
 * `Anthropic SDK (Python) <https://github.com/anthropics/anthropic-sdk-python>`_
 * `Anthropic Documentation <https://docs.anthropic.com/>`_
-
