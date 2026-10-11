@@ -173,7 +173,11 @@ class TestCase(CommonTestCaseBase):
             model="gemini-2.5-flash",
             input=["Hi", {"type": ["function_call"]}],
         )
-        self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+            '[{"role":"user","parts":[{"content":"Hi","type":"text"}],"name":null}]',
+        )
         self.assertFalse(trace.get_current_span().get_span_context().is_valid)
 
     def test_model_reflected_into_span_name(self) -> None:

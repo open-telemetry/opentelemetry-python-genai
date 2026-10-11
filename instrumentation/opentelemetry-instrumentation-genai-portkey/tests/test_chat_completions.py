@@ -497,8 +497,21 @@ def test_sync_chat_completions_error_handling(
         )
 
 
+@pytest.mark.parametrize(
+    ("parameter", "value", "attribute"),
+    [
+        ("temperature", "high", GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE),
+        ("max_tokens", "many", GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS),
+    ],
+)
 def test_sync_chat_completions_bad_parameter_reaches_the_client(
-    tracer_provider, logger_provider, meter_provider, span_exporter
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    parameter,
+    value,
+    attribute,
 ):
     with instrument(
         PortkeyInstrumentor(),
@@ -516,14 +529,14 @@ def test_sync_chat_completions_bad_parameter_reaches_the_client(
             side_effect=RuntimeError("Portkey rejected the request")
         )
 
-        # Request extraction converted temperature with float(), which
-        # raised on this value before the client saw it.
+        # Request extraction converted numeric parameters with float() and
+        # int(), which raised on these values before the client saw them.
         before = context_api.get_current()
         with pytest.raises(RuntimeError, match="Portkey rejected the request"):
             p.chat.completions.create(
                 messages=[{"role": "user", "content": "Hello"}],
                 model="gpt-4o",
-                temperature="high",
+                **{parameter: value},
             )
         assert context_api.get_current() is before
 
@@ -531,9 +544,7 @@ def test_sync_chat_completions_bad_parameter_reaches_the_client(
         assert (
             span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
         )
-        assert (
-            GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE not in span.attributes
-        )
+        assert attribute not in span.attributes
 
 
 @pytest.mark.skipif(

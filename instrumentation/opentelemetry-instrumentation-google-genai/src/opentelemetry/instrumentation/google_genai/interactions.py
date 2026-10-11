@@ -390,7 +390,7 @@ def _interactions_input_to_messages(
                 uri=_get_field(item, "uri") or "",
             )
             parts.append(part)
-        elif item_type is not None:
+        elif isinstance(item_type, str):
             part = GenericPart(type=item_type)
             parts.append(part)
 

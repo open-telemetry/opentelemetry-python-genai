@@ -67,13 +67,19 @@ class StreamingTestCase(TestCase):
         finally:
             context_api.detach(tok)
 
-    def test_malformed_contents_do_not_leave_the_invocation_open(self):
+    def _assert_contents_leave_no_open_invocation(self, contents):
         self.configure_valid_response(text="Yep, it works!")
-        # Content capture converted `contents` before the SDK saw them, and
-        # that conversion raised on None.
-        self.generate_content(model="gemini-2.0-flash", contents=None)
+        self.generate_content(model="gemini-2.0-flash", contents=contents)
         self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
         self.assertFalse(trace.get_current_span().get_span_context().is_valid)
+
+    def test_malformed_contents_do_not_leave_the_invocation_open(self):
+        # Content capture converted `contents` before the SDK saw them, and
+        # that conversion raised on None.
+        self._assert_contents_leave_no_open_invocation(None)
+
+    def test_empty_contents_do_not_leave_the_invocation_open(self):
+        self._assert_contents_leave_no_open_invocation([])
 
     def test_handles_multiple_responses(self):
         self.configure_valid_response(text="First response")

@@ -242,14 +242,14 @@ def _prepare_output_messages(
 def _safe_float(value: Any) -> float | None:
     try:
         return float(value)
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError):
         return None
 
 
 def _safe_int(value: Any) -> int | None:
     try:
         return int(value)
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError):
         return None
 
 

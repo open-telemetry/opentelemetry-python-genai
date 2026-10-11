@@ -177,15 +177,21 @@ class NonStreamingTestCase(TestCase):
         self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
         return self.otel.get_span_named("generate_content gemini-2.0-flash")
 
-    def test_malformed_contents_do_not_fail_the_call(self):
+    def _assert_contents_do_not_fail_the_call(self, contents):
         self.configure_valid_response(text="Yep, it works!")
-        # Content capture converted `contents` before the SDK saw them, and
-        # that conversion raised on None.
         response = self.generate_content(
-            model="gemini-2.0-flash", contents=None
+            model="gemini-2.0-flash", contents=contents
         )
         self.assertEqual(response.text, "Yep, it works!")
         self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
+    def test_malformed_contents_do_not_fail_the_call(self):
+        # Content capture converted `contents` before the SDK saw them, and
+        # that conversion raised on None.
+        self._assert_contents_do_not_fail_the_call(None)
+
+    def test_empty_contents_do_not_fail_the_call(self):
+        self._assert_contents_do_not_fail_the_call([])
 
     def test_instrumentation_does_not_break_core_functionality(self):
         self.configure_valid_response(text="Yep, it works!")

@@ -455,9 +455,8 @@ def _apply_response_attributes(
 def _to_input_messages(
     contents: ContentListUnion | ContentListUnionDict | None,
 ) -> list[InputMessage]:
-    # t_contents raises on missing or empty contents, which the SDK itself
-    # leaves to the API to reject.
-    if not contents:
+    # t_contents rejects None and empty lists before the wrapped SDK call runs.
+    if contents is None or (isinstance(contents, list) and not contents):
         return []
     return to_input_messages(contents=transformers.t_contents(contents))
 
