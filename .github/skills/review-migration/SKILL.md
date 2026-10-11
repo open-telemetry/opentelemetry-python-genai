@@ -258,15 +258,15 @@ async `def`, `Stream` / `AsyncStream` wrappers).
 
 For each distinct GenAI semconv operation the migrated package emits (`chat`,
 `embeddings`, `execute_tool`, `invoke_agent`, `invoke_workflow`,
-`create_agent`, …) there should be at least one happy-path scenario file under
-`tests/conformance/<op>.py` driven by `run_conformance(...)`. More
+`create_agent`, …) there should be at least one happy-path scenario script under
+`tests/conformance/<scenario>.py` configured in `tests/conformance/conformance.yaml`. More
 scenarios per operation are fine but never required.
 
 | Operation | Scenario file | Status |
 |---|---|---|
 
-Mention if conformance scenario is skipped, there are expected_violations,
-or `uv run tox -e py312-test-instrumentation-genai-<lib>` fails.
+Mention if conformance scenario is skipped, there are expected_violations in
+`conformance.yaml`, or `uv run tox -e py314-test-instrumentation-genai-<lib>-conformance` fails.
 
 #### 4c. Docstring / README coverage
 
@@ -309,8 +309,8 @@ are none, render `_No follow-up issues recommended._`
 
 - `.github/skills/migrate-from-openinference/SKILL.md` — the migration skill; it
   runs this review at its final step to produce `MIGRATION_REPORT.md`.
-- `.github/skills/write-conformance-tests/SKILL.md` — authoring the
-  conformance scenarios this report checks in §4b.
+- `.github/skills/write-conformance-tests/SKILL.md` - authoring the
+  conformance scenarios and conformance.yaml this report checks in §4b.
 - `.github/instructions/instrumentation.instructions.md` — the copilot
   PR-review rules for `instrumentation/**`; generic instrumentation
   violations are flagged there and not repeated in this report.

@@ -129,12 +129,18 @@ Flag, with a link to the rule:
   responses) before committing. Examples: `authorization`, `openai-organization`,
   `openai-project`, `Set-Cookie`, and any response-body field tied to a real
   account.
-- Conformance: packages ship `tests/conformance/<scenario>.py` modules (each
-  defining a subclass of
-  `opentelemetry.test_util_genai.conformance.Scenario` that sets
-  `expected_spans`, `expected_metrics`, and implements `run(...)`) and a
-  `tests/test_conformance.py` that runs them via
-  `opentelemetry.test_util_genai.conformance.run_conformance`.
+- Conformance: packages ship `tests/conformance/conformance.yaml` (declaring
+  runner, mock server, environment variables, the `weaver.registry` override,
+  expected spans/metrics, and `expected_violations`), standalone scenario scripts
+  (`tests/conformance/<scenario>.py`) executed under `opentelemetry-instrument`, and a
+  committed `tests/conformance/data.json`. They run via
+  `pytest …/tests/conformance.py`. Flag a `conformance.yaml` with no
+  `weaver.registry` — it would validate against the runner's pin, not `versions.env`'s.
+
+All conformance suites use the shared runner.
+For content assertions, `tests/conformance.py` calls the public `genai_session` API,
+checks `ScenarioReport.failures` and `.violations`, and inspects `.report` for message parts.
+These suites run each scenario once and still regenerate `data.json` on a complete run.
 
 ## 7. Examples
 

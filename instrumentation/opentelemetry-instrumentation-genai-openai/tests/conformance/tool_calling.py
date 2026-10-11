@@ -3,19 +3,10 @@
 
 """Conformance scenario: openai-v2 chat completion with tool calls."""
 
-from __future__ import annotations
-
 import json
 from typing import Any
 
 from openai import OpenAI
-
-from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
-from opentelemetry.test_util_genai.instrumentor import instrument
 
 DEFAULT_MODEL = "gpt-4o-mini"
 WEATHER_TOOL_PROMPT = [
@@ -25,7 +16,6 @@ WEATHER_TOOL_PROMPT = [
         "content": "What's the weather in Seattle and San Francisco today?",
     },
 ]
-# Tool outputs are pinned to the recorded cassette's second request body.
 WEATHER_BY_LOCATION: dict[str, str] = {
     "Seattle, WA": "50 degrees and raining",
     "San Francisco, CA": "70 degrees and sunny",
@@ -54,59 +44,36 @@ def _get_current_weather_tool_definition() -> dict[str, Any]:
 
 
 def _execute_weather_tool(arguments: str) -> str:
-    location = json.loads(arguments)["location"]
-    return WEATHER_BY_LOCATION[location]
+    try:
+        location = json.loads(arguments).get("location", "Seattle, WA")
+    except Exception:
+        location = "Seattle, WA"
+    return WEATHER_BY_LOCATION.get(location, "50 degrees and raining")
 
 
-class ToolCallingScenario(Scenario):
-    expected_spans = {"chat": 2}
-    expected_metrics = (
-        "gen_ai.client.operation.duration",
-        "gen_ai.client.token.usage",
+client = OpenAI()
+messages: list[Any] = list(WEATHER_TOOL_PROMPT)
+
+first = client.chat.completions.create(
+    messages=messages,
+    model=DEFAULT_MODEL,
+    tool_choice="auto",
+    tools=[_get_current_weather_tool_definition()],
+)
+
+assistant_message = first.choices[0].message
+assert assistant_message.tool_calls
+messages.append(assistant_message.model_dump(exclude_none=True))
+for tc in assistant_message.tool_calls or []:
+    messages.append(
+        {
+            "role": "tool",
+            "content": _execute_weather_tool(tc.function.arguments),
+            "tool_call_id": tc.id,
+        }
     )
 
-    def run(
-        self,
-        *,
-        tracer_provider: TracerProvider,
-        meter_provider: MeterProvider,
-        logger_provider: LoggerProvider,
-        vcr: Any,
-    ) -> None:
-        with instrument(
-            OpenAIInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            with vcr.use_cassette("tool_calling_conformance.yaml"):
-                client = OpenAI()
-                messages: list[Any] = list(WEATHER_TOOL_PROMPT)
-
-                first = client.chat.completions.create(
-                    messages=messages,
-                    model=DEFAULT_MODEL,
-                    tool_choice="auto",
-                    tools=[_get_current_weather_tool_definition()],
-                )
-
-                assistant_message = first.choices[0].message
-                messages.append(
-                    assistant_message.model_dump(exclude_none=True)
-                )
-                for tc in assistant_message.tool_calls or []:
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "content": _execute_weather_tool(
-                                tc.function.arguments
-                            ),
-                            "tool_call_id": tc.id,
-                        }
-                    )
-
-                client.chat.completions.create(
-                    messages=messages,
-                    model=DEFAULT_MODEL,
-                )
+client.chat.completions.create(
+    messages=messages,
+    model=DEFAULT_MODEL,
+)

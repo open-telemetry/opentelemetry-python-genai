@@ -100,12 +100,12 @@ Copy the shape from an existing package — paths in `tox.ini` are repo-root-rel
     (`<lib>-{oldest,latest,conformance}: -r …/tests/requirements.<factor>.txt` plus
     `{[testenv]test_deps}` / `{[testenv]pytest_deps}`). Requirements install here - **not**
     in `commands_pre`.
-  - `[testenv] commands`: add the pytest line (it `--ignore`s `tests/test_conformance.py`) and
-    the separate `…-conformance` pytest line.
+  - `[testenv] commands`: regular tests exclude the conformance directory and test runners.
+    Conformance tests target `conformance.py`.
   - `[testenv:typecheck] deps`: add `{toxinidir}/instrumentation/<pkg>[instruments]`.
 - **`[tool.pyright]`** (in root `pyproject.toml`): `include` is opt-in and added to
   *progressively* as a package gets fully typed. When a package is in `include`, also add its
-  `<pkg>/tests/**/*.py` and `<pkg>/examples/**/*.py` to `exclude` — tests and examples stay
+  `<pkg>/tests/**/*.py` and `<pkg>/examples/**/*.py` to `exclude` - tests and examples stay
   untyped; `src/**` is never excluded.
 
 ## Commands
@@ -122,7 +122,7 @@ uv run pre-commit run ruff --all-files
 # Test one package (append -oldest / -latest for the version-matrix variants)
 uv run tox -e py312-test-instrumentation-genai-openai-latest
 
-# Run a package's conformance scenarios (only *-conformance envs collect test_conformance.py)
+# Run a package's conformance scenarios
 uv run tox -e py314-test-instrumentation-genai-openai-conformance
 
 # Type check (pyright)
@@ -365,24 +365,38 @@ Full transparency isn't always reachable — prefer the least intrusive option t
 
 ### Conformance tests
 
-Packages with substantive instrumentation ship `tests/conformance/<scenario>.py`
-scenarios and a `tests/test_conformance.py` that validates emitted telemetry
-against the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
-via Weaver live-check. Each scenario module defines a subclass of
-`opentelemetry.test_util_genai.conformance.Scenario` that sets
-`expected_spans`, `expected_metrics`, and implements
-`run(*, tracer_provider, meter_provider, logger_provider, vcr)`.
+All conformance suites use the shared runner.
+For content assertions, `tests/conformance.py` calls the public `genai_session` API,
+checks `ScenarioReport.failures` and `.violations`, and inspects `.report` for message parts.
+These suites run each scenario once and still regenerate `data.json` on a complete run.
+
+Packages with substantive instrumentation ship a `tests/conformance/conformance.yaml`
+configuration, standalone scenario scripts (`tests/conformance/<scenario>.py`), and a
+committed `tests/conformance/data.json` that validate emitted telemetry against the
+[GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+via the shared conformance runner (`genai-conformance`).
+
+`conformance.yaml` configures the runner, starts `genai-mock-server`, defines environment
+variables, declares expected spans/metrics, and documents known gaps under `expected_violations`.
+Scenarios are standalone Python scripts executed under `opentelemetry-instrument python <scenario>.py`.
+
+Every `conformance.yaml` sets `weaver.registry` to
+`https://github.com/open-telemetry/semantic-conventions-genai.git@${SEMCONV_GENAI_REF}[model]`.
+The shared `common_session` fixture reads the pin from `versions.env` and passes it to
+`genai_session`. The runner owns registry provisioning, policies, and Weaver setup.
+
+`data.json` is rewritten by every complete run and committed; CI fails the conformance job when it
+no longer matches what the run emitted, so commit the file a green run produced.
 
 Ship a scenario for **every** semconv operation the library emits, even an
 operation currently blocked by a util-genai or semconv gap. Skipping the
 scenario hides the gap; writing it records the gap (as a declared violation
-or a skip reason) so it fails loudly once the gap is fixed. **Never** drop a
-scenario file because it would fail today.
+under `expected_violations` in `conformance.yaml`) so it fails loudly once the gap is fixed.
+**Never** drop a scenario file because it would fail today.
 
 Run via `uv run tox -e py314-test-instrumentation-genai-<lib>-conformance`. The
-`*-conformance` tox envs target `tests/test_conformance.py` directly; the
-regular `*-{oldest,latest}` envs `--ignore` it so they don't need the
-OTLP/gRPC exporter or `weaver_live_check`.
+`*-conformance` tox envs run pytest against `conformance.py`.
+Regular test envs exclude these files and the `tests/conformance` directory.
 
 The parallel PR-review rules live in
 [`.github/instructions/instrumentation.instructions.md`](.github/instructions/instrumentation.instructions.md)

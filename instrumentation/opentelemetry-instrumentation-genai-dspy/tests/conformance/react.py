@@ -5,19 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import dspy
-
-from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import (
-    ExpectedViolation,
-    Scenario,
-)
-from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 def add(x: int, y: int) -> int:
@@ -50,37 +38,8 @@ class MockExtract:
         return {"answer": "4"}
 
 
-class ReActScenario(Scenario):
-    expected_spans = {"invoke_agent": 1, "execute_tool": 1}
-    expected_metrics = (
-        "gen_ai.invoke_agent.duration",
-        "gen_ai.execute_tool.duration",
-    )
-    expected_violations = (
-        ExpectedViolation(
-            advice_id="genai_expected_attribute_missing",
-            message_substring="gen_ai.tool.call.id",
-        ),
-    )
-
-    def run(
-        self,
-        *,
-        tracer_provider: TracerProvider,
-        meter_provider: MeterProvider,
-        logger_provider: LoggerProvider,
-        vcr: Any,
-    ) -> None:
-        with instrument(
-            DSPyInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            tool = dspy.Tool(add, name="add", desc="Add two numbers.")
-            react = dspy.ReAct("question -> answer", tools=[tool])
-            react.react = MockSyncPredict()
-            react.extract = MockExtract()
-
-            react(question="What is 2 + 2?")
+tool = dspy.Tool(add, name="add", desc="Add two numbers.")
+react = dspy.ReAct("question -> answer", tools=[tool])
+react.react = MockSyncPredict()
+react.extract = MockExtract()
+react(question="What is 2 + 2?")

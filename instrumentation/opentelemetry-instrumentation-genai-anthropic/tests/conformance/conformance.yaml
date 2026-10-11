@@ -1,0 +1,110 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: genai-conformance
+instrumented_library: anthropic
+instrumentation_library: opentelemetry-instrumentation-genai-anthropic
+
+weaver:
+  registry: https://github.com/open-telemetry/semantic-conventions-genai.git@${SEMCONV_GENAI_REF}[model]
+
+server:
+  run: genai-mock-server --port ${PORT}
+
+env:
+  ANTHROPIC_BASE_URL: ${MOCK_SERVER_URL}
+  ANTHROPIC_API_KEY: test_anthropic_api_key
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: SPAN_ONLY
+
+scenarios:
+  inference:
+    run: opentelemetry-instrument python inference.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  streaming:
+    run: opentelemetry-instrument python streaming.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  inference_raw_response:
+    run: opentelemetry-instrument python inference_raw_response.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  inference_raw_response_streaming:
+    run: opentelemetry-instrument python inference_raw_response_streaming.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+          attributes:
+            gen_ai.request.stream: true
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+      - gen_ai.client.operation.time_to_first_chunk
+      - gen_ai.client.operation.time_per_output_chunk
+
+  tool_calling:
+    run: opentelemetry-instrument python tool_calling.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 2
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  multimodal:
+    run: opentelemetry-instrument python multimodal.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
+
+  server_tool_calling:
+    run: opentelemetry-instrument python server_tool_calling.py
+    spans:
+      - match:
+          attributes:
+            gen_ai.operation.name: chat
+        expect:
+          count: 1
+    metrics:
+      - gen_ai.client.operation.duration
+      - gen_ai.client.token.usage
