@@ -91,16 +91,57 @@ def get_workspace_packages(repo_root: Path) -> dict[str, tuple[Path, str]]:
     return packages
 
 
+def _workspace_dirs(
+    workspace_packages: dict[str, tuple[Path, str]],
+) -> dict[Path, str]:
+    return {
+        pkg_dir.resolve(): name
+        for name, (pkg_dir, _) in workspace_packages.items()
+    }
+
+
+def _match_local_package(
+    line: str,
+    oldest_path: Path,
+    repo_root: Path,
+    workspace_dirs: dict[Path, str],
+) -> str | None:
+    """Return the canonical name of the local package a requirement line installs, if any."""
+    path_str = line
+    if line.startswith(("-e", "--editable")):
+        parts = line.split(maxsplit=1)
+        path_str = parts[1].strip() if len(parts) > 1 else ""
+
+    path_clean = (
+        path_str.split("[", 1)[0]
+        .strip()
+        .replace("{toxinidir}", str(repo_root))
+    )
+
+    for base in (oldest_path.parent, oldest_path.parent.parent, repo_root):
+        resolved = (base / path_clean).resolve()
+        if resolved in workspace_dirs:
+            return workspace_dirs[resolved]
+        if (resolved / "pyproject.toml").is_file():
+            try:
+                data = tomllib.loads(
+                    (resolved / "pyproject.toml").read_text(encoding="utf-8")
+                )
+                name = data.get("project", {}).get("name")
+                if name:
+                    return canonicalize_name(name)
+            except Exception:
+                pass
+    return None
+
+
 def parse_local_workspace_lines(
     oldest_path: Path,
     repo_root: Path,
     workspace_packages: dict[str, tuple[Path, str]],
 ) -> dict[str, str]:
     """Find lines in a requirements file that install local workspace packages."""
-    workspace_dirs = {
-        pkg_dir.resolve(): name
-        for name, (pkg_dir, _) in workspace_packages.items()
-    }
+    workspace_dirs = _workspace_dirs(workspace_packages)
     local_pkgs: dict[str, str] = {}
 
     for raw in oldest_path.read_text(encoding="utf-8").splitlines():
@@ -108,41 +149,12 @@ def parse_local_workspace_lines(
         if not line:
             continue
 
-        path_str = line
-        is_editable = line.startswith(("-e", "--editable"))
-        if is_editable:
-            parts = line.split(maxsplit=1)
-            path_str = parts[1].strip() if len(parts) > 1 else ""
-
-        path_clean = (
-            path_str.split("[", 1)[0]
-            .strip()
-            .replace("{toxinidir}", str(repo_root))
+        matched_pkg = _match_local_package(
+            line, oldest_path, repo_root, workspace_dirs
         )
-
-        matched_pkg: str | None = None
-        for base in (oldest_path.parent, oldest_path.parent.parent, repo_root):
-            resolved = (base / path_clean).resolve()
-            if resolved in workspace_dirs:
-                matched_pkg = workspace_dirs[resolved]
-                break
-            if (resolved / "pyproject.toml").is_file():
-                try:
-                    data = tomllib.loads(
-                        (resolved / "pyproject.toml").read_text(
-                            encoding="utf-8"
-                        )
-                    )
-                    name = data.get("project", {}).get("name")
-                    if name:
-                        matched_pkg = canonicalize_name(name)
-                        break
-                except Exception:
-                    pass
-
         if matched_pkg:
             local_pkgs[matched_pkg] = line
-        elif is_editable:
+        elif line.startswith(("-e", "--editable")):
             local_pkgs[line] = line
 
     return local_pkgs
@@ -240,6 +252,78 @@ def check_workspace_dependencies(
             )
 
     return errors
+
+
+def _release_target(version: Version) -> Version:
+    return Version(version.public.split(".dev")[0])
+
+
+def strip_released_local_installs(repo_root: Path) -> list[Path]:
+    """Drop oldest-requirements local installs of workspace deps whose floor is already released.
+
+    Returns the modified requirements files.
+    """
+    workspace_packages = get_workspace_packages(repo_root)
+    workspace_dirs = _workspace_dirs(workspace_packages)
+    modified: list[Path] = []
+
+    for pkg_dir, _ in workspace_packages.values():
+        oldest_path = pkg_dir / "tests" / "requirements.oldest.txt"
+        if not oldest_path.is_file():
+            continue
+
+        pyproject = tomllib.loads(
+            (pkg_dir / "pyproject.toml").read_text(encoding="utf-8")
+        )
+
+        released: set[str] = set()
+        for req in get_declared_requirements(pyproject):
+            name = canonicalize_name(req.name)
+            if name not in workspace_packages:
+                continue
+            floor = next(
+                (
+                    spec.version
+                    for spec in req.specifier
+                    if spec.operator in (">=", "==", "~=")
+                ),
+                None,
+            )
+            if floor is None:
+                continue
+            try:
+                floor_target = _release_target(Version(floor))
+                current_target = _release_target(
+                    Version(workspace_packages[name][1])
+                )
+            except Exception:
+                continue
+            if floor_target < current_target:
+                released.add(name)
+
+        if not released:
+            continue
+
+        lines = oldest_path.read_text(encoding="utf-8").splitlines(
+            keepends=True
+        )
+        kept = []
+        for raw in lines:
+            line = raw.split("#", 1)[0].strip()
+            if line and (
+                _match_local_package(
+                    line, oldest_path, repo_root, workspace_dirs
+                )
+                in released
+            ):
+                continue
+            kept.append(raw)
+
+        if len(kept) != len(lines):
+            oldest_path.write_text("".join(kept), encoding="utf-8")
+            modified.append(oldest_path)
+
+    return modified
 
 
 def declared_dep_names(pyproject: dict) -> set[str]:
