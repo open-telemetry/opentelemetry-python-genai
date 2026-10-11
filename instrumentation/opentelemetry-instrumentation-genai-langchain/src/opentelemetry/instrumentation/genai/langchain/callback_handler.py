@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
@@ -57,6 +56,10 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     RetrievalDocument,
     Role,
+)
+from opentelemetry.util.genai.utils import (
+    object_to_any_value,
+    tool_arguments_to_any_value,
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
@@ -706,14 +709,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             name = serialized.get("name") or "unknown"
             description = serialized.get("description")
 
-        arguments: Any
-        if inputs is not None:
-            arguments = inputs
-        else:
-            try:
-                arguments = json.loads(input_str)
-            except (json.JSONDecodeError, ValueError):
-                arguments = input_str
         agent_name, _ = self._find_agent_context(parent_run_id)
         parent_context = self._invocation_manager.get_parent_context(
             parent_run_id
@@ -727,7 +722,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             _attach_to_context=False,
         )
         tool_invocation.tool_description = description
-        tool_invocation.arguments = arguments
+        if tool_invocation.should_capture_content:
+            tool_invocation.arguments = tool_arguments_to_any_value(
+                inputs if inputs is not None else input_str
+            )
         tool_call_id = kwargs.get("tool_call_id")
         if tool_call_id:
             tool_invocation.tool_call_id = tool_call_id
@@ -749,7 +747,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         end_tool_call_id = getattr(output, "tool_call_id", None)
         if end_tool_call_id and not tool_invocation.tool_call_id:
             tool_invocation.tool_call_id = end_tool_call_id
-        tool_invocation.tool_result = getattr(output, "content", None)
+        if tool_invocation.should_capture_content:
+            tool_invocation.tool_result = object_to_any_value(
+                getattr(output, "content", output)
+            )
         tool_invocation.stop()
         self._invocation_manager.delete_invocation_state(run_id=run_id)
 

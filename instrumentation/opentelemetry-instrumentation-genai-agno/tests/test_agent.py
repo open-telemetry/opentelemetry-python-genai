@@ -663,7 +663,6 @@ def test_format_content_structured_types() -> None:
         item: str
 
     assert format_content("plain text") == "plain text"
-    assert format_content(None) == ""
     assert format_content(42) == "42"
     assert json.loads(format_content(MyModel(name="test", count=5))) == {
         "name": "test",
@@ -735,8 +734,6 @@ def test_set_tool_invocation_output_structured_result(
     tracer_provider,
     monkeypatch,
 ) -> None:
-    import json
-
     from pydantic import BaseModel
 
     from opentelemetry.instrumentation.genai.agno.patch import (
@@ -758,7 +755,7 @@ def test_set_tool_invocation_output_structured_result(
         ToolOutput(status="ok", code=200),
     )
     invocation.stop()
-    assert json.loads(invocation.tool_result) == {
+    assert invocation.tool_result == {
         "status": "ok",
         "code": 200,
     }

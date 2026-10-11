@@ -52,6 +52,17 @@ from .message import (
 )
 from .tool_call_wrapper import wrapped_tool
 
+
+def _normalize_to_list_if_tuple(value: Any) -> Any:
+    # Match the Google GenAI SDK Pydantic model's sequence coercion.
+    # The SDK automatically coerces tuples to lists during model instantiation,
+    # but `transformers.t_contents` bypasses this and fails on tuples.
+    # Normalizing defensively prevents `ValueError` cascades for valid tuple inputs.
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
 _is_mcp_imported = False
 McpClientSession = McpTool = None
 try:
@@ -520,12 +531,16 @@ def _create_instrumented_generate_content(
 
                 if telemetry_handler.should_capture_content():
                     invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
+                        contents=transformers.t_contents(
+                            _normalize_to_list_if_tuple(contents)
+                        )
                     )
                     if wrapped_config.system_instruction:
                         invocation.system_instruction = to_system_instructions(
                             content=transformers.t_contents(
-                                wrapped_config.system_instruction
+                                _normalize_to_list_if_tuple(
+                                    wrapped_config.system_instruction
+                                )
                             )[0]
                         )
                 candidates = []
@@ -679,12 +694,16 @@ def _create_instrumented_generate_content_stream(
 
             if telemetry_handler.should_capture_content():
                 invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
+                    contents=transformers.t_contents(
+                        _normalize_to_list_if_tuple(contents)
+                    )
                 )
                 if wrapped_config.system_instruction:
                     invocation.system_instruction = to_system_instructions(
                         content=transformers.t_contents(
-                            wrapped_config.system_instruction
+                            _normalize_to_list_if_tuple(
+                                wrapped_config.system_instruction
+                            )
                         )[0]
                     )
             return GenerateContentStreamWrapper(
@@ -751,12 +770,16 @@ def _create_instrumented_async_generate_content(
 
                 if telemetry_handler.should_capture_content():
                     invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
+                        contents=transformers.t_contents(
+                            _normalize_to_list_if_tuple(contents)
+                        )
                     )
                     if wrapped_config.system_instruction:
                         invocation.system_instruction = to_system_instructions(
                             content=transformers.t_contents(
-                                wrapped_config.system_instruction
+                                _normalize_to_list_if_tuple(
+                                    wrapped_config.system_instruction
+                                )
                             )[0]
                         )
                 candidates = []
@@ -834,12 +857,16 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
 
             if telemetry_handler.should_capture_content():
                 invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
+                    contents=transformers.t_contents(
+                        _normalize_to_list_if_tuple(contents)
+                    )
                 )
                 if wrapped_config.system_instruction:
                     invocation.system_instruction = to_system_instructions(
                         content=transformers.t_contents(
-                            wrapped_config.system_instruction
+                            _normalize_to_list_if_tuple(
+                                wrapped_config.system_instruction
+                            )
                         )[0]
                     )
             return AsyncGenerateContentStreamWrapper(

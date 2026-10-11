@@ -1174,6 +1174,56 @@ def test_on_tool_end_captures_result_with_span_only_mode(monkeypatch):
     assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT] == "result text"
 
 
+@pytest.mark.parametrize(
+    "tool_input, expected_result",
+    [
+        # Without a tool_call_id LangChain passes the raw return value.
+        ({"city": "Paris"}, '{"temp":20}'),
+        # With one, it wraps the result in a ToolMessage.
+        (
+            {
+                "name": "weather",
+                "args": {"city": "Paris"},
+                "id": "call_1",
+                "type": "tool_call",
+            },
+            '{"temp": 20}',
+        ),
+    ],
+)
+def test_tool_result_captured_with_and_without_tool_call_id(
+    monkeypatch, tool_input: dict[str, Any], expected_result: str
+):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    tracer_provider, span_exporter, logger_provider, meter_provider = (
+        _make_providers()
+    )
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    try:
+
+        @tool
+        def weather(city: str) -> dict[str, int]:
+            """Get the weather."""
+            return {"temp": 20}
+
+        weather.invoke(tool_input)
+
+        (span,) = span_exporter.get_finished_spans()
+        assert (
+            span.attributes[gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT]
+            == expected_result
+        )
+    finally:
+        instrumentor.uninstrument()
+
+
 # ---------------------------------------------------------------------------
 # on_tool_end attribute types
 # ---------------------------------------------------------------------------
