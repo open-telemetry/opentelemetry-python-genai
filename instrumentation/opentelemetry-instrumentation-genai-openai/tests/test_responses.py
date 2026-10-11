@@ -15,6 +15,7 @@ from openai import (
 )
 from pydantic import BaseModel
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
     ResponseStreamManagerWrapper,
@@ -1614,3 +1615,27 @@ def test_responses_create_event_only_no_content_in_span(
         logs[0].log_record.event_name
         == "gen_ai.client.inference.operation.details"
     )
+
+
+def test_responses_create_malformed_input_reaches_the_client(
+    span_exporter, instrument_with_content
+):
+    _skip_if_not_latest()
+
+    client = OpenAI(base_url="http://localhost:4242", max_retries=0)
+
+    # A list where the item type should be a string makes request extraction
+    # raise before the client sees the request.
+    with pytest.raises(APIConnectionError):
+        client.responses.create(  # pylint: disable=no-member
+            model=DEFAULT_MODEL,
+            input=[{"type": ["function_call"]}],
+            timeout=0.1,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
+    assert not trace.get_current_span().get_span_context().is_valid

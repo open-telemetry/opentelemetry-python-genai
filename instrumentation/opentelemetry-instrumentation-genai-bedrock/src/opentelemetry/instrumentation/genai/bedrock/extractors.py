@@ -180,7 +180,11 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         fmt = document.get("format", "pdf")
         source = document.get("source")
         content_bytes = source.get("bytes", b"") if _is_dict(source) else b""
-        mime_type = _DOC_MIME_TYPES.get(fmt, f"application/{fmt}")
+        mime_type = (
+            _DOC_MIME_TYPES.get(fmt, f"application/{fmt}")
+            if isinstance(fmt, str)
+            else None
+        )
         return BlobPart(
             content=content_bytes,
             mime_type=mime_type,

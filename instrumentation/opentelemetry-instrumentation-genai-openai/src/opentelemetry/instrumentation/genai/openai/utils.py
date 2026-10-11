@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
@@ -369,6 +369,8 @@ def _content_to_parts(content: Any) -> list[MessagePart]:
 
 def _prepare_input_messages(messages) -> list[InputMessage]:
     chat_messages = []
+    if not isinstance(messages, Iterable):
+        return chat_messages
     for message in messages:
         role = get_property_value(message, "role")
         name = get_property_value(message, "name")

@@ -280,7 +280,7 @@ def _get_input_message(item: object) -> InputMessage | None:
     if InputMessage is None or Role is None:
         return None
 
-    item_type = _get_field(item, "type")
+    item_type = _get_str(_get_field(item, "type"))
 
     if item_type in _TOOL_CALL_ARGUMENT_FIELDS and ToolCall is not None:
         raw = _get_field(item, _TOOL_CALL_ARGUMENT_FIELDS[item_type])

@@ -279,6 +279,8 @@ def _to_server_tool_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
     item_type = item.get("type") if isinstance(item, dict) else item.type
+    if not isinstance(item_type, str):
+        return None
     tool_name = _SERVER_TOOL_CALL_NAMES.get(item_type)
     response_name = _SERVER_TOOL_RESPONSE_NAMES.get(item_type)
     if tool_name is None and response_name is None:
