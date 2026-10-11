@@ -62,9 +62,11 @@ def set_request_content(
     system_capture: IteratorCapture,
     tools_capture: IteratorCapture,
 ) -> None:
-    invocation.input_messages = messages_capture.extract(get_input_messages)
-    invocation.system_instruction = system_capture.extract(
-        get_system_instruction
+    invocation.input_messages = (
+        messages_capture.extract(get_input_messages) or []
+    )
+    invocation.system_instruction = (
+        system_capture.extract(get_system_instruction) or []
     )
     invocation.tool_definitions = tools_capture.extract(get_tool_definitions)
 

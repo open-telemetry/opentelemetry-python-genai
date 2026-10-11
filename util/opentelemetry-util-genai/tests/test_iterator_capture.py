@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import logging
 from collections.abc import Generator, Iterable, Iterator, Sequence
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -68,6 +69,41 @@ def test_extract_converts_partial_nested_input_after_failure() -> None:
     assert not capture.complete
     assert next(message["content"]) == "second"
     assert next(unread) == "unread"
+
+
+@pytest.mark.parametrize("failure", ["snapshot", "converter"])
+def test_extract_errors_return_none(
+    failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    capture = IteratorCapture({"messages": [1]}, "messages")
+
+    def convert(value: object) -> str:
+        raise ValueError("invalid content")
+
+    if failure == "snapshot":
+
+        def fail_snapshot(*, unconsumed: object) -> object:
+            raise ValueError("invalid snapshot")
+
+        monkeypatch.setattr(capture, "snapshot", fail_snapshot)
+
+    with caplog.at_level(logging.DEBUG):
+        assert capture.extract(convert) is None
+    assert "Failed to extract request property messages" in caplog.text
+
+
+def test_extract_does_not_swallow_cancellation() -> None:
+    capture = IteratorCapture({}, "messages")
+    error = asyncio.CancelledError()
+
+    def convert(value: object) -> str:
+        raise error
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        capture.extract(convert)
+    assert caught.value is error
 
 
 def test_disabled_capture_leaves_request_untouched(

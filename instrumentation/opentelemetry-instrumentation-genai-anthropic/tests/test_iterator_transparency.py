@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from anthropic import Anthropic, AsyncAnthropic
+from anthropic import Anthropic, AsyncAnthropic, BadRequestError
 
 try:
     import httpx2 as httpx
@@ -19,8 +19,105 @@ from opentelemetry.instrumentation.genai.anthropic import patch
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 
 from .test_sync_messages import _STREAM_SSE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("sdk_failure", [False, True])
+async def test_invalid_captured_content_preserves_sdk_outcome(
+    span_exporter: Any,
+    instrument_with_content: Any,
+    asynchronous: bool,
+    streaming: bool,
+    sdk_failure: bool,
+) -> None:
+    def respond(request: Any) -> Any:
+        assert json.loads(request.content)["messages"] == [1]
+        if sdk_failure:
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "invalid messages",
+                    },
+                },
+            )
+        if streaming:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_STREAM_SSE_BODY,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_invalid_content",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-20250514",
+                "content": [{"type": "text", "text": "Hi"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    kwargs = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 32,
+        "messages": iter([1]),
+        "system": iter([{"type": "text", "text": "Be brief"}]),
+    }
+
+    async def call_sdk() -> None:
+        if asynchronous:
+            async with AsyncAnthropic(
+                api_key="test",
+                http_client=httpx.AsyncClient(
+                    transport=httpx.MockTransport(respond)
+                ),
+            ) as client:
+                if streaming:
+                    async with client.messages.stream(**kwargs) as stream:
+                        await stream.until_done()
+                else:
+                    result = await client.messages.create(**kwargs)
+                    assert result.id == "msg_invalid_content"
+        else:
+            with Anthropic(
+                api_key="test",
+                http_client=httpx.Client(
+                    transport=httpx.MockTransport(respond)
+                ),
+            ) as client:
+                if streaming:
+                    with client.messages.stream(**kwargs) as stream:
+                        stream.until_done()
+                else:
+                    result = client.messages.create(**kwargs)
+                    assert result.id == "msg_invalid_content"
+
+    if sdk_failure:
+        with pytest.raises(BadRequestError, match="invalid messages"):
+            await call_sdk()
+    else:
+        await call_sdk()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attributes = spans[0].attributes
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in attributes
+    assert json.loads(attributes[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]) == [
+        {"type": "text", "content": "Be brief"}
+    ]
+    if sdk_failure:
+        assert attributes[ERROR_TYPE] == "anthropic.BadRequestError"
 
 
 @pytest.mark.asyncio

@@ -56,7 +56,7 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Adding attributes to invocations produced by the util is fine.
 - Flag captured request iterators that bypass `IteratorCapture`, eager consumption or replay,
   wrapping unrelated arguments, capture when disabled, and snapshots taken before SDK consumption.
-  See [request property capture](../../AGENTS.md#capturing-request-properties-that-may-contain-iterators).
+  See [request property capture](../../AGENTS.md#capturing-properties-that-may-contain-iterators).
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers, and
   invocation-backed wrappers that do not pass the invocation to `super().__init__(stream, invocation)`

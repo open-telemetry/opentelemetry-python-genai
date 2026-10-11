@@ -214,11 +214,20 @@ class IteratorCapture:
 
     def extract(
         self, converter: Callable[[_InputT | None], _ResultT]
-    ) -> _ResultT:
+    ) -> _ResultT | None:
         """Pass a snapshot to ``converter`` and return its result.
 
         The converter must accept lists for consumed iterators, ``()`` for
         unread or unavailable values, and ``None`` for disabled or missing
-        properties.
+        properties. Log snapshot or conversion errors and return ``None``.
         """
-        return converter(cast("_InputT | None", self.snapshot(unconsumed=())))
+        try:
+            snapshot = cast("_InputT | None", self.snapshot(unconsumed=()))
+            return converter(snapshot)
+        except Exception:
+            _logger.debug(
+                "Failed to extract request property %s",
+                self.property_name,
+                exc_info=True,
+            )
+            return None

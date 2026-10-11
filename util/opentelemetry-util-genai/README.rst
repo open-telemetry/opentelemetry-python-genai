@@ -224,7 +224,8 @@ Disabled captures and missing properties leave ``kwargs`` untouched and return
 
 ``extract(converter)`` calls the instrumentation's converter with a snapshot,
 using ``()`` for unread iterators and ``None`` for disabled or missing properties.
-The converter must accept that shape and return the telemetry content. Use
+The converter must accept that shape and return the telemetry content.
+``extract()`` logs snapshot or conversion errors and returns ``None``. Use
 ``snapshot()`` directly when no conversion is needed.
 
 Nested built-in dictionaries, lists, and tuples are supported. File objects
