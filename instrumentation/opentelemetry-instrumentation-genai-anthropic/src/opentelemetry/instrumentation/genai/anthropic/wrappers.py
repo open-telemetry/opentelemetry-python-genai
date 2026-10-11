@@ -30,8 +30,10 @@ from opentelemetry.util.genai.stream import (
 )
 
 from .messages_extractors import (
+    get_input_messages,
+    get_system_instruction,
+    get_tool_definitions,
     set_invocation_response_attributes,
-    set_request_content,
 )
 
 _logger = logging.getLogger(__name__)
@@ -328,11 +330,14 @@ class MessagesStreamManagerWrapper(
         try:
             return super()._enter_manager(invocation)
         finally:
-            set_request_content(
-                invocation,
-                self._self_messages_capture,
-                self._self_system_capture,
-                self._self_tools_capture,
+            invocation.input_messages = (
+                self._self_messages_capture.extract(get_input_messages) or []
+            )
+            invocation.system_instruction = (
+                self._self_system_capture.extract(get_system_instruction) or []
+            )
+            invocation.tool_definitions = self._self_tools_capture.extract(
+                get_tool_definitions
             )
 
     def _wrap_stream(
@@ -381,11 +386,14 @@ class AsyncMessagesStreamManagerWrapper(
         try:
             return await super()._enter_manager(invocation)
         finally:
-            set_request_content(
-                invocation,
-                self._self_messages_capture,
-                self._self_system_capture,
-                self._self_tools_capture,
+            invocation.input_messages = (
+                self._self_messages_capture.extract(get_input_messages) or []
+            )
+            invocation.system_instruction = (
+                self._self_system_capture.extract(get_system_instruction) or []
+            )
+            invocation.tool_definitions = self._self_tools_capture.extract(
+                get_tool_definitions
             )
 
     def _wrap_stream(

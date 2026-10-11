@@ -205,10 +205,10 @@ For embedding invocations, the following attributes are set:
 
 
 Capturing request iterators
---------------------------
+---------------------------
 
-Use one ``IteratorCapture`` per request property. It replaces that property's
-value in ``kwargs`` with a lazy proxy and records values as the SDK reads them.
+Use ``IteratorCapture.from_property()`` for a named request property. It replaces
+that property's value in ``kwargs`` and records values as the SDK reads them.
 Disabled captures and missing properties leave ``kwargs`` untouched and return
 ``None`` from ``snapshot()``.
 
@@ -216,15 +216,27 @@ Disabled captures and missing properties leave ``kwargs`` untouched and return
 
     from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
-    messages_capture = IteratorCapture(kwargs, "messages", enabled=capture_content)
+    messages_capture = IteratorCapture.from_property(
+        kwargs, "messages", enabled=capture_content
+    )
     try:
         response = sdk_call(**kwargs)
     finally:
         messages = messages_capture.extract(get_input_messages)
 
-``extract(converter)`` calls the instrumentation's converter with a snapshot,
+For a bare value, pass ``capture.wrapped`` to the SDK:
+
+.. code-block:: python
+
+    capture = IteratorCapture(messages, enabled=capture_content)
+    try:
+        response = sdk_call(messages=capture.wrapped)
+    finally:
+        messages = capture.extract(get_input_messages)
+
+``extract(extractor)`` calls the instrumentation's extractor with a snapshot,
 using ``()`` for unread iterators and ``None`` for disabled or missing properties.
-The converter must accept that shape and return the telemetry content.
+The extractor must accept that shape and return the telemetry content.
 ``extract()`` logs snapshot or conversion errors and returns ``None``. Use
 ``snapshot()`` directly when no conversion is needed.
 

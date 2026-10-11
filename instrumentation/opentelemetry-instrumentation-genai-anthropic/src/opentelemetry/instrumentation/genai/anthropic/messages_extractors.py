@@ -23,7 +23,6 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.util.genai.invocation import InferenceInvocation
-from opentelemetry.util.genai.iterator_capture import IteratorCapture
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -54,21 +53,6 @@ if TYPE_CHECKING:
         ToolUnionParam,
         Usage,
     )
-
-
-def set_request_content(
-    invocation: InferenceInvocation,
-    messages_capture: IteratorCapture,
-    system_capture: IteratorCapture,
-    tools_capture: IteratorCapture,
-) -> None:
-    invocation.input_messages = (
-        messages_capture.extract(get_input_messages) or []
-    )
-    invocation.system_instruction = (
-        system_capture.extract(get_system_instruction) or []
-    )
-    invocation.tool_definitions = tools_capture.extract(get_tool_definitions)
 
 
 @dataclass
@@ -130,12 +114,15 @@ def extract_usage_tokens(
 
 
 def get_input_messages(
-    messages: Iterable[MessageParam] | None,
+    messages: Iterable[object] | None,
 ) -> list[InputMessage]:
     if messages is None:
         return []
     result: list[InputMessage] = []
     for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        message = cast("MessageParam", message)
         if "role" not in message or "content" not in message:
             continue
         role = message["role"]

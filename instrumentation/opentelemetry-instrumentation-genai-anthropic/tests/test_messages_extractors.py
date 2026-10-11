@@ -3,6 +3,7 @@
 
 """Tests for Anthropic message parameter extraction."""
 
+from collections import UserDict
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,11 +41,35 @@ from opentelemetry.util.genai.types import (
 
 
 @pytest.mark.parametrize(
-    "incomplete", [{}, {"role": "user"}, {"content": "Hello"}]
+    "invalid",
+    [
+        {},
+        {"role": "user"},
+        {"content": "Hello"},
+        1,
+        None,
+        "role content",
+        ["role", "content"],
+    ],
 )
-def test_input_messages_skip_missing_fields(incomplete: dict[str, str]) -> None:
+def test_input_messages_skip_invalid_entries(invalid: object) -> None:
+    assert get_input_messages([invalid]) == []
     messages = get_input_messages(
-        [incomplete, {"role": "user", "content": "Valid"}]
+        [
+            {"role": "user", "content": "First"},
+            invalid,
+            {"role": "user", "content": "Last"},
+        ]
+    )
+    assert [message.parts for message in messages] == [
+        [TextPart(content="First")],
+        [TextPart(content="Last")],
+    ]
+
+
+def test_input_messages_accept_mappings() -> None:
+    messages = get_input_messages(
+        [UserDict({"role": "user", "content": "Valid"})]
     )
     assert len(messages) == 1
     assert messages[0].role == "user"
