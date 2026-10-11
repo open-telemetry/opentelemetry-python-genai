@@ -1,0 +1,1 @@
+Stop request extraction from raising on sampling or token parameters that do not convert to numbers, such as `temperature="high"` or `max_tokens="many"`.
