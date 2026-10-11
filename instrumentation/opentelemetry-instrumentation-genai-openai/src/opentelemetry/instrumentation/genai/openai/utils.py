@@ -37,11 +37,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponsePart,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import (
-    decode_base64,
-    image_from_url,
-    suppress_extraction_errors,
-)
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 _OpenAIOmit = getattr(openai, "Omit", None)
 
@@ -121,6 +117,8 @@ def create_chat_invocation(
     client_instance,
     capture_content: bool,
 ) -> InferenceInvocation:
+    # pylint: disable=too-many-branches
+
     address, port = get_server_address_and_port(client_instance)
     invocation = handler.inference(
         GenAIAttributes.GenAiProviderNameValues.OPENAI.value,
@@ -128,17 +126,6 @@ def create_chat_invocation(
         server_address=address if address else None,
         server_port=port if port else None,
     )
-    _apply_chat_request_attributes(invocation, kwargs, capture_content)
-    return invocation
-
-
-@suppress_extraction_errors()
-def _apply_chat_request_attributes(
-    invocation: InferenceInvocation,
-    kwargs,
-    capture_content: bool,
-) -> None:
-    # pylint: disable=too-many-branches
     invocation.temperature = get_value(kwargs.get("temperature"))
     invocation.top_p = get_value(kwargs.get("p") or kwargs.get("top_p"))
     max_tokens = get_value(kwargs.get("max_completion_tokens"))
@@ -204,6 +191,7 @@ def _apply_chat_request_attributes(
         invocation.tool_definitions = _prepare_tool_definitions(
             kwargs.get("tools")
         )
+    return invocation
 
 
 def get_value(v: Any):

@@ -23,10 +23,7 @@ from opentelemetry.util.genai.invocation import (
     RemoteAgentInvocation,
     RetrievalInvocation,
 )
-from opentelemetry.util.genai.utils import (
-    bind_arguments,
-    suppress_extraction_errors,
-)
+from opentelemetry.util.genai.utils import bind_arguments
 
 from .extractors import (
     extract_converse_request,
@@ -81,10 +78,9 @@ def _handle_converse(
         operation_name=GenAiOperationNameValues.CHAT.value,
     )
     capture_content = handler.should_capture_content()
-    with suppress_extraction_errors():
-        extract_converse_request(
-            api_params, invocation, capture_content=capture_content
-        )
+    extract_converse_request(
+        api_params, invocation, capture_content=capture_content
+    )
     try:
         response: Any = wrapped(*args, **kwargs)
     except BaseException as exc:
@@ -135,10 +131,9 @@ async def _handle_async_converse(
         operation_name=GenAiOperationNameValues.CHAT.value,
     )
     capture_content = handler.should_capture_content()
-    with suppress_extraction_errors():
-        extract_converse_request(
-            api_params, invocation, capture_content=capture_content
-        )
+    extract_converse_request(
+        api_params, invocation, capture_content=capture_content
+    )
     try:
         response: Any = await wrapped(*args, **kwargs)
     except BaseException as exc:
@@ -188,8 +183,7 @@ def _handle_invoke_model(
             server_address=server_address,
             server_port=server_port,
         )
-        with suppress_extraction_errors():
-            extract_embedding_request(api_params, invocation)
+        extract_embedding_request(api_params, invocation)
         try:
             response: Any = wrapped(*args, **kwargs)
             raw_bytes = b""
@@ -218,10 +212,9 @@ def _handle_invoke_model(
         server_port=server_port,
     )
     capture_content = handler.should_capture_content()
-    with suppress_extraction_errors():
-        extract_invoke_model_request(
-            api_params, invocation, capture_content=capture_content
-        )
+    extract_invoke_model_request(
+        api_params, invocation, capture_content=capture_content
+    )
     try:
         response = wrapped(*args, **kwargs)
     except BaseException as exc:
@@ -284,8 +277,7 @@ async def _handle_async_invoke_model(
             server_address=server_address,
             server_port=server_port,
         )
-        with suppress_extraction_errors():
-            extract_embedding_request(api_params, invocation)
+        extract_embedding_request(api_params, invocation)
         try:
             response: Any = await wrapped(*args, **kwargs)
         except BaseException as exc:
@@ -331,10 +323,9 @@ async def _handle_async_invoke_model(
         server_port=server_port,
     )
     capture_content = handler.should_capture_content()
-    with suppress_extraction_errors():
-        extract_invoke_model_request(
-            api_params, invocation, capture_content=capture_content
-        )
+    extract_invoke_model_request(
+        api_params, invocation, capture_content=capture_content
+    )
     try:
         response = await wrapped(*args, **kwargs)
     except BaseException as exc:
@@ -406,15 +397,15 @@ def _start_invoke_agent(
         server_address=server_address,
         server_port=server_port,
     )
-    with suppress_extraction_errors():
-        raw_agent_id = api_params.get("agentId")
-        if raw_agent_id:
-            invocation.agent_id = str(raw_agent_id)
-        extract_invoke_agent_request(
-            api_params,
-            invocation,
-            capture_content=invocation.should_capture_content,
-        )
+    raw_agent_id = api_params.get("agentId")
+    if raw_agent_id:
+        invocation.agent_id = str(raw_agent_id)
+
+    extract_invoke_agent_request(
+        api_params,
+        invocation,
+        capture_content=invocation.should_capture_content,
+    )
     return invocation
 
 
@@ -452,12 +443,11 @@ def _start_retrieve(
         server_address=server_address,
         server_port=server_port,
     )
-    with suppress_extraction_errors():
-        extract_retrieve_request(
-            api_params,
-            invocation,
-            capture_content=invocation.should_capture_content,
-        )
+    extract_retrieve_request(
+        api_params,
+        invocation,
+        capture_content=invocation.should_capture_content,
+    )
     return invocation
 
 

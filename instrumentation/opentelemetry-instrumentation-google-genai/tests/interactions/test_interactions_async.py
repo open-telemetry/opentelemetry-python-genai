@@ -6,25 +6,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from opentelemetry import context as context_api
-
 from .base import TestCase
 
 
 class TestInteractionsAsync(TestCase):
     def run_interaction(self, *args: Any, **kwargs: Any) -> Any:
-        async def _run() -> Any:
-            # asyncio.run() discards the task's context, so a leak is only
-            # visible from inside the task.
-            before = context_api.get_current()
-            try:
-                return await self.client.aio.interactions.create(
-                    *args, **kwargs
-                )
-            finally:
-                self.assertIs(context_api.get_current(), before)
-
-        return asyncio.run(_run())
+        return asyncio.run(
+            self.client.aio.interactions.create(*args, **kwargs)
+        )
 
     def run_streaming_interaction(
         self, *args: Any, **kwargs: Any

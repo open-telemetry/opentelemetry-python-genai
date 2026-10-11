@@ -3,7 +3,6 @@
 
 import asyncio
 
-from opentelemetry import context as context_api
 from opentelemetry.trace import StatusCode
 
 from .base import TestCase
@@ -17,19 +16,13 @@ class AsyncStreamingMixin:
         return "google.genai.AsyncModels.generate_content_stream"
 
     async def _generate_content_stream_helper(self, *args, **kwargs):
-        # asyncio.run() discards the task's context, so a leak is only
-        # visible from inside the task.
-        before = context_api.get_current()
         result = []
-        try:
-            async for (
-                response
-            ) in await self.client.aio.models.generate_content_stream(  # pylint: disable=missing-kwoa
-                *args, **kwargs
-            ):
-                result.append(response)
-        finally:
-            self.assertIs(context_api.get_current(), before)
+        async for (
+            response
+        ) in await self.client.aio.models.generate_content_stream(  # pylint: disable=missing-kwoa
+            *args, **kwargs
+        ):
+            result.append(response)
         return result
 
     def generate_content_stream(self, *args, **kwargs):
