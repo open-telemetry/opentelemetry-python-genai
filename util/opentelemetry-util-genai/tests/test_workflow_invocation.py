@@ -5,6 +5,11 @@ import os
 import unittest
 from unittest.mock import patch
 
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -28,11 +33,19 @@ from opentelemetry.util.genai.types import (
 class TestWorkflowInvocation(unittest.TestCase):
     def setUp(self):
         self.span_exporter = InMemorySpanExporter()
+        self.log_exporter = InMemoryLogRecordExporter()
         self.tracer_provider = TracerProvider()
         self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
-        self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        logger_provider = LoggerProvider()
+        logger_provider.add_log_record_processor(
+            SimpleLogRecordProcessor(self.log_exporter)
+        )
+        self.handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=logger_provider,
+        )
 
     def test_default_values(self):
         invocation = self.handler.workflow(name=None)
@@ -76,6 +89,69 @@ class TestWorkflowInvocation(unittest.TestCase):
         spans = self.span_exporter.get_finished_spans()
         assert spans[0].attributes is not None
         assert spans[0].attributes["key"] == "value"
+
+    def test_emit_event_uses_invocation_context(self):
+        invocation = self.handler.workflow(name="stateful_workflow")
+        invocation.emit_event(
+            "gen_ai.execution.state.changed",
+            {"gen_ai.execution.state.changed_key.count": 2},
+            body="Execution state changed",
+        )
+        invocation.stop()
+
+        records = self.log_exporter.get_finished_logs()
+        assert len(records) == 1
+        record = records[0].log_record
+        assert record.event_name == "gen_ai.execution.state.changed"
+        assert record.body == "Execution state changed"
+        assert record.attributes is not None
+        assert (
+            record.attributes["gen_ai.execution.state.changed_key.count"] == 2
+        )
+        assert record.trace_id == invocation.span.get_span_context().trace_id
+        assert record.span_id == invocation.span.get_span_context().span_id
+
+    def test_emit_event_after_stop_is_ignored(self):
+        invocation = self.handler.workflow(name="stateful_workflow")
+        invocation.stop()
+        invocation.emit_event("test.event", {})
+
+        assert self.log_exporter.get_finished_logs() == ()
+
+    def test_emit_event_without_attached_context(self):
+        invocation = self.handler.workflow(
+            name="stateful_workflow", _attach_to_context=False
+        )
+        invocation.emit_event("test.event", {})
+        invocation.stop()
+
+        records = self.log_exporter.get_finished_logs()
+        assert len(records) == 1
+        record = records[0].log_record
+        assert record.trace_id == invocation.span.get_span_context().trace_id
+        assert record.span_id == invocation.span.get_span_context().span_id
+
+    def test_emit_event_while_suspended(self):
+        invocation = self.handler.workflow(name="stateful_workflow")
+        invocation.suspend()
+        invocation.emit_event("test.event", {})
+        invocation.stop()
+
+        records = self.log_exporter.get_finished_logs()
+        assert len(records) == 1
+        assert (
+            records[0].log_record.span_id
+            == invocation.span.get_span_context().span_id
+        )
+
+    def test_emit_event_after_failure_is_ignored(self):
+        invocation = self.handler.workflow(
+            name="stateful_workflow", _attach_to_context=False
+        )
+        invocation.fail(ValueError("failed"))
+        invocation.emit_event("test.event", {})
+
+        assert self.log_exporter.get_finished_logs() == ()
 
     def test_default_lists_are_independent(self):
         """Ensure separate invocations get separate list instances."""

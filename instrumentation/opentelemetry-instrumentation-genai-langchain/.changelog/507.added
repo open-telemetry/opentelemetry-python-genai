@@ -1,0 +1,1 @@
+Emit correlated execution state-change events for LangGraph node updates.
