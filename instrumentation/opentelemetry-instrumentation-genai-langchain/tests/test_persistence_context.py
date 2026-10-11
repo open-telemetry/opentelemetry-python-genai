@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from inspect import signature
 from typing import Any, TypedDict
 
 import pytest
@@ -12,6 +13,7 @@ pytest.importorskip("langgraph")
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.pregel import Pregel
 from langgraph.store.memory import InMemoryStore
 
 from opentelemetry import context
@@ -28,6 +30,12 @@ from .test_execution_context import (
 from .test_stream_context import _assert_no_runs
 
 __all__ = ["clients", "no_detach_errors"]
+
+# LangGraph 0.6 replaced checkpoint_during with durability modes.
+_durability = pytest.mark.skipif(
+    "durability" not in signature(Pregel.stream).parameters,
+    reason="durability modes need LangGraph >= 0.6",
+)
 
 
 class _State(TypedDict):
@@ -205,38 +213,43 @@ def _assert_persistence_parents(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("durability", ["sync", "async", "exit"])
+@pytest.mark.parametrize(
+    "durability",
+    [
+        # The default mode; older LangGraph checkpoints the same way.
+        None,
+        pytest.param("async", marks=_durability),
+        pytest.param("exit", marks=_durability),
+    ],
+)
 async def test_checkpoint_and_store_context(
     clients,
     span_exporter,
     asynchronous: bool,
     streaming: bool,
-    durability: str,
+    durability: str | None,
 ) -> None:
     saver = _saver(clients)
     graph = _graph(saver, _store(clients), asynchronous)
     before = context.get_current()
     config = {"configurable": {"thread_id": "one"}}
+    kwargs = {} if durability is None else {"durability": durability}
     for text in ("first", "second"):
         if streaming:
             if asynchronous:
-                async for _ in graph.astream(
-                    {"text": text}, config, durability=durability
-                ):
+                async for _ in graph.astream({"text": text}, config, **kwargs):
                     assert context.get_current() is before
             else:
-                for _ in graph.stream(
-                    {"text": text}, config, durability=durability
-                ):
+                for _ in graph.stream({"text": text}, config, **kwargs):
                     assert context.get_current() is before
         elif asynchronous:
-            assert await graph.ainvoke(
-                {"text": text}, config, durability=durability
-            ) == {"text": text}
+            assert await graph.ainvoke({"text": text}, config, **kwargs) == {
+                "text": text
+            }
         else:
-            assert graph.invoke(
-                {"text": text}, config, durability=durability
-            ) == {"text": text}
+            assert graph.invoke({"text": text}, config, **kwargs) == {
+                "text": text
+            }
         assert context.get_current() is before
         assert (
             InMemorySaver.get_tuple(saver, config).checkpoint[

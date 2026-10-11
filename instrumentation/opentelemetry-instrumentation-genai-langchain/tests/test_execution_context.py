@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from contextvars import copy_context
+from importlib import import_module, invalidate_caches
+from importlib.util import find_spec
+from pathlib import Path
 from typing import Any, TypedDict
 
 import httpx
@@ -18,14 +23,18 @@ from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
+from langchain_core.runnables import base as runnables_base
 from langchain_core.tools import BaseTool, StructuredTool, Tool
 from langchain_core.vectorstores import VectorStore
 from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI, OpenAI
 
 from opentelemetry import baggage, context, trace
-from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+from opentelemetry.instrumentation.genai.langchain import (
+    LangChainInstrumentor,
+    agent_context,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
@@ -97,6 +106,65 @@ async def clients(
                     client_set.stream_waiting.set()
                     await asyncio.Event().wait()
 
+    class ResponsesApiStream(ResponseStream):
+        def __iter__(self) -> Iterator[bytes]:
+            response = {
+                "id": "resp-test",
+                "object": "response",
+                "created_at": 1,
+                "model": "test-model",
+                "status": "in_progress",
+                "output": [],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            }
+            message = {
+                "type": "message",
+                "id": "msg-test",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                    }
+                ],
+            }
+            yield sse_event("response.created", response=response)
+            yield sse_event(
+                "response.output_text.delta",
+                item_id="msg-test",
+                output_index=0,
+                content_index=0,
+                delta="answer",
+                logprobs=[],
+            )
+            if client_set.stream_error is not None:
+                raise client_set.stream_error
+            yield sse_event(
+                "response.completed",
+                response={
+                    **response,
+                    "status": "completed",
+                    "output": [message],
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                    },
+                },
+            )
+
+    def sse_event(event_type: str, **payload: Any) -> bytes:
+        data = json.dumps(
+            {"type": event_type, "sequence_number": 0, **payload}
+        )
+        return f"event: {event_type}\ndata: {data}\n\n".encode()
+
     def sse_chunk(content: str, finish_reason: str | None) -> bytes:
         payload = {
             "id": "chatcmpl-test",
@@ -125,7 +193,11 @@ async def clients(
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=ResponseStream(),
+                stream=(
+                    ResponsesApiStream()
+                    if request.url.path.endswith("/responses")
+                    else ResponseStream()
+                ),
             )
         return httpx.Response(
             200,
@@ -193,6 +265,22 @@ def _child(child: ReadableSpan, parent: ReadableSpan) -> None:
         <= child.end_time
         <= parent.end_time
     )
+
+
+def _assert_cancellation(
+    error: BaseException, original: BaseException
+) -> None:
+    # langchain-core awaits a tool or stream body in a task of its own. On
+    # Python 3.10 a task re-raises its cancellation as a new CancelledError
+    # chained to the original; 3.11 re-raises the original (bpo-45390).
+    if sys.version_info >= (3, 11):
+        assert error is original
+        return
+    assert isinstance(error, asyncio.CancelledError)
+    cause: BaseException | None = error
+    while cause is not None and cause is not original:
+        cause = cause.__context__
+    assert cause is original
 
 
 @pytest.mark.asyncio
@@ -270,10 +358,11 @@ async def test_chat_model_correlates_sdk_and_http(
     assert result.content == "answer"
     assert context.get_current() is before
     (model_span,) = _spans(span_exporter, _LC_SCOPE)
-    (inference,) = _spans(span_exporter, _OPENAI_SCOPE)
+    # The OpenAI inference runs inside the LangChain chat span, so util-genai
+    # suppresses it and the request parents to the chat span.
+    assert _spans(span_exporter, _OPENAI_SCOPE) == []
     (http,) = _spans(span_exporter, _HTTP_SCOPE)
-    _child(inference, model_span)
-    _child(http, inference)
+    _child(http, model_span)
 
 
 @pytest.mark.asyncio
@@ -341,6 +430,13 @@ class _State(TypedDict):
     text: str
 
 
+def _optional_module(name: str) -> Any:
+    try:
+        return import_module(name)
+    except ImportError:
+        return None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_graph_node_and_nested_tool_correlate_http(
@@ -349,8 +445,13 @@ async def test_graph_node_and_nested_tool_correlate_http(
     asynchronous: bool,
 ) -> None:
     graph_module = pytest.importorskip("langgraph.graph")
-    helper = pytest.importorskip("langgraph._internal._runnable")
-    if not hasattr(helper, "set_config_context"):
+    if not any(
+        hasattr(_optional_module(name), "set_config_context")
+        for name in (
+            "langgraph._internal._runnable",
+            "langgraph.utils.runnable",
+        )
+    ):
         pytest.skip("LangGraph version has no scoped node execution helper")
 
     tool = StructuredTool.from_function(
@@ -459,7 +560,10 @@ async def test_execution_failure_restores_context(
             tool.invoke("hello")
         else:
             await tool.ainvoke("hello")
-    assert raised.value is error
+    if "cancel" in mode:
+        _assert_cancellation(raised.value, error)
+    else:
+        assert raised.value is error
     assert context.get_current() is before
     (http,) = _spans(span_exporter, _HTTP_SCOPE)
     (tool_span,) = _spans(span_exporter, _LC_SCOPE)
@@ -521,8 +625,8 @@ async def test_task_cancellation_finalizes_tool_once(
                     "hello", config={"callbacks": [OtherHandler()]}
                 )
             except asyncio.CancelledError as error:
-                assert error is errors[0]
-                assert error.args == ("cancelled by test",)
+                _assert_cancellation(error, errors[0])
+                assert errors[0].args == ("cancelled by test",)
                 raise
             finally:
                 assert context.get_current() is before
@@ -624,8 +728,17 @@ def test_uninstrument_restores_execution_methods(
         (BaseRetriever, "ainvoke"),
         (BaseChatModel, "stream"),
         (BaseChatModel, "astream"),
+        (Runnable, "_call_with_config"),
+        (Runnable, "_acall_with_config"),
         (Runnable, "_transform_stream_with_config"),
         (Runnable, "_atransform_stream_with_config"),
+        (Runnable, "batch"),
+        (Runnable, "abatch"),
+        (RunnableBranch, "invoke"),
+        (RunnableBranch, "ainvoke"),
+        (RunnableBranch, "stream"),
+        (RunnableBranch, "astream"),
+        (runnables_base, "set_config_context"),
         (CallbackManager, "on_chain_start"),
     ]
     try:
@@ -646,3 +759,183 @@ def test_uninstrument_restores_execution_methods(
                 assert getattr(owner, name) is not original
         for (owner, name), original in zip(targets, originals):
             assert getattr(owner, name) is original
+
+
+def test_uninstrument_restores_the_twice_wrapped_graph_stream(
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+) -> None:
+    Pregel = pytest.importorskip("langgraph.pregel").Pregel
+    originals = {name: vars(Pregel)[name] for name in ("stream", "astream")}
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    ):
+        for name, original in originals.items():
+            # The agent announcement wraps the execution boundary, which
+            # wraps the original.
+            outer = vars(Pregel)[name]
+            assert outer._self_wrapper is getattr(
+                agent_context, f"wrap_{name}"
+            )
+            inner = outer.__wrapped__
+            assert inner is not original
+            assert inner.__wrapped__ is original
+    for name, original in originals.items():
+        assert vars(Pregel)[name] is original
+
+
+def _uninstall_langgraph(monkeypatch, tmp_path, keep: str | None) -> None:
+    """Take LangGraph off sys.path and out of sys.modules.
+
+    ``keep`` names a sibling distribution under the ``langgraph`` namespace
+    (``langgraph-checkpoint``) that stays installed without the runtime.
+    Every other package on the affected path entries stays reachable.
+    """
+    for name in list(sys.modules):
+        if name == "langgraph" or name.startswith("langgraph."):
+            monkeypatch.delitem(sys.modules, name)
+    path: list[str] = []
+    for entry in sys.path:
+        root = Path(entry or ".")
+        if not (root / "langgraph").is_dir():
+            path.append(entry)
+            continue
+        shadow = tmp_path / f"site-packages-{len(path)}"
+        shadow.mkdir()
+        for child in root.iterdir():
+            if (
+                not child.name.startswith(
+                    ("langgraph.", "langgraph_", "langgraph-")
+                )
+                and child.name != "langgraph"
+            ):
+                (shadow / child.name).symlink_to(child)
+        if keep is not None:
+            (shadow / "langgraph").mkdir()
+            (shadow / "langgraph" / keep).symlink_to(root / "langgraph" / keep)
+            for info in root.glob(f"langgraph_{keep}-*.dist-info"):
+                (shadow / info.name).symlink_to(info)
+        path.append(str(shadow))
+    monkeypatch.setattr(sys, "path", path)
+    monkeypatch.setattr(sys, "path_importer_cache", {})
+    invalidate_caches()
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "method", "level"),
+    [
+        (
+            "langchain_core.language_models.chat_models",
+            "BaseChatModel",
+            "_agenerate_with_cache",
+            logging.WARNING,
+        ),
+        (
+            "langchain_core.runnables.base",
+            "Runnable",
+            "_atransform_stream_with_config",
+            logging.WARNING,
+        ),
+        (
+            "langchain_core.runnables.base",
+            None,
+            "set_config_context",
+            logging.WARNING,
+        ),
+        (
+            "langgraph._internal._runnable",
+            None,
+            "set_config_context",
+            logging.WARNING,
+        ),
+        ("langgraph._internal._runnable", None, None, logging.WARNING),
+    ],
+)
+def test_instrument_skips_missing_execution_boundary(
+    monkeypatch,
+    caplog,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    module_name: str,
+    class_name: str | None,
+    method: str | None,
+    level: int,
+) -> None:
+    module = pytest.importorskip(module_name)
+    if method is None:
+        # Hide the module and everything imported under it.
+        for name in list(sys.modules):
+            if name == module_name or name.startswith(f"{module_name}."):
+                monkeypatch.setitem(sys.modules, name, None)
+    else:
+        owner = getattr(module, class_name) if class_name else module
+        monkeypatch.delattr(owner, method)
+    run = BaseTool.run
+    generate = BaseChatModel._generate_with_cache
+    with caplog.at_level(logging.DEBUG, logger=_LC_SCOPE):
+        with instrument(
+            LangChainInstrumentor(),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+        ):
+            assert BaseTool.run is not run
+            assert BaseChatModel._generate_with_cache is not generate
+        assert BaseTool.run is run
+        assert BaseChatModel._generate_with_cache is generate
+    target = ".".join(filter(None, (module_name, class_name, method)))
+    prefix = f"Skipping execution boundary {target}{': ' if method else '.'}"
+    skipped = [
+        record
+        for record in caplog.records
+        if record.name == f"{_LC_SCOPE}._execution_context"
+        and record.getMessage().startswith(prefix)
+    ]
+    assert skipped
+    assert {record.levelno for record in skipped} == {level}
+
+
+# The optional library is absent, or only langgraph-checkpoint is installed:
+# the namespace then resolves without the runtime. Nothing to warn about.
+@pytest.mark.parametrize("installed", [None, "checkpoint"])
+def test_instrument_skips_absent_langgraph(
+    monkeypatch,
+    caplog,
+    tmp_path,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    installed: str | None,
+) -> None:
+    pytest.importorskip("langgraph")
+    _uninstall_langgraph(monkeypatch, tmp_path, installed)
+    assert (find_spec("langgraph") is not None) == (installed is not None)
+    with caplog.at_level(logging.DEBUG, logger=_LC_SCOPE):
+        with instrument(
+            LangChainInstrumentor(),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+        ):
+            pass
+    records = [
+        record
+        for record in caplog.records
+        if record.name == f"{_LC_SCOPE}._execution_context"
+    ]
+    assert {record.levelno for record in records} == {logging.DEBUG}
+    assert sorted(record.getMessage() for record in records) == [
+        f"Skipping execution boundary {target}: langgraph is not installed"
+        for target in sorted(
+            (
+                "langgraph._internal._runnable.set_config_context",
+                "langgraph.pregel.Pregel.astream",
+                "langgraph.pregel.Pregel.stream",
+            )
+        )
+    ]
