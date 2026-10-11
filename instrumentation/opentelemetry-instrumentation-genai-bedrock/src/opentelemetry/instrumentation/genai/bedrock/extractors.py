@@ -962,6 +962,12 @@ def extract_retrieve_request(
     *,
     capture_content: bool = True,
 ) -> None:
+    raw_kb_id = api_params.get("knowledgeBaseId")
+    if raw_kb_id:
+        invocation.attributes[aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID] = (
+            str(raw_kb_id)
+        )
+
     retrieval_config = api_params.get("retrievalConfiguration")
     if _is_dict(retrieval_config):
         vector_search_config = retrieval_config.get(
@@ -978,6 +984,150 @@ def extract_retrieve_request(
             query_text = retrieval_query.get("text")
             if query_text is not None:
                 invocation.query_text = str(query_text)
+
+
+def _extract_model_from_arn(model_arn: Any) -> str | None:
+    if not model_arn:
+        return None
+    arn_str = str(model_arn)
+    for prefix in ("foundation-model/", "inference-profile/"):
+        if prefix in arn_str:
+            return arn_str.split(prefix, 1)[1]
+    return arn_str
+
+
+def extract_retrieve_and_generate_model(
+    api_params: dict[str, Any],
+) -> str | None:
+    rag_config = api_params.get("retrieveAndGenerateConfiguration")
+    if not _is_dict(rag_config):
+        return None
+    for sub_key in (
+        "knowledgeBaseConfiguration",
+        "externalSourcesConfiguration",
+    ):
+        sub_cfg = rag_config.get(sub_key)
+        if _is_dict(sub_cfg) and sub_cfg.get("modelArn"):
+            return _extract_model_from_arn(sub_cfg.get("modelArn"))
+    return None
+
+
+def extract_retrieve_and_generate_request(
+    api_params: dict[str, Any],
+    invocation: InferenceInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = api_params.get("sessionId")
+    if session_id:
+        invocation.conversation_id = str(session_id)
+
+    if capture_content:
+        input_obj = api_params.get("input")
+        if _is_dict(input_obj):
+            input_text = input_obj.get("text")
+            if input_text is not None:
+                invocation.input_messages = [
+                    InputMessage(
+                        role=Role.USER.value,
+                        parts=[TextPart(content=str(input_text))],
+                    )
+                ]
+
+    rag_config = api_params.get("retrieveAndGenerateConfiguration")
+    if not _is_dict(rag_config):
+        return
+
+    gen_config: dict[str, Any] | None = None
+    kb_config = rag_config.get("knowledgeBaseConfiguration")
+    if _is_dict(kb_config):
+        kb_id = kb_config.get("knowledgeBaseId")
+        if kb_id:
+            invocation.attributes[
+                aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID
+            ] = str(kb_id)
+
+        if _is_dict(kb_config.get("generationConfiguration")):
+            gen_config = kb_config["generationConfiguration"]
+
+    ext_config = rag_config.get("externalSourcesConfiguration")
+    if (
+        gen_config is None
+        and _is_dict(ext_config)
+        and _is_dict(ext_config.get("generationConfiguration"))
+    ):
+        gen_config = ext_config["generationConfiguration"]
+
+    if _is_dict(gen_config):
+        guardrail_cfg = gen_config.get("guardrailConfiguration")
+        if _is_dict(guardrail_cfg):
+            guardrail_id = guardrail_cfg.get("guardrailId")
+            if guardrail_id:
+                invocation.attributes[
+                    aws_attributes.AWS_BEDROCK_GUARDRAIL_ID
+                ] = str(guardrail_id)
+
+        inf_cfg = gen_config.get("inferenceConfig")
+        if _is_dict(inf_cfg):
+            text_inf = inf_cfg.get("textInferenceConfig")
+            if _is_dict(text_inf):
+                if "temperature" in text_inf:
+                    invocation.temperature = _safe_float(
+                        text_inf.get("temperature")
+                    )
+                if "topP" in text_inf:
+                    invocation.top_p = _safe_float(text_inf.get("topP"))
+                if "maxTokens" in text_inf:
+                    invocation.max_tokens = _safe_int(
+                        text_inf.get("maxTokens")
+                    )
+                stop_seq = text_inf.get("stopSequences")
+                if _is_list(stop_seq):
+                    invocation.stop_sequences = [
+                        str(s) for s in stop_seq if s is not None
+                    ]
+
+        add_fields = gen_config.get("additionalModelRequestFields")
+        if _is_dict(add_fields):
+            top_k = _first_not_none(
+                add_fields.get("topK"), add_fields.get("top_k")
+            )
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+            if invocation.seed is None and "seed" in add_fields:
+                invocation.seed = _safe_int(add_fields.get("seed"))
+
+
+def extract_retrieve_and_generate_response(
+    response: dict[str, Any],
+    invocation: InferenceInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = response.get("sessionId")
+    if session_id and not invocation.conversation_id:
+        invocation.conversation_id = str(session_id)
+
+    guardrail_action = response.get("guardrailAction")
+    finish_reason = (
+        "content_filter" if guardrail_action == "INTERVENED" else "stop"
+    )
+    invocation.finish_reasons = [finish_reason]
+
+    if not capture_content:
+        return
+
+    output = response.get("output")
+    if _is_dict(output):
+        text = output.get("text")
+        if text is not None:
+            invocation.output_messages = [
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[TextPart(content=str(text))],
+                    finish_reason=finish_reason,
+                )
+            ]
 
 
 def extract_retrieve_response(

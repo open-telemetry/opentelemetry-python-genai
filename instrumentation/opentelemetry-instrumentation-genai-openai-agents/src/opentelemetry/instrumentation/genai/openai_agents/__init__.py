@@ -77,10 +77,13 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         processors are restored on ``uninstrument()``.
     """
 
+    # BaseInstrumentor is a singleton: __init__ re-runs on the existing
+    # instance, so state needed for uninstrumentation lives on the class.
+    _processor: GenAITracingProcessor | None = None
+    _previous_processors: tuple[Any, ...] | None = None
+
     def __init__(self) -> None:
         super().__init__()
-        self._processor: GenAITracingProcessor | None = None
-        self._previous_processors: tuple[Any, ...] | None = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
