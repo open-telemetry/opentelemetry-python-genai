@@ -17,7 +17,7 @@ from collections.abc import (
     Iterator,
     Sequence,
 )
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, Agent, Team, Workflow
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
@@ -314,14 +314,14 @@ def _set_invocation_input(
 
 
 def _resolve_conversation_id(
-    instance: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    wrapped: Callable[..., Any],
+    instance: Agent | Team | Workflow,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    wrapped: Callable[..., object],
 ) -> str | None:
     session_id = get_argument("session_id", wrapped, args, kwargs)
     if session_id is None:
-        session_id = getattr(instance, "session_id", None)
+        session_id = instance.session_id
     return str(session_id) if session_id is not None else None
 
 
