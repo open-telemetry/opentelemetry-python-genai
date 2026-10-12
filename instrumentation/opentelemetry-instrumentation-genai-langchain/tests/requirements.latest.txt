@@ -24,5 +24,6 @@ boto3==1.43.110
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-langchain[instruments]
 
+langchain-classic==1.0.8
 opentelemetry-instrumentation-httpx >= 0.64b0, <1
 -e instrumentation/opentelemetry-instrumentation-genai-openai[instruments]
