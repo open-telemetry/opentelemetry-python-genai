@@ -17,15 +17,16 @@ from collections.abc import (
     Iterator,
     Sequence,
 )
-from typing import TYPE_CHECKING, Any, cast, Agent, Team, Workflow
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from agno.agent import RunOutput
+    from agno.agent import Agent, RunOutput
     from agno.knowledge.document.base import Document
     from agno.knowledge.knowledge import Knowledge
     from agno.run.workflow import WorkflowRunOutput
-    from agno.team import TeamRunOutput
+    from agno.team import Team, TeamRunOutput
     from agno.tools.function import FunctionCall, FunctionExecutionResult
+    from agno.workflow.workflow import Workflow
 
     AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
 
