@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -15,7 +16,7 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
-from inspect import BoundArguments, signature
+from inspect import BoundArguments, Signature, signature
 from typing import Any
 from uuid import UUID
 
@@ -219,12 +220,24 @@ async def _adeferred(
             await close()
 
 
+def _signature(original: Callable[..., Any]) -> Signature:
+    # Binding needs the parameters, not annotation values. Python 3.14
+    # evaluates annotations lazily in the class namespace, where the legacy
+    # Chain's `dict` method shadows the builtin in `input: dict[str, Any]`,
+    # so read them as strings instead of evaluating them.
+    if sys.version_info >= (3, 14):
+        from annotationlib import Format
+
+        return signature(original, annotation_format=Format.STRING)
+    return signature(original)
+
+
 def _wrap_stream(
     original: Callable[..., Any],
     invocations: _InvocationManager,
     asynchronous: bool,
 ) -> Callable[..., Any]:
-    parameters = signature(original)
+    parameters = _signature(original)
 
     @wraps(original)
     def wrapper(
@@ -258,7 +271,7 @@ def _wrap_call(
     invocations: _InvocationManager,
     asynchronous: bool,
 ) -> Callable[..., Any]:
-    parameters = signature(original)
+    parameters = _signature(original)
 
     @wraps(original)
     def sync(
