@@ -195,10 +195,6 @@ def test_prompt_template_accepts_scalar_input(
     assert chat_span.attributes["gen_ai.prompt.variable.name"] == "Ada"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Blocked by opentelemetry-python-genai#821",
-)
 def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
     span_exporter,
     metric_reader,
@@ -232,7 +228,9 @@ def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
         if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
         == "chat"
     )
-    assert "gen_ai.prompt.variable.value" not in chat_span.attributes
+    assert chat_span.attributes["gen_ai.prompt.variable.value"] == (
+        '{"__lc_escaped__":{}}'
+    )
     assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
     assert (
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
