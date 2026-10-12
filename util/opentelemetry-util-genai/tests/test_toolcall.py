@@ -4,6 +4,7 @@
 """Tests for ToolCallRequestPart and ToolInvocation inheritance structure"""
 
 import os
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -300,7 +301,7 @@ def test_arguments_dict_serialized_to_json():
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
 def test_arguments_str_passed_through():
-    """str arguments are stored as-is (no JSON wrapping)."""
+    """str arguments are recorded as-is, without JSON quoting."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("echo")
     invocation.arguments = "hello"
@@ -314,15 +315,51 @@ def test_arguments_str_passed_through():
     os.environ,
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
-def test_arguments_int_passed_through():
-    """int arguments are stored as-is."""
+def test_arguments_int_serialized_to_json():
+    """int arguments are serialized to JSON string."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("counter")
     invocation.arguments = 42
     invocation.stop()
 
     attrs = span_exporter.get_finished_spans()[0].attributes
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == 42
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == "42"
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_unconverted_objects_serialized():
+    class Model:
+        def model_dump(self):
+            return {"k": "v"}
+
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("echo")
+    invocation.arguments = Model()
+    invocation.tool_result = Decimal("1.5")
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"k":"v"}'
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_RESULT] == "1.5"
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_non_finite_floats_not_recorded_as_invalid_json():
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("echo")
+    invocation.arguments = {"a": 1, "b": float("nan")}
+    invocation.tool_result = float("inf")
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"a":1}'
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
 
 
 @patch.dict(

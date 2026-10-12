@@ -1,0 +1,1 @@
+Record the tool call result when a tool is invoked without a tool call id. Previously the result was dropped because LangChain passes the raw return value instead of a `ToolMessage`, e.g. `weather.invoke({"city": "Paris"})` returning `{"temp": 20}` recorded no result, now `{"temp":20}`.

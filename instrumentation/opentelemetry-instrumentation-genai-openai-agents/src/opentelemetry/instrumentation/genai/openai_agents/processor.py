@@ -32,9 +32,7 @@ the openai SDK directly and produces those.
 
 from __future__ import annotations
 
-import json
 import weakref
-from collections.abc import Mapping
 from typing import Any
 
 from agents.tracing import Span, Trace, TracingProcessor
@@ -53,20 +51,15 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import Error
-from opentelemetry.util.types import AnyValue
+from opentelemetry.util.genai.utils import (
+    object_to_any_value,
+    tool_arguments_to_any_value,
+)
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
 # only puts the name in the span name, not as an attribute.
 _WORKFLOW_NAME_ATTR = "gen_ai.workflow.name"
-
-
-def _tool_arguments(raw: str) -> AnyValue:
-    try:
-        parsed: AnyValue = json.loads(raw)
-    except ValueError:
-        return raw
-    return parsed if isinstance(parsed, Mapping) else raw
 
 
 class GenAITracingProcessor(TracingProcessor):
@@ -140,12 +133,8 @@ class GenAITracingProcessor(TracingProcessor):
         ):
             arguments = span.span_data.input
             if arguments:
-                invocation.arguments = _tool_arguments(arguments)
-            output = span.span_data.output
-            if output is not None:
-                invocation.tool_result = (
-                    output if isinstance(output, str) else str(output)
-                )
+                invocation.arguments = tool_arguments_to_any_value(arguments)
+            invocation.tool_result = object_to_any_value(span.span_data.output)
         # SpanError is a mapping, not a raised exception, so it never
         # reaches util-genai's exception path on its own.
         span_error = getattr(span, "error", None)

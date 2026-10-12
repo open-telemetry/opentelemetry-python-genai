@@ -1,0 +1,1 @@
+Normalize tuple contents to lists during telemetry capture to prevent instrumentation extraction errors before the SDK request.

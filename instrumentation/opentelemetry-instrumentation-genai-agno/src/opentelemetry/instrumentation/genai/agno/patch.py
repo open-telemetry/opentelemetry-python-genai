@@ -65,7 +65,7 @@ from opentelemetry.util.genai.types import (
     Role,
     TextPart,
 )
-from opentelemetry.util.genai.utils import get_argument
+from opentelemetry.util.genai.utils import get_argument, object_to_any_value
 
 logger = logging.getLogger(__name__)
 
@@ -248,17 +248,17 @@ def _extract_input_content(input_val: Any) -> str:
 def _extract_output_content(result: Any) -> str:
     if result is None:
         return ""
+    return format_content(_extract_output_value(result))
+
+
+def _extract_output_value(result: Any) -> Any:
     content = _get_property_value(result, "content")
     if content is not None:
-        return format_content(content)
+        return content
     val = _get_property_value(result, "result")
     if val is not None:
-        return format_content(val)
-    return format_content(result)
-
-
-def _extract_arguments_str(args_val: Any) -> str:
-    return format_content(args_val)
+        return val
+    return result
 
 
 def _set_tool_invocation_input(
@@ -266,9 +266,7 @@ def _set_tool_invocation_input(
     instance: FunctionCall,
 ) -> None:
     if invocation.should_capture_content:
-        arguments = instance.arguments
-        if arguments is not None:
-            invocation.arguments = _extract_arguments_str(arguments)
+        invocation.arguments = object_to_any_value(instance.arguments)
 
 
 def _fail_tool_invocation(
@@ -291,7 +289,9 @@ def _set_tool_invocation_output(
     if result.status == "failure":
         return
     if invocation.should_capture_content:
-        invocation.tool_result = _extract_output_content(result)
+        invocation.tool_result = object_to_any_value(
+            _extract_output_value(result)
+        )
 
 
 def _set_invocation_input(

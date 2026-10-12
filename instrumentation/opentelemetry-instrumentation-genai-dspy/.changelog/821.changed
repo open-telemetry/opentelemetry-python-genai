@@ -1,0 +1,1 @@
+Record non-string tool call results as JSON strings, and convert objects through `model_dump` or `__dict__`. Previously primitives were recorded as-is and objects through `str()`, e.g. a result of `7` was recorded as `7`, now `"7"`.
