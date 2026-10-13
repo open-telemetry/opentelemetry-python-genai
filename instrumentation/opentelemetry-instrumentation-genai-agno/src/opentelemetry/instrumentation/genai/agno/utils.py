@@ -168,6 +168,35 @@ def prepare_tool_definitions(
     return definitions or None
 
 
+def extract_user_id(
+    instance: Any = None,
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    run_response: Any = None,
+    wrapped: Callable[..., Any] | None = None,
+) -> str | None:
+    """Extract user_id from call arguments, instance, or response."""
+    if wrapped is not None and (args or kwargs):
+        user_id = get_argument("user_id", wrapped, args or (), kwargs or {})
+        if user_id is not None:
+            return str(user_id)
+    else:
+        if kwargs and (user_id := kwargs.get("user_id")) is not None:
+            return str(user_id)
+        if args and len(args) > 2 and args[2] is not None:
+            return str(args[2])
+    if instance:
+        if (user_id := getattr(instance, "user_id", None)) is not None:
+            return str(user_id)
+        if (user := getattr(instance, "user", None)) is not None:
+            return str(user)
+    if run_response and (
+        (user_id := getattr(run_response, "user_id", None)) is not None
+    ):
+        return str(user_id)
+    return None
+
+
 def extract_session_id(
     instance: Any = None,
     args: tuple[Any, ...] | None = None,
@@ -219,3 +248,23 @@ def extract_session_id(
     ):
         return str(session_id)
     return None
+
+
+def set_invocation_user_id(
+    invocation: Any,
+    instance: Any = None,
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    run_response: Any = None,
+    wrapped: Callable[..., Any] | None = None,
+) -> None:
+    """Extract and set user.id on the invocation attributes if present."""
+    from opentelemetry.semconv._incubating.attributes.user_attributes import (  # pylint: disable=import-outside-toplevel
+        USER_ID,
+    )
+
+    user_id = extract_user_id(
+        instance, args, kwargs, run_response, wrapped=wrapped
+    )
+    if user_id is not None:
+        invocation.attributes[USER_ID] = user_id
