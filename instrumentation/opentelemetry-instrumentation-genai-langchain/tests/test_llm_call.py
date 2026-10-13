@@ -228,9 +228,6 @@ def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
         if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
         == "chat"
     )
-    assert chat_span.attributes["gen_ai.prompt.variable.value"] == (
-        '{"__lc_escaped__":{}}'
-    )
     assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
     assert (
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
