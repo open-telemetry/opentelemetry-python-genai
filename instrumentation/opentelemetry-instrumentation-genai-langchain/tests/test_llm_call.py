@@ -129,7 +129,11 @@ def test_chat_openai_prompt_template(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capture_content", ["SPAN_ONLY", "NO_CONTENT"])
 async def test_async_prompt_template_propagates_prompt_context(
-    span_exporter, tracer_provider, meter_provider, logger_provider, capture_content
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    capture_content,
 ):
     model = FakeMessagesListChatModel(
         responses=[AIMessage(content="It is raining.")]

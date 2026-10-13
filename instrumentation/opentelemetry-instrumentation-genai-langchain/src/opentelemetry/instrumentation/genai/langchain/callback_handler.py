@@ -158,11 +158,16 @@ def _extract_prompt_context(
         for key, value in source.items():
             if not isinstance(key, str) or key not in declared_variables:
                 continue
+            serialized_value = (
+                cast(Mapping[str, object], value)
+                if isinstance(value, Mapping)
+                else None
+            )
             if (
                 source is partial_variables
-                and isinstance(value, Mapping)
-                and value.get("lc") == 1
-                and value.get("type") == "not_implemented"
+                and serialized_value is not None
+                and serialized_value.get("lc") == 1
+                and serialized_value.get("type") == "not_implemented"
             ):
                 continue
             effective_variables[key] = value
