@@ -127,8 +127,9 @@ def test_chat_openai_prompt_template(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capture_content", ["SPAN_ONLY", "NO_CONTENT"])
 async def test_async_prompt_template_propagates_prompt_context(
-    span_exporter, tracer_provider, meter_provider, logger_provider
+    span_exporter, tracer_provider, meter_provider, logger_provider, capture_content
 ):
     model = FakeMessagesListChatModel(
         responses=[AIMessage(content="It is raining.")]
@@ -137,19 +138,17 @@ async def test_async_prompt_template_propagates_prompt_context(
         "Answer this weather question briefly: {question}",
         name="weather_prompt",
     )
-
     with instrument(
         LangChainInstrumentor(),
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
-        content_capture="SPAN_ONLY",
+        content_capture=capture_content,
     ):
         response = await (prompt | model).ainvoke(
             {"question": "What's the weather like in Seattle?"},
             config={"metadata": {"ls_model_name": "test-chat-model"}},
         )
-
     assert response.content == "It is raining."
     chat_span = next(
         span
@@ -161,10 +160,13 @@ async def test_async_prompt_template_propagates_prompt_context(
         chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
         == "weather_prompt"
     )
-    assert (
-        chat_span.attributes["gen_ai.prompt.variable.question"]
-        == "What's the weather like in Seattle?"
-    )
+    if capture_content == "SPAN_ONLY":
+        assert (
+            chat_span.attributes["gen_ai.prompt.variable.question"]
+            == "What's the weather like in Seattle?"
+        )
+    else:
+        assert "gen_ai.prompt.variable.question" not in chat_span.attributes
 
 
 def test_prompt_template_accepts_scalar_input(
@@ -206,7 +208,7 @@ def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
         responses=[AIMessage(content="It is raining.")]
     )
     prompt = PromptTemplate.from_template("Input: {value}").partial(
-        value={"lc": object()}
+        value=object()
     )
 
     with instrument(
@@ -229,6 +231,7 @@ def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
         == "chat"
     )
     assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
+    assert "gen_ai.prompt.variable.value" not in chat_span.attributes
     assert (
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
         in chat_span.attributes

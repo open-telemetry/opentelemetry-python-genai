@@ -242,7 +242,6 @@ class TestExtractPromptContext:
         assert context is not None
         assert context.variables == {
             "callable": callable_value,
-            "unresolved": {"lc": 1, "type": "not_implemented"},
             "unsupported": unsupported_value,
         }
 

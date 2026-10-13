@@ -158,6 +158,13 @@ def _extract_prompt_context(
         for key, value in source.items():
             if not isinstance(key, str) or key not in declared_variables:
                 continue
+            if (
+                source is partial_variables
+                and isinstance(value, Mapping)
+                and value.get("lc") == 1
+                and value.get("type") == "not_implemented"
+            ):
+                continue
             effective_variables[key] = value
 
     return _PromptContext(name=name, variables=effective_variables)
