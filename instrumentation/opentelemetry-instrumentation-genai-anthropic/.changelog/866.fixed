@@ -1,1 +1,1 @@
-Stop request extraction from raising on a message without `role` or a `system` list that holds plain strings.
+Stop request extraction from raising on a `system` list that holds plain strings.
