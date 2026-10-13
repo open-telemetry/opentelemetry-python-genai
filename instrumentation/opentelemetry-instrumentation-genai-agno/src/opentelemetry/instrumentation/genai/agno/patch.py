@@ -20,12 +20,13 @@ from collections.abc import (
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from agno.agent import RunOutput
+    from agno.agent import Agent, RunOutput
     from agno.knowledge.document.base import Document
     from agno.knowledge.knowledge import Knowledge
     from agno.run.workflow import WorkflowRunOutput
-    from agno.team import TeamRunOutput
+    from agno.team import Team, TeamRunOutput
     from agno.tools.function import FunctionCall, FunctionExecutionResult
+    from agno.workflow.workflow import Workflow
 
     AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
 
@@ -313,6 +314,18 @@ def _set_invocation_input(
             ]
 
 
+def _resolve_conversation_id(
+    instance: Agent | Team | Workflow,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    wrapped: Callable[..., object],
+) -> str | None:
+    session_id = get_argument("session_id", wrapped, args, kwargs)
+    if session_id is None:
+        session_id = instance.session_id
+    return str(session_id) if session_id is not None else None
+
+
 def _extract_finish_reason(result: object) -> str:
     if "error" in str(getattr(result, "status", "")).lower():
         return "error"
@@ -347,6 +360,7 @@ def _start_agent_invocation(
     wrapped: Callable[..., Any],
 ) -> LocalAgentInvocation:
     agent_name = getattr(instance, "name", None)
+    conversation_id = _resolve_conversation_id(instance, args, kwargs, wrapped)
     model_obj = get_argument("model", wrapped, args, kwargs) or getattr(
         instance, "model", None
     )
@@ -361,6 +375,7 @@ def _start_agent_invocation(
     invocation = handler.invoke_local_agent(
         agent_name=str(agent_name) if agent_name else None,
         request_model=str(request_model) if request_model else None,
+        conversation_id=conversation_id,
     )
     description = getattr(instance, "description", None)
     if description:
@@ -581,7 +596,10 @@ def _start_workflow_invocation(
     wrapped: Callable[..., Any],
 ) -> WorkflowInvocation:
     workflow_name = getattr(instance, "name", None)
-    invocation = handler.workflow(name=workflow_name)
+    conversation_id = _resolve_conversation_id(instance, args, kwargs, wrapped)
+    invocation = handler.workflow(
+        name=workflow_name, conversation_id=conversation_id
+    )
     _set_invocation_input(
         invocation, instance, args, kwargs, capture_content, wrapped
     )

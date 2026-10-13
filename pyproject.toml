@@ -23,6 +23,7 @@ dependencies = [
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
   "opentelemetry-instrumentation-genai-qwen-agent[instruments]",
+  "opentelemetry-instrumentation-genai-qwenpaw[instruments]",
   "opentelemetry-instrumentation-genai-smolagents[instruments]",
   "opentelemetry-instrumentation-genai-weaviate-client[instruments]",
 ]
@@ -58,6 +59,7 @@ opentelemetry-instrumentation-genai-llama-index = { workspace = true }
 opentelemetry-instrumentation-genai-openai = { workspace = true }
 opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
 opentelemetry-instrumentation-genai-qwen-agent = { workspace = true }
+opentelemetry-instrumentation-genai-qwenpaw = { workspace = true }
 opentelemetry-instrumentation-genai-smolagents = { workspace = true }
 opentelemetry-instrumentation-genai-weaviate-client = { workspace = true }
 
@@ -129,6 +131,7 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
   "instrumentation/opentelemetry-instrumentation-genai-portkey",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent",
+  "instrumentation/opentelemetry-instrumentation-genai-qwenpaw",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
 ]
@@ -159,6 +162,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-portkey/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/examples/**/*.py",
   "util/opentelemetry-util-genai/tests/**/*.py",
