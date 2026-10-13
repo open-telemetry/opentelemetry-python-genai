@@ -81,16 +81,6 @@ _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
 
 
-def _should_emit_event(
-    content_capturing_mode: ContentCapturingMode,
-) -> bool:
-    """Check if event emission is enabled."""
-    return content_capturing_mode in (
-        ContentCapturingMode.EVENT_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-
 CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
     "opentelemetry.genai.client.inference.context"
 )
@@ -262,19 +252,11 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
-        self._emit_event: bool = _should_emit_event(
-            self._content_capturing_mode
+        self._emit_event: bool = self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
+            event_name="gen_ai.client.inference.operation.details",
         )
-        if (
-            self._emit_event
-            and isinstance(self._completion_hook, _NoOpCompletionHook)
-            and hasattr(self._logger, "enabled")
-        ):
-            self._emit_event = self._logger.enabled(
-                context=self._span_context,
-                severity_number=SeverityNumber.DEBUG,
-                event_name="gen_ai.client.inference.operation.details",
-            )
 
     @property
     def provider(self) -> str | None:

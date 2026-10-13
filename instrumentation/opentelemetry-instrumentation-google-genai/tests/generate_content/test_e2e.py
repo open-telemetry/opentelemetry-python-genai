@@ -515,17 +515,12 @@ def test_upload_hook_non_streaming(
     )
     time.sleep(2)
 
-    if setup_content_recording == "SPAN_AND_EVENT":
-        event = otel_mocker.get_event_named(
-            "gen_ai.client.inference.operation.details"
-        )
-        assert_fsspec_equal(
-            event.attributes["gen_ai.input.messages_ref"], expected_input
-        )
-    else:
-        otel_mocker.assert_does_not_have_event_named(
-            "gen_ai.client.inference.operation.details"
-        )
+    event = otel_mocker.get_event_named(
+        "gen_ai.client.inference.operation.details"
+    )
+    assert_fsspec_equal(
+        event.attributes["gen_ai.input.messages_ref"], expected_input
+    )
 
     span = otel_mocker.get_span_named(f"generate_content {model}")
     assert_fsspec_equal(

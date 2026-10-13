@@ -483,8 +483,20 @@ class NonStreamingTestCase(TestCase):
                 tools=self.tools,
             ),
         )
-        self.otel.assert_does_not_have_event_named(
+        self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
+        )
+        event = self.otel.get_event_named(
+            "gen_ai.client.inference.operation.details"
+        )
+        self.assertNotIn(
+            gen_ai_attributes.GEN_AI_INPUT_MESSAGES, event.attributes
+        )
+        self.assertNotIn(
+            gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES, event.attributes
+        )
+        self.assertNotIn(
+            gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS, event.attributes
         )
 
     @patch.dict(

@@ -36,7 +36,6 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai._inference_invocation import _should_emit_event
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
@@ -173,37 +172,6 @@ class TestDeprecatedMessagePartNames(unittest.TestCase):
     def test_parts_compare_equal_across_names(self):
         self.assertEqual(Text(content="hello"), TextPart(content="hello"))
         self.assertIsInstance(TextPart(content="hello"), Text)
-
-
-class TestShouldEmitEvent(unittest.TestCase):
-    def test_should_emit_event_against_content_capturing_env_var(
-        self,
-    ):  # pylint: disable=no-self-use
-        expected_results = {
-            "EVENT_ONLY": True,
-            "SPAN_AND_EVENT": True,
-            "NO_CONTENT": False,
-            "SPAN_ONLY": False,
-            "": False,
-        }
-
-        for content_capturing, expected in expected_results.items():
-            with patch.dict(
-                os.environ,
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": content_capturing,
-                },
-            ):
-                assert (
-                    _should_emit_event(get_content_capturing_mode())
-                    is expected
-                )
-
-    def test_should_emit_event_with_explicit_mode(self):  # pylint: disable=no-self-use
-        assert _should_emit_event(ContentCapturingMode.NO_CONTENT) is False
-        assert _should_emit_event(ContentCapturingMode.SPAN_ONLY) is False
-        assert _should_emit_event(ContentCapturingMode.EVENT_ONLY) is True
-        assert _should_emit_event(ContentCapturingMode.SPAN_AND_EVENT) is True
 
 
 class TestShouldCaptureContent(unittest.TestCase):
