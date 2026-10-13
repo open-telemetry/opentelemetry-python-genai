@@ -533,6 +533,7 @@ def test_sync_messages_create_captures_multimodal_content(
 
 def test_sync_messages_create_preserves_generator_document_content(
     instrument_with_content,
+    span_exporter,
 ):
     received_content = None
 
@@ -585,6 +586,15 @@ def test_sync_messages_create_preserves_generator_document_content(
     assert received_content == [
         {"type": "text", "text": "First"},
         {"type": "text", "text": "Second"},
+    ]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    messages = json.loads(
+        spans[0].attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    )
+    assert messages[0]["parts"] == [
+        {"type": "text", "content": "First"},
+        {"type": "text", "content": "Second"},
     ]
 
 
@@ -1390,14 +1400,9 @@ def test_sync_messages_create_tools_generator_reaches_the_sdk(
     _assert_weather_tool_definitions(spans[0])
 
 
-def test_sync_messages_stream_tools_generator_is_recorded(
+def test_sync_messages_stream_tools_generator_reaches_the_sdk(
     span_exporter, instrument_with_content
 ):
-    """``stream`` serializes the request before the invocation exists.
-
-    The generator has to be frozen in the wrapper, not while the invocation is
-    built, or the SDK drains it first and the span records no tools.
-    """
     seen = {}
 
     def respond(request):

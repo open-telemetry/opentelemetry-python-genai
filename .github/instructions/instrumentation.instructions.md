@@ -54,6 +54,9 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Message content, prompts, and tool call arguments must only be set through the util's content
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.
+- Flag captured request iterators that bypass `IteratorCapture`, eager consumption or replay,
+  wrapping unrelated arguments, capture when disabled, and snapshots taken before SDK consumption.
+  See [request property capture](../../AGENTS.md#capturing-properties-that-may-contain-iterators).
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers, and
   invocation-backed wrappers that do not pass the invocation to `super().__init__(stream, invocation)`
@@ -109,6 +112,7 @@ Flag, with a link to the rule:
 
 - For every public API instrumented, cover sync/async variants when both exist.
 - Cover streaming and non-streaming variants when both exist.
+- Flag missing iterator tests for nested values, partial reads, errors, or file-backed content.
 - Cover happy path and error scenarios. For error scenarios, at minimum include: provider error /
   endpoint unavailable, stream interrupted by network, stream closed early by the caller, and a
   caller-side exception raised inside the `with …stream(…) as stream:` block before the stream is drained.
