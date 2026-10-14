@@ -1,1 +1,1 @@
-Remove unconditional mutation of OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT during instrumentation to respect user configuration and default content capture settings.
+Stop mutating global state during instrumentation to enable events, remove support for OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, events are now enabled by default and can be disabled via logging configuration

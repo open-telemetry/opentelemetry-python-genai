@@ -1,1 +1,1 @@
-Remove ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable in favor of logger configuration.
+Remove ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable in favor of logger configuration, see https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/examples/suppress-inference-event/README.rst for examples.
