@@ -2256,6 +2256,78 @@ def test_to_input_messages_extracts_image_part():
     assert blob.content == b"ABC"
 
 
+class TestLangGraphThreadBinding:
+    """A LangGraph thread binding must not outlive its run."""
+
+    @pytest.fixture
+    def handler(
+        self,
+        tracer_provider: TracerProvider,
+        logger_provider: LoggerProvider,
+        meter_provider: MeterProvider,
+    ) -> OpenTelemetryLangChainCallbackHandler:
+        return OpenTelemetryLangChainCallbackHandler(
+            TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+                instrumentation_scope_name="opentelemetry.instrumentation.genai.langchain",
+                instrumentation_scope_version=__version__,
+            )
+        )
+
+    def _start_langgraph_workflow(self, handler, run_id):
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=run_id,
+            metadata={"ls_integration": "langgraph", "thread_id": "bound"},
+        )
+
+    def test_chain_error_unbinds_the_thread(self, handler):
+        run_id = uuid.uuid4()
+        self._start_langgraph_workflow(handler, run_id)
+
+        # The binding exists before the failure.
+        assert handler._invocation_manager._threads["bound"] == [("", run_id)]
+
+        handler.on_chain_error(ValueError("boom"), run_id=run_id)
+
+        assert "bound" not in handler._invocation_manager._threads
+        assert (
+            handler._invocation_manager.get_thread_invocation("bound") is None
+        )
+
+    def test_chain_end_unbinds_the_thread(self, handler):
+        run_id = uuid.uuid4()
+        self._start_langgraph_workflow(handler, run_id)
+
+        assert handler._invocation_manager._threads["bound"] == [("", run_id)]
+
+        handler.on_chain_end(outputs={}, run_id=run_id)
+
+        assert "bound" not in handler._invocation_manager._threads
+
+    def test_nested_graph_run_binds_its_own_checkpoint_namespace(
+        self, handler
+    ):
+        run_id = uuid.uuid4()
+        handler.on_chain_start(
+            serialized={"name": "LangGraph"},
+            inputs={},
+            run_id=run_id,
+            metadata={
+                "ls_integration": "langgraph",
+                "thread_id": "bound",
+                "langgraph_checkpoint_ns": "child:abc",
+            },
+        )
+
+        assert handler._invocation_manager._threads["bound"] == [
+            ("child:abc", run_id)
+        ]
+
+
 def test_instrumentor_shares_handler_across_callback_managers(
     tracer_provider: TracerProvider,
     logger_provider: LoggerProvider,
