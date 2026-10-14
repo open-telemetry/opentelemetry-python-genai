@@ -57,6 +57,7 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     _extract_prompt_context,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _ai_message_parts,
     _legacy_function_call_request,
     _media_part,
     _normalize_role,
@@ -1700,6 +1701,46 @@ class TestMakeLastOutputMessage:
 
         assert len(result) == 1
         assert result[0].parts[0].content == "only response"
+
+    def test_skips_trailing_empty_ai_message(self):
+        msgs = [
+            AIMessage(content="final answer"),
+            AIMessage(content=""),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    def test_accepts_generator_messages(self):
+        msgs = (AIMessage(content=text) for text in ("intermediate", "final"))
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final"
+
+    def test_does_not_convert_earlier_ai_messages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        converted: list[str] = []
+
+        def recording_parts(message: AIMessage):
+            converted.append(str(message.content))
+            return _ai_message_parts(message)
+
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.langchain.utils._ai_message_parts",
+            recording_parts,
+        )
+        msgs = [
+            AIMessage(content="first"),
+            HumanMessage(content="next question"),
+            AIMessage(content="final answer"),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert result[0].parts[0].content == "final answer"
+        assert converted == ["final answer"]
 
 
 # ---------------------------------------------------------------------------

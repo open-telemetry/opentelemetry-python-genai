@@ -521,19 +521,10 @@ def make_output_message(data: Any) -> list[OutputMessage]:
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
-    if not isinstance(data, dict):
+    messages = _output_messages_field(data)
+    if messages is None:
         return []
-    data_dict = cast(dict[str, Any], data)
-    messages: Any = data_dict.get("messages")
-    if (
-        messages is None
-        or isinstance(messages, (str, bytes))
-        or not isinstance(messages, Iterable)
-    ):
-        return []
-    return to_output_messages(
-        cast(Iterable[MessageLikeRepresentation], messages)
-    )
+    return to_output_messages(messages)
 
 
 def make_last_output_message(data: Any) -> list[OutputMessage]:
@@ -546,10 +537,30 @@ def make_last_output_message(data: Any) -> list[OutputMessage]:
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
-    all_messages = make_output_message(data)
-    if all_messages:
-        return [all_messages[-1]]
+    messages = _output_messages_field(data)
+    if messages is None:
+        return []
+    for message in reversed(list(messages)):
+        output = to_output_messages([message])
+        if output:
+            return output
     return []
+
+
+def _output_messages_field(
+    data: Any,
+) -> Iterable[MessageLikeRepresentation] | None:
+    """Return ``data['messages']`` when it is a non-string iterable."""
+    if not isinstance(data, dict):
+        return None
+    messages: Any = cast(dict[str, Any], data).get("messages")
+    if (
+        messages is None
+        or isinstance(messages, (str, bytes))
+        or not isinstance(messages, Iterable)
+    ):
+        return None
+    return cast(Iterable[MessageLikeRepresentation], messages)
 
 
 def serialize(obj: Any) -> str | None:
