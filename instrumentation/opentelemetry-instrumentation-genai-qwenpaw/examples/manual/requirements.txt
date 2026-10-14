@@ -1,4 +1,4 @@
-qwenpaw>=1.1.0,<2.0.0
+qwenpaw>=1.1.12.post3,<2.0.0
 
 opentelemetry-sdk~=1.43.0
 opentelemetry-exporter-otlp-proto-grpc~=1.43.0
