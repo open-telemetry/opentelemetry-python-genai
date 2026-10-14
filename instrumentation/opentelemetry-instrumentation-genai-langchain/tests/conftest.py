@@ -3,12 +3,16 @@
 
 """Unit tests configuration module."""
 
+import logging
 import os
+from collections import Counter
+from collections.abc import Iterator
 
 import boto3
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_aws import ChatBedrock
+from langchain_core.callbacks import CallbackManager
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
@@ -17,7 +21,21 @@ from opentelemetry.instrumentation._semconv import (
     _StabilityMode,
 )
 from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+from opentelemetry.instrumentation.genai.langchain.callback_handler import (
+    OpenTelemetryLangChainCallbackHandler,
+)
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
+from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.test_util_genai.vcr import scrub_response_headers_overwrite
+from opentelemetry.util.genai.types import ContentCapturingMode
 
 # Loading the ``vcr`` module also activates the ``vcr_cassette_name`` override,
 # which strips the ``[parametrize]`` suffix so all ``content_capture`` matrix
@@ -27,6 +45,78 @@ pytest_plugins = [
     "opentelemetry.test_util_genai.fixtures",
     "opentelemetry.test_util_genai.vcr",
 ]
+
+_DURATION_METRICS = {
+    "execute_tool": "gen_ai.execute_tool.duration",
+    "invoke_agent": "gen_ai.invoke_agent.duration",
+    "invoke_workflow": "gen_ai.invoke_workflow.duration",
+    "retrieval": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
+    "chat": gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
+}
+
+
+@pytest.fixture
+def instrument_langchain(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    content_capture: ContentCapturingMode,
+    caplog: pytest.LogCaptureFixture,
+) -> Iterator[None]:
+    with (
+        caplog.at_level(
+            logging.WARNING, logger="langchain_core.callbacks.manager"
+        ),
+        instrument(
+            LangChainInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture=content_capture.name,
+        ),
+    ):
+        (handler,) = [
+            handler
+            for handler in CallbackManager([]).handlers
+            if isinstance(handler, OpenTelemetryLangChainCallbackHandler)
+        ]
+        yield
+
+        # Pytest resets caplog.records between setup, call, and teardown.
+        warnings = [
+            record.getMessage()
+            for phase in ("setup", "call", "teardown")
+            for record in caplog.get_records(phase)
+            if record.name == "langchain_core.callbacks.manager"
+            and record.levelno >= logging.WARNING
+        ]
+        assert not warnings, warnings
+        assert not handler._invocation_manager._invocations
+
+    expected = Counter(
+        _DURATION_METRICS[operation]
+        for span in span_exporter.get_finished_spans()
+        if span.attributes is not None
+        and (
+            operation := span.attributes.get(
+                gen_ai_attributes.GEN_AI_OPERATION_NAME
+            )
+        )
+        in _DURATION_METRICS
+    )
+    assert expected
+    metrics_data = metric_reader.get_metrics_data()
+    assert metrics_data is not None
+    actual = {
+        metric.name: sum(point.count for point in metric.data.data_points)
+        for resource in metrics_data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        if metric.name in _DURATION_METRICS.values()
+    }
+    assert actual == expected
 
 
 @pytest.fixture(scope="function", name="chat_openai_gpt_3_5_turbo_model")
