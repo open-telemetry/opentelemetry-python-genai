@@ -1,0 +1,1 @@
+Record `gen_ai.response.finish_reasons` on `dspy.ReAct` and `dspy.ReActV2` agent spans regardless of content capture: `stop` when the agent calls `finish` or `submit`, `error` when ReAct ends without `finish` or ReActV2 reports a forced submit or parse error, and other ReActV2 termination reasons as reported. The output message no longer sets the deprecated `finish_reason`.
