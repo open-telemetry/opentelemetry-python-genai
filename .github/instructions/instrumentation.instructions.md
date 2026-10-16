@@ -59,8 +59,8 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   See [request property capture](../../AGENTS.md#capturing-properties-that-may-contain-iterators).
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers, and
-  invocation-backed wrappers that do not pass the invocation to `super().__init__(stream, invocation)`
-  or do not `invocation.suspend()` before the stream is returned. Flag an `_execution_context()`
+  invocation-backed wrappers that do not pass the invocation to `super().__init__(stream, invocation)`,
+  which suspends it before the stream is returned. Flag an `_execution_context()`
   override on an invocation-backed wrapper: the base wrapper already activates a suspended
   invocation during reads, and an override bypasses that guard.
 - Instrumentation should not change what a call returns or when its work happens. Flag: work the SDK

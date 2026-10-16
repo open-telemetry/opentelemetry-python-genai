@@ -1,0 +1,1 @@
+Suspend invocations in the shared stream wrapper constructors so caller context is restored between stream reads.

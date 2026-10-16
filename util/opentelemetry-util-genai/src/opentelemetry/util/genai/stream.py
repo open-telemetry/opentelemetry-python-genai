@@ -99,11 +99,10 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     def _execution_context(self) -> AbstractContextManager[None]:
         """Scope stream reads and cleanup, restoring context before returning a chunk.
 
-        By default a suspended invocation is made current again for each read:
-        an instrumentation that hands the stream back to the caller calls
-        ``invocation.suspend()`` and gets the span restored around tool or
-        provider code without overriding this hook. Invocations that are still
-        attached, or that never attached, leave the context alone.
+        The constructor suspends invocations that support context management.
+        Their spans are made current again around tool or provider code without
+        overriding this hook. Invocations that never attached leave the context
+        alone.
         """
         invocation = getattr(self, "_self_invocation", None)
         if invocation is None or not getattr(invocation, "_suspended", False):
@@ -169,8 +168,8 @@ class SyncStreamWrapper(
     ``super().__init__(stream, invocation)`` and implement the three telemetry
     hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
-    ``_execution_context`` scopes each read and cleanup; by default it makes a
-    suspended invocation current again and can be overridden.
+    The constructor suspends the invocation when it supports ``suspend()``.
+    ``_execution_context`` makes it current again for each read and cleanup.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -188,6 +187,9 @@ class SyncStreamWrapper(
         if invocation is not None and hasattr(invocation, "_request_stream"):
             setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
+        suspend = getattr(invocation, "suspend", None)
+        if suspend is not None:
+            suspend()
 
     # The SDK stream, held loosely typed: subclasses re-expose it through a
     # ``stream`` property carrying the SDK's own type.
@@ -296,8 +298,8 @@ class AsyncStreamWrapper(
     ``super().__init__(stream, invocation)`` and implement the three telemetry
     hooks: ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for
     successful finalization, and ``_on_stream_error`` for failure finalization.
-    ``_execution_context`` scopes each read and cleanup; by default it makes a
-    suspended invocation current again and can be overridden.
+    The constructor suspends the invocation when it supports ``suspend()``.
+    ``_execution_context`` makes it current again for each read and cleanup.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
@@ -316,6 +318,9 @@ class AsyncStreamWrapper(
         if invocation is not None and hasattr(invocation, "_request_stream"):
             setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
+        suspend = getattr(invocation, "suspend", None)
+        if suspend is not None:
+            suspend()
 
     # See ``SyncStreamWrapper._self_stream``.
     _self_stream: Any
@@ -517,7 +522,6 @@ class SyncToolStreamWrapper(SyncStreamWrapper[ChunkT]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
-        invocation.suspend()
         self._self_chunks: list[Any] = []
 
     def __del__(self) -> None:
@@ -563,7 +567,6 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
     ) -> None:
         super().__init__(stream, invocation)
         self._self_tool_invocation = invocation
-        invocation.suspend()
         self._self_chunks: list[Any] = []
 
     def __del__(self) -> None:

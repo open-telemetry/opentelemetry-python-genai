@@ -71,16 +71,16 @@ is usually hardcoded in specific invocation and does not need to be passed.
 A streamed response only finishes once the caller has drained the stream, so the invocation must
 stay open until then. Do **not** call `invocation.stop()` when the SDK returns the stream — the
 span would close before any chunks arrive. The invocation's span must also not stay current in
-the caller's context while the stream is unconsumed: call `invocation.suspend()` before returning
-the stream, and re-activate the invocation only while a chunk is being read.
+the caller's context while the stream is unconsumed. The shared stream wrappers suspend the
+invocation before returning the stream and re-activate it only during reads and cleanup.
 
 Instrument streams by subclassing `SyncStreamWrapper` / `AsyncStreamWrapper` from
 `opentelemetry.util.genai.stream` (the public, supported helpers). The base class proxies the
 underlying SDK stream, drives iteration, and finalizes telemetry exactly once on success, error,
 or `close()`. Subclasses pass the SDK stream and the invocation to
-`super().__init__(stream, invocation)`, which also marks the invocation as a streamed request
-(`gen_ai.request.stream`), call `invocation.suspend()` before returning the stream, and implement
-three hooks. The base `_execution_context()` makes a suspended invocation current again for each
+`super().__init__(stream, invocation)`, which suspends it and marks it as a streamed request
+(`gen_ai.request.stream`), and implement three hooks.
+The base `_execution_context()` makes a suspended invocation current again for each
 read and cleanup operation and restores the context before the chunk is returned, so
 invocation-backed wrappers don't override it.
 
@@ -94,7 +94,6 @@ invocation-backed wrappers don't override it.
 class MyStreamWrapper(SyncStreamWrapper[Chunk]):
     def __init__(self, stream, invocation, capture_content):
         super().__init__(stream, invocation)
-        invocation.suspend()
         ...
 
     def _process_chunk(self, chunk): ...  # accumulate state
