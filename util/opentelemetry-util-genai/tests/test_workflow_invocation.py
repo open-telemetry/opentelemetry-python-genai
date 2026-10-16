@@ -49,6 +49,23 @@ class TestWorkflowInvocation(unittest.TestCase):
         invocation.stop()
         assert invocation._name == "customer_support_pipeline"
 
+    def test_property_delegation_to_data(self):
+        from opentelemetry.util.genai.invocation import WorkflowData
+
+        inv = self.handler.workflow(name="customer_support_pipeline")
+        self.assertIsInstance(inv.data, WorkflowData)
+        self.assertEqual(inv.data.workflow_name, "customer_support_pipeline")
+        self.assertEqual(inv.workflow_name, "customer_support_pipeline")
+
+        msg = InputMessage(role="user", parts=[TextPart(content="hello")])
+        inv.input_messages = [msg]
+        self.assertEqual(inv.data.input_messages, [msg])
+
+        out = OutputMessage(role="assistant", parts=[TextPart(content="hi")])
+        inv.output_messages = [out]
+        self.assertEqual(inv.data.output_messages, [out])
+        inv.stop()
+
     def test_with_input_messages(self):
         msg = InputMessage(role="user", parts=[TextPart(content="hello")])
         invocation = self.handler.workflow(name="test")
