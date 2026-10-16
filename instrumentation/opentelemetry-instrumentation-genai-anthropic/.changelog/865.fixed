@@ -1,0 +1,1 @@
+Prevent one-shot iterators for messages, system, and tools from being consumed before reaching the SDK during content capture.
