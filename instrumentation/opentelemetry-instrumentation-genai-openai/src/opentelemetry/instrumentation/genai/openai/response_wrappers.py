@@ -27,11 +27,13 @@ try:
         get_response_error,
         set_fetch_response_attributes,
         set_invocation_response_attributes,
+        set_stream_event_attributes,
     )
 except ImportError:
     get_response_error = None
     set_fetch_response_attributes = None
     set_invocation_response_attributes = None
+    set_stream_event_attributes = None
 
 try:
     from opentelemetry.instrumentation.genai.openai.utils import (  # pylint: disable=no-name-in-module
@@ -231,6 +233,9 @@ class _ResponseStreamMixin(Generic[TextFormatT]):
             model = getattr(response, "model", None)
             if model:
                 self._self_invocation.response_model_name = model
+
+        if set_stream_event_attributes is not None:
+            set_stream_event_attributes(self._self_invocation, event)
 
         if event_type in {"response.completed", "response.incomplete"}:
             self._stop(response)

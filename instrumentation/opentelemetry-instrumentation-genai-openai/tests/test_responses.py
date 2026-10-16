@@ -42,6 +42,9 @@ from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .test_utils import (
+    COMPACTED_INPUT,
+    COMPACTION_CONTEXT_MANAGEMENT,
+    COMPACTION_TRIGGER_INPUT,
     COMPUTER_SCREENSHOT_DATA_URL,
     CUSTOM_TOOL_CALL_ID,
     CUSTOM_TOOL_INPUT,
@@ -50,6 +53,7 @@ from .test_utils import (
     EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
     EXPECTED_TOOL_DEFINITIONS,
     EXPECTED_TOOL_LOOP_INPUT_MESSAGES,
+    GEN_AI_CONVERSATION_COMPACTED,
     GEN_AI_RESPONSE_STATUS,
     USER_ONLY_EXPECTED_INPUT_MESSAGES,
     USER_ONLY_PROMPT,
@@ -77,6 +81,7 @@ try:
     _has_tools_param = "tools" in _create_params
     _has_reasoning_param = "reasoning" in _create_params
     _has_conversation_param = "conversation" in _create_params
+    _has_context_management_param = "context_management" in _create_params
     _stream_params = set(inspect.signature(_Responses.stream).parameters)
     _stream_has_service_tier = "service_tier" in _stream_params
     _has_custom_tool_types = (
@@ -90,6 +95,7 @@ except ImportError:
     _has_tools_param = False
     _has_reasoning_param = False
     _has_conversation_param = False
+    _has_context_management_param = False
     _stream_has_service_tier = False
     _has_custom_tool_types = False
 
@@ -384,6 +390,181 @@ def test_responses_create_basic(
     )
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
     assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    assert GEN_AI_CONVERSATION_COMPACTED not in span.attributes
+
+
+@pytest.mark.cassette("test_responses_create_basic[content_mode0]")
+@pytest.mark.vcr()
+def test_responses_create_records_compacted_input(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    openai_client.responses.create(
+        model=DEFAULT_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=COMPACTED_INPUT,
+        stream=False,
+    )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+
+
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_context_management_param,
+    reason="openai SDK too old to support 'context_management' on Responses.create",
+)
+def test_responses_create_records_server_compaction(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    response = openai_client.responses.create(
+        model=REASONING_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=COMPACTION_TRIGGER_INPUT,
+        context_management=COMPACTION_CONTEXT_MANAGEMENT,
+        stream=False,
+    )
+
+    assert any(item.type == "compaction" for item in response.output)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+
+
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_context_management_param,
+    reason="openai SDK too old to support 'context_management' on Responses.create",
+)
+def test_responses_create_streaming_records_server_compaction(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with openai_client.responses.create(
+        model=REASONING_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=COMPACTION_TRIGGER_INPUT,
+        context_management=COMPACTION_CONTEXT_MANAGEMENT,
+        stream=True,
+    ) as stream:
+        response = _collect_completed_response(stream)
+
+    assert any(item.type == "compaction" for item in response.output)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+
+
+SERVER_COMPACTION_STREAM_CASSETTE = (
+    "test_responses_create_streaming_records_server_compaction[content_mode0]"
+)
+_requires_context_management = pytest.mark.skipif(
+    not _has_context_management_param,
+    reason="openai SDK too old to support 'context_management' on Responses.create",
+)
+
+
+def is_compaction_item_event(event) -> bool:
+    return (
+        event.type == "response.output_item.done"
+        and getattr(event.item, "type", None) == "compaction"
+    )
+
+
+def _create_compaction_stream(openai_client):
+    return openai_client.responses.create(
+        model=REASONING_MODEL,
+        instructions=SYSTEM_INSTRUCTIONS,
+        input=COMPACTION_TRIGGER_INPUT,
+        context_management=COMPACTION_CONTEXT_MANAGEMENT,
+        stream=True,
+    )
+
+
+@pytest.mark.cassette(SERVER_COMPACTION_STREAM_CASSETTE)
+@pytest.mark.vcr()
+@_requires_context_management
+def test_responses_streaming_close_after_compaction_records_compaction(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    stream = _create_compaction_stream(openai_client)
+    for event in stream:
+        if is_compaction_item_event(event):
+            break
+    stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+
+
+@pytest.mark.cassette(SERVER_COMPACTION_STREAM_CASSETTE)
+@pytest.mark.vcr()
+@_requires_context_management
+def test_responses_streaming_caller_error_after_compaction_records_compaction(
+    span_exporter, openai_client, instrument_no_content
+):
+    _skip_if_not_latest()
+
+    with pytest.raises(ValueError, match="caller error after compaction"):
+        with _create_compaction_stream(openai_client) as stream:
+            for event in stream:
+                if is_compaction_item_event(event):
+                    raise ValueError("caller error after compaction")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ValueError"
+
+
+@pytest.mark.cassette(SERVER_COMPACTION_STREAM_CASSETTE)
+@pytest.mark.vcr()
+@_requires_context_management
+def test_responses_streaming_stream_error_after_compaction_records_compaction(
+    span_exporter, openai_client, instrument_no_content, monkeypatch
+):
+    _skip_if_not_latest()
+
+    stream = _create_compaction_stream(openai_client)
+
+    class FailAfterCompaction:
+        def __init__(self, inner):
+            self._inner = inner
+            self._compacted = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._compacted:
+                raise ConnectionError("connection reset after compaction")
+            event = next(self._inner)
+            self._compacted = is_compaction_item_event(event)
+            return event
+
+        def close(self):
+            return self._inner.close()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(stream, "stream", FailAfterCompaction(stream.stream))
+
+    with pytest.raises(
+        ConnectionError, match="connection reset after compaction"
+    ):
+        with stream:
+            for _ in stream:
+                pass
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
 
 
 RETRIEVE_RESPONSE_ID = (

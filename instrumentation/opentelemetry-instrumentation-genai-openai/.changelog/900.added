@@ -1,0 +1,1 @@
+Record `gen_ai.conversation.compacted` on Responses API spans when compaction items are present in the request input or response output.

@@ -186,6 +186,30 @@ def _extract_conversation_id(conversation: object) -> str | None:
     return None
 
 
+def _has_compaction_item(items: object) -> bool:
+    return any(
+        _get_field(item, "type") == "compaction"
+        for item in _get_sequence(items)
+    )
+
+
+_OUTPUT_ITEM_EVENT_TYPES = frozenset(
+    {"response.output_item.added", "response.output_item.done"}
+)
+
+
+def set_stream_event_attributes(invocation, event: object) -> None:
+    """Record what a stream event settles before the terminal response.
+
+    A stream closed or interrupted early never delivers the terminal response,
+    so a compaction item already streamed must be recorded as it arrives.
+    """
+    if _get_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES and (
+        _has_compaction_item([_get_field(event, "item")])
+    ):
+        invocation.conversation_compacted = True
+
+
 def extract_params(
     *,
     model: str | None = None,
@@ -862,6 +886,9 @@ def apply_request_attributes(
             params.output_type
         )
 
+    if _has_compaction_item(params.input):
+        invocation.conversation_compacted = True
+
     if capture_content:
         invocation.system_instruction = get_system_instruction(
             params.instructions
@@ -969,6 +996,9 @@ def set_invocation_response_attributes(
     finish_reasons = extract_finish_reasons(response)
     if finish_reasons:
         invocation.finish_reasons = finish_reasons
+
+    if _has_compaction_item(response.output):
+        invocation.conversation_compacted = True
 
     if capture_content:
         output_messages = get_output_messages_from_response(response)
