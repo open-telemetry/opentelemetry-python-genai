@@ -500,6 +500,14 @@ def _set_agent_step_output(
         invocation.output_messages = [_output_message(result.response)]
 
 
+def _set_agent_finish_reason(
+    invocation: LocalAgentInvocation, finish_reason: str
+) -> None:
+    invocation.finish_reasons = [finish_reason]
+    for message in invocation.output_messages:
+        message.finish_reason = finish_reason
+
+
 def _set_return_direct_agent_output(
     invocation: LocalAgentInvocation, tool_output: ToolOutput
 ) -> None:
@@ -795,7 +803,10 @@ class _LlamaIndexInvocation(BaseSpan):
                 name,
             ), invocation in self._workflow_invocations_by_key.items():
                 if name == agent_name:
-                    _set_agent_step_output(invocation, output)
+                    if invocation.should_capture_content:
+                        _set_agent_step_output(invocation, output)
+                    # Final results include historical tool calls, not just tool selections that require another agent step.
+                    _set_agent_finish_reason(invocation, "stop")
                     break
         invocations: list[LocalAgentInvocation] = []
         for candidate in self._workflow_invocations_by_key.values():
@@ -1148,9 +1159,10 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             return
         pending = parent.take_pending_handoff(run_id)
         if pending is not None:
-            _finish_member_agent(
-                pending, parent.take_workflow_tool_error(run_id)
-            )
+            turn_error = parent.take_workflow_tool_error(run_id)
+            if turn_error is None:
+                _set_agent_finish_reason(pending, "tool_calls")
+            _finish_member_agent(pending, turn_error)
             parent.remove_workflow_invocation(pending)
         else:
             parent.take_workflow_tool_error(run_id)
@@ -1175,9 +1187,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[_LlamaIndexInvocation]):
             capture_content = self._handler.should_capture_content()
             if capture_content:
                 _set_workflow_output(span._invocation, result)
-            span.finalize_workflow_agents(
-                result=result if capture_content else None
-            )
+            span.finalize_workflow_agents(result=result)
         elif isinstance(span._invocation, LocalAgentInvocation):
             span.reset_tool_attributes()
             span.reset_workflow_tool()
