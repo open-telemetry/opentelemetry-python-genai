@@ -502,6 +502,12 @@ def test_sync_chat_completions_error_handling(
     [
         ("temperature", "high", GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE),
         ("max_tokens", "many", GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS),
+        ("temperature", 10**400, GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE),
+        (
+            "max_tokens",
+            float("inf"),
+            GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS,
+        ),
     ],
 )
 def test_sync_chat_completions_bad_parameter_reaches_the_client(
