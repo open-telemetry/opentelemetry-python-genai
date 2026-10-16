@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     gen_ai_json_dumps,
+    get_argument,
     object_to_any_value,
 )
 
@@ -165,3 +166,56 @@ def prepare_tool_definitions(
                 )
 
     return definitions or None
+
+
+def extract_session_id(
+    instance: Any = None,
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    run_response: Any = None,
+    wrapped: Callable[..., Any] | None = None,
+    *,
+    is_continue: bool = False,
+) -> str | None:
+    """Extract session_id from call arguments, instance, or response."""
+    if is_continue:
+        if run_response is None:
+            if wrapped is not None and (args or kwargs):
+                run_response = get_argument(
+                    "run_response", wrapped, args or (), kwargs or {}
+                )
+            elif kwargs:
+                run_response = kwargs.get("run_response")
+
+        if run_response is not None:
+            if (
+                session_id := getattr(run_response, "session_id", None)
+            ) is not None:
+                return str(session_id)
+            if instance is not None and (
+                (session_id := getattr(instance, "session_id", None))
+                is not None
+            ):
+                return str(session_id)
+            return None
+
+    if wrapped is not None and (args or kwargs):
+        session_id = get_argument(
+            "session_id", wrapped, args or (), kwargs or {}
+        )
+        if session_id is not None:
+            return str(session_id)
+    else:
+        if kwargs and (session_id := kwargs.get("session_id")) is not None:
+            return str(session_id)
+        if args and len(args) > 4 and args[4] is not None:
+            return str(args[4])
+    if instance is not None and (
+        (session_id := getattr(instance, "session_id", None)) is not None
+    ):
+        return str(session_id)
+    if run_response is not None and (
+        (session_id := getattr(run_response, "session_id", None)) is not None
+    ):
+        return str(session_id)
+    return None
