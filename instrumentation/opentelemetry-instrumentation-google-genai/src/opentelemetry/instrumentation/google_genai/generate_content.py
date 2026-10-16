@@ -600,13 +600,13 @@ def _merge_streamed_candidates(candidates: list[Candidate]) -> list[Candidate]:
         index = candidate.index or 0
         target = merged.get(index)
         if target is None:
-            target = merged[index] = Candidate(
-                index=candidate.index, content=Content(parts=[])
-            )
+            target = merged[index] = Candidate(index=candidate.index)
         if candidate.finish_reason is not None:
             target.finish_reason = candidate.finish_reason
         if not candidate.content:
             continue
+        if target.content is None:
+            target.content = Content(parts=[])
         if candidate.content.role:
             target.content.role = candidate.content.role
         for part in candidate.content.parts or []:

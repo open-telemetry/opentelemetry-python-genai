@@ -12,6 +12,9 @@ from google.genai.types import (
 from opentelemetry.instrumentation.google_genai.generate_content import (
     _merge_streamed_candidates,
 )
+from opentelemetry.instrumentation.google_genai.message import (
+    to_output_messages,
+)
 
 
 def _candidate(*parts, index=None, finish_reason=None):
@@ -63,3 +66,15 @@ def test_does_not_mutate_the_streamed_chunks():
     _merge_streamed_candidates([first, _candidate(Part(text=", world"))])
 
     assert first.content.parts == [Part(text="Hello")]
+
+
+def test_contentless_candidate_produces_no_output_message():
+    merged = _merge_streamed_candidates(
+        [
+            Candidate(index=0),
+            Candidate(index=0, finish_reason=FinishReason.SAFETY),
+        ]
+    )
+
+    assert merged == [Candidate(index=0, finish_reason=FinishReason.SAFETY)]
+    assert to_output_messages(candidates=merged) == []
