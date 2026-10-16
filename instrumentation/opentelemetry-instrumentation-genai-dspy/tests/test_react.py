@@ -13,6 +13,9 @@ import dspy
 import pytest
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
+from opentelemetry.instrumentation.genai.dspy.utils import (
+    extract_output_content,
+)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
@@ -308,3 +311,14 @@ async def test_react_async_error_handling(
     assert span.status.status_code == StatusCode.ERROR
     attrs = span.attributes or {}
     assert attrs.get(error_attributes.ERROR_TYPE) == "RuntimeError"
+
+
+def test_agent_output_respects_signature() -> None:
+    signature = dspy.Signature("question -> answer")
+    result = dspy.Prediction(
+        answer="Paris",
+        reasoning="The capital is Paris.",
+        trajectory={},
+    )
+
+    assert extract_output_content(result, signature) == "Paris"
