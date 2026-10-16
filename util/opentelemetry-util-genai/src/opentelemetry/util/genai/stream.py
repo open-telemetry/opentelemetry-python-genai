@@ -50,13 +50,11 @@ _ChunkT_co = TypeVar("_ChunkT_co", covariant=True)
 _logger = logging.getLogger(__name__)
 
 
-class _StreamTimingInvocation(Protocol):
-    def _on_stream_chunk(self, chunk_at: float) -> None: ...
-
+class _StreamInvocation(Protocol):
     def activate(self) -> AbstractContextManager[None]: ...
 
 
-class _StreamingInvocation(_StreamTimingInvocation, Protocol):
+class _StreamingInvocation(_StreamInvocation, Protocol):
     def fail(self, error: Error | BaseException) -> None: ...
 
 
@@ -180,7 +178,7 @@ class SyncStreamWrapper(
     def __init__(
         self,
         stream: _SyncStream[ChunkT],
-        invocation: _StreamTimingInvocation | None = None,
+        invocation: _StreamInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
@@ -272,14 +270,18 @@ class SyncStreamWrapper(
             except BaseException as error:
                 self._finalize_failure(error)
                 raise
-            invocation = self._self_invocation
+            # Non-inference invocations (agent, workflow, fetch_response) are
+            # passed for context scoping only; chunk timing is inference-only.
+            on_stream_chunk: Callable[[float], None] | None = getattr(
+                self._self_invocation, "_on_stream_chunk", None
+            )
             chunk_at = (
-                timeit.default_timer() if invocation is not None else None
+                timeit.default_timer() if on_stream_chunk is not None else None
             )
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if invocation is not None and chunk_at is not None:
-                invocation._on_stream_chunk(chunk_at)
+            if on_stream_chunk is not None and chunk_at is not None:
+                on_stream_chunk(chunk_at)
             return chunk
 
 
@@ -308,7 +310,7 @@ class AsyncStreamWrapper(
     def __init__(
         self,
         stream: _AsyncStream[ChunkT],
-        invocation: _StreamTimingInvocation | None = None,
+        invocation: _StreamInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
@@ -486,14 +488,18 @@ class AsyncStreamWrapper(
                 self._finalize_failure(error)
                 raise
 
-            invocation = self._self_invocation
+            # Non-inference invocations (agent, workflow, fetch_response) are
+            # passed for context scoping only; chunk timing is inference-only.
+            on_stream_chunk: Callable[[float], None] | None = getattr(
+                self._self_invocation, "_on_stream_chunk", None
+            )
             chunk_at = (
-                timeit.default_timer() if invocation is not None else None
+                timeit.default_timer() if on_stream_chunk is not None else None
             )
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if invocation is not None and chunk_at is not None:
-                invocation._on_stream_chunk(chunk_at)
+            if on_stream_chunk is not None and chunk_at is not None:
+                on_stream_chunk(chunk_at)
             return chunk
 
 

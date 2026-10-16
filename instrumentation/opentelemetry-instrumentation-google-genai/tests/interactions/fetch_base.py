@@ -687,6 +687,25 @@ class TestCase(CommonTestCaseBase):
         for attribute in span.attributes:
             self.assertFalse(attribute.startswith("gen_ai.usage."))
 
+    def test_streaming_fetch_records_no_chunk_metrics(self) -> None:
+        # Chunk timing metrics are defined for inference; fetch_response
+        # retrieves an already generated response.
+        self.configure_valid_fetch(interaction_id="stream-id-3")
+        self.run_streaming_fetch("stream-id-3", stream=True)
+        self.otel.assert_has_span_named(_SPAN_NAME)
+        self.assertEqual(
+            self.otel.get_metrics_data_named(
+                "gen_ai.client.operation.time_to_first_chunk"
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.otel.get_metrics_data_named(
+                "gen_ai.client.operation.time_per_output_chunk"
+            ),
+            [],
+        )
+
     def test_streaming_request_exception_records_error(self) -> None:
         self.configure_exception(ValueError("stream request failed"))
         with self.assertRaises(ValueError):

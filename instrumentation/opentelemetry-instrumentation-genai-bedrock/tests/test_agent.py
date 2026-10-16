@@ -81,6 +81,24 @@ class _FailingAsyncEventStream:
             raise StopAsyncIteration
 
 
+_CHUNK_METRICS = {
+    "gen_ai.client.operation.time_to_first_chunk",
+    "gen_ai.client.operation.time_per_output_chunk",
+}
+
+
+def _metric_names(metric_reader) -> set[str]:
+    data = metric_reader.get_metrics_data()
+    if data is None:
+        return set()
+    return {
+        metric.name
+        for resource_metrics in data.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+    }
+
+
 # --- Sync invoke_agent tests ---
 
 
@@ -88,6 +106,7 @@ def test_invoke_agent_sync_with_content(
     agent_client,
     instrument_with_content,
     span_exporter,
+    metric_reader,
 ) -> None:
     stubber = Stubber(agent_client)
     stubber._validate_response = lambda *args, **kwargs: None
@@ -158,6 +177,8 @@ def test_invoke_agent_sync_with_content(
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hello from agent!"
+    # Chunk timing metrics describe inference streams, not invoke_agent.
+    assert not _metric_names(metric_reader) & _CHUNK_METRICS
 
 
 def test_invoke_agent_sync_no_content(
@@ -574,6 +595,7 @@ async def test_async_invoke_agent_with_content(
     async_agent_client,
     instrument_with_content,
     span_exporter,
+    metric_reader,
 ) -> None:
     stubber = Stubber(async_agent_client)
     stubber._validate_response = lambda *args, **kwargs: None
@@ -638,6 +660,8 @@ async def test_async_invoke_agent_with_content(
         span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
     )
     assert output_msgs[0]["parts"][0]["content"] == "Async agent response"
+    # Chunk timing metrics describe inference streams, not invoke_agent.
+    assert not _metric_names(metric_reader) & _CHUNK_METRICS
 
 
 @pytest.mark.asyncio
