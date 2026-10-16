@@ -137,6 +137,8 @@ pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_API, reason="Responses API requires a newer openai SDK"
 )
 
+_HAS_RESPONSES_PARSE = HAS_RESPONSES_API and hasattr(_Responses, "parse")
+
 SYSTEM_INSTRUCTIONS = "You are a helpful assistant."
 EXPECTED_SYSTEM_INSTRUCTIONS = [
     {
@@ -1781,6 +1783,222 @@ def test_responses_create_event_only_no_content_in_span(
     assert (
         logs[0].log_record.event_name
         == "gen_ai.client.inference.operation.details"
+    )
+
+
+class _ParseCalendarEvent(BaseModel):
+    name: str
+    date: str
+    participants: list[str]
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_parse_basic(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    """Responses.parse() emits a GenAI span like create()."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
+        response = openai_client.responses.parse(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            text_format=_ParseCalendarEvent,
+            stream=False,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+    assert (
+        span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
+        == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
+    )
+    # parse(text_format=...) records the JSON output type, not the schema.
+    _assert_request_attrs(span, output_type="json")
+    assert "_ParseCalendarEvent" not in str(span.attributes)
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_parse_wrapping_lifecycle(
+    tracer_provider, logger_provider, meter_provider
+):
+    """instrument() wraps parse() and uninstrument() restores it."""
+    from openai.resources.responses.responses import (  # pylint: disable=no-name-in-module
+        AsyncResponses,
+        Responses,
+    )
+
+    before_sync = Responses.parse
+    before_async = AsyncResponses.parse
+
+    instrumentor = OpenAIInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    assert hasattr(Responses.parse, "__wrapped__")
+    assert hasattr(AsyncResponses.parse, "__wrapped__")
+
+    instrumentor.uninstrument()
+    assert Responses.parse is before_sync
+    assert AsyncResponses.parse is before_async
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_create_output_type_unchanged_by_parse(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    """Responses.create() behaviour is unchanged by the parse() wrapper."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette("test_responses_create_basic[content_mode0].yaml"):
+        response = openai_client.responses.create(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            stream=False,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        response.id,
+        response.model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        response_service_tier=getattr(response, "service_tier", None),
+    )
+    assert GenAIAttributes.GEN_AI_OUTPUT_TYPE not in span.attributes
+
+
+class _MissingFieldCalendarEvent(BaseModel):
+    # Absent from the recorded body, so parsing it must fail.
+    field_that_is_never_present: str
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_with_raw_response_parse_defers_validation(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    """``with_raw_response.parse()`` keeps validation deferred."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
+        raw_response = openai_client.responses.with_raw_response.parse(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            text_format=_MissingFieldCalendarEvent,
+            stream=False,
+        )
+
+        # The raw response comes back untouched; telemetry is already recorded.
+        (span,) = span_exporter.get_finished_spans()
+        assert_all_attributes(
+            span,
+            DEFAULT_MODEL,
+            True,
+            "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237099",
+            "gpt-4o-mini-2024-07-18",
+            22,
+            6,
+            response_service_tier="default",
+        )
+
+        # Validation still happens only when the caller parses.
+        with pytest.raises(ValidationError):
+            raw_response.parse()
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_with_raw_response_parse_captures_content(
+    span_exporter, openai_client, instrument_with_content, vcr
+):
+    """Content capture works for raw-response parse calls."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
+        openai_client.responses.with_raw_response.parse(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            text_format=_MissingFieldCalendarEvent,
+            stream=False,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237099",
+        "gpt-4o-mini-2024-07-18",
+        22,
+        6,
+        response_service_tier="default",
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert "science fair" in json.dumps(output_messages)
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="Responses.parse requires a newer openai SDK",
+)
+def test_responses_parse_api_error(
+    span_exporter, openai_client, instrument_no_content, vcr
+):
+    """A parse call that fails at the API level still records telemetry."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_responses_create_api_error[content_mode0].yaml"
+    ):
+        with pytest.raises((BadRequestError, NotFoundError)) as exc_info:
+            openai_client.responses.parse(
+                model=INVALID_MODEL,
+                input="Hello",
+                text_format=_ParseCalendarEvent,
+                stream=False,
+            )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == INVALID_MODEL
+    )
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == f"openai.{type(exc_info.value).__name__}"
     )
 
 
