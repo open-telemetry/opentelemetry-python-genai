@@ -498,6 +498,7 @@ class NonStreamingTestCase(TestCase):
         self.assertNotIn(
             gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS, event.attributes
         )
+        self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, event.attributes)
 
     @patch.dict(
         "os.environ",
