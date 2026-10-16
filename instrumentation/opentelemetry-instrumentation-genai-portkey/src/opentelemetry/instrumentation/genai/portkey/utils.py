@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import sys
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
@@ -17,6 +18,8 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
@@ -28,6 +31,7 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 if TYPE_CHECKING:
     from portkey_ai import AsyncPortkey, Portkey
@@ -144,6 +148,90 @@ def _extract_tool_calls(tool_calls: Iterable[Any]) -> list[ToolCallRequest]:
     return parts
 
 
+# "audio/mp3" is not a registered media type - the payload is MPEG audio.
+_AUDIO_MIME_TYPES = {"wav": "audio/wav", "mp3": "audio/mpeg"}
+
+
+def _audio_to_part(input_audio: Any) -> MessagePart | None:
+    """Build a blob part for an ``input_audio`` descriptor."""
+    if input_audio is None:
+        return None
+    data = get_property_value(input_audio, "data")
+    if not isinstance(data, str):
+        return None
+    decoded = decode_base64(data)
+    if decoded is None:
+        return None
+    audio_format = get_property_value(input_audio, "format")
+    return BlobPart(
+        mime_type=_AUDIO_MIME_TYPES.get(audio_format)
+        if isinstance(audio_format, str)
+        else None,
+        modality=Modality.AUDIO,
+        content=decoded,
+    )
+
+
+def _document_to_part(file_obj: Any) -> MessagePart | None:
+    """Build a part for a file descriptor: a reference when the file is
+    hosted by the provider (``file_id``), a blob when uploaded inline
+    (``file_data``)."""
+    if file_obj is None:
+        return None
+    filename = get_property_value(file_obj, "filename")
+    mime_type = (
+        mimetypes.guess_type(filename)[0]
+        if isinstance(filename, str) and filename
+        else None
+    )
+    file_id = get_property_value(file_obj, "file_id")
+    if isinstance(file_id, str) and file_id:
+        return FilePart(
+            mime_type=mime_type, modality=Modality.DOCUMENT, file_id=file_id
+        )
+    file_data = get_property_value(file_obj, "file_data")
+    if not isinstance(file_data, str) or not file_data:
+        return None
+    if file_data.startswith("data:"):
+        return image_from_url(file_data, modality=Modality.DOCUMENT)
+    content = decode_base64(file_data)
+    if content is None:
+        return None
+    return BlobPart(
+        mime_type=mime_type, modality=Modality.DOCUMENT, content=content
+    )
+
+
+def _content_part_to_message_part(item: Any) -> MessagePart | None:
+    if isinstance(item, str):
+        return Text(content=item)
+    part_type = get_property_value(item, "type")
+    text = get_property_value(item, "text")
+    if part_type in ("text", "input_text", "output_text") or (
+        part_type is None and isinstance(text, str)
+    ):
+        if isinstance(text, str):
+            return Text(content=text)
+        return None
+    if part_type == "image_url":
+        image_url = get_property_value(item, "image_url")
+        if not isinstance(image_url, str):
+            image_url = get_property_value(image_url, "url")
+        if isinstance(image_url, str) and image_url:
+            return image_from_url(image_url)
+        return None
+    if part_type == "input_audio":
+        return _audio_to_part(get_property_value(item, "input_audio"))
+    if part_type in ("file", "input_file"):
+        return _document_to_part(get_property_value(item, "file") or item)
+    if part_type == "refusal":
+        refusal = get_property_value(item, "refusal")
+        if isinstance(refusal, str):
+            return Text(content=refusal)
+        return None
+    return None
+
+
 def _prepare_input_messages(messages: Iterable[Any]) -> list[InputMessage]:
     chat_messages: list[InputMessage] = []
     for message in messages:
@@ -165,19 +253,17 @@ def _prepare_input_messages(messages: Iterable[Any]) -> list[InputMessage]:
             if isinstance(content, str):
                 parts.append(Text(content=content))
             elif isinstance(content, Mapping):
-                content_dict = cast(Mapping[str, Any], content)
-                content_type = content_dict.get("type")
-                if content_type == "text" and content_dict.get("text"):
-                    parts.append(Text(content=str(content_dict["text"])))
-            elif isinstance(content, Iterable):
-                for item in cast(Iterable[Any], content):
-                    if isinstance(item, str):
-                        parts.append(Text(content=item))
-                    elif isinstance(item, Mapping):
-                        item_dict = cast(Mapping[str, Any], item)
-                        item_type = item_dict.get("type")
-                        if item_type == "text" and item_dict.get("text"):
-                            parts.append(Text(content=str(item_dict["text"])))
+                part = _content_part_to_message_part(content)
+                if part is not None:
+                    parts.append(part)
+            elif isinstance(content, Sequence) and not isinstance(
+                content, (bytes, bytearray)
+            ):
+                # Iterating a generator drains it and leaves the request with no content.
+                for item in cast(Sequence[Any], content):
+                    part = _content_part_to_message_part(item)
+                    if part is not None:
+                        parts.append(part)
         chat_messages.append(InputMessage(role=str(role), parts=parts))
     return chat_messages
 

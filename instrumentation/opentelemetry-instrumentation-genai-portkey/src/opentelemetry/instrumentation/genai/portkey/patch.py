@@ -6,7 +6,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from typing import Any, cast
 
 from wrapt import wrap_function_wrapper
@@ -85,6 +91,28 @@ def unpatch_portkey() -> None:
         pass
 
 
+_ITERABLE_KWARGS = ("messages", "tools")
+
+
+def _materialize_iterables(kwargs: dict[str, Any]) -> None:
+    """Materialize any generator passed as messages or tools.
+
+    The SDK accepts any iterable for these arguments and consumes it during the
+    call.  Instrumentation reads the same kwargs *before* the wrapped call, so
+    a generator would be drained by telemetry and the SDK would receive an
+    exhausted iterator.  Converting to a list once lets both sides see the same
+    data without changing the caller's observable behaviour.
+    """
+    for key in _ITERABLE_KWARGS:
+        value = kwargs.get(key)
+        if (
+            value is not None
+            and isinstance(value, Iterable)
+            and not isinstance(value, (str, bytes, Sequence, Mapping))
+        ):
+            kwargs[key] = list(cast(Iterable[object], value))
+
+
 def _sync_completions_create(
     handler: TelemetryHandler,
     *,
@@ -98,6 +126,7 @@ def _sync_completions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        _materialize_iterables(kwargs)
         invocation = create_inference_invocation(
             handler, instance, kwargs, capture_content, is_prompt=is_prompt
         )
@@ -131,6 +160,7 @@ def _async_completions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        _materialize_iterables(kwargs)
         invocation = create_inference_invocation(
             handler, instance, kwargs, capture_content, is_prompt=is_prompt
         )
