@@ -14,6 +14,7 @@ from langchain_core.messages import (
     ChatMessage,
     FunctionMessage,
     HumanMessage,
+    MessageLikeRepresentation,
     SystemMessage,
     ToolMessage,
     convert_to_messages,
@@ -337,25 +338,36 @@ def _message_parts(message: BaseMessage) -> list[MessagePart]:
     return _content_to_parts(message.content)
 
 
+def _normalize_messages(
+    messages: Iterable[MessageLikeRepresentation],
+) -> list[BaseMessage]:
+    """Convert entries to ``BaseMessage`` s, skipping unconvertible ones."""
+    materialized = list(messages)
+    try:
+        return convert_to_messages(materialized)
+    except Exception:  # pylint: disable=broad-except
+        normalized: list[BaseMessage] = []
+        for message in materialized:
+            if isinstance(message, BaseMessage):
+                normalized.append(message)
+                continue
+            try:
+                normalized.extend(convert_to_messages([message]))
+            except Exception:  # pylint: disable=broad-except
+                continue
+        return normalized
+
+
 def to_input_messages(
-    messages: Iterable[Any],
+    messages: Iterable[MessageLikeRepresentation],
 ) -> list[InputMessage]:
     """Convert LangChain messages into spec-conformant ``InputMessage`` s.
 
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
-    materialized = list(messages)
-    try:
-        normalized_messages: Iterable[BaseMessage] = convert_to_messages(
-            materialized
-        )
-    except Exception:  # pylint: disable=broad-except
-        normalized_messages = [
-            m for m in materialized if isinstance(m, BaseMessage)
-        ]
     result: list[InputMessage] = []
-    for message in normalized_messages:
+    for message in _normalize_messages(messages):
         parts = _message_parts(message)
         if not parts and not _has_content(message):
             continue
@@ -370,22 +382,21 @@ def to_input_messages(
 
 
 def to_output_messages(
-    messages: Iterable[BaseMessage],
+    messages: Iterable[MessageLikeRepresentation],
     *,
     finish_reason: str = "",
 ) -> list[OutputMessage]:
-    """Convert LangChain ``AIMessage`` instances into ``OutputMessage`` s.
+    """Convert LangChain messages into ``OutputMessage`` s.
 
-    Non-``AIMessage`` entries are skipped: only assistant turns are recorded
-    as ``gen_ai.output.messages``. Tool execution results belong on the
-    *input* side of the next inference call, not the output side of the
-    previous one.
+    Only assistant turns are recorded as ``gen_ai.output.messages``. Tool
+    execution results belong on the *input* side of the next inference call,
+    not the output side of the previous one.
 
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
     result: list[OutputMessage] = []
-    for message in messages:
+    for message in _normalize_messages(messages):
         if not isinstance(message, AIMessage):
             continue
         parts = _ai_message_parts(message)
@@ -476,7 +487,9 @@ def make_input_message(data: Any) -> list[InputMessage]:
             messages, Iterable
         ):
             return []
-        return to_input_messages(cast(Iterable[BaseMessage], messages))
+        return to_input_messages(
+            cast(Iterable[MessageLikeRepresentation], messages)
+        )
     # Fallback: serialize non-message state fields as input.
     # Common in LangGraph where nodes use structured state fields
     # (e.g., user_query) rather than a message list.
@@ -500,7 +513,7 @@ def make_input_message(data: Any) -> list[InputMessage]:
 def make_output_message(data: Any) -> list[OutputMessage]:
     """Build ``OutputMessage`` s from a workflow/agent output mapping.
 
-    Only ``AIMessage`` entries become outputs. ``finish_reason`` is left
+    Only assistant messages become outputs. ``finish_reason`` is left
     empty: the underlying per-LLM-call finish reasons are recorded on child
     inference spans, and util-genai filters empty values out of
     ``gen_ai.response.finish_reasons``.
@@ -518,7 +531,9 @@ def make_output_message(data: Any) -> list[OutputMessage]:
         or not isinstance(messages, Iterable)
     ):
         return []
-    return to_output_messages(cast(Iterable[BaseMessage], messages))
+    return to_output_messages(
+        cast(Iterable[MessageLikeRepresentation], messages)
+    )
 
 
 def make_last_output_message(data: Any) -> list[OutputMessage]:

@@ -41,8 +41,8 @@ def _is_dict(val: object) -> TypeGuard[dict[str, Any]]:
     return isinstance(val, dict)
 
 
-def _is_list(val: object) -> TypeGuard[list[Any]]:
-    return isinstance(val, list)
+def _is_list(val: object) -> TypeGuard[Sequence[Any]]:
+    return isinstance(val, (list, tuple))
 
 
 def _first_not_none(*values: Any) -> Any:
