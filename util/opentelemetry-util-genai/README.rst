@@ -14,7 +14,9 @@ Key Components
 - ``CompletionHook`` -- protocol for uploading content to external storage (built-in ``fsspec`` support)
 - Metrics -- ``gen_ai.client.operation.duration`` and ``gen_ai.client.token.usage`` histograms, plus
   the streaming timing histograms ``gen_ai.client.operation.time_to_first_chunk`` and
-  ``gen_ai.client.operation.time_per_output_chunk``
+  ``gen_ai.client.operation.time_per_output_chunk``. Local agent invocations
+  can also record ``gen_ai.invoke_agent.inference_calls`` and
+  ``gen_ai.invoke_agent.tool_calls`` when their count fields are set.
 
 
 Usage
@@ -49,6 +51,9 @@ before returning the stream. The base wrapper then makes the suspended invocatio
 current during reads, cleanup and finalization of an abandoned stream, so no
 ``_execution_context()`` override is needed.
 Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
+Pass ``record_stream_chunks=False`` for a generator whose chunks are not LLM
+response chunks; this retains the execution context without recording streaming
+request attributes or timing metrics.
 
 
 Modalities

@@ -171,6 +171,8 @@ class SyncStreamWrapper(
     successful finalization, and ``_on_stream_error`` for failure finalization.
     ``_execution_context`` scopes each read and cleanup; by default it makes a
     suspended invocation current again and can be overridden.
+    Set ``record_stream_chunks=False`` for non-LLM generators that need the
+    invocation context but no request stream attribute or chunk timing metrics.
 
     Users should consume subclasses as normal streams, for example with
     ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
@@ -181,11 +183,18 @@ class SyncStreamWrapper(
         self,
         stream: _SyncStream[ChunkT],
         invocation: _StreamTimingInvocation | None = None,
+        *,
+        record_stream_chunks: bool = True,
     ):
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if invocation is not None and hasattr(invocation, "_request_stream"):
+        self._self_record_stream_chunks = record_stream_chunks
+        if (
+            record_stream_chunks
+            and invocation is not None
+            and hasattr(invocation, "_request_stream")
+        ):
             setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
@@ -274,11 +283,17 @@ class SyncStreamWrapper(
                 raise
             invocation = self._self_invocation
             chunk_at = (
-                timeit.default_timer() if invocation is not None else None
+                timeit.default_timer()
+                if invocation is not None and self._self_record_stream_chunks
+                else None
             )
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if invocation is not None and chunk_at is not None:
+            if (
+                invocation is not None
+                and chunk_at is not None
+                and self._self_record_stream_chunks
+            ):
                 invocation._on_stream_chunk(chunk_at)
             return chunk
 
@@ -298,6 +313,8 @@ class AsyncStreamWrapper(
     successful finalization, and ``_on_stream_error`` for failure finalization.
     ``_execution_context`` scopes each read and cleanup; by default it makes a
     suspended invocation current again and can be overridden.
+    Set ``record_stream_chunks=False`` for non-LLM async generators that need
+    the invocation context but no request stream attribute or chunk timing metrics.
 
     Users should consume subclasses as normal async streams, for example with
     ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
@@ -309,11 +326,18 @@ class AsyncStreamWrapper(
         self,
         stream: _AsyncStream[ChunkT],
         invocation: _StreamTimingInvocation | None = None,
+        *,
+        record_stream_chunks: bool = True,
     ):
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if invocation is not None and hasattr(invocation, "_request_stream"):
+        self._self_record_stream_chunks = record_stream_chunks
+        if (
+            record_stream_chunks
+            and invocation is not None
+            and hasattr(invocation, "_request_stream")
+        ):
             setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
@@ -488,11 +512,17 @@ class AsyncStreamWrapper(
 
             invocation = self._self_invocation
             chunk_at = (
-                timeit.default_timer() if invocation is not None else None
+                timeit.default_timer()
+                if invocation is not None and self._self_record_stream_chunks
+                else None
             )
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if invocation is not None and chunk_at is not None:
+            if (
+                invocation is not None
+                and chunk_at is not None
+                and self._self_record_stream_chunks
+            ):
                 invocation._on_stream_chunk(chunk_at)
             return chunk
 

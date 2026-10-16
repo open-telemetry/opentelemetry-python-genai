@@ -6,6 +6,7 @@
 
 import inspect
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -54,6 +55,144 @@ class _StubLLM:
 
 def _spans_named(span_exporter, name):
     return [s for s in span_exporter.get_finished_spans() if s.name == name]
+
+
+def _metric_points(metric_reader, name):
+    data = metric_reader.get_metrics_data()
+    return [
+        point
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        if metric.name == name
+        for point in metric.data.data_points
+    ]
+
+
+def test_agent_run_counts_calls_once_per_invocation(
+    span_exporter, metric_reader, instrument_no_content
+):
+    agent = _StubAgent.create(name="CountingBot", llm=_StubLLM())
+    agent.llm.chat = lambda **kwargs: iter(
+        [[Message(role="assistant", content="ok")]]
+    )
+    agent.function_map["get_weather"] = SimpleNamespace(
+        call=lambda *_args, **_kwargs: "sunny"
+    )
+
+    def fake_run(messages, **kwargs):
+        for response in agent._call_llm(messages):
+            yield response
+        agent._call_tool("get_weather", "{}")
+        for response in agent._call_llm(messages):
+            yield response
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        run = agent.run([Message(role="user", content="Go")])
+        assert not span_exporter.get_finished_spans()
+        assert len(list(run)) == 2
+
+    assert len(_spans_named(span_exporter, "invoke_agent CountingBot")) == 1
+    attrs = dict(
+        _spans_named(span_exporter, "invoke_agent CountingBot")[0].attributes
+        or {}
+    )
+    assert GenAIAttributes.GEN_AI_REQUEST_STREAM not in attrs
+    for name, expected in (
+        ("gen_ai.invoke_agent.inference_calls", 2),
+        ("gen_ai.invoke_agent.tool_calls", 1),
+    ):
+        points = _metric_points(metric_reader, name)
+        assert len(points) == 1
+        assert points[0].sum == expected
+        assert isinstance(points[0].sum, int)
+        assert dict(points[0].attributes) == {
+            GenAIAttributes.GEN_AI_AGENT_NAME: "CountingBot"
+        }
+
+
+def test_agent_run_counts_failed_inference_and_tool(
+    metric_reader, instrument_no_content
+):
+    agent = _StubAgent.create(name="FailingCounter", llm=_StubLLM())
+    agent.llm.chat = lambda **kwargs: iter(())
+
+    def fake_run(messages, **kwargs):
+        agent._call_llm(messages)
+        agent._call_tool("missing", "{}")
+        raise ValueError("agent failed")
+        yield  # pragma: no cover
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        with pytest.raises(ValueError, match="agent failed"):
+            list(agent.run([Message(role="user", content="Go")]))
+
+    assert (
+        _metric_points(metric_reader, "gen_ai.invoke_agent.inference_calls")[
+            0
+        ].sum
+        == 1
+    )
+    assert (
+        _metric_points(metric_reader, "gen_ai.invoke_agent.tool_calls")[0].sum
+        == 1
+    )
+
+
+def test_assistant_counts_unknown_and_known_tool_calls_once(
+    metric_reader, instrument_no_content
+):
+    agent = Assistant(
+        llm={"model": "qwen-max", "model_type": "qwen_dashscope"},
+        name="AssistantCounter",
+    )
+    agent.function_map["known"] = SimpleNamespace(
+        file_access=False,
+        call=lambda *_args, **_kwargs: "ok",
+        description="A test tool",
+    )
+
+    def fake_run(messages, **kwargs):
+        assert (
+            agent._call_tool("missing", "{}")
+            == "Tool missing does not exists."
+        )
+        assert agent._call_tool("known", "{}") == "ok"
+        yield [Message(role="assistant", content="done")]
+
+    with patch.object(agent, "_run", side_effect=fake_run):
+        list(agent.run([Message(role="user", content="Go")]))
+
+    points = _metric_points(metric_reader, "gen_ai.invoke_agent.tool_calls")
+    assert len(points) == 1
+    assert points[0].sum == 2
+    assert isinstance(points[0].sum, int)
+
+
+def test_nested_agent_call_counts_are_separate(
+    metric_reader, instrument_no_content
+):
+    parent = _StubAgent.create(name="ParentCounter", llm=_StubLLM())
+    child = _StubAgent.create(name="ChildCounter", llm=_StubLLM())
+    parent.llm.chat = child.llm.chat = lambda **kwargs: iter(())
+
+    def fake_run(self, messages, **kwargs):
+        self._call_llm(messages)
+        if self is parent:
+            yield from child.run([Message(role="user", content="child")])
+            self._call_llm(messages)
+        yield [Message(role="assistant", content="done")]
+
+    with patch.object(_StubAgent, "_run", autospec=True, side_effect=fake_run):
+        list(parent.run([Message(role="user", content="parent")]))
+
+    points = _metric_points(
+        metric_reader, "gen_ai.invoke_agent.inference_calls"
+    )
+    assert {
+        point.attributes[GenAIAttributes.GEN_AI_AGENT_NAME]: point.sum
+        for point in points
+    } == {"ParentCounter": 2, "ChildCounter": 1}
 
 
 @pytest.mark.vcr()
@@ -146,7 +285,9 @@ def test_multi_turn_conversation(span_exporter, instrument_with_content):
     " qwen-agent version does not support",
 )
 @pytest.mark.vcr()
-def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
+def test_agent_run_with_tool_call(
+    span_exporter, metric_reader, instrument_with_content
+):
     """A tool-calling agent run nests execute_tool spans."""
 
     @register_tool("get_current_weather_test", allow_overwrite=True)
@@ -222,6 +363,19 @@ def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
     # The tool span is nested (transitively) under the invoke_agent span.
     assert tool_span.context.trace_id == agent_span.context.trace_id
     assert tool_span.parent is not None
+
+    for name, expected in (
+        ("gen_ai.invoke_agent.inference_calls", 3),
+        ("gen_ai.invoke_agent.tool_calls", 2),
+    ):
+        points = [
+            point
+            for point in _metric_points(metric_reader, name)
+            if point.attributes[GenAIAttributes.GEN_AI_AGENT_NAME]
+            == "WeatherAgent"
+        ]
+        assert len(points) == 1
+        assert points[0].sum == expected
 
 
 def test_agent_run_error(span_exporter, instrument_no_content):

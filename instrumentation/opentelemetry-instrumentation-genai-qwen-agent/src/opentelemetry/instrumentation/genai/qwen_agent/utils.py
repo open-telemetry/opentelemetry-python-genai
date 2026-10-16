@@ -10,6 +10,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from opentelemetry.context import Context
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.types import (
@@ -269,6 +270,7 @@ def create_agent_invocation(
     handler: TelemetryHandler,
     agent_instance: Any,
     messages: QwenMessage | list[QwenMessage] | None,
+    context: Context | None = None,
 ) -> LocalAgentInvocation:
     """Create and start an AgentInvocation for Agent.run()."""
     llm_instance = getattr(agent_instance, "llm", None)
@@ -283,6 +285,7 @@ def create_agent_invocation(
         if llm_instance is not None
         else None,
         agent_name=agent_name,
+        context=context,
     )
     invocation.agent_description = (
         getattr(agent_instance, "description", None) or None
