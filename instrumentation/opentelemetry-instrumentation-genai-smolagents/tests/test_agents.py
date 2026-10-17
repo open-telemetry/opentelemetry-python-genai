@@ -900,3 +900,36 @@ def test_a_tool_error_the_agent_recovers_from_leaves_the_run_successful(
     assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "recovered"
+
+
+def test_tool_calling_agent_with_tuple_images(
+    instrument_with_content, span_exporter, vcr
+) -> None:
+    from PIL import Image
+
+    model = OpenAIModel(
+        model_id="gpt-4o",
+        api_key="test_openai_api_key",
+        api_base="https://api.openai.com/v1",
+    )
+    image_path = pathlib.Path(__file__).parent / "fixtures" / "img.png"
+    agent = ToolCallingAgent(tools=[], model=model, max_steps=3)
+    with vcr.use_cassette("agent_with_image.yaml"):
+        agent.run(
+            "Describe what you see in this image briefly.",
+            images=(Image.open(image_path),),
+        )
+
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = spans_by_operation(spans, "invoke_agent")
+
+    assert agent_span.name == "invoke_agent ToolCallingAgent"
+
+    agent_inputs = parse_messages(agent_span, GenAI.GEN_AI_INPUT_MESSAGES)
+    assert agent_inputs[0]["role"] == "user"
+    assert agent_inputs[0]["parts"][0] == {
+        "type": "text",
+        "content": "Describe what you see in this image briefly.",
+    }
+    assert agent_inputs[0]["parts"][1]["type"] == "blob"
+    assert agent_inputs[0]["parts"][1]["modality"] == "image"

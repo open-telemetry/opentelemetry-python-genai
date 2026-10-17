@@ -25,6 +25,7 @@ from opentelemetry.instrumentation.genai.smolagents import (
     patch as patch_module,
 )
 from opentelemetry.instrumentation.genai.smolagents._messages import (
+    task_to_input_messages,
     to_input_messages,
     to_output_message,
     to_tool_definitions,
@@ -871,3 +872,66 @@ def test_to_output_message_maps_image_content() -> None:
     assert output.parts[1] == UriPart(
         mime_type=None, modality="image", uri=IMAGE_URL
     )
+
+
+def test_to_input_messages_tuple_messages() -> None:
+    messages = to_input_messages(
+        (
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            ChatMessage(role=MessageRole.ASSISTANT, content="Hi there"),
+        )
+    )
+    assert len(messages) == 2
+    assert messages[0].role == "user"
+    assert messages[0].parts == [TextPart(content="Hello")]
+    assert messages[1].role == "assistant"
+    assert messages[1].parts == [TextPart(content="Hi there")]
+
+
+def test_to_input_messages_tuple_content_parts() -> None:
+    messages = to_input_messages(
+        [
+            {
+                "role": "user",
+                "content": (
+                    {"type": "text", "text": "Hello"},
+                    {"type": "image_url", "image_url": {"url": IMAGE_URL}},
+                ),
+            }
+        ]
+    )
+    assert len(messages) == 1
+    assert messages[0].role == "user"
+    assert messages[0].parts[0] == TextPart(content="Hello")
+    assert messages[0].parts[1] == UriPart(
+        mime_type=None, modality="image", uri=IMAGE_URL
+    )
+
+
+def test_task_to_input_messages_tuple_images() -> None:
+    messages = task_to_input_messages("Describe these", ("aVZCT1J3MEtHZ28=",))
+    assert len(messages) == 1
+    assert messages[0].role == "user"
+    assert messages[0].parts[0] == TextPart(content="Describe these")
+    assert isinstance(messages[0].parts[1], BlobPart)
+    assert messages[0].parts[1].modality == "image"
+
+
+def test_generate_with_tuple_messages(
+    instrument_with_content, span_exporter
+) -> None:
+    model = transformers_model()
+    tuple_messages = (
+        {
+            "role": "user",
+            "content": ({"type": "text", "text": "Where is the Louvre?"},),
+        },
+    )
+    model.generate(messages=tuple_messages)
+
+    (span,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
+    inputs = parse_messages(span, GenAI.GEN_AI_INPUT_MESSAGES)
+    assert inputs[0]["role"] == "user"
+    assert inputs[0]["parts"] == [
+        {"type": "text", "content": "Where is the Louvre?"}
+    ]
