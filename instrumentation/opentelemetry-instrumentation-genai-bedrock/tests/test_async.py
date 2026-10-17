@@ -15,6 +15,7 @@ import pytest_asyncio
 from aiobotocore.response import StreamingBody as AioStreamingBody
 from botocore.stub import Stubber
 
+from opentelemetry.instrumentation.genai.bedrock import BedrockInstrumentor
 from opentelemetry.instrumentation.genai.bedrock.patch import (
     patch_bedrock,
     unpatch_bedrock,
@@ -30,7 +31,18 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util.genai.handler import TelemetryHandler
+
+from .bedrock_endpoint import (
+    ANTHROPIC_REQUEST,
+    ANTHROPIC_RESPONSE,
+    INVOKE_MODEL,
+    OPERATIONS,
+    RecordingBody,
+    call_bedrock_async,
+    local_bedrock,
+)
 
 MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 NOVA_MODEL_ID = "amazon.nova-micro-v1:0"
@@ -1301,3 +1313,116 @@ async def test_async_invoke_model_embedding_abandoned_body(
     assert span.status.status_code == StatusCode.ERROR
     assert span.status.description == "abandoned stream"
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "_OTHER"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", OPERATIONS)
+async def test_file_like_body_io_is_the_sdk_s_own_async(
+    operation: str,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+) -> None:
+    """aiobotocore reads the body itself, and takes the proxy unchanged.
+
+    The body is a real ``io.IOBase``, which is what aiohttp requires of a
+    request body, so this also shows the proxy still passes that check.
+    """
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        uninstrumented = await call_bedrock_async(
+            endpoint, operation, RecordingBody(ANTHROPIC_REQUEST)
+        )
+
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            instrumented = await call_bedrock_async(
+                endpoint, operation, RecordingBody(ANTHROPIC_REQUEST)
+            )
+
+    assert instrumented.error == uninstrumented.error is None
+    assert instrumented.calls == uninstrumented.calls
+    assert instrumented.position == uninstrumented.position
+    assert instrumented.received == uninstrumented.received
+    assert instrumented.received == [ANTHROPIC_REQUEST]
+
+
+@pytest.mark.asyncio
+async def test_file_like_body_attributes_are_recorded_async(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The async path records the request attributes the body held."""
+    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = await call_bedrock_async(
+                endpoint, INVOKE_MODEL, RecordingBody(ANTHROPIC_REQUEST)
+            )
+
+    assert result.error is None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+
+
+@pytest.mark.asyncio
+async def test_file_like_embedding_body_attributes_are_recorded_async(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The async embedding path reads its request body the same way.
+
+    The response carries no embedding, so the dimension count can only have
+    come from the request body the SDK read.
+    """
+    request_body = json.dumps(
+        {
+            "inputText": "Hello world",
+            "dimensions": 512,
+            "embedding_types": ["float"],
+        }
+    ).encode()
+    response_body = json.dumps({"inputTextTokenCount": 3}).encode()
+
+    with local_bedrock([(200, response_body)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = await call_bedrock_async(
+                endpoint,
+                INVOKE_MODEL,
+                RecordingBody(request_body),
+                model_id=EMBEDDING_MODEL_ID,
+            )
+
+    assert result.error is None
+    span = span_exporter.get_finished_spans()[0]
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
+        == 512
+    )
+    assert span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_ENCODING_FORMATS
+    ] == ("float",)
