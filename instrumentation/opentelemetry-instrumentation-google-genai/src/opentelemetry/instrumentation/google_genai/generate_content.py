@@ -10,6 +10,8 @@ from typing import Any
 from google.genai.models import AsyncModels, Models
 from google.genai.models import t as transformers
 from google.genai.types import (
+    Candidate,
+    Content,
     ContentListUnion,
     ContentListUnionDict,
     GenerateContentConfig,
@@ -586,6 +588,41 @@ def _create_instrumented_generate_content(
     return instrumented_generate_content
 
 
+def _merge_streamed_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Merge the per-chunk candidates of a stream into one candidate per index.
+
+    Each streamed chunk carries a fragment of the response; adjacent text
+    fragments of the same kind are joined so a streamed response is reported
+    like the equivalent non-streamed one.
+    """
+    merged: dict[int, Candidate] = {}
+    for candidate in candidates:
+        index = candidate.index or 0
+        target = merged.get(index)
+        if target is None:
+            target = merged[index] = Candidate(index=candidate.index)
+        if candidate.finish_reason is not None:
+            target.finish_reason = candidate.finish_reason
+        if not candidate.content:
+            continue
+        if target.content is None:
+            target.content = Content(parts=[])
+        if candidate.content.role:
+            target.content.role = candidate.content.role
+        for part in candidate.content.parts or []:
+            last = target.content.parts[-1] if target.content.parts else None
+            if (
+                last is not None
+                and part.text is not None
+                and last.text is not None
+                and bool(part.thought) == bool(last.thought)
+            ):
+                last.text += part.text
+            else:
+                target.content.parts.append(part.model_copy())
+    return list(merged.values())
+
+
 class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
     def __init__(
         self,
@@ -614,7 +651,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
             and self._self_candidates
         ):
             self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
+                candidates=_merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -654,7 +691,7 @@ class AsyncGenerateContentStreamWrapper(
             and self._self_candidates
         ):
             self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
+                candidates=_merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 

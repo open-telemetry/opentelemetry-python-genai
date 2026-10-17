@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
+from unittest.mock import patch
 
 from google.genai.types import (
     GenerateContentConfig,
@@ -146,6 +147,20 @@ class StreamingTestCase(TestCase):
         self.assertEqual(responses[1].text, "Second response")
         self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_merges_streamed_chunks_into_one_output_message(self):
+        self.configure_valid_response(text="Hello")
+        self.configure_valid_response(text=", world")
+        self.generate_content(model="gemini-2.0-flash", contents="Hi")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"content":"Hello, world","type":"text"}],"finish_reason":"","name":null}]',
         )
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):
