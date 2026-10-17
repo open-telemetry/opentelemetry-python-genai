@@ -1,0 +1,1 @@
+Initial Sentence Transformers instrumentation emitting `embeddings` spans for `SentenceTransformer.encode`, `encode_query`, and `encode_document`.
