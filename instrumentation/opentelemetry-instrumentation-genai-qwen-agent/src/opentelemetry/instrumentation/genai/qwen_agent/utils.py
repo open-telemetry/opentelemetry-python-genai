@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -62,14 +63,16 @@ def _field_value(value: Any, *names: str) -> Any:
     return None
 
 
-def _extract_content_text(content: str | list[QwenContentItem] | None) -> str:
+def _extract_content_text(
+    content: str | Sequence[QwenContentItem] | None,
+) -> str:
     """Extract text from a qwen-agent Message content field.
 
     Content can be a plain string or a list of ContentItem.
     """
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
+    if isinstance(content, (list, tuple)):
         texts: list[str] = []
         for item in content:
             text = getattr(item, "text", None)
@@ -80,7 +83,7 @@ def _extract_content_text(content: str | list[QwenContentItem] | None) -> str:
 
 
 def find_tool_call_id(
-    messages: list[QwenMessage] | None, tool_name: str
+    messages: Sequence[QwenMessage] | None, tool_name: str
 ) -> str | None:
     """Best-effort lookup of the current tool call's function id.
 
@@ -89,7 +92,7 @@ def find_tool_call_id(
     ``tool_name`` that has no function-result message answering its
     ``function_id`` yet.
     """
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         return None
 
     responded: set[str] = set()
@@ -141,13 +144,13 @@ def _tool_call_response_id(msg: Any) -> str:
 
 
 def convert_to_input_messages(
-    messages: QwenMessage | list[QwenMessage] | None,
+    messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> list[InputMessage]:
     """Convert a qwen-agent Message list to GenAI InputMessage objects."""
     if not messages:
         return []
 
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         messages = [messages]
 
     input_messages: list[InputMessage] = []
@@ -186,13 +189,13 @@ def convert_to_input_messages(
 
 
 def convert_to_output_messages(
-    messages: QwenMessage | list[QwenMessage] | None,
+    messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> list[OutputMessage]:
     """Convert qwen-agent response messages to GenAI OutputMessage objects."""
     if not messages:
         return []
 
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         messages = [messages]
 
     output_messages: list[OutputMessage] = []
@@ -231,7 +234,7 @@ def convert_to_output_messages(
 
 
 def convert_to_final_output_messages(
-    messages: QwenMessage | list[QwenMessage] | None,
+    messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> list[OutputMessage]:
     """Convert only the final qwen-agent answer to OutputMessage objects.
 
@@ -242,7 +245,7 @@ def convert_to_final_output_messages(
     if not messages:
         return []
 
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         messages = [messages]
 
     for msg in reversed(messages):
@@ -268,7 +271,7 @@ def convert_to_final_output_messages(
 def create_agent_invocation(
     handler: TelemetryHandler,
     agent_instance: Any,
-    messages: QwenMessage | list[QwenMessage] | None,
+    messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> LocalAgentInvocation:
     """Create and start an AgentInvocation for Agent.run()."""
     llm_instance = getattr(agent_instance, "llm", None)

@@ -12,9 +12,14 @@ import pytest
 from qwen_agent.agent import Agent
 from qwen_agent.agents import Assistant
 from qwen_agent.llm import base as qwen_llm_base
-from qwen_agent.llm.schema import FunctionCall, Message
+from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
+from opentelemetry.instrumentation.genai.qwen_agent.utils import (
+    convert_to_input_messages,
+    convert_to_output_messages,
+    find_tool_call_id,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -395,3 +400,131 @@ def test_nested_agent_runs_produce_nested_spans(
     assert len(child_spans) == 1
     assert child_spans[0].parent is not None
     assert child_spans[0].parent.span_id == parent_spans[0].context.span_id
+
+
+def test_convert_to_input_messages_handles_tuples():
+    """convert_to_input_messages accepts tuples of messages and tuple content items."""
+    messages = (
+        Message(
+            role="user",
+            content=(ContentItem(text="Hello"), ContentItem(text="world")),
+        ),
+        Message(
+            role="assistant",
+            content="",
+            function_call=FunctionCall(
+                name="get_weather", arguments='{"city": "Paris"}'
+            ),
+        ),
+        Message(
+            role="function",
+            name="get_weather",
+            content="Sunny, 20C",
+            extra={"function_id": "call_1"},
+        ),
+        {
+            "role": "user",
+            "content": "Final note",
+        },
+    )
+    result = convert_to_input_messages(messages)
+    assert len(result) == 4
+    assert result[0].role == "user"
+    assert len(result[0].parts) == 1
+    assert result[0].parts[0].content == "Hello\nworld"
+    assert result[1].role == "assistant"
+    assert result[1].parts[0].name == "get_weather"
+    assert result[1].parts[0].arguments == {"city": "Paris"}
+    assert result[2].role == "function"
+    assert result[2].parts[0].response == "Sunny, 20C"
+    assert result[3].role == "user"
+    assert result[3].parts[0].content == "Final note"
+
+
+def test_convert_to_output_messages_handles_tuples():
+    """convert_to_output_messages accepts tuples of messages and tuple content items."""
+    messages = (
+        Message(
+            role="assistant",
+            content=(ContentItem(text="Thinking"), ContentItem(text="done")),
+        ),
+        Message(
+            role="assistant",
+            content="",
+            function_call=FunctionCall(name="calc", arguments='{"op": "add"}'),
+        ),
+    )
+    result = convert_to_output_messages(messages)
+    assert len(result) == 2
+    assert result[0].role == "assistant"
+    assert result[0].finish_reason == "stop"
+    assert result[0].parts[0].content == "Thinking\ndone"
+    assert result[1].role == "assistant"
+    assert result[1].finish_reason == "tool_call"
+    assert result[1].parts[0].name == "calc"
+
+
+def test_find_tool_call_id_handles_tuples():
+    """find_tool_call_id resolves pending function id when messages are passed as a tuple."""
+    history = (
+        Message(role="user", content="run tool"),
+        Message(
+            role="assistant",
+            content="",
+            function_call=FunctionCall(name="lookup", arguments='{"id": 42}'),
+            extra={"function_id": "call_lookup_42"},
+        ),
+    )
+    assert find_tool_call_id(history, "lookup") == "call_lookup_42"
+
+    answered = history + (
+        Message(
+            role="function",
+            name="lookup",
+            content="result",
+            extra={"function_id": "call_lookup_42"},
+        ),
+    )
+    assert find_tool_call_id(answered, "lookup") is None
+
+
+def test_agent_run_with_tuple_messages(span_exporter, instrument_with_content):
+    """Agent.run() handles messages and yielded responses provided as tuples."""
+    agent = _StubAgent.create(name="TupleAgentBot", llm=_StubLLM())
+
+    input_messages = (
+        Message(
+            role="user",
+            content=(
+                ContentItem(text="Hello"),
+                ContentItem(text="from tuple"),
+            ),
+        ),
+    )
+    response_messages = (
+        Message(role="assistant", content="Answer from tuple"),
+    )
+
+    def fake_run(messages, **kwargs):
+        yield response_messages
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        list(agent.run(input_messages))
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent TupleAgentBot")
+    assert len(agent_spans) == 1
+    attrs = dict(agent_spans[0].attributes or {})
+
+    input_data = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    assert len(input_data) == 1
+    assert input_data[0]["role"] == "user"
+    assert input_data[0]["parts"] == [
+        {"content": "Hello\nfrom tuple", "type": "text"}
+    ]
+
+    output_data = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    assert len(output_data) == 1
+    assert output_data[0]["role"] == "assistant"
+    assert output_data[0]["parts"] == [
+        {"content": "Answer from tuple", "type": "text"}
+    ]
