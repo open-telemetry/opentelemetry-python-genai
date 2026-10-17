@@ -6,6 +6,7 @@
 
 import inspect
 import json
+from collections import UserList
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
+    convert_to_final_output_messages,
     convert_to_input_messages,
     convert_to_output_messages,
     find_tool_call_id,
@@ -527,4 +529,131 @@ def test_agent_run_with_tuple_messages(span_exporter, instrument_with_content):
     assert output_data[0]["role"] == "assistant"
     assert output_data[0]["parts"] == [
         {"content": "Answer from tuple", "type": "text"}
+    ]
+
+
+def test_convert_to_input_messages_handles_raw_dict_tuple_content():
+    """convert_to_input_messages extracts text from raw dictionary content items in a tuple."""
+    messages = (
+        {
+            "role": "user",
+            "content": ({"text": "Hello"}, {"text": "raw dict world"}),
+        },
+        Message(role="user", content=({"text": "Second question"},)),
+    )
+    result = convert_to_input_messages(messages)
+    assert len(result) == 2
+    assert result[0].role == "user"
+    assert result[0].parts[0].content == "Hello\nraw dict world"
+    assert result[1].role == "user"
+    assert result[1].parts[0].content == "Second question"
+
+
+def test_conversion_helpers_handle_user_list_sequences():
+    """General Sequence implementations like UserList are supported across helpers."""
+    input_msgs = UserList(
+        [
+            Message(
+                role="user",
+                content=UserList(
+                    [ContentItem(text="Hello"), {"text": "from UserList"}]
+                ),
+            ),
+            Message(
+                role="assistant",
+                content="Response text",
+            ),
+        ]
+    )
+    converted_input = convert_to_input_messages(input_msgs)
+    assert len(converted_input) == 2
+    assert converted_input[0].role == "user"
+    assert converted_input[0].parts[0].content == "Hello\nfrom UserList"
+    assert converted_input[1].role == "assistant"
+    assert converted_input[1].parts[0].content == "Response text"
+
+    output_msgs = UserList(
+        [
+            Message(
+                role="assistant",
+                content=UserList([{"text": "Part A"}, {"text": "Part B"}]),
+            ),
+        ]
+    )
+    converted_output = convert_to_output_messages(output_msgs)
+    assert len(converted_output) == 1
+    assert converted_output[0].role == "assistant"
+    assert converted_output[0].parts[0].content == "Part A\nPart B"
+
+    final_output = convert_to_final_output_messages(output_msgs)
+    assert len(final_output) == 1
+    assert final_output[0].parts[0].content == "Part A\nPart B"
+
+    tool_history = UserList(
+        [
+            Message(role="user", content="fetch data"),
+            Message(
+                role="assistant",
+                content="",
+                function_call=FunctionCall(name="fetch", arguments="{}"),
+                extra={"function_id": "call_seq_1"},
+            ),
+        ]
+    )
+    assert find_tool_call_id(tool_history, "fetch") == "call_seq_1"
+
+    answered_history = UserList(
+        list(tool_history)
+        + [
+            Message(
+                role="function",
+                name="fetch",
+                content="result",
+                extra={"function_id": "call_seq_1"},
+            )
+        ]
+    )
+    assert find_tool_call_id(answered_history, "fetch") is None
+
+
+def test_agent_run_with_user_list_messages(
+    span_exporter, instrument_with_content
+):
+    """Agent.run() handles messages provided as general Sequence like UserList."""
+    agent = _StubAgent.create(name="UserListAgentBot", llm=_StubLLM())
+
+    input_messages = UserList(
+        [
+            Message(
+                role="user",
+                content=UserList([{"text": "Hello UserList"}]),
+            ),
+        ]
+    )
+    response_messages = UserList(
+        [
+            Message(role="assistant", content="Answer from UserList"),
+        ]
+    )
+
+    def fake_run(messages, **kwargs):
+        yield response_messages
+
+    with patch.object(_StubAgent, "_run", side_effect=fake_run):
+        list(agent.run(input_messages))
+
+    agent_spans = _spans_named(span_exporter, "invoke_agent UserListAgentBot")
+    assert len(agent_spans) == 1
+    attrs = dict(agent_spans[0].attributes or {})
+
+    input_data = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    assert len(input_data) == 1
+    assert input_data[0]["parts"] == [
+        {"content": "Hello UserList", "type": "text"}
+    ]
+
+    output_data = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    assert len(output_data) == 1
+    assert output_data[0]["parts"] == [
+        {"content": "Answer from UserList", "type": "text"}
     ]

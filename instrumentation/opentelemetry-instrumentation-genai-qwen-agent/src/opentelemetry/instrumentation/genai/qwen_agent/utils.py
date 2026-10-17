@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -33,6 +33,13 @@ if TYPE_CHECKING:
     QwenContentItem = ContentItem | dict[str, Any]
 
 _logger = logging.getLogger(__name__)
+
+
+def _is_sequence(val: object) -> bool:
+    """Check if a value is a non-string, non-mapping sequence."""
+    return isinstance(val, Sequence) and not isinstance(
+        val, (str, bytes, bytearray, Mapping)
+    )
 
 
 def _field_value(value: Any, *names: str) -> Any:
@@ -72,12 +79,12 @@ def _extract_content_text(
     """
     if isinstance(content, str):
         return content
-    if isinstance(content, (list, tuple)):
+    if _is_sequence(content):
         texts: list[str] = []
         for item in content:
-            text = getattr(item, "text", None)
+            text = _field_value(item, "text")
             if text is not None:
-                texts.append(text)
+                texts.append(str(text))
         return "\n".join(texts)
     return str(content) if content else ""
 
@@ -92,7 +99,7 @@ def find_tool_call_id(
     ``tool_name`` that has no function-result message answering its
     ``function_id`` yet.
     """
-    if not isinstance(messages, (list, tuple)):
+    if not _is_sequence(messages):
         return None
 
     responded: set[str] = set()
@@ -146,11 +153,11 @@ def _tool_call_response_id(msg: Any) -> str:
 def convert_to_input_messages(
     messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> list[InputMessage]:
-    """Convert a qwen-agent Message list to GenAI InputMessage objects."""
+    """Convert a qwen-agent Message sequence to GenAI InputMessage objects."""
     if not messages:
         return []
 
-    if not isinstance(messages, (list, tuple)):
+    if not _is_sequence(messages):
         messages = [messages]
 
     input_messages: list[InputMessage] = []
@@ -195,7 +202,7 @@ def convert_to_output_messages(
     if not messages:
         return []
 
-    if not isinstance(messages, (list, tuple)):
+    if not _is_sequence(messages):
         messages = [messages]
 
     output_messages: list[OutputMessage] = []
@@ -245,7 +252,7 @@ def convert_to_final_output_messages(
     if not messages:
         return []
 
-    if not isinstance(messages, (list, tuple)):
+    if not _is_sequence(messages):
         messages = [messages]
 
     for msg in reversed(messages):
