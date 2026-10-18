@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from opentelemetry.util.genai.handler import TelemetryHandler
@@ -15,22 +16,24 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 # so it stays a constant.
 _PROVIDER = "huggingface"
 
+# On 6.x, ``save`` builds the model card's usage snippet by calling ``encode``,
+# which is not an embedding request made by the caller.
+_in_save: ContextVar[bool] = ContextVar("_in_save", default=False)
+
 
 def _model_name(instance: Any) -> str | None:
     """Best-effort model identifier for a ``SentenceTransformer`` instance.
 
-    Recent releases expose it as ``model_card_data.base_model``. None of the
-    candidates are guaranteed, so every access is defensive and ``None`` is an
-    acceptable result.
+    ``base_model`` holds the Hub model a model was loaded from or fine-tuned
+    on, and ``model_id`` the Hub id it was saved or pushed under. The card's
+    ``model_name`` is not used: it is a display name that ``save`` sets to
+    ``SentenceTransformer`` when there is no base model.
     """
     card = getattr(instance, "model_card_data", None)
-    for attr in ("base_model", "model_name", "model_id"):
+    for attr in ("base_model", "model_id"):
         name = getattr(card, attr, None)
         if isinstance(name, str) and name:
             return name
-    name = getattr(instance, "model_name_or_path", None)
-    if isinstance(name, str) and name:
-        return name
     return None
 
 
@@ -61,6 +64,9 @@ def wrap_encode(
     handler: TelemetryHandler,
 ) -> Any:
     """Wrap ``SentenceTransformer.encode`` in an ``embeddings`` invocation."""
+    if _in_save.get():
+        return wrapped(*args, **kwargs)
+
     invocation = handler.embedding(
         _PROVIDER,
         request_model=_model_name(instance),
@@ -74,3 +80,20 @@ def wrap_encode(
     invocation.dimension_count = _dimension_count(instance)
     invocation.stop()
     return result
+
+
+def wrap_save(
+    wrapped: Any,
+    instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Wrap ``SentenceTransformer.save`` so its internal ``encode`` calls are not recorded.
+
+    ``save_pretrained`` and ``push_to_hub`` delegate to ``save``.
+    """
+    token = _in_save.set(True)
+    try:
+        return wrapped(*args, **kwargs)
+    finally:
+        _in_save.reset(token)

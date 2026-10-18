@@ -19,10 +19,11 @@ def test_instrumentation_dependencies():
     )
 
 
-def test_instrument_wraps_and_uninstrument_restores_encode(
+def test_instrument_wraps_and_uninstrument_restores_methods(
     tracer_provider, logger_provider, meter_provider
 ):
     original_encode = SentenceTransformer.encode
+    original_save = SentenceTransformer.save
     instrumentor = SentenceTransformersInstrumentor()
 
     instrumentor.instrument(
@@ -32,10 +33,12 @@ def test_instrument_wraps_and_uninstrument_restores_encode(
     )
     try:
         assert SentenceTransformer.encode is not original_encode
+        assert SentenceTransformer.save is not original_save
     finally:
         instrumentor.uninstrument()
 
     assert SentenceTransformer.encode is original_encode
+    assert SentenceTransformer.save is original_save
 
 
 def test_uninstrument_stops_span_creation(

@@ -45,6 +45,7 @@ from opentelemetry.instrumentation.genai.sentence_transformers.package import (
 )
 from opentelemetry.instrumentation.genai.sentence_transformers.patch import (
     wrap_encode,
+    wrap_save,
 )
 from opentelemetry.instrumentation.genai.sentence_transformers.version import (
     __version__,
@@ -119,6 +120,7 @@ class SentenceTransformersInstrumentor(BaseInstrumentor):
                     f"{_CLASS}.{method}",
                     wrapper,
                 )
+        wrap_function_wrapper(_MODULE, f"{_CLASS}.save", wrap_save)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Sentence Transformers instrumentation."""
@@ -128,3 +130,4 @@ class SentenceTransformersInstrumentor(BaseInstrumentor):
         for method in _ENCODE_METHODS:
             if hasattr(cls, method):
                 unwrap(cls, method)
+        unwrap(cls, "save")

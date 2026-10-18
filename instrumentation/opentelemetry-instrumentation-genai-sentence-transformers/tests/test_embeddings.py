@@ -95,6 +95,65 @@ def test_unknown_model_name_falls_back_to_the_operation_name(
     assert GenAI.GEN_AI_REQUEST_MODEL not in span.attributes
 
 
+def test_saved_model_without_a_base_model_records_no_request_model(
+    instrument_no_content, span_exporter, tmp_path
+):
+    model = sentence_transformer(model_name=None)
+    model.save(str(tmp_path))
+
+    model.encode("hello")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "embeddings"
+    assert GenAI.GEN_AI_REQUEST_MODEL not in span.attributes
+
+
+def test_name_given_to_save_is_the_request_model(
+    instrument_no_content, span_exporter, tmp_path
+):
+    model = sentence_transformer(model_name=None)
+    model.save(str(tmp_path), model_name="my-org/my-model")
+
+    model.encode("hello")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_REQUEST_MODEL] == "my-org/my-model"
+
+
+@pytest.mark.parametrize("method", ["save", "save_pretrained"])
+def test_saving_a_model_records_no_span(
+    instrument_no_content, span_exporter, tmp_path, method
+):
+    getattr(sentence_transformer(), method)(str(tmp_path))
+
+    assert span_exporter.get_finished_spans() == ()
+
+
+def test_encode_after_save_is_recorded(
+    instrument_no_content, span_exporter, tmp_path
+):
+    model = sentence_transformer()
+    model.save(str(tmp_path))
+
+    model.encode("hello")
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_encode_after_a_failed_save_is_recorded(
+    instrument_no_content, span_exporter, tmp_path
+):
+    model = sentence_transformer()
+    not_a_directory = tmp_path / "file"
+    not_a_directory.write_text("")
+
+    with pytest.raises(OSError):
+        model.save(str(not_a_directory))
+    model.encode("hello")
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
 def test_runtime_error_is_recorded_and_reraised(
     instrument_no_content, span_exporter
 ):
