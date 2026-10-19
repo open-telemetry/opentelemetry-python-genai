@@ -1712,6 +1712,24 @@ class TestMakeLastOutputMessage:
         assert len(result) == 1
         assert result[0].parts[0].content == "final answer"
 
+    @pytest.mark.parametrize(
+        "trailing_entry",
+        [
+            HumanMessage(content="next question"),
+            ToolMessage(content="tool result", tool_call_id="call_1"),
+            {"role": "not_a_real_role", "content": "dropped"},
+            {"content": "no role key"},
+            ("human",),
+            None,
+        ],
+    )
+    def test_skips_trailing_non_output_entry(self, trailing_entry):
+        msgs = [AIMessage(content="final answer"), trailing_entry]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
     def test_accepts_generator_messages(self):
         msgs = (AIMessage(content=text) for text in ("intermediate", "final"))
         result = make_last_output_message({"messages": msgs})
