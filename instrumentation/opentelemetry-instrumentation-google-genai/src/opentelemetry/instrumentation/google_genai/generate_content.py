@@ -620,7 +620,7 @@ def _merge_streamed_candidates(candidates: list[Candidate]) -> list[Candidate]:
                 last.text += part.text
             else:
                 target.content.parts.append(part.model_copy())
-    return list(merged.values())
+    return [merged[index] for index in sorted(merged)]
 
 
 class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):

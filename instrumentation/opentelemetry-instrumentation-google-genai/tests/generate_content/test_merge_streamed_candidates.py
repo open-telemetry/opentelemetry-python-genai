@@ -78,3 +78,14 @@ def test_contentless_candidate_produces_no_output_message():
 
     assert merged == [Candidate(index=0, finish_reason=FinishReason.SAFETY)]
     assert to_output_messages(candidates=merged) == []
+
+
+def test_orders_candidates_by_index():
+    merged = _merge_streamed_candidates(
+        [
+            _candidate(Part(text="second"), index=1),
+            _candidate(Part(text="first"), index=0),
+        ]
+    )
+
+    assert [candidate.index for candidate in merged] == [0, 1]
