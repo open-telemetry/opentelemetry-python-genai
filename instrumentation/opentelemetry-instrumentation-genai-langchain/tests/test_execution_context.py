@@ -14,14 +14,16 @@ from importlib import import_module, invalidate_caches
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, TypedDict
+from unittest import mock
 
 import httpx
 import pytest
 import pytest_asyncio
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import AsyncCallbackManager, BaseCallbackHandler
 from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
 from langchain_core.runnables import base as runnables_base
@@ -29,6 +31,7 @@ from langchain_core.tools import BaseTool, StructuredTool, Tool
 from langchain_core.vectorstores import VectorStore
 from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI, OpenAI
+from tests._api import FakeChatModel, FakeRetriever, invoke
 
 from opentelemetry import baggage, context, trace
 from opentelemetry.instrumentation.genai.langchain import (
@@ -40,7 +43,11 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
 )
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
@@ -786,6 +793,246 @@ def test_uninstrument_restores_the_twice_wrapped_graph_stream(
             assert inner.__wrapped__ is original
     for name, original in originals.items():
         assert vars(Pregel)[name] is original
+
+
+class _Recorder(BaseCallbackHandler):
+    def __init__(self):
+        self.starts = 0
+
+    def on_chain_start(self, *args, **kwargs):
+        self.starts += 1
+
+    on_chat_model_start = on_chain_start
+    on_tool_start = on_chain_start
+    on_retriever_start = on_chain_start
+
+
+class _EqualRecorder(_Recorder):
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, OpenTelemetryLangChainCallbackHandler):
+            return not other._enabled
+        return self is other
+
+
+def _runnable(operation):
+    if operation == "chat":
+        return FakeChatModel(responses=[AIMessage(content="answer")])
+    if operation == "tool":
+        return Tool(
+            name="echo", description="Echo the input", func=lambda value: value
+        )
+    if operation == "retrieval":
+        return FakeRetriever(documents=[Document(page_content="answer")])
+    return RunnableLambda(lambda value: value).with_config(
+        run_name="test_agent" if operation == "agent" else "test_workflow"
+    )
+
+
+def _metric_counts(reader):
+    data = reader.get_metrics_data()
+    if data is None:
+        return {}
+    return {
+        metric.name: sum(point.count for point in metric.data.data_points)
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "operation", ["workflow", "agent", "chat", "tool", "retrieval"]
+)
+async def test_cached_callbacks_stop_emitting_after_uninstrument(
+    asynchronous,
+    operation,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
+    log_exporter,
+    metric_reader,
+):
+    recorder = _Recorder()
+    hook = mock.Mock()
+    runnable = _runnable(operation)
+    manager_type = AsyncCallbackManager if asynchronous else CallbackManager
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_AND_EVENT",
+        completion_hook=hook,
+    ):
+        callbacks = manager_type.configure(inheritable_callbacks=[recorder])
+        handler = next(
+            h
+            for h in callbacks.handlers
+            if isinstance(h, OpenTelemetryLangChainCallbackHandler)
+        )
+        await invoke(
+            runnable, "before", asynchronous, {"callbacks": callbacks}
+        )
+        assert len(span_exporter.get_finished_spans()) == 1
+        assert recorder.starts == 1
+
+    span_exporter.clear()
+    log_exporter.clear()
+    hook.reset_mock()
+    counts = _metric_counts(metric_reader)
+    assert counts
+    for manager in (callbacks, callbacks.copy()):
+        await invoke(runnable, "after", asynchronous, {"callbacks": manager})
+
+    assert not span_exporter.get_finished_spans()
+    assert not log_exporter.get_finished_logs()
+    assert _metric_counts(metric_reader) == counts
+    hook.on_completion.assert_not_called()
+    assert recorder.starts == 3
+    assert not handler._invocation_manager._invocations
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("retained", ["manager", "copy", "handlers"])
+@pytest.mark.parametrize(
+    "recorder_type",
+    [_Recorder, _EqualRecorder],
+    ids=["identity", "custom-equality"],
+)
+async def test_reinstrument_replaces_stale_callbacks(
+    asynchronous,
+    retained,
+    recorder_type,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
+):
+    recorder = recorder_type()
+    old_hook = mock.Mock()
+    new_hook = mock.Mock()
+    runnable = _runnable("chat")
+    manager_type = AsyncCallbackManager if asynchronous else CallbackManager
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        completion_hook=old_hook,
+    ):
+        callbacks = manager_type.configure(inheritable_callbacks=[recorder])
+        if retained == "copy":
+            callbacks = callbacks.copy()
+        elif retained == "handlers":
+            callbacks = callbacks.handlers.copy()
+        await invoke(
+            runnable, "before", asynchronous, {"callbacks": callbacks}
+        )
+
+    span_exporter.clear()
+    old_hook.reset_mock()
+    new_exporter = InMemorySpanExporter()
+    new_provider = TracerProvider()
+    new_provider.add_span_processor(SimpleSpanProcessor(new_exporter))
+    try:
+        with instrument(
+            LangChainInstrumentor(),
+            tracer_provider=new_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+            completion_hook=new_hook,
+        ):
+            await invoke(
+                runnable, "after", asynchronous, {"callbacks": callbacks}
+            )
+
+        assert not span_exporter.get_finished_spans()
+        assert len(new_exporter.get_finished_spans()) == 1
+        old_hook.on_completion.assert_not_called()
+        new_hook.on_completion.assert_called_once()
+        assert recorder.starts == 2
+    finally:
+        new_provider.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "error"])
+@pytest.mark.parametrize(
+    "reinstrument", [False, True], ids=["disabled", "reinstrumented"]
+)
+async def test_inflight_stream_finishes_after_uninstrument(
+    asynchronous,
+    fail,
+    reinstrument,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
+):
+    error = RuntimeError("stream failed")
+    model = FakeChatModel(
+        responses=[AIMessage(content="answer")],
+        stream_error=error if fail else None,
+    )
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    ):
+        manager_type = (
+            AsyncCallbackManager if asynchronous else CallbackManager
+        )
+        callbacks = manager_type.configure()
+        config = {"callbacks": callbacks}
+        stream = (
+            model.astream("hello", config=config)
+            if asynchronous
+            else model.stream("hello", config=config)
+        )
+        if asynchronous:
+            assert (await anext(stream)).content == "answer"
+        else:
+            assert next(stream).content == "answer"
+        assert not span_exporter.get_finished_spans()
+
+    async def drain():
+        if asynchronous:
+            return [chunk async for chunk in stream]
+        return list(stream)
+
+    with ExitStack() as stack:
+        if reinstrument:
+            stack.enter_context(
+                instrument(
+                    LangChainInstrumentor(),
+                    tracer_provider=tracer_provider,
+                    meter_provider=meter_provider,
+                    logger_provider=logger_provider,
+                )
+            )
+            await invoke(model, "new run", asynchronous, config)
+            assert len(span_exporter.get_finished_spans()) == 1
+        if fail:
+            with pytest.raises(RuntimeError) as raised:
+                await drain()
+            assert raised.value is error
+        else:
+            await drain()
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == (2 if reinstrument else 1)
+    span = spans[-1]
+    assert span.status.status_code == (
+        StatusCode.ERROR if fail else StatusCode.UNSET
+    )
+    if not fail:
+        assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
 
 
 def _uninstall_langgraph(monkeypatch, tmp_path, keep: str | None) -> None:

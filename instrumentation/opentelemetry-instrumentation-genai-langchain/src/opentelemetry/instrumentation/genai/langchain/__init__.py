@@ -60,6 +60,7 @@ class LangChainInstrumentor(BaseInstrumentor):
     """
 
     _execution_context: _ExecutionContext | None = None
+    _callback_handler: OpenTelemetryLangChainCallbackHandler | None = None
 
     def __init__(
         self,
@@ -91,6 +92,7 @@ class LangChainInstrumentor(BaseInstrumentor):
             telemetry_handler=telemetry_handler,
             invocation_manager=invocation_manager,
         )
+        self._callback_handler = handler
 
         wrap_function_wrapper(
             "langchain_core.callbacks",
@@ -123,6 +125,9 @@ class LangChainInstrumentor(BaseInstrumentor):
         """
         Cleanup instrumentation (unwrap).
         """
+        if self._callback_handler is not None:
+            self._callback_handler._enabled = False
+            self._callback_handler = None
         unwrap("langchain_core.callbacks.base.BaseCallbackManager", "__init__")
         # The agent entry points wrap last, over the execution boundary, so
         # they come off first.
@@ -157,6 +162,27 @@ class _BaseCallbackManagerInitWrapper:
         kwargs: dict[str, Any],
     ):
         wrapped(*args, **kwargs)
+        inactive_handler_ids = {
+            id(handler)
+            for handler in (
+                *instance.handlers,
+                *instance.inheritable_handlers,
+            )
+            if isinstance(handler, OpenTelemetryLangChainCallbackHandler)
+            and not handler._enabled
+        }
+        if inactive_handler_ids:
+            # Live run managers can share these lists and must still finish.
+            instance.handlers = [
+                h
+                for h in instance.handlers
+                if id(h) not in inactive_handler_ids
+            ]
+            instance.inheritable_handlers = [
+                h
+                for h in instance.inheritable_handlers
+                if id(h) not in inactive_handler_ids
+            ]
         if not any(
             isinstance(handler, OpenTelemetryLangChainCallbackHandler)
             for handler in instance.inheritable_handlers
