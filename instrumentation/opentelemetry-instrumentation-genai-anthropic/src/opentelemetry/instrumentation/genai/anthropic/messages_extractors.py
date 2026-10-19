@@ -135,17 +135,18 @@ def get_system_instruction(
         return []
     if isinstance(system, str):
         return [TextPart(content=system)] if system else []
-    return [
-        TextPart(content=block["text"])
-        for block in system
-        if block.get("text")
-    ]
+    parts: list[SystemInstructionPart] = []
+    for block in system:
+        text = _get_field(block, "text")
+        if isinstance(text, str) and text:
+            parts.append(TextPart(content=text))
+    return parts
 
 
-def _tool_field(tool: object, key: str) -> object:
-    if isinstance(tool, Mapping):
-        return cast("Mapping[str, object]", tool).get(key)
-    return getattr(tool, key, None)
+def _get_field(value: object, key: str) -> object:
+    if isinstance(value, Mapping):
+        return cast("Mapping[str, object]", value).get(key)
+    return getattr(value, key, None)
 
 
 def get_tool_definitions(
@@ -164,11 +165,11 @@ def get_tool_definitions(
 
     definitions: list[ToolDefinition] = []
     for tool in tools:
-        name = _tool_field(tool, "name")
-        tool_type = _tool_field(tool, "type")
-        input_schema = _tool_field(tool, "input_schema")
+        name = _get_field(tool, "name")
+        tool_type = _get_field(tool, "type")
+        input_schema = _get_field(tool, "input_schema")
         if input_schema is not None or tool_type in (None, "custom"):
-            description = _tool_field(tool, "description")
+            description = _get_field(tool, "description")
             definitions.append(
                 FunctionToolDefinition(
                     name=name if isinstance(name, str) else "",

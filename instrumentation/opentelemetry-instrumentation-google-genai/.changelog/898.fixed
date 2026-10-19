@@ -1,0 +1,1 @@
+Forward the caller's config unchanged when a ``GenerateContentConfig`` dict cannot be parsed, instead of replacing it with an empty config; the fallback is logged at debug level.

@@ -177,12 +177,51 @@ class NonStreamingTestCase(TestCase):
         self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
         return self.otel.get_span_named("generate_content gemini-2.0-flash")
 
+    def _assert_contents_do_not_fail_the_call(self, contents):
+        self.configure_valid_response(text="Yep, it works!")
+        response = self.generate_content(
+            model="gemini-2.0-flash", contents=contents
+        )
+        self.assertEqual(response.text, "Yep, it works!")
+        self.otel.assert_has_span_named("generate_content gemini-2.0-flash")
+
+    def test_malformed_contents_do_not_fail_the_call(self):
+        # Content capture converted `contents` before the SDK saw them, and
+        # that conversion raised on None.
+        self._assert_contents_do_not_fail_the_call(None)
+
+    def test_empty_contents_do_not_fail_the_call(self):
+        self._assert_contents_do_not_fail_the_call([])
+
     def test_instrumentation_does_not_break_core_functionality(self):
         self.configure_valid_response(text="Yep, it works!")
         response = self.generate_content(
             model="gemini-2.0-flash", contents="Does this work?"
         )
         self.assertEqual(response.text, "Yep, it works!")
+
+    def test_unparsable_config_dict_reaches_the_engine(self):
+        # The SDK itself rejects a config dict it cannot parse, so the
+        # instrumented wrapper must forward the caller's dict unchanged
+        # instead of substituting an empty config. Running from the shared
+        # base covers all four instrumented call sites.
+        self.configure_valid_response(text="Yep, it works!")
+        config = {"not_a_real_field": 1}
+        self.generate_content(
+            model="gemini-2.0-flash",
+            contents="Some input prompt",
+            config=config,
+        )
+        calls = [
+            engine.call_args
+            for engine in (
+                self.mock_generate_content,
+                self.mock_generate_content_stream,
+            )
+            if engine.call_args is not None
+        ]
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(calls[0].kwargs["config"], config)
 
     def test_tuple_contents(self):
         self.configure_valid_response(text="Yep, it works!")

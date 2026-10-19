@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
@@ -239,25 +240,43 @@ def _prepare_output_messages(
     return output_messages
 
 
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, float):
+        return value
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and abs(value) <= sys.float_info.max
+    ):
+        return float(value)
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
 def _apply_request_parameters(
     invocation: InferenceInvocation,
     kwargs: dict[str, Any],
     capture_content: bool,
 ) -> None:
     if (temp := get_value(kwargs.get("temperature"))) is not None:
-        invocation.temperature = float(temp)
+        invocation.temperature = _as_float(temp)
     if (top_p := get_value(kwargs.get("top_p"))) is not None:
-        invocation.top_p = float(top_p)
+        invocation.top_p = _as_float(top_p)
     elif (p := get_value(kwargs.get("p"))) is not None:
-        invocation.top_p = float(p)
+        invocation.top_p = _as_float(p)
     if (top_k := get_value(kwargs.get("top_k"))) is not None:
-        invocation.top_k = int(top_k)
+        invocation.top_k = _as_int(top_k)
     if (max_tokens := get_value(kwargs.get("max_tokens"))) is not None:
-        invocation.max_tokens = int(max_tokens)
+        invocation.max_tokens = _as_int(max_tokens)
     elif (
         max_completion_tokens := get_value(kwargs.get("max_completion_tokens"))
     ) is not None:
-        invocation.max_tokens = int(max_completion_tokens)
+        invocation.max_tokens = _as_int(max_completion_tokens)
     if (stop := get_value(kwargs.get("stop"))) is not None:
         if isinstance(stop, str):
             invocation.stop_sequences = [stop]
@@ -268,13 +287,13 @@ def _apply_request_parameters(
     if (
         presence_penalty := get_value(kwargs.get("presence_penalty"))
     ) is not None:
-        invocation.presence_penalty = float(presence_penalty)
+        invocation.presence_penalty = _as_float(presence_penalty)
     if (
         frequency_penalty := get_value(kwargs.get("frequency_penalty"))
     ) is not None:
-        invocation.frequency_penalty = float(frequency_penalty)
+        invocation.frequency_penalty = _as_float(frequency_penalty)
     if (seed := get_value(kwargs.get("seed"))) is not None:
-        invocation.seed = int(seed)
+        invocation.seed = _as_int(seed)
     if (choice_count := get_value(kwargs.get("n"))) is not None:
         if isinstance(choice_count, int) and choice_count != 1:
             invocation.request_choice_count = choice_count

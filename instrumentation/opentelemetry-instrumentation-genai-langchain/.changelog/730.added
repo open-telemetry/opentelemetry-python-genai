@@ -1,0 +1,1 @@
+Capture prompt template name - `gen_ai.prompt.name` and variables - `gen_ai.prompt.variable.<key>` on chat

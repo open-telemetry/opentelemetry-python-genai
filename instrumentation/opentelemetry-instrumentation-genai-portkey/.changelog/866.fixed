@@ -1,0 +1,1 @@
+Stop request extraction from raising on sampling or token parameters of the wrong type or outside float range, such as `temperature="high"`, `temperature=10**400` or `max_tokens=float("inf")`; those values are left off the span.
