@@ -17,10 +17,7 @@ from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
 from opentelemetry.instrumentation.genai.qwen_agent.utils import (
-    convert_to_final_output_messages,
     convert_to_input_messages,
-    convert_to_output_messages,
-    find_tool_call_id,
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -443,69 +440,22 @@ def test_convert_to_input_messages_handles_tuples():
     assert result[3].parts[0].content == "Final note"
 
 
-def test_convert_to_output_messages_handles_tuples():
-    """convert_to_output_messages accepts tuples of messages and tuple content items."""
-    messages = (
-        Message(
-            role="assistant",
-            content=(ContentItem(text="Thinking"), ContentItem(text="done")),
-        ),
-        Message(
-            role="assistant",
-            content="",
-            function_call=FunctionCall(name="calc", arguments='{"op": "add"}'),
-        ),
-    )
-    result = convert_to_output_messages(messages)
-    assert len(result) == 2
-    assert result[0].role == "assistant"
-    assert result[0].finish_reason == "stop"
-    assert result[0].parts[0].content == "Thinking\ndone"
-    assert result[1].role == "assistant"
-    assert result[1].finish_reason == "tool_call"
-    assert result[1].parts[0].name == "calc"
-
-
-def test_find_tool_call_id_handles_tuples():
-    """find_tool_call_id resolves pending function id when messages are passed as a tuple."""
-    history = (
-        Message(role="user", content="run tool"),
-        Message(
-            role="assistant",
-            content="",
-            function_call=FunctionCall(name="lookup", arguments='{"id": 42}'),
-            extra={"function_id": "call_lookup_42"},
-        ),
-    )
-    assert find_tool_call_id(history, "lookup") == "call_lookup_42"
-
-    answered = history + (
-        Message(
-            role="function",
-            name="lookup",
-            content="result",
-            extra={"function_id": "call_lookup_42"},
-        ),
-    )
-    assert find_tool_call_id(answered, "lookup") is None
-
-
 def test_agent_run_with_tuple_messages(span_exporter, instrument_with_content):
-    """Agent.run() handles messages and yielded responses provided as tuples."""
+    """Agent.run() handles messages and content provided as tuples."""
     agent = _StubAgent.create(name="TupleAgentBot", llm=_StubLLM())
 
     input_messages = (
-        Message(
-            role="user",
-            content=(
-                ContentItem(text="Hello"),
-                ContentItem(text="from tuple"),
+        {
+            "role": "user",
+            "content": (
+                {"text": "Hello"},
+                {"text": "from tuple"},
             ),
-        ),
+        },
     )
-    response_messages = (
+    response_messages = [
         Message(role="assistant", content="Answer from tuple"),
-    )
+    ]
 
     def fake_run(messages, **kwargs):
         yield response_messages
@@ -549,20 +499,20 @@ def test_convert_to_input_messages_handles_raw_dict_tuple_content():
     assert result[1].parts[0].content == "Second question"
 
 
-def test_conversion_helpers_handle_user_list_sequences():
-    """General Sequence implementations like UserList are supported across helpers."""
+def test_convert_to_input_messages_handles_user_list():
+    """convert_to_input_messages handles general Sequence implementations like UserList."""
     input_msgs = UserList(
         [
-            Message(
-                role="user",
-                content=UserList(
-                    [ContentItem(text="Hello"), {"text": "from UserList"}]
+            {
+                "role": "user",
+                "content": UserList(
+                    [{"text": "Hello"}, {"text": "from UserList"}]
                 ),
-            ),
-            Message(
-                role="assistant",
-                content="Response text",
-            ),
+            },
+            {
+                "role": "assistant",
+                "content": "Response text",
+            },
         ]
     )
     converted_input = convert_to_input_messages(input_msgs)
@@ -571,49 +521,6 @@ def test_conversion_helpers_handle_user_list_sequences():
     assert converted_input[0].parts[0].content == "Hello\nfrom UserList"
     assert converted_input[1].role == "assistant"
     assert converted_input[1].parts[0].content == "Response text"
-
-    output_msgs = UserList(
-        [
-            Message(
-                role="assistant",
-                content=UserList([{"text": "Part A"}, {"text": "Part B"}]),
-            ),
-        ]
-    )
-    converted_output = convert_to_output_messages(output_msgs)
-    assert len(converted_output) == 1
-    assert converted_output[0].role == "assistant"
-    assert converted_output[0].parts[0].content == "Part A\nPart B"
-
-    final_output = convert_to_final_output_messages(output_msgs)
-    assert len(final_output) == 1
-    assert final_output[0].parts[0].content == "Part A\nPart B"
-
-    tool_history = UserList(
-        [
-            Message(role="user", content="fetch data"),
-            Message(
-                role="assistant",
-                content="",
-                function_call=FunctionCall(name="fetch", arguments="{}"),
-                extra={"function_id": "call_seq_1"},
-            ),
-        ]
-    )
-    assert find_tool_call_id(tool_history, "fetch") == "call_seq_1"
-
-    answered_history = UserList(
-        list(tool_history)
-        + [
-            Message(
-                role="function",
-                name="fetch",
-                content="result",
-                extra={"function_id": "call_seq_1"},
-            )
-        ]
-    )
-    assert find_tool_call_id(answered_history, "fetch") is None
 
 
 def test_agent_run_with_user_list_messages(
@@ -624,17 +531,15 @@ def test_agent_run_with_user_list_messages(
 
     input_messages = UserList(
         [
-            Message(
-                role="user",
-                content=UserList([{"text": "Hello UserList"}]),
-            ),
+            {
+                "role": "user",
+                "content": UserList([{"text": "Hello UserList"}]),
+            },
         ]
     )
-    response_messages = UserList(
-        [
-            Message(role="assistant", content="Answer from UserList"),
-        ]
-    )
+    response_messages = [
+        Message(role="assistant", content="Answer from UserList"),
+    ]
 
     def fake_run(messages, **kwargs):
         yield response_messages

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
@@ -35,11 +35,24 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def _is_sequence(val: object) -> bool:
+def _is_sequence(val: object) -> TypeGuard[Sequence[Any]]:
     """Check if a value is a non-string, non-mapping sequence."""
     return isinstance(val, Sequence) and not isinstance(
         val, (str, bytes, bytearray, Mapping)
     )
+
+
+def _as_message_sequence(
+    messages: QwenMessage | Sequence[QwenMessage] | None,
+) -> Sequence[QwenMessage]:
+    """Normalize input messages into a sequence without copying."""
+    if messages is None:
+        return ()
+    if isinstance(messages, Sequence) and not isinstance(
+        messages, (str, bytes, bytearray, Mapping)
+    ):
+        return messages
+    return (cast("QwenMessage", messages),)
 
 
 def _field_value(value: Any, *names: str) -> Any:
@@ -90,7 +103,7 @@ def _extract_content_text(
 
 
 def find_tool_call_id(
-    messages: Sequence[QwenMessage] | None, tool_name: str
+    messages: list[QwenMessage] | None, tool_name: str
 ) -> str | None:
     """Best-effort lookup of the current tool call's function id.
 
@@ -99,7 +112,7 @@ def find_tool_call_id(
     ``tool_name`` that has no function-result message answering its
     ``function_id`` yet.
     """
-    if not _is_sequence(messages):
+    if not isinstance(messages, list):
         return None
 
     responded: set[str] = set()
@@ -154,14 +167,12 @@ def convert_to_input_messages(
     messages: QwenMessage | Sequence[QwenMessage] | None,
 ) -> list[InputMessage]:
     """Convert a qwen-agent Message sequence to GenAI InputMessage objects."""
-    if not messages:
+    message_sequence = _as_message_sequence(messages)
+    if not message_sequence:
         return []
 
-    if not _is_sequence(messages):
-        messages = [messages]
-
     input_messages: list[InputMessage] = []
-    for msg in messages:
+    for msg in message_sequence:
         try:
             role = _field_value(msg, "role") or Role.USER.value
             content = _field_value(msg, "content") or ""
@@ -196,17 +207,16 @@ def convert_to_input_messages(
 
 
 def convert_to_output_messages(
-    messages: QwenMessage | Sequence[QwenMessage] | None,
+    messages: QwenMessage | list[QwenMessage] | None,
 ) -> list[OutputMessage]:
     """Convert qwen-agent response messages to GenAI OutputMessage objects."""
     if not messages:
         return []
 
-    if not _is_sequence(messages):
-        messages = [messages]
+    msg_list = messages if isinstance(messages, list) else [messages]
 
     output_messages: list[OutputMessage] = []
-    for msg in messages:
+    for msg in msg_list:
         try:
             content = _field_value(msg, "content") or ""
             function_call = _field_value(msg, "function_call")
@@ -241,7 +251,7 @@ def convert_to_output_messages(
 
 
 def convert_to_final_output_messages(
-    messages: QwenMessage | Sequence[QwenMessage] | None,
+    messages: QwenMessage | list[QwenMessage] | None,
 ) -> list[OutputMessage]:
     """Convert only the final qwen-agent answer to OutputMessage objects.
 
@@ -252,10 +262,9 @@ def convert_to_final_output_messages(
     if not messages:
         return []
 
-    if not _is_sequence(messages):
-        messages = [messages]
+    msg_list = messages if isinstance(messages, list) else [messages]
 
-    for msg in reversed(messages):
+    for msg in reversed(msg_list):
         try:
             role = _field_value(msg, "role") or Role.ASSISTANT.value
             function_call = _field_value(msg, "function_call")
