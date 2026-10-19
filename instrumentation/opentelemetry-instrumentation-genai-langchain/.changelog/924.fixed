@@ -1,1 +1,1 @@
-Stop cached callback managers from recording new runs after uninstrumentation and replace inactive handlers when reinstrumenting.
+Stop cached callback managers from recording new runs after uninstrumentation and refresh inactive handlers on reinstrumentation, including direct callback dispatch.

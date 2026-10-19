@@ -23,7 +23,8 @@ from langchain_core.callbacks import AsyncCallbackManager, BaseCallbackHandler
 from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
 from langchain_core.runnables import base as runnables_base
@@ -746,8 +747,17 @@ def test_uninstrument_restores_execution_methods(
         (RunnableBranch, "stream"),
         (RunnableBranch, "astream"),
         (runnables_base, "set_config_context"),
-        (CallbackManager, "on_chain_start"),
     ]
+    targets.extend(
+        (manager_type, method)
+        for manager_type in (CallbackManager, AsyncCallbackManager)
+        for method in (
+            "on_chain_start",
+            "on_chat_model_start",
+            "on_tool_start",
+            "on_retriever_start",
+        )
+    )
     try:
         from langgraph.pregel import Pregel
 
@@ -957,6 +967,130 @@ async def test_reinstrument_replaces_stale_callbacks(
         assert recorder.starts == 2
     finally:
         new_provider.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "operation", ["chain", "chat_model", "tool", "retriever"]
+)
+@pytest.mark.parametrize(
+    "recorder_type",
+    [_Recorder, _EqualRecorder],
+    ids=["identity", "custom-equality"],
+)
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "error"])
+async def test_reinstrument_refreshes_direct_callback_dispatch(
+    asynchronous,
+    operation,
+    recorder_type,
+    fail,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
+):
+    recorder = recorder_type()
+    old_hook = mock.Mock()
+    new_hook = mock.Mock()
+    manager_type = AsyncCallbackManager if asynchronous else CallbackManager
+    hook_calls_per_run = 1 if operation in ("chain", "chat_model") else 0
+    start_args, end_method, end_args = {
+        "chain": (
+            ({"name": "LangGraph", "id": ["langgraph"]}, {}),
+            "on_chain_end",
+            ({},),
+        ),
+        "chat_model": (
+            ({"name": "ChatOpenAI"}, [[HumanMessage(content="hello")]]),
+            "on_llm_end",
+            (
+                LLMResult(
+                    generations=[
+                        [ChatGeneration(message=AIMessage(content="answer"))]
+                    ]
+                ),
+            ),
+        ),
+        "tool": (({"name": "echo"}, "hello"), "on_tool_end", ("answer",)),
+        "retriever": (
+            ({"name": "lookup"}, "hello"),
+            "on_retriever_end",
+            ([Document(page_content="answer")],),
+        ),
+    }[operation]
+
+    async def start():
+        result = getattr(callbacks, f"on_{operation}_start")(
+            *start_args, invocation_params={"model_name": "gpt-4o"}
+        )
+        if asynchronous:
+            result = await result
+        return result[0] if operation == "chat_model" else result
+
+    async def finish(run, error=False):
+        method = end_method.replace("_end", "_error") if error else end_method
+        args = (RuntimeError("run failed"),) if error else end_args
+        result = getattr(run, method)(*args)
+        if asynchronous:
+            await result
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        completion_hook=old_hook,
+    ):
+        callbacks = manager_type.configure(inheritable_callbacks=[recorder])
+        inflight = await start()
+        old_handlers = inflight.handlers
+        old_inheritable_handlers = inflight.inheritable_handlers
+        old_handler = next(
+            h
+            for h in old_handlers
+            if isinstance(h, OpenTelemetryLangChainCallbackHandler)
+        )
+
+    disabled = await start()
+    await finish(disabled)
+    assert not span_exporter.get_finished_spans()
+    old_hook.on_completion.assert_not_called()
+    new_exporter = InMemorySpanExporter()
+    new_provider = TracerProvider()
+    new_provider.add_span_processor(SimpleSpanProcessor(new_exporter))
+    try:
+        with instrument(
+            LangChainInstrumentor(),
+            tracer_provider=new_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+            completion_hook=new_hook,
+        ):
+            for _ in range(2):
+                await finish(await start())
+            assert len(new_exporter.get_finished_spans()) == 2
+            assert not span_exporter.get_finished_spans()
+            assert recorder.starts == 4
+            assert new_hook.on_completion.call_count == 2 * hook_calls_per_run
+            old_hook.on_completion.assert_not_called()
+            assert inflight.handlers is old_handlers
+            assert inflight.inheritable_handlers is old_inheritable_handlers
+            assert any(h is old_handler for h in old_handlers)
+            assert all(h is not old_handler for h in callbacks.handlers)
+            assert all(
+                h is not old_handler for h in callbacks.inheritable_handlers
+            )
+    finally:
+        await finish(inflight, error=fail)
+        new_provider.shutdown()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == (
+        StatusCode.ERROR if fail else StatusCode.UNSET
+    )
+    assert old_hook.on_completion.call_count == hook_calls_per_run
+    assert not old_handler._invocation_manager._invocations
 
 
 @pytest.mark.asyncio

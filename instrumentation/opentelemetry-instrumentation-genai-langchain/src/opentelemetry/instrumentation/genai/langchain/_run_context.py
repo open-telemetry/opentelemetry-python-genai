@@ -20,6 +20,7 @@ from inspect import BoundArguments, Signature, signature
 from typing import Any
 from uuid import UUID
 
+from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.callbacks.manager import BaseRunManager
 
 try:
@@ -131,10 +132,13 @@ def _started(result: BaseRunManager | list[BaseRunManager]) -> None:
 
 def _start_run(
     wrapped: Callable[..., Any],
-    instance: Any,
+    instance: BaseCallbackManager,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    *,
+    refresh_handlers: Callable[[BaseCallbackManager], None],
 ) -> Any:
+    refresh_handlers(instance)
     result = wrapped(*args, **kwargs)
     _started(result)
     return result
@@ -142,10 +146,13 @@ def _start_run(
 
 async def _astart_run(
     wrapped: Callable[..., Any],
-    instance: Any,
+    instance: BaseCallbackManager,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    *,
+    refresh_handlers: Callable[[BaseCallbackManager], None],
 ) -> Any:
+    refresh_handlers(instance)
     result = await wrapped(*args, **kwargs)
     _started(result)
     return result

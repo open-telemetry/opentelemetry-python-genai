@@ -94,15 +94,17 @@ class LangChainInstrumentor(BaseInstrumentor):
         )
         self._callback_handler = handler
 
+        callback_manager_wrapper = _BaseCallbackManagerInitWrapper(handler)
         wrap_function_wrapper(
             "langchain_core.callbacks",
             "BaseCallbackManager.__init__",
-            _BaseCallbackManagerInitWrapper(handler),
+            callback_manager_wrapper,
         )
         self._execution_context = _ExecutionContext(
             invocation_manager,
             handler.on_tool_error,
             handler.on_retriever_error,
+            callback_manager_wrapper.refresh_handlers,
         )
         self._execution_context.instrument()
         self._instrument_agent_entry_points()
@@ -162,6 +164,9 @@ class _BaseCallbackManagerInitWrapper:
         kwargs: dict[str, Any],
     ):
         wrapped(*args, **kwargs)
+        self.refresh_handlers(instance)
+
+    def refresh_handlers(self, instance: BaseCallbackManager) -> None:
         inactive_handler_ids = {
             id(handler)
             for handler in (
