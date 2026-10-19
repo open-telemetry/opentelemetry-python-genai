@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -442,12 +443,20 @@ class TestAgentInvocationContent(unittest.TestCase):
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
         assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
+        assert json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]) == [
+            {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {}},
+                "type": "function",
+            }
+        ]
 
     @patch(
         "opentelemetry.util.genai.handler.get_content_capturing_mode",
         return_value=ContentCapturingMode.NO_CONTENT,
     )
-    def test_tool_definitions_omitted_without_content_capture(self, _mock_cap):
+    def test_tool_definitions_without_content_capture(self, _mock_cap):
         handler = TelemetryHandler(tracer_provider=self.tracer_provider)
         tool = FunctionToolDefinition(
             name="get_weather",
@@ -456,6 +465,23 @@ class TestAgentInvocationContent(unittest.TestCase):
         )
         invocation = handler.invoke_local_agent()
         invocation.tool_definitions = [tool]
+        invocation.stop()
+
+        attrs = self.span_exporter.get_finished_spans()[0].attributes
+        assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
+        assert json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]) == [
+            {"name": "get_weather", "type": "function"}
+        ]
+
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.NO_CONTENT,
+    )
+    def test_tool_definitions_omitted_when_none_without_content_capture(
+        self, _mock_cap
+    ):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        invocation = handler.invoke_local_agent()
         invocation.stop()
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes

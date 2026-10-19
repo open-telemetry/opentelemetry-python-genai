@@ -37,6 +37,7 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai._inference_invocation import _should_emit_event
+from opentelemetry.util.genai._invocation import get_content_attributes
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     Blob,
@@ -44,7 +45,9 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    FunctionToolDefinition,
     GenericPart,
+    GenericToolDefinition,
     InputMessage,
     MessagePart,
     Modality,
@@ -1741,6 +1744,267 @@ class TestMessageModels(unittest.TestCase):
         self.assertEqual(
             json.loads(gen_ai_json_dumps(text_part)),
             {"type": "text", "content": "hello"},
+        )
+
+
+class TestGetContentAttributesToolDefinitions(unittest.TestCase):
+    def test_tool_definitions_with_content_capture_for_span(self):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather in a city",
+            parameters={
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        )
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+        )
+        self.assertIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs)
+        definitions = json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS])
+        self.assertEqual(
+            definitions,
+            [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather in a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                    "type": "function",
+                }
+            ],
+        )
+
+    def test_tool_definitions_without_content_capture_for_span(self):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather in a city",
+            parameters={
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        )
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs)
+        definitions = json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS])
+        self.assertEqual(
+            definitions,
+            [{"name": "get_weather", "type": "function"}],
+        )
+        self.assertNotIn("description", definitions[0])
+        self.assertNotIn("parameters", definitions[0])
+
+    def test_tool_definitions_event_only_mode_for_span(self):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get the weather in a city",
+            parameters={"type": "object", "properties": {}},
+        )
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        self.assertIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs)
+        definitions = json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS])
+        self.assertEqual(
+            definitions,
+            [{"name": "get_weather", "type": "function"}],
+        )
+
+    def test_tool_definitions_with_content_capture_for_event(self):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get weather",
+            parameters={"type": "object"},
+        )
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[tool],
+            for_span=False,
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        self.assertIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs)
+        self.assertEqual(
+            attrs[GenAI.GEN_AI_TOOL_DEFINITIONS],
+            [
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object"},
+                    "type": "function",
+                }
+            ],
+        )
+
+    def test_tool_definitions_without_content_capture_for_event(self):
+        tool = FunctionToolDefinition(
+            name="get_weather",
+            description="Get weather",
+            parameters={"type": "object"},
+        )
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[tool],
+            for_span=False,
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs)
+        self.assertEqual(
+            attrs[GenAI.GEN_AI_TOOL_DEFINITIONS],
+            [{"name": "get_weather", "type": "function"}],
+        )
+
+    def test_generic_tool_definition(self):
+        generic = GenericToolDefinition(
+            name="web_search", type="web_search_20250305"
+        )
+        # Without content capture
+        attrs_no_content = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[generic],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertEqual(
+            json.loads(attrs_no_content[GenAI.GEN_AI_TOOL_DEFINITIONS]),
+            [{"name": "web_search", "type": "web_search_20250305"}],
+        )
+        # With content capture
+        attrs_with_content = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[generic],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+        )
+        self.assertEqual(
+            json.loads(attrs_with_content[GenAI.GEN_AI_TOOL_DEFINITIONS]),
+            [{"name": "web_search", "type": "web_search_20250305"}],
+        )
+
+    def test_dict_tool_definition(self):
+        dict_tool = {
+            "name": "calc",
+            "type": "calculator",
+            "description": "Performs math",
+            "parameters": {"type": "object"},
+        }
+        # Without content capture: only name and type
+        attrs_no_content = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[dict_tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertEqual(
+            json.loads(attrs_no_content[GenAI.GEN_AI_TOOL_DEFINITIONS]),
+            [{"name": "calc", "type": "calculator"}],
+        )
+        # With content capture: full dict preserved
+        attrs_with_content = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[dict_tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+        )
+        self.assertEqual(
+            json.loads(attrs_with_content[GenAI.GEN_AI_TOOL_DEFINITIONS]),
+            [dict_tool],
+        )
+
+    def test_custom_object_tool_definition(self):
+        class CustomTool:
+            def __init__(self, name: str, tool_type: str, description: str):
+                self.name = name
+                self.type = tool_type
+                self.description = description
+
+        obj_tool = CustomTool("custom_tool", "extension", "Custom tool desc")
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[obj_tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertEqual(
+            json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]),
+            [{"name": "custom_tool", "type": "extension"}],
+        )
+
+    def test_tool_definitions_none_or_empty(self):
+        for tool_defs in (None, []):
+            attrs_no_content = get_content_attributes(
+                input_messages=[],
+                output_messages=[],
+                system_instruction=[],
+                tool_definitions=tool_defs,
+                for_span=True,
+                content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+            )
+            self.assertNotIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs_no_content)
+
+            attrs_with_content = get_content_attributes(
+                input_messages=[],
+                output_messages=[],
+                system_instruction=[],
+                tool_definitions=tool_defs,
+                for_span=True,
+                content_capturing_mode=ContentCapturingMode.SPAN_ONLY,
+            )
+            self.assertNotIn(GenAI.GEN_AI_TOOL_DEFINITIONS, attrs_with_content)
+
+    def test_tool_definitions_multiple_mixed(self):
+        func_tool = FunctionToolDefinition(
+            name="func", description="desc", parameters={}
+        )
+        generic_tool = GenericToolDefinition(name="gen", type="custom")
+        dict_tool = {"name": "dict", "type": "function", "description": "d"}
+        attrs = get_content_attributes(
+            input_messages=[],
+            output_messages=[],
+            system_instruction=[],
+            tool_definitions=[func_tool, generic_tool, dict_tool],
+            for_span=True,
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertEqual(
+            json.loads(attrs[GenAI.GEN_AI_TOOL_DEFINITIONS]),
+            [
+                {"name": "func", "type": "function"},
+                {"name": "gen", "type": "custom"},
+                {"name": "dict", "type": "function"},
+            ],
         )
 
 

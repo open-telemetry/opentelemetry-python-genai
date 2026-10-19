@@ -1,0 +1,1 @@
+Omit description and parameters from gen_ai.tool.definitions when content capture is disabled.
