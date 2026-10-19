@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -14,7 +15,6 @@ from opentelemetry.instrumentation.genai.openai.chat_wrappers import (
     ChatStreamWrapper,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 
 def _chunk(
@@ -44,7 +44,7 @@ _REFUSAL_CHUNKS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_streamed_refusal_is_captured_in_output_messages(
-    tracer_provider, asynchronous: bool
+    tracer_provider, span_exporter, instrument_with_content, asynchronous: bool
 ) -> None:
     invocation = TelemetryHandler(tracer_provider=tracer_provider).inference(
         "openai", request_model="gpt-4o"
@@ -65,10 +65,17 @@ async def test_streamed_refusal_is_captured_in_output_messages(
         stream = ChatStreamWrapper(produce(), invocation, True)
         assert len(list(stream)) == len(_REFUSAL_CHUNKS)
 
-    assert invocation.output_messages == [
-        OutputMessage(
-            role="assistant",
-            finish_reason="stop",
-            parts=[TextPart(content="I'm sorry, I can't help with that.")],
-        )
+    (span,) = span_exporter.get_finished_spans()
+    assert json.loads(span.attributes["gen_ai.output.messages"]) == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "text",
+                    "content": "I'm sorry, I can't help with that.",
+                }
+            ],
+            "finish_reason": "stop",
+            "name": None,
+        }
     ]
