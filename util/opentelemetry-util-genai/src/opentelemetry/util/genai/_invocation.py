@@ -8,7 +8,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from types import TracebackType
 from typing import Any, TypeAlias, cast
 
@@ -402,6 +402,16 @@ def _json_dumps_unless_str(value: object) -> str | None:
     return gen_ai_json_dumps(converted)
 
 
+def _tool_definition_without_content(tool: Any) -> dict[str, Any]:
+    if isinstance(tool, Mapping):
+        name = tool.get("name")
+        tool_type = tool.get("type") or "function"
+    else:
+        name = getattr(tool, "name", None)
+        tool_type = getattr(tool, "type", None) or "function"
+    return {"name": name, "type": tool_type}
+
+
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -444,10 +454,29 @@ def get_content_attributes(
     )
 
     def serialize(items: Sequence[Any]) -> Any:
-        dicts = [asdict(item) for item in items]
+        dicts = [
+            asdict(item)
+            if is_dataclass(item) and not isinstance(item, type)
+            else dict(item)
+            if isinstance(item, Mapping)
+            else item
+            for item in items
+        ]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
+    # Tool definitions are always captured, the sem conv recommends adding params / description only
+    # when the content capture mode is set..
     if mode not in allowed_modes:
+        if tool_definitions:
+            tool_dicts = [
+                _tool_definition_without_content(item)
+                for item in tool_definitions
+            ]
+            return {
+                GenAI.GEN_AI_TOOL_DEFINITIONS: (
+                    gen_ai_json_dumps(tool_dicts) if for_span else tool_dicts
+                )
+            }
         return {}
 
     optional_attrs = (
