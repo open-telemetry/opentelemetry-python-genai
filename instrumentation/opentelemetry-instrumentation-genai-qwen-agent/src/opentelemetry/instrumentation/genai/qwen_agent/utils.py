@@ -48,10 +48,8 @@ def _as_message_sequence(
     """Normalize input messages into a sequence without copying."""
     if messages is None:
         return ()
-    if isinstance(messages, Sequence) and not isinstance(
-        messages, (str, bytes, bytearray, Mapping)
-    ):
-        return messages
+    if _is_sequence(messages):
+        return cast("Sequence[QwenMessage]", messages)
     return (cast("QwenMessage", messages),)
 
 
