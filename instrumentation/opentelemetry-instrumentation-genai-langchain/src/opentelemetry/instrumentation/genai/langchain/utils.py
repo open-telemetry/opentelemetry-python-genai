@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
 from langchain_core.messages import (
@@ -540,7 +540,9 @@ def make_last_output_message(data: Any) -> list[OutputMessage]:
     messages = _output_messages_field(data)
     if messages is None:
         return []
-    for message in reversed(list(messages)):
+    if not isinstance(messages, Sequence):
+        messages = list(messages)
+    for message in reversed(messages):
         output = to_output_messages([message])
         if output:
             return output
