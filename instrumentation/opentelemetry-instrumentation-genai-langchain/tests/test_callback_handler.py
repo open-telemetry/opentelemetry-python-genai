@@ -11,6 +11,7 @@ import math
 import uuid
 from unittest import mock
 
+import langchain.agents
 import pytest
 from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -380,6 +381,61 @@ async def test_chain_input_and_output_capture(
             {"type": "text", "content": "final answer"}
         ]
     else:
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+@pytest.mark.skipif(
+    not hasattr(langchain.agents, "create_agent"),
+    reason="create_agent requires a newer langchain version",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_unnamed_agent_respects_content_capture(
+    asynchronous: bool,
+    content_capture: ContentCapturingMode,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    inputs = {"messages": [HumanMessage(content="hello")]}
+    agent = langchain.agents.create_agent(
+        FakeChatModel(responses=[AIMessage(content="done")]), tools=[]
+    )
+    stream = agent.astream(inputs) if asynchronous else agent.stream(inputs)
+    try:
+        if asynchronous:
+            assert await anext(stream)
+        else:
+            assert next(stream)
+        # NO_CONTENT also filters exported attributes; inspect the live input.
+        handler = LangChainInstrumentor()._callback_handler
+        assert handler is not None
+        (invocation,) = [
+            state.invocation
+            for state in handler._invocation_manager._invocations.values()
+            if isinstance(state.invocation, LocalAgentInvocation)
+        ]
+    finally:
+        if asynchronous:
+            async for _ in stream:
+                pass
+        else:
+            for _ in stream:
+                pass
+
+    if content_capture == ContentCapturingMode.NO_CONTENT:
+        assert invocation.input_messages == []
+    else:
+        (message,) = invocation.input_messages
+        assert message.parts[0].content == "hello"
+    span = finished_span(span_exporter, "invoke_agent")
+    attrs = span.attributes
+    assert attrs is not None
+    assert GenAI.GEN_AI_AGENT_NAME not in attrs
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert message["parts"] == [{"type": "text", "content": "hello"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
