@@ -35,6 +35,7 @@ except ImportError:
         create = None
 
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -159,6 +160,25 @@ class TestCase(CommonTestCaseBase):
         self.configure_valid_interaction()
         self.run_interaction(model="gemini-2.5-flash", input="Does this work?")
         self.otel.assert_has_span_named("interactions.create gemini-2.5-flash")
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_malformed_input_does_not_leave_the_invocation_open(self) -> None:
+        self.configure_valid_interaction()
+        # A list where the step type should be a string made input
+        # extraction raise after the invocation started.
+        self.run_interaction(
+            model="gemini-2.5-flash",
+            input=["Hi", {"type": ["function_call"]}],
+        )
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
+            '[{"role":"user","parts":[{"content":"Hi","type":"text"}],"name":null}]',
+        )
+        self.assertFalse(trace.get_current_span().get_span_context().is_valid)
 
     def test_model_reflected_into_span_name(self) -> None:
         self.configure_valid_interaction()

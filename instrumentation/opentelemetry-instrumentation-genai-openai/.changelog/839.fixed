@@ -1,0 +1,1 @@
+Map `type: "reasoning"` input items to assistant messages with `ReasoningPart` on Responses API calls.

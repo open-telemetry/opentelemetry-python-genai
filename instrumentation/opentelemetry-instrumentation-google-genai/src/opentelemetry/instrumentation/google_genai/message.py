@@ -14,6 +14,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     OutputMessage,
+    ReasoningPart,
     Role,
     ServerToolCallPart,
     ServerToolCallResponsePart,
@@ -91,6 +92,8 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
         return f"{idx}"
 
     if (text := part.text) is not None:
+        if part.thought:
+            return ReasoningPart(content=text)
         return TextPart(content=text)
 
     if inline_data := part.inline_data:

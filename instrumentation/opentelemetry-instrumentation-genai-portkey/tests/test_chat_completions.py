@@ -17,6 +17,7 @@ try:
 except ImportError:
     AsyncPortkey = None  # type: ignore[assignment,misc]
 
+from opentelemetry import context as context_api
 from opentelemetry.instrumentation.genai.portkey import PortkeyInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
@@ -494,6 +495,62 @@ def test_sync_chat_completions_error_handling(
         assert (
             span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
         )
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value", "attribute"),
+    [
+        ("temperature", "high", GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE),
+        ("max_tokens", "many", GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS),
+        ("temperature", 10**400, GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE),
+        (
+            "max_tokens",
+            float("inf"),
+            GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS,
+        ),
+    ],
+)
+def test_sync_chat_completions_bad_parameter_reaches_the_client(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    parameter,
+    value,
+    attribute,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        if hasattr(p.chat.completions, "openai_client"):
+            p.chat.completions.openai_client = MagicMock()
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = RuntimeError(
+                "Portkey rejected the request"
+            )
+        p.chat.completions._post = MagicMock(
+            side_effect=RuntimeError("Portkey rejected the request")
+        )
+
+        # Request extraction converted numeric parameters with float() and
+        # int(), which raised on these values before the client saw them.
+        before = context_api.get_current()
+        with pytest.raises(RuntimeError, match="Portkey rejected the request"):
+            p.chat.completions.create(
+                messages=[{"role": "user", "content": "Hello"}],
+                model="gpt-4o",
+                **{parameter: value},
+            )
+        assert context_api.get_current() is before
+
+        (span,) = span_exporter.get_finished_spans()
+        assert (
+            span.attributes.get(ErrorAttributes.ERROR_TYPE) == "RuntimeError"
+        )
+        assert attribute not in span.attributes
 
 
 @pytest.mark.skipif(

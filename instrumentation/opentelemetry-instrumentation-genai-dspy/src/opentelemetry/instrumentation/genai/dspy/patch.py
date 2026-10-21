@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from dspy.retrievers.retrieve import Retrieve
 
     _RetrieverInstance = Retrieve | ColBERTv2 | Embeddings
+    _FinishReasonFn = Callable[[Prediction], str | None]
     _BoundFunctionWrapper = BoundFunctionWrapper[Any, Any]
     _FunctionWrapper = FunctionWrapper[Any, Any]
 else:
@@ -245,12 +246,12 @@ def patch_dspy(handler: TelemetryHandler) -> None:
     _wrap_function(
         _REACT_MODULE,
         f"{_REACT_CLASS}.forward",
-        _react_forward(handler, "dspy.ReAct"),
+        _react_forward(handler, "dspy.ReAct", _react_finish_reason),
     )
     _wrap_function(
         _REACT_MODULE,
         f"{_REACT_CLASS}.aforward",
-        _react_aforward(handler, "dspy.ReAct"),
+        _react_aforward(handler, "dspy.ReAct", _react_finish_reason),
     )
 
     react_v2_cls = getattr(
@@ -260,13 +261,15 @@ def patch_dspy(handler: TelemetryHandler) -> None:
         _wrap_function(
             _REACT_V2_MODULE,
             f"{_REACT_V2_CLASS}.forward",
-            _react_forward(handler, "dspy.ReActV2"),
+            _react_forward(handler, "dspy.ReActV2", _react_v2_finish_reason),
         )
         if hasattr(react_v2_cls, "aforward"):
             _wrap_function(
                 _REACT_V2_MODULE,
                 f"{_REACT_V2_CLASS}.aforward",
-                _react_aforward(handler, "dspy.ReActV2"),
+                _react_aforward(
+                    handler, "dspy.ReActV2", _react_v2_finish_reason
+                ),
             )
 
 
@@ -415,18 +418,47 @@ def _start_agent_invocation(
     return invocation
 
 
+def _react_finish_reason(result: Prediction) -> str:
+    trajectory: Mapping[str, object] | None = getattr(
+        result, "trajectory", None
+    )
+    if isinstance(trajectory, Mapping):
+        tool_names = [
+            value
+            for key, value in trajectory.items()
+            if key.startswith("tool_name_")
+        ]
+        if tool_names and tool_names[-1] == "finish":
+            return "stop"
+    return "error"
+
+
+def _react_v2_finish_reason(result: Prediction) -> str | None:
+    termination_reason: object = getattr(result, "termination_reason", None)
+    if termination_reason == "submit":
+        return "stop"
+    if termination_reason in ("forced_submit", "parse_error"):
+        return "error"
+    return termination_reason if isinstance(termination_reason, str) else None
+
+
 def _set_agent_invocation_output(
+    handler: TelemetryHandler,
     invocation: LocalAgentInvocation,
     instance: Module,
     result: Prediction | None,
+    finish_reason: str | None,
 ) -> None:
+    if finish_reason is not None:
+        invocation.finish_reasons = [finish_reason]
+    if not handler.should_capture_content():
+        return
     signature: Any = getattr(instance, "signature", None)
     output_str = extract_output_content(result, signature)
     invocation.output_messages = [
         OutputMessage(
             role="assistant",
             parts=[TextPart(content=output_str)],
-            finish_reason="stop",
         )
     ]
 
@@ -434,6 +466,7 @@ def _set_agent_invocation_output(
 def _react_forward(
     handler: TelemetryHandler,
     agent_name: str,
+    finish_reason: _FinishReasonFn,
 ) -> Callable[..., Any]:
     def traced_method(
         wrapped: Callable[..., Any],
@@ -446,8 +479,9 @@ def _react_forward(
         )
         with invocation:
             result = wrapped(*args, **kwargs)
-            if handler.should_capture_content():
-                _set_agent_invocation_output(invocation, instance, result)
+            _set_agent_invocation_output(
+                handler, invocation, instance, result, finish_reason(result)
+            )
             return result
 
     return traced_method
@@ -456,6 +490,7 @@ def _react_forward(
 def _react_aforward(
     handler: TelemetryHandler,
     agent_name: str,
+    finish_reason: _FinishReasonFn,
 ) -> Callable[..., Any]:
     async def traced_method(
         wrapped: Callable[..., Awaitable[Any]],
@@ -468,8 +503,9 @@ def _react_aforward(
         )
         with invocation:
             result = await wrapped(*args, **kwargs)
-            if handler.should_capture_content():
-                _set_agent_invocation_output(invocation, instance, result)
+            _set_agent_invocation_output(
+                handler, invocation, instance, result, finish_reason(result)
+            )
             return result
 
     return traced_method

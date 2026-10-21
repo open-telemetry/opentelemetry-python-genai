@@ -9,9 +9,11 @@ import base64
 import json
 import math
 import uuid
+from unittest import mock
 
 import pytest
 from langchain_core.documents import Document
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -33,7 +35,11 @@ from langchain_core.outputs import (
     LLMResult,
 )
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langchain_core.runnables import (
+    RunnableConfig,
+    RunnableLambda,
+    RunnableParallel,
+)
 from tests._api import (
     FakeChatModel,
     FakeRetriever,
@@ -48,15 +54,16 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
     _extract_document_score,
+    _extract_prompt_context,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _ai_message_parts,
     _legacy_function_call_request,
     _media_part,
     _normalize_role,
     extract_token_details,
     make_input_message,
     make_last_output_message,
-    make_output_message,
     serialize,
     to_input_messages,
     to_output_messages,
@@ -75,17 +82,184 @@ from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
+    LocalAgentInvocation,
+    WorkflowInvocation,
+)
 from opentelemetry.util.genai.types import (
     BlobPart,
     ContentCapturingMode,
     FilePart,
     InputMessage,
-    OutputMessage,
     RetrievalDocument,
     TextPart,
     ToolCallRequestPart,
     UriPart,
 )
+
+
+def _make_agent_inv_mock() -> mock.MagicMock:
+    agent_inv = mock.MagicMock(spec=LocalAgentInvocation)
+    agent_inv.agent_id = None
+    return agent_inv
+
+
+def _make_handler():
+    telemetry = mock.MagicMock()
+    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
+    telemetry.workflow.return_value = workflow_inv
+    agent_inv = _make_agent_inv_mock()
+    telemetry.invoke_local_agent.return_value = agent_inv
+    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
+    return handler, telemetry, workflow_inv, agent_inv
+
+
+def _run_id():
+    return uuid.uuid4()
+
+
+class TestExtractPromptContext:
+    @pytest.mark.parametrize(
+        "template_type", ["PromptTemplate", "ChatPromptTemplate"]
+    )
+    def test_extracts_name_and_declared_variables(
+        self, template_type: str
+    ) -> None:
+        history = [HumanMessage(content="Earlier question")]
+        context = _extract_prompt_context(
+            {
+                "id": ["langchain", "prompts", template_type],
+                "name": "weather",
+                "kwargs": {
+                    "input_variables": ["question"],
+                    "optional_variables": ["history"],
+                    "partial_variables": {"language": "French"},
+                },
+            },
+            {
+                "question": "Will it rain?",
+                "history": history,
+                "unused": "ignored",
+            },
+            None,
+        )
+
+        assert context is not None
+        assert context.name == "weather"
+        assert context.variables == {
+            "question": "Will it rain?",
+            "history": history,
+            "language": "French",
+        }
+
+    def test_name_precedence_and_generic_name_exclusion(self):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "name": "PromptTemplate",
+            "kwargs": {"name": "serialized-name"},
+        }
+
+        context = _extract_prompt_context(
+            serialized, {}, {"prompt_name": "metadata-name"}
+        )
+        assert context is not None
+        assert context.name == "metadata-name"
+
+        unnamed = _extract_prompt_context(
+            {**serialized, "kwargs": {}}, {}, None
+        )
+        assert unnamed is not None
+        assert unnamed.name is None
+
+    @pytest.mark.parametrize("source", ["metadata", "kwargs"])
+    def test_explicit_template_class_name_is_preserved(self, source: str):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "name": "PromptTemplate",
+            "kwargs": {},
+        }
+        metadata = None
+        if source == "metadata":
+            metadata = {"prompt_name": "PromptTemplate"}
+        else:
+            serialized["kwargs"] = {"name": "PromptTemplate"}
+
+        context = _extract_prompt_context(serialized, {}, metadata)
+
+        assert context is not None
+        assert context.name == "PromptTemplate"
+
+    def test_runtime_values_override_partials_and_scalar_is_mapped(self):
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "kwargs": {
+                "input_variables": ["question"],
+                "optional_variables": ["history"],
+                "partial_variables": {"language": "French"},
+            },
+        }
+
+        context = _extract_prompt_context(serialized, "runtime", None)
+
+        assert context is not None
+        assert context.variables == {
+            "question": "runtime",
+            "language": "French",
+        }
+
+    def test_preserves_none_as_json_null(self):
+        context = _extract_prompt_context(
+            {
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "kwargs": {"input_variables": ["value"]},
+            },
+            {"value": None},
+            None,
+        )
+
+        assert context is not None
+        assert context.variables == {"value": None}
+
+    def test_passes_declared_values_without_serializing(self):
+        callable_value = lambda: "value"
+        unsupported_value = object()
+        serialized = {
+            "id": ["langchain", "prompts", "PromptTemplate"],
+            "kwargs": {
+                "partial_variables": {
+                    "callable": callable_value,
+                    "unresolved": {
+                        "lc": 1,
+                        "type": "not_implemented",
+                    },
+                },
+                "input_variables": ["unsupported"],
+            },
+        }
+
+        context = _extract_prompt_context(
+            serialized, {"unsupported": unsupported_value}, None
+        )
+
+        assert context is not None
+        assert context.variables == {
+            "callable": callable_value,
+            "unsupported": unsupported_value,
+        }
+
+    def test_ignores_non_prompt_runs(self):
+        assert (
+            _extract_prompt_context(
+                {
+                    "id": ["langchain", "schema", "RunnableSequence"],
+                    "name": "PromptTemplate",
+                },
+                {"question": "ignored"},
+                {"prompt_name": "ignored"},
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio
@@ -164,8 +338,14 @@ async def test_chain_classification_and_completion(
                 AIMessage(content="final answer"),
             ]
         },
+        {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "final answer"},
+            ]
+        },
     ],
-    ids=["empty", "no-assistant", "last-assistant"],
+    ids=["empty", "no-assistant", "last-assistant", "dict-assistant"],
 )
 async def test_chain_input_and_output_capture(
     asynchronous: bool,
@@ -189,10 +369,10 @@ async def test_chain_input_and_output_capture(
         assert json.loads(captured[0]["parts"][0]["content"]) == inputs
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
-    if (
-        content_capture == ContentCapturingMode.SPAN_ONLY
-        and outputs.get("messages")
-        and isinstance(outputs["messages"][-1], AIMessage)
+    last = (outputs.get("messages") or [None])[-1]
+    if content_capture == ContentCapturingMode.SPAN_ONLY and (
+        isinstance(last, AIMessage)
+        or (isinstance(last, dict) and last.get("role") == "assistant")
     ):
         captured = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
         assert len(captured) == 1
@@ -840,6 +1020,214 @@ async def test_retriever_parenting_and_error(
         )
 
 
+class TestPromptContextLifecycle:
+    @pytest.mark.parametrize("with_transform", [False, True])
+    def test_real_lcel_prompt_context_reaches_model(
+        self, with_transform: bool
+    ) -> None:
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        prompt = ChatPromptTemplate.from_messages(
+            [("human", "Hello {name}")]
+        ).model_copy(update={"name": "greeting"})
+        model = FakeListChatModel(responses=["Hello Ada"]).with_config(
+            metadata={"ls_model_name": "fake-model"}
+        )
+        if with_transform:
+            (prompt | RunnableLambda(lambda value: value) | model).invoke(
+                {"name": "Ada"}, config={"callbacks": [handler]}
+            )
+        else:
+            (prompt | model).invoke(
+                {"name": "Ada"}, config={"callbacks": [handler]}
+            )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+
+    def test_real_parallel_lcel_keeps_prompt_contexts_isolated(self) -> None:
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        invocations = [
+            mock.MagicMock(spec=InferenceInvocation),
+            mock.MagicMock(spec=InferenceInvocation),
+        ]
+        telemetry.inference.side_effect = invocations
+
+        def branch(prompt_name: str, response: str):
+            prompt = ChatPromptTemplate.from_messages(
+                [("human", "{value}")]
+            ).model_copy(update={"name": prompt_name})
+            model = FakeListChatModel(responses=[response]).with_config(
+                metadata={"ls_model_name": "fake-model"}
+            )
+            return prompt | model
+
+        chain = RunnableParallel(
+            first=branch("first-prompt", "first-response"),
+            second=branch("second-prompt", "second-response"),
+        )
+
+        chain.invoke({"value": "shared"}, config={"callbacks": [handler]})
+
+        contexts = {
+            (invocation.prompt_name, invocation.prompt_variables["value"])
+            for invocation in invocations
+        }
+        assert contexts == {
+            ("first-prompt", "shared"),
+            ("second-prompt", "shared"),
+        }
+
+    def test_successful_prompt_context_is_applied_to_next_model(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "greeting",
+                "kwargs": {"input_variables": ["name"]},
+            },
+            inputs={"name": "Ada"},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_end(outputs={"text": "Hello Ada"}, run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello Ada")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+        assert (
+            handler._invocation_manager.consume_prompt_context(sequence_id)
+            is None
+        )
+
+    def test_unsupported_model_does_not_consume_prompt_context(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "greeting",
+                "kwargs": {"input_variables": ["name"]},
+            },
+            inputs={"name": "Ada"},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_end(outputs={"text": "Hello Ada"}, run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "UnsupportedModel"},
+            messages=[[HumanMessage(content="Hello Ada")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+        )
+
+        telemetry.inference.assert_not_called()
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello Ada")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {"name": "Ada"}
+
+    def test_prompt_variables_are_not_processed_when_content_disabled(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = False
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "greeting",
+                "kwargs": {"input_variables": ["name"]},
+            },
+            inputs={"name": object()},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_end(outputs={}, run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="Hello")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_variables == {}
+
+    def test_failed_prompt_context_is_not_applied(self):
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        telemetry.inference.return_value.prompt_name = None
+        telemetry.inference.return_value.prompt_variables = None
+        sequence_id = _run_id()
+        prompt_id = _run_id()
+        handler._invocation_manager.add_invocation_state(
+            sequence_id, None, None
+        )
+        handler.on_chain_start(
+            serialized={
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "failed",
+                "kwargs": {"input_variables": ["value"]},
+            },
+            inputs={"value": "secret"},
+            run_id=prompt_id,
+            parent_run_id=sequence_id,
+        )
+        handler.on_chain_error(RuntimeError("format failed"), run_id=prompt_id)
+
+        handler.on_chat_model_start(
+            serialized={"name": "ChatOpenAI"},
+            messages=[[HumanMessage(content="unrelated")]],
+            run_id=_run_id(),
+            parent_run_id=sequence_id,
+            metadata={"ls_provider": "openai"},
+            invocation_params={"model_name": "gpt-4"},
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name is None
+        assert invocation.prompt_variables is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_multimodal_input_content_capture(
@@ -1070,6 +1458,19 @@ class TestMakeInputMessage:
         assert len(result) == 1
         assert result[0].parts[0].content == "Hi"
 
+    def test_messages_key_malformed_entry_keeps_convertible_entries(self):
+        result = make_input_message(
+            {
+                "messages": [
+                    {"role": "user", "content": "Hello"},
+                    ("human",),
+                    HumanMessage(content="Hi"),
+                ]
+            }
+        )
+
+        assert [m.parts[0].content for m in result] == ["Hello", "Hi"]
+
     def test_messages_key_all_malformed_returns_empty_without_raising(self):
         result = make_input_message(
             {"messages": [("human",), None, {"content": "x"}]}
@@ -1140,71 +1541,11 @@ class TestMakeInputMessage:
 
 
 # ---------------------------------------------------------------------------
-# utils.make_output_message / make_last_output_message
+# utils.to_output_messages / make_last_output_message
 # ---------------------------------------------------------------------------
 
 
-class TestMakeOutputMessage:
-    def test_returns_empty_list_for_non_dict(self):
-        assert make_output_message("not a dict") == []
-        assert make_output_message(None) == []
-
-    def test_returns_empty_list_when_no_messages_key(self):
-        assert make_output_message({"output": "hi"}) == []
-
-    def test_returns_empty_list_when_messages_is_none(self):
-        assert make_output_message({"messages": None}) == []
-
-    def test_ai_message_produces_assistant_output(self):
-        ai_msg = AIMessage(content="The answer is 42")
-        result = make_output_message({"messages": [ai_msg]})
-
-        assert len(result) == 1
-        assert isinstance(result[0], OutputMessage)
-        assert result[0].role == "assistant"
-        assert result[0].finish_reason == ""
-        assert result[0].parts[0].content == "The answer is 42"
-
-    def test_non_ai_message_skipped(self):
-        human_msg = HumanMessage(content="Hello")
-        result = make_output_message({"messages": [human_msg]})
-        assert result == []
-
-    def test_ai_message_with_empty_content_skipped(self):
-        ai_msg = AIMessage(content="")
-        result = make_output_message({"messages": [ai_msg]})
-        assert result == []
-
-    def test_multiple_ai_messages_all_returned(self):
-        msgs = [
-            AIMessage(content="First response"),
-            AIMessage(content="Second response"),
-        ]
-        result = make_output_message({"messages": msgs})
-
-        assert len(result) == 2
-        assert result[0].parts[0].content == "First response"
-        assert result[1].parts[0].content == "Second response"
-
-    def test_mixed_messages_only_ai_returned(self):
-        msgs = [
-            HumanMessage(content="question"),
-            AIMessage(content="answer"),
-            HumanMessage(content="follow-up"),
-        ]
-        result = make_output_message({"messages": msgs})
-
-        assert len(result) == 1
-        assert result[0].parts[0].content == "answer"
-
-    def test_finish_reason_default_is_empty_string(self):
-        # Workflow/agent output spans must not fabricate a finish reason:
-        # util-genai filters empty strings out of
-        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
-        # while the per-call inference spans report the real values.
-        result = make_output_message({"messages": [AIMessage(content="hi")]})
-        assert result[0].finish_reason == ""
-
+class TestToOutputMessages:
     def test_to_output_messages_propagates_explicit_finish_reason(self):
         # The inference path passes the provider's finish_reason through
         # ``to_output_messages``; the converter must forward it onto every
@@ -1243,6 +1584,16 @@ class TestMakeLastOutputMessage:
         assert len(result) == 1
         assert result[0].parts[0].content == "final answer"
 
+    def test_returns_last_assistant_message_in_dict_form(self):
+        msgs = [
+            AIMessage(content="intermediate"),
+            {"role": "assistant", "content": "final answer"},
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
     def test_returns_empty_when_no_ai_messages(self):
         result = make_last_output_message(
             {"messages": [HumanMessage(content="hi")]}
@@ -1252,12 +1603,94 @@ class TestMakeLastOutputMessage:
     def test_returns_empty_for_empty_outputs(self):
         assert make_last_output_message({}) == []
 
+    @pytest.mark.parametrize(
+        "data",
+        ["not a dict", None, {"output": "hi"}, {"messages": None}],
+    )
+    def test_returns_empty_without_messages_list(self, data):
+        assert make_last_output_message(data) == []
+
+    def test_tuple_assistant_entry_produces_assistant_output(self):
+        result = make_last_output_message({"messages": [("ai", "Hello")]})
+
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].parts[0].content == "Hello"
+
+    def test_finish_reason_default_is_empty_string(self):
+        # Workflow/agent output spans must not fabricate a finish reason:
+        # util-genai filters empty strings out of
+        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
+        # while the per-call inference spans report the real values.
+        result = make_last_output_message(
+            {"messages": [AIMessage(content="hi")]}
+        )
+        assert result[0].finish_reason == ""
+
     def test_single_ai_message_returned(self):
         ai_msg = AIMessage(content="only response")
         result = make_last_output_message({"messages": [ai_msg]})
 
         assert len(result) == 1
         assert result[0].parts[0].content == "only response"
+
+    def test_skips_trailing_empty_ai_message(self):
+        msgs = [
+            AIMessage(content="final answer"),
+            AIMessage(content=""),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    @pytest.mark.parametrize(
+        "trailing_entry",
+        [
+            HumanMessage(content="next question"),
+            ToolMessage(content="tool result", tool_call_id="call_1"),
+            {"role": "not_a_real_role", "content": "dropped"},
+            {"content": "no role key"},
+            ("human",),
+            None,
+        ],
+    )
+    def test_skips_trailing_non_output_entry(self, trailing_entry):
+        msgs = [AIMessage(content="final answer"), trailing_entry]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    def test_accepts_generator_messages(self):
+        msgs = (AIMessage(content=text) for text in ("intermediate", "final"))
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final"
+
+    def test_does_not_convert_earlier_ai_messages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        converted: list[str] = []
+
+        def recording_parts(message: AIMessage):
+            converted.append(str(message.content))
+            return _ai_message_parts(message)
+
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.langchain.utils._ai_message_parts",
+            recording_parts,
+        )
+        msgs = [
+            AIMessage(content="first"),
+            HumanMessage(content="next question"),
+            AIMessage(content="final answer"),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert result[0].parts[0].content == "final answer"
+        assert converted == ["final answer"]
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
-langchain==1.4.5
-langchain-openai>=1.7.1
-langgraph>=1.2.15
+langchain==1.4.6
+langchain-openai>=1.7.2
+langgraph>=1.2.16
 opentelemetry-sdk>=1.44.0
 opentelemetry-exporter-otlp-proto-grpc>=1.44.0
 opentelemetry-instrumentation-genai-langchain~=1.0b0
