@@ -44,8 +44,10 @@ from opentelemetry.instrumentation.genai.qwen_agent.package import (
     _instruments,
 )
 from opentelemetry.instrumentation.genai.qwen_agent.patch import (
+    wrap_agent_call_llm,
     wrap_agent_call_tool,
     wrap_agent_run,
+    wrap_fncall_agent_call_tool,
 )
 from opentelemetry.instrumentation.genai.qwen_agent.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -56,6 +58,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 __all__ = ["QwenAgentInstrumentor", "__version__"]
 
 _AGENT_MODULE = "qwen_agent.agent"
+_FN_CALL_AGENT_MODULE = "qwen_agent.agents.fncall_agent"
 
 
 def _with_handler(
@@ -82,6 +85,7 @@ class QwenAgentInstrumentor(BaseInstrumentor):
       ``run()`` internally, so the ``invoke_agent`` span is created once
       by the ``run()`` wrapper.
     - ``Agent._call_tool()``: tool execution spans (``execute_tool``).
+    - ``Agent._call_llm()``: inference call counts on ``invoke_agent``.
 
     LLM call spans (``chat``) are not emitted by this instrumentation;
     enable the instrumentation of the underlying model client library
@@ -113,13 +117,26 @@ class QwenAgentInstrumentor(BaseInstrumentor):
         )
         wrap_function_wrapper(
             _AGENT_MODULE,
+            "Agent._call_llm",
+            wrap_agent_call_llm,
+        )
+        wrap_function_wrapper(
+            _AGENT_MODULE,
             "Agent._call_tool",
             _with_handler(wrap_agent_call_tool, handler),
+        )
+        wrap_function_wrapper(
+            _FN_CALL_AGENT_MODULE,
+            "FnCallAgent._call_tool",
+            wrap_fncall_agent_call_tool,
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Qwen-Agent instrumentation."""
         import qwen_agent.agent
+        import qwen_agent.agents.fncall_agent
 
+        unwrap(qwen_agent.agents.fncall_agent.FnCallAgent, "_call_tool")
         unwrap(qwen_agent.agent.Agent, "run")
+        unwrap(qwen_agent.agent.Agent, "_call_llm")
         unwrap(qwen_agent.agent.Agent, "_call_tool")

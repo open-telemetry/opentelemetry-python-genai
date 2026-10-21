@@ -771,6 +771,83 @@ class TestRemoteAgentInvocation(unittest.TestCase):
 
 
 class TestAgentInvocationMetrics(TestBase):
+    def test_local_agent_records_call_counts(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="Counter")
+        invocation.inference_calls = 3
+        invocation.tool_calls = 2
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        for name, expected in (
+            ("gen_ai.invoke_agent.inference_calls", 3),
+            ("gen_ai.invoke_agent.tool_calls", 2),
+        ):
+            points = metrics[name]
+            self.assertEqual(len(points), 1)
+            self.assertEqual(points[0].sum, expected)
+            self.assertIsInstance(points[0].sum, int)
+            self.assertEqual(
+                points[0].attributes, {GenAI.GEN_AI_AGENT_NAME: "Counter"}
+            )
+
+    def test_local_agent_call_counts_include_custom_metric_attributes(
+        self,
+    ) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="Counter")
+        invocation.metric_attributes["deployment.environment"] = "staging"
+        invocation.inference_calls = 3
+        invocation.tool_calls = 2
+        invocation.stop()
+
+        metrics = self._harvest_metrics()
+        for name in (
+            "gen_ai.invoke_agent.duration",
+            "gen_ai.invoke_agent.inference_calls",
+            "gen_ai.invoke_agent.tool_calls",
+        ):
+            self.assertEqual(
+                metrics[name][0].attributes,
+                {
+                    GenAI.GEN_AI_AGENT_NAME: "Counter",
+                    "deployment.environment": "staging",
+                },
+            )
+
+    def test_local_agent_records_zero_calls_on_failure(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        invocation = handler.invoke_local_agent(agent_name="Counter")
+        invocation.inference_calls = 0
+        invocation.tool_calls = 0
+        invocation.fail(ValueError("failed"))
+
+        metrics = self._harvest_metrics()
+        self.assertEqual(
+            metrics["gen_ai.invoke_agent.inference_calls"][0].sum, 0
+        )
+        self.assertEqual(metrics["gen_ai.invoke_agent.tool_calls"][0].sum, 0)
+
+    def test_unset_call_counts_are_not_recorded(self) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        handler.invoke_local_agent(agent_name="NoCounts").stop()
+
+        metrics = self._harvest_metrics()
+        self.assertNotIn("gen_ai.invoke_agent.inference_calls", metrics)
+        self.assertNotIn("gen_ai.invoke_agent.tool_calls", metrics)
+
     def test_local_agent_records_duration_and_tokens(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,

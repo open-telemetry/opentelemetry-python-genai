@@ -15,6 +15,11 @@ It produces spans following the `GenAI semantic conventions
 - ``invoke_agent`` for ``Agent.run()``
 - ``execute_tool`` for ``Agent._call_tool()``
 
+Each ``invoke_agent`` run also records the
+``gen_ai.invoke_agent.inference_calls`` and
+``gen_ai.invoke_agent.tool_calls`` histograms. They count calls made by that
+agent, including failed calls; nested agents record their own counts.
+
 LLM call (``chat``) spans are intentionally not emitted by this
 instrumentation: the model client libraries qwen-agent calls into have their
 own instrumentations, and emitting them here as well would duplicate the LLM

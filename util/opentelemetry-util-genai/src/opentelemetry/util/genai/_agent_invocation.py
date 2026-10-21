@@ -112,6 +112,8 @@ class AgentInvocation(GenAIInvocation, ABC):
 
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
+        self.inference_calls: int | None = None
+        self.tool_calls: int | None = None
 
         self.input_messages: list[InputMessage] = []
         self.output_messages: list[OutputMessage] = []
@@ -251,6 +253,24 @@ class LocalAgentInvocation(AgentInvocation):
             attributes=self._get_metric_attributes(),
             context=self._span_context,
         )
+        count_attributes: dict[str, AttributeValue] = (
+            {GenAI.GEN_AI_AGENT_NAME: self._agent_name}
+            if self._agent_name is not None
+            else {}
+        )
+        count_attributes.update(self.metric_attributes)
+        if self.inference_calls is not None:
+            self._instruments.invoke_agent_inference_calls.record(
+                self.inference_calls,
+                attributes=count_attributes,
+                context=self._span_context,
+            )
+        if self.tool_calls is not None:
+            self._instruments.invoke_agent_tool_calls.record(
+                self.tool_calls,
+                attributes=count_attributes,
+                context=self._span_context,
+            )
 
 
 class RemoteAgentInvocation(AgentInvocation):
