@@ -231,6 +231,8 @@ class LocalAgentInvocation(AgentInvocation):
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
         )
+        self.inference_calls: int | None = None
+        self.tool_calls: int | None = None
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
@@ -241,16 +243,37 @@ class LocalAgentInvocation(AgentInvocation):
         attrs.update(self.metric_attributes)
         return attrs
 
+    def _record_call_metrics(
+        self, attributes: dict[str, AttributeValue]
+    ) -> None:
+        if self.inference_calls is not None:
+            self._instruments.invoke_agent_inference_calls.record(
+                self.inference_calls,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        if self.tool_calls is not None:
+            self._instruments.invoke_agent_tool_calls.record(
+                self.tool_calls,
+                attributes=attributes,
+                context=self._span_context,
+            )
+
     def _record_metrics(self) -> None:
         duration_seconds = max(
             timeit.default_timer() - self._monotonic_start_s,
             0.0,
         )
+        attributes = self._get_metric_attributes()
         self._instruments.invoke_agent_duration.record(
             duration_seconds,
-            attributes=self._get_metric_attributes(),
+            attributes=attributes,
             context=self._span_context,
         )
+        call_attributes: dict[str, AttributeValue] = {}
+        if self._agent_name is not None:
+            call_attributes[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
+        self._record_call_metrics(call_attributes)
 
 
 class RemoteAgentInvocation(AgentInvocation):
