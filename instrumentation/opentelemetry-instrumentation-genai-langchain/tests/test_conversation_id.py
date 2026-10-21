@@ -191,7 +191,7 @@ class TestAgentTree:
         agent_run_id, chat_run_id = uuid4(), uuid4()
 
         token = agent_context._pending.set(
-            (agent_context._PendingAgent(name=None),)
+            (agent_context._PendingGraph(name=None),)
         )
         try:
             handler.on_chain_start(

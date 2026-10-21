@@ -352,11 +352,6 @@ async def test_nested_graph_with_bound_agent_metadata_is_agent(
             "invoke_agent marked_node",
             id="agent-override",
         ),
-        pytest.param(
-            {"otel_workflow_span": True},
-            "invoke_workflow marked_node",
-            id="workflow-override",
-        ),
     ],
 )
 async def test_graph_child_with_local_operation_metadata(
@@ -416,6 +411,61 @@ def test_nested_runnable_sequence_is_not_workflow(
         _graph(sequence).invoke({"messages": [HumanMessage(content="hello")]})
 
     assert len(_workflow_spans(span_exporter)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+async def test_inherited_workflow_override_marks_only_top_level_run(
+    instrument_langchain: Any,
+    span_exporter: InMemorySpanExporter,
+    async_mode: bool,
+) -> None:
+    graph = _graph(_respond, name="outer_graph")
+    with instrument_langchain():
+        inputs = {"messages": [HumanMessage(content="hello")]}
+        config = {"metadata": {"otel_workflow_span": True}}
+        if async_mode:
+            await graph.ainvoke(inputs, config=config)
+        else:
+            graph.invoke(inputs, config=config)
+
+    assert [span.name for span in _workflow_spans(span_exporter)] == [
+        "invoke_workflow outer_graph"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "agent_metadata",
+    [
+        pytest.param({"agent_type": "worker"}, id="agent-type"),
+        pytest.param({"otel_agent_span": True}, id="agent-override"),
+    ],
+)
+async def test_explicit_agent_nested_under_agent(
+    instrument_langchain: Any,
+    span_exporter: InMemorySpanExporter,
+    async_mode: bool,
+    agent_metadata: dict[str, Any],
+) -> None:
+    researcher = RunnableLambda(_respond).with_config(
+        run_name="researcher", metadata=agent_metadata
+    )
+    supervisor = _graph(researcher, name="supervisor").with_config(
+        {"metadata": {"agent_name": "supervisor"}}
+    )
+    with instrument_langchain():
+        inputs = {"messages": [HumanMessage(content="hello")]}
+        if async_mode:
+            await supervisor.ainvoke(inputs)
+        else:
+            supervisor.invoke(inputs)
+
+    assert sorted(span.name for span in _agent_spans(span_exporter)) == [
+        "invoke_agent researcher",
+        "invoke_agent supervisor",
+    ]
 
 
 @pytest.mark.parametrize(

@@ -138,7 +138,7 @@ def resolve_agent_name(
 def _has_agent_signals(
     metadata: dict[str, Any] | None,
     ancestor_agent_names: set[str] | None = None,
-    has_parent_agent: bool = False,
+    is_agent_node: bool = False,
 ) -> bool:
     """Return True when metadata contains any signal that the chain is an agent.
 
@@ -156,7 +156,7 @@ def _has_agent_signals(
     return bool(
         (metadata_name and not inherited_name)
         or (
-            not has_parent_agent
+            not is_agent_node
             and (
                 metadata.get(_META_AGENT_TYPE)
                 or metadata.get(_META_AGENT_SPAN)
@@ -315,22 +315,30 @@ def classify_chain_run(
     if announced_workflow:
         return OperationName.INVOKE_WORKFLOW
 
+    is_agent_node = bool(
+        has_parent_agent
+        and metadata
+        and metadata.get(LANGGRAPH_NODE_KEY) == agent_name
+    )
+
     # 3. Explicit callback metadata.
     if (
         metadata
         and metadata.get(_META_AGENT_SPAN)
-        and _has_agent_signals(
-            metadata, ancestor_agent_names, has_parent_agent
-        )
+        and _has_agent_signals(metadata, ancestor_agent_names, is_agent_node)
     ):
         return OperationName.INVOKE_AGENT
 
-    if metadata and metadata.get(_META_WORKFLOW_SPAN):
+    if (
+        parent_run_id is None
+        and metadata
+        and metadata.get(_META_WORKFLOW_SPAN)
+    ):
         return OperationName.INVOKE_WORKFLOW
 
     # 4. Remaining callback signals.
     if _has_agent_signals(
-        metadata, ancestor_agent_names, has_parent_agent
+        metadata, ancestor_agent_names, is_agent_node
     ) or _detect_agent_name(agent_name, metadata):
         return OperationName.INVOKE_AGENT
 

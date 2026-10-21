@@ -307,7 +307,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     conversation_id=conversation_id,
                     _attach_to_context=self._attach_to_context,
                 )
-                agent.conversation_id = conversation_id
                 if capture_content:
                     agent.input_messages = make_input_message(inputs)
                 if effective_metadata:

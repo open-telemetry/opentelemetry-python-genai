@@ -197,7 +197,7 @@ class TestClassifyChainRun:
             kwargs={},
             parent_run_id=uuid.uuid4(),
         )
-        assert result == OperationName.INVOKE_WORKFLOW
+        assert result is None
 
     @pytest.mark.parametrize(
         ("metadata", "announced_workflow", "expected"),
@@ -220,8 +220,8 @@ class TestClassifyChainRun:
                     "agent_type": "inherited",
                 },
                 False,
-                OperationName.INVOKE_WORKFLOW,
-                id="explicit-workflow-beats-agent-type",
+                OperationName.INVOKE_AGENT,
+                id="nested-workflow-override-does-not-mask-agent-type",
             ),
             pytest.param(
                 {
@@ -229,8 +229,8 @@ class TestClassifyChainRun:
                     "otel_agent_span": False,
                 },
                 False,
-                OperationName.INVOKE_WORKFLOW,
-                id="explicit-workflow-beats-agent-suppression",
+                None,
+                id="nested-workflow-override-does-not-create-workflow",
             ),
         ],
     )
@@ -238,7 +238,7 @@ class TestClassifyChainRun:
         self,
         metadata: dict[str, Any],
         announced_workflow: bool,
-        expected: str,
+        expected: str | None,
     ) -> None:
         result = classify_chain_run(
             serialized={},

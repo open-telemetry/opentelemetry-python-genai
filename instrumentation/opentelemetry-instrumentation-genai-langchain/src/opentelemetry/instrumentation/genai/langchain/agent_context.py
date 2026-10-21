@@ -32,8 +32,6 @@ class _PendingGraph:
     claimed: bool = False
 
 
-_PendingAgent = _PendingGraph
-
 _pending: ContextVar[tuple[_PendingGraph, ...]] = ContextVar(
     "otel_genai_pending_graphs", default=()
 )
