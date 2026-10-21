@@ -31,6 +31,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 
 def _custom_embed_fn(texts: list[str], **kwargs: Any) -> list[list[float]]:
@@ -192,19 +193,41 @@ def test_sync_embedder_hosted_model(
         assert result.shape == (3, 5)
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    span = spans[0]
-    assert span.name == "embeddings text-embedding-3-small"
-    attrs = span.attributes or {}
-    assert attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "embeddings"
-    assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == "openai"
-    assert attrs.get(GenAI.GEN_AI_REQUEST_MODEL) == "text-embedding-3-small"
-    assert GenAI.GEN_AI_RESPONSE_MODEL not in attrs
-    assert GenAI.GEN_AI_USAGE_INPUT_TOKENS not in attrs
-    assert attrs.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 5
-    assert attrs.get(GenAI.GEN_AI_REQUEST_ENCODING_FORMATS) == ("float",)
-    assert attrs.get(server_attributes.SERVER_ADDRESS) == "api.example.com"
-    assert attrs.get(server_attributes.SERVER_PORT) == 8443
+    assert len(spans) == 2
+
+    # First batch of 2 inputs ("one", "two")
+    span0 = spans[0]
+    assert span0.name == "embeddings text-embedding-3-small"
+    attrs0 = span0.attributes or {}
+    assert attrs0.get(GenAI.GEN_AI_OPERATION_NAME) == "embeddings"
+    assert attrs0.get(GenAI.GEN_AI_PROVIDER_NAME) == "openai"
+    assert attrs0.get(GenAI.GEN_AI_REQUEST_MODEL) == "text-embedding-3-small"
+    assert (
+        attrs0.get(GenAI.GEN_AI_RESPONSE_MODEL)
+        == "text-embedding-3-small-2024"
+    )
+    assert attrs0.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS) == 6
+    assert attrs0.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 5
+    assert attrs0.get(GenAI.GEN_AI_REQUEST_ENCODING_FORMATS) == ("float",)
+    assert attrs0.get(server_attributes.SERVER_ADDRESS) == "api.example.com"
+    assert attrs0.get(server_attributes.SERVER_PORT) == 8443
+
+    # Second batch of 1 input ("three")
+    span1 = spans[1]
+    assert span1.name == "embeddings text-embedding-3-small"
+    attrs1 = span1.attributes or {}
+    assert attrs1.get(GenAI.GEN_AI_OPERATION_NAME) == "embeddings"
+    assert attrs1.get(GenAI.GEN_AI_PROVIDER_NAME) == "openai"
+    assert attrs1.get(GenAI.GEN_AI_REQUEST_MODEL) == "text-embedding-3-small"
+    assert (
+        attrs1.get(GenAI.GEN_AI_RESPONSE_MODEL)
+        == "text-embedding-3-small-2024"
+    )
+    assert attrs1.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS) == 3
+    assert attrs1.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 5
+    assert attrs1.get(GenAI.GEN_AI_REQUEST_ENCODING_FORMATS) == ("float",)
+    assert attrs1.get(server_attributes.SERVER_ADDRESS) == "api.example.com"
+    assert attrs1.get(server_attributes.SERVER_PORT) == 8443
 
     metrics_data = metric_reader.get_metrics_data()
     assert metrics_data is not None
@@ -215,6 +238,7 @@ def test_sync_embedder_hosted_model(
         for m in sm.metrics
     ]
     assert "gen_ai.client.operation.duration" in metric_names
+    assert "gen_ai.client.token.usage" in metric_names
 
 
 @pytest.mark.anyio
@@ -271,8 +295,8 @@ async def test_async_embedder_hosted_model(
     attrs = span.attributes or {}
     assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == "cohere"
     assert attrs.get(GenAI.GEN_AI_REQUEST_MODEL) == "embed-english-v3.0"
-    assert GenAI.GEN_AI_RESPONSE_MODEL not in attrs
-    assert GenAI.GEN_AI_USAGE_INPUT_TOKENS not in attrs
+    assert attrs.get(GenAI.GEN_AI_RESPONSE_MODEL) == "embed-english-v3.0"
+    assert attrs.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS) == 7
     assert attrs.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
 
 
@@ -355,7 +379,7 @@ def test_embedder_copy_and_deepcopy(
     assert len(spans) == 2
 
 
-def test_embedder_constructor_kwargs_on_instance(
+def test_embedder_constructor_kwargs(
     tracer_provider: TracerProvider,
     logger_provider: LoggerProvider,
     meter_provider: MeterProvider,
@@ -367,11 +391,12 @@ def test_embedder_constructor_kwargs_on_instance(
         logger_provider=logger_provider,
         meter_provider=meter_provider,
     ):
-        embedder = dspy.Embedder(_custom_embed_fn, caching=False)
-        embedder.kwargs = {
-            "api_base": "https://init.example.com:8443",
-            "encoding_format": "base64",
-        }
+        embedder = dspy.Embedder(
+            _custom_embed_fn,
+            caching=False,
+            api_base="https://init.example.com:8443",
+            encoding_format="base64",
+        )
         embedder("hello")
 
     spans = span_exporter.get_finished_spans()
@@ -380,3 +405,105 @@ def test_embedder_constructor_kwargs_on_instance(
     assert attrs.get(server_attributes.SERVER_ADDRESS) == "init.example.com"
     assert attrs.get(server_attributes.SERVER_PORT) == 8443
     assert attrs.get(GenAI.GEN_AI_REQUEST_ENCODING_FORMATS) == ("base64",)
+
+
+def test_sync_embedder_cache_hit_skips_span(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dspy.cache, "enable_disk_cache", False)
+    dspy.cache.reset_memory_cache()
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        embedder = dspy.Embedder(_custom_embed_fn, caching=True)
+        res1 = embedder(["alpha", "beta"])
+        assert res1.shape == (2, 4)
+        assert len(span_exporter.get_finished_spans()) == 1
+
+        res2 = embedder(["alpha", "beta"])
+        assert res2.shape == (2, 4)
+        # Cache hit skips model call and emits no span
+        assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.anyio
+async def test_async_embedder_cache_hit_skips_span(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dspy.cache, "enable_disk_cache", False)
+    dspy.cache.reset_memory_cache()
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        embedder = dspy.Embedder(_custom_embed_fn, caching=True)
+        res1 = await embedder.acall(["gamma"])
+        assert res1.shape == (1, 4)
+        assert len(span_exporter.get_finished_spans()) == 1
+
+        res2 = await embedder.acall(["gamma"])
+        assert res2.shape == (1, 4)
+        # Cache hit skips model call and emits no span
+        assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.anyio
+async def test_async_embedder_multiple_batches(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        embedder = dspy.Embedder(_custom_embed_fn, batch_size=2, caching=False)
+        res = await embedder.acall(["a", "b", "c"])
+        assert res.shape == (3, 4)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+
+def test_nested_embedding_invocation_suppression(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        handler = TelemetryHandler(
+            instrumentation_scope_name="test",
+            instrumentation_scope_version="1.0",
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+            logger_provider=logger_provider,
+        )
+        embedder = dspy.Embedder(_custom_embed_fn, caching=False)
+        with handler.embedding(provider="test", request_model="parent_model"):
+            embedder(["hello"])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "embeddings parent_model"

@@ -20,7 +20,6 @@ from opentelemetry.util.genai.types import (
 
 if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
-    from dspy.clients.embedding import Embedder
     from dspy.primitives.prediction import Prediction
 
 SENTINEL_TOOL_NAMES: frozenset[str] = frozenset({"finish", "submit"})
@@ -95,10 +94,13 @@ _MODEL_PREFIX_TO_PROVIDER: tuple[tuple[str, str], ...] = (
 
 
 def resolve_embedder_provider_and_model(
-    instance: Embedder,
+    model_or_instance: Any,
 ) -> tuple[str, str | None]:
-    """Resolve (gen_ai.provider.name, gen_ai.request.model) from a DSPy Embedder."""
-    model = getattr(instance, "model", None)
+    """Resolve (gen_ai.provider.name, gen_ai.request.model) from a DSPy Embedder or model."""
+    if hasattr(model_or_instance, "model"):
+        model = getattr(model_or_instance, "model", None)
+    else:
+        model = model_or_instance
     if isinstance(model, str):
         provider_raw, model_name = parse_provider_and_model(model)
         if provider_raw:
