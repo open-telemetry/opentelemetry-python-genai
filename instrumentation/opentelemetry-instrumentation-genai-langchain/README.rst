@@ -29,6 +29,10 @@ Installation
 
     pip install opentelemetry-instrumentation-genai-langchain
 
+LangGraph is optional. Graph node boundaries are instrumented from LangGraph
+0.3.18 on; an older LangGraph still runs, with a warning that context is not
+propagated across its nodes.
+
 See the `examples <examples>`_ directory for runnable ``workflow``, ``agent``,
 ``tools``, and ``zero-code`` scenarios.
 
@@ -144,11 +148,15 @@ compiled LangGraph workflows are detected independently. Runnables marked with
 ``agent_type`` or ``otel_agent_span=True`` can emit agent spans inside an
 enclosing agent.
 
+Graph-bound conversation IDs are used when callback metadata has no ID.
+Per-run callback IDs take precedence, and graph-bound ``otel_trace=False``
+suppresses the graph span even when the runtime omits it from callback metadata.
+
 Known Limitations
 -----------------
 
-Context propagation to nested calls (such as auto-instrumented HTTP clients
-or database queries within tools) is not supported when using LangChain async API.
+Custom runnables that override ``invoke`` without starting a run do not
+inherit the parent run's context in multi-input ``batch`` or ``abatch`` calls.
 
 References
 ----------

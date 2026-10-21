@@ -42,10 +42,12 @@ def test_invoke_interrupt_and_resume_do_not_log_callback_warnings(
     config: Any = {"configurable": {"thread_id": "sync"}}
 
     with assert_no_warnings(caplog, _CALLBACK_LOGGER):
-        interrupted = graph.invoke({"answer": ""}, config)
+        graph.invoke({"answer": ""}, config)
+        # LangGraph < 0.4 leaves __interrupt__ out of the returned state,
+        # so check the pending node instead.
+        assert graph.get_state(config).next == ("ask",)
         resumed = graph.invoke(Command(resume="yes"), config)
 
-    assert "__interrupt__" in interrupted
     assert resumed == {"answer": "yes"}
 
 
@@ -61,8 +63,10 @@ async def test_ainvoke_interrupt_and_resume_do_not_log_callback_warnings(
     config: Any = {"configurable": {"thread_id": "async"}}
 
     with assert_no_warnings(caplog, _CALLBACK_LOGGER):
-        interrupted = await graph.ainvoke({"answer": ""}, config)
+        await graph.ainvoke({"answer": ""}, config)
+        # LangGraph < 0.4 leaves __interrupt__ out of the returned state,
+        # so check the pending node instead.
+        assert (await graph.aget_state(config)).next == ("ask",)
         resumed = await graph.ainvoke(Command(resume="yes"), config)
 
-    assert "__interrupt__" in interrupted
     assert resumed == {"answer": "yes"}

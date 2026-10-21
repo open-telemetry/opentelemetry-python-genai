@@ -468,6 +468,55 @@ async def test_explicit_agent_nested_under_agent(
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("runtime_metadata", "expected_id"),
+    [
+        pytest.param({}, "bound", id="bound-id"),
+        pytest.param({"thread_id": "runtime"}, "runtime", id="runtime-id"),
+        pytest.param(
+            {"thread_id": None, "session_id": "session"},
+            "session",
+            id="runtime-session",
+        ),
+    ],
+)
+async def test_graph_conversation_id_prefers_callback_metadata(
+    instrument_langchain: Any,
+    span_exporter: InMemorySpanExporter,
+    async_mode: bool,
+    runtime_metadata: dict[str, str | None],
+    expected_id: str,
+) -> None:
+    child = _graph(_respond, name="child").with_config(
+        metadata={"thread_id": "bound"}
+    )
+
+    def run_child(state: _State) -> _State:
+        return child.invoke(state, config={"metadata": runtime_metadata})
+
+    async def arun_child(state: _State) -> _State:
+        return await child.ainvoke(
+            state, config={"metadata": runtime_metadata}
+        )
+
+    graph = _graph(RunnableLambda(run_child, afunc=arun_child), name="outer")
+    with instrument_langchain():
+        inputs = {"messages": [HumanMessage(content="hello")]}
+        if async_mode:
+            await graph.ainvoke(inputs)
+        else:
+            graph.invoke(inputs)
+
+    child_span = next(
+        span
+        for span in _workflow_spans(span_exporter)
+        if span.name == "invoke_workflow child"
+    )
+    assert child_span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == expected_id
+
+
 @pytest.mark.parametrize(
     "agent_metadata",
     [
@@ -571,6 +620,15 @@ async def test_nested_workflow_ignores_agent_opt_out_inherited_from_node(
         ),
         pytest.param(
             lambda: _graph(
+                _graph(_respond, name="inner_agent").with_config(
+                    metadata={"otel_trace": False, "agent_type": "worker"}
+                ),
+                name="outer_graph",
+            ),
+            id="bound-agent-trace",
+        ),
+        pytest.param(
+            lambda: _graph(
                 _graph(_respond, name="inner_graph").with_config(
                     {"metadata": {"otel_agent_span": False}}
                 ),
@@ -605,6 +663,7 @@ async def test_nested_workflow_explicit_opt_out_suppresses(
     assert [span.name for span in _workflow_spans(span_exporter)] == [
         "invoke_workflow outer_graph"
     ]
+    assert not _agent_spans(span_exporter)
 
 
 def test_nested_workflow_call_config_trace_opt_out_suppresses(

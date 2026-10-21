@@ -299,6 +299,8 @@ def classify_chain_run(
     )
 
     # 1. Suppress known noise.
+    if graph_metadata and graph_metadata.get(_META_OTEL_TRACE) is False:
+        return None
     if _should_ignore_chain(
         metadata,
         agent_name,

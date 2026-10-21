@@ -50,23 +50,38 @@ from opentelemetry.trace import (
     TracerProvider,
     get_tracer,
 )
+from opentelemetry.util.genai._embedding_invocation import (
+    SuppressedEmbeddingInvocation,
+)
+from opentelemetry.util.genai._fetch_response_invocation import (
+    SuppressedFetchResponseInvocation,
+)
 from opentelemetry.util.genai._inference_invocation import (
-    CLIENT_INFERENCE_CONTEXT_KEY,
-    InferenceData,
     SuppressedInferenceInvocation,
 )
 from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.util.genai._retrieval_invocation import (
+    SuppressedRetrievalInvocation,
+)
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
     _SafeCompletionHook,
 )
 from opentelemetry.util.genai.invocation import (
+    CLIENT_EMBEDDING_CONTEXT_KEY,
+    CLIENT_FETCH_RESPONSE_CONTEXT_KEY,
+    CLIENT_INFERENCE_CONTEXT_KEY,
+    CLIENT_RETRIEVAL_CONTEXT_KEY,
+    EmbeddingData,
     EmbeddingInvocation,
+    FetchResponseData,
     FetchResponseInvocation,
+    InferenceData,
     InferenceInvocation,
     LocalAgentInvocation,
     RemoteAgentInvocation,
+    RetrievalData,
     RetrievalInvocation,
     ToolInvocation,
     WorkflowInvocation,
@@ -190,7 +205,15 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return RetrievalInvocation(
+        invocation_cls: type[RetrievalInvocation] = (
+            SuppressedRetrievalInvocation
+            if isinstance(
+                get_value(CLIENT_RETRIEVAL_CONTEXT_KEY, context=context),
+                RetrievalData,
+            )
+            else RetrievalInvocation
+        )
+        return invocation_cls(
             self._tracer,
             self._instruments,
             self._logger,
@@ -278,7 +301,15 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return EmbeddingInvocation(
+        invocation_cls: type[EmbeddingInvocation] = (
+            SuppressedEmbeddingInvocation
+            if isinstance(
+                get_value(CLIENT_EMBEDDING_CONTEXT_KEY, context=context),
+                EmbeddingData,
+            )
+            else EmbeddingInvocation
+        )
+        return invocation_cls(
             self._tracer,
             self._instruments,
             self._logger,
@@ -319,7 +350,15 @@ class TelemetryHandler:
 
         Only set data attributes on the invocation object, do not modify the span or context.
         """
-        return FetchResponseInvocation(
+        invocation_cls: type[FetchResponseInvocation] = (
+            SuppressedFetchResponseInvocation
+            if isinstance(
+                get_value(CLIENT_FETCH_RESPONSE_CONTEXT_KEY, context=context),
+                FetchResponseData,
+            )
+            else FetchResponseInvocation
+        )
+        return invocation_cls(
             self._tracer,
             self._instruments,
             self._logger,

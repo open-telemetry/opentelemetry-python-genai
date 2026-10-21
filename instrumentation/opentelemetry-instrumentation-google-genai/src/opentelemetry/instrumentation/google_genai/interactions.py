@@ -117,7 +117,6 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     Error,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     InputMessage,
     MessagePart,
@@ -279,6 +278,8 @@ def _to_server_tool_part(
     item: Step | dict[str, object],
 ) -> MessagePart | None:
     item_type = item.get("type") if isinstance(item, dict) else item.type
+    if not isinstance(item_type, str):
+        return None
     tool_name = _SERVER_TOOL_CALL_NAMES.get(item_type)
     response_name = _SERVER_TOOL_RESPONSE_NAMES.get(item_type)
     if tool_name is None and response_name is None:
@@ -387,9 +388,6 @@ def _interactions_input_to_messages(
                 modality=Modality.DOCUMENT,
                 uri=_get_field(item, "uri") or "",
             )
-            parts.append(part)
-        elif item_type is not None:
-            part = GenericPart(type=item_type)
             parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]

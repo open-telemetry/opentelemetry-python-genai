@@ -15,7 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
 
-from ._raw_response import ParsableResponse
+from ._raw_response import RawResponseLike
 from .utils import (
     _content_to_parts,
     _openai_response_format_to_output_type,
@@ -28,16 +28,14 @@ from .utils import (
 if TYPE_CHECKING:
     from openai.types.responses.response import Response
     from openai.types.responses.response_output_item import ResponseOutputItem
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+    )
+    from openai.types.responses.response_reasoning_item_param import (
+        ResponseReasoningItemParam,
+    )
     from openai.types.responses.response_usage import ResponseUsage
     from openai.types.responses.tool_param import ToolParam
-
-    from opentelemetry.util.genai.types import (
-        Error,
-        InputMessage,
-        OutputMessage,
-        TextPart,
-        ToolDefinition,
-    )
 
 try:
     from openai.types.responses.response import Response
@@ -82,36 +80,23 @@ except ImportError:
     ResponseComputerToolCall = None
 
 
-try:
-    from opentelemetry.util.genai.types import (
-        Error,
-        FunctionToolDefinition,
-        GenericToolDefinition,
-        InputMessage,
-        OutputMessage,
-        ReasoningPart,
-        Role,
-        ServerToolCallPart,
-        ServerToolCallResponsePart,
-        TextPart,
-        ToolCallResponsePart,
-    )
-    from opentelemetry.util.genai.types import (
-        ToolCallRequestPart as ToolCall,
-    )
-except ImportError:
-    Error = None
-    FunctionToolDefinition = None
-    GenericToolDefinition = None
-    InputMessage = None
-    OutputMessage = None
-    ReasoningPart = None
-    Role = None
-    ServerToolCallPart = None
-    ServerToolCallResponsePart = None
-    TextPart = None
-    ToolCall = None
-    ToolCallResponsePart = None
+from opentelemetry.util.genai.types import (
+    Error,
+    FunctionToolDefinition,
+    GenericToolDefinition,
+    InputMessage,
+    OutputMessage,
+    ReasoningPart,
+    Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
+    TextPart,
+    ToolCallResponsePart,
+    ToolDefinition,
+)
+from opentelemetry.util.genai.types import (
+    ToolCallRequestPart as ToolCall,
+)
 
 
 @dataclass
@@ -201,6 +186,30 @@ def _extract_conversation_id(conversation: object) -> str | None:
     return None
 
 
+def _has_compaction_item(items: object) -> bool:
+    return any(
+        _get_field(item, "type") == "compaction"
+        for item in _get_sequence(items)
+    )
+
+
+_OUTPUT_ITEM_EVENT_TYPES = frozenset(
+    {"response.output_item.added", "response.output_item.done"}
+)
+
+
+def set_stream_event_attributes(invocation, event: object) -> None:
+    """Record what a stream event settles before the terminal response.
+
+    A stream closed or interrupted early never delivers the terminal response,
+    so a compaction item already streamed must be recorded as it arrives.
+    """
+    if _get_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES and (
+        _has_compaction_item([_get_field(event, "item")])
+    ):
+        invocation.conversation_compacted = True
+
+
 def extract_params(
     *,
     model: str | None = None,
@@ -211,6 +220,7 @@ def extract_params(
     service_tier: str | None = None,
     temperature: float | None = None,
     text: object | None = None,
+    text_format: object | None = None,
     tools: Iterable[ToolParam] | None = None,
     top_p: float | None = None,
     **_kwargs: object,
@@ -238,7 +248,14 @@ def extract_params(
             else None
         ),
         temperature=_get_float(temperature),
-        output_type=_extract_output_type_from_value(text),
+        output_type=(
+            _extract_output_type_from_value(text)
+            or (
+                GenAIAttributes.GenAiOutputTypeValues.JSON.value
+                if isinstance(text_format, type)
+                else None
+            )
+        ),
         tools=_get_tools(tools),
         top_p=_get_float(top_p),
     )
@@ -271,6 +288,22 @@ def _get_call_id(item: object) -> str | None:
     )
 
 
+def _extract_reasoning_parts(
+    item: ResponseReasoningItem | ResponseReasoningItemParam,
+) -> list[ReasoningPart]:
+    parts: list[ReasoningPart] = []
+    for block in _get_sequence(_get_field(item, "summary")):
+        text = _get_field(block, "text")
+        if isinstance(text, str):
+            parts.append(ReasoningPart(content=text))
+    for block in _get_sequence(_get_field(item, "content")):
+        if _get_field(block, "type") == "reasoning_text":
+            text = _get_field(block, "text")
+            if isinstance(text, str):
+                parts.append(ReasoningPart(content=text))
+    return parts
+
+
 # Client-side tool calls, by the field holding the call's arguments. A custom
 # tool takes free-form text where a function takes a JSON arguments string.
 _TOOL_CALL_ARGUMENT_FIELDS = {
@@ -291,7 +324,7 @@ def _get_input_message(item: object) -> InputMessage | None:
     if InputMessage is None or Role is None:
         return None
 
-    item_type = _get_field(item, "type")
+    item_type = _get_str(_get_field(item, "type"))
 
     if item_type in _TOOL_CALL_ARGUMENT_FIELDS and ToolCall is not None:
         raw = _get_field(item, _TOOL_CALL_ARGUMENT_FIELDS[item_type])
@@ -334,6 +367,15 @@ def _get_input_message(item: object) -> InputMessage | None:
                     ),
                 )
             ],
+        )
+
+    if item_type == "reasoning":
+        parts = _extract_reasoning_parts(item)
+        if not parts:
+            return None
+        return InputMessage(
+            role=Role.ASSISTANT.value,
+            parts=parts,
         )
 
     role = _get_field(item, "role")
@@ -409,25 +451,7 @@ def _extract_output_parts(content_blocks: Sequence[object]) -> list[TextPart]:
     return parts
 
 
-def _extract_reasoning_parts(
-    item: ResponseReasoningItem,
-) -> list[ReasoningPart]:
-    if ReasoningPart is None:
-        return []
-
-    parts: list[ReasoningPart] = []
-    for block in item.summary:
-        if isinstance(block.text, str):
-            parts.append(ReasoningPart(content=block.text))
-    for block in item.content or []:
-        if getattr(block, "type", None) == "reasoning_text" and isinstance(
-            getattr(block, "text", None), str
-        ):
-            parts.append(ReasoningPart(content=block.text))
-    return parts
-
-
-_SERVER_TOOL_NAMES: dict[str, str] = {
+_SERVER_TOOL_NAMES = {
     "code_interpreter_call": "code_interpreter",
     "file_search_call": "file_search",
     "image_generation_call": "image_generation",
@@ -870,6 +894,9 @@ def apply_request_attributes(
             params.output_type
         )
 
+    if _has_compaction_item(params.input):
+        invocation.conversation_compacted = True
+
     if capture_content:
         invocation.system_instruction = get_system_instruction(
             params.instructions
@@ -939,10 +966,19 @@ def _parse_raw_response(
 ) -> object:
     """Return the payload of a non-streaming ``with_raw_response`` result."""
     if is_streamed_raw_response(request_kwargs) or not isinstance(
-        response, ParsableResponse
+        response, RawResponseLike
     ):
         return response
-    return response.parse()
+    try:
+        payload = json.loads(response.http_response.content)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if Response is None:
+        return None
+    try:
+        return Response.model_construct(**payload)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
 
 
 def set_invocation_response_attributes(
@@ -977,6 +1013,9 @@ def set_invocation_response_attributes(
     finish_reasons = extract_finish_reasons(response)
     if finish_reasons:
         invocation.finish_reasons = finish_reasons
+
+    if _has_compaction_item(response.output):
+        invocation.conversation_compacted = True
 
     if capture_content:
         output_messages = get_output_messages_from_response(response)

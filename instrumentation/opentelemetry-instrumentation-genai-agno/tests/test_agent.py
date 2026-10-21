@@ -31,6 +31,9 @@ from opentelemetry.semconv.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._conversation_context import (
+    get_ambient_conversation_id,
+)
 
 
 def test_agent_run_spans(
@@ -298,21 +301,31 @@ def test_team_run_error_path(
         name="test-sync-team",
         members=[member],
         model=MockModel(id="mock-model"),
+        session_id="instance-session",
     )
+
+    def fail_team_initialization(*args: Any, **kwargs: Any) -> None:
+        assert get_ambient_conversation_id() == "call-session"
+        raise RuntimeError("team failure")
+
     with (
         patch.object(
             Team,
             "initialize_team",
-            side_effect=RuntimeError("team failure"),
+            side_effect=fail_team_initialization,
         ),
         pytest.raises(RuntimeError, match="team failure"),
     ):
-        team.run("hello team world")
+        team.run("hello team world", session_id="call-session")
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_agent test-sync-team"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "call-session"
+    )
     assert span.attributes.get("error.type") == "RuntimeError"
     assert span.status.status_code == StatusCode.ERROR
 
@@ -363,6 +376,7 @@ def test_team_arun_error_path(
         name="test-async-team",
         members=[member],
         model=MockModel(id="mock-model"),
+        session_id="async-instance-session",
     )
 
     async def _run_async() -> None:
@@ -382,6 +396,10 @@ def test_team_arun_error_path(
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_agent test-async-team"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "async-instance-session"
+    )
     assert span.attributes.get("error.type") == "RuntimeError"
     assert span.status.status_code == StatusCode.ERROR
 
@@ -421,10 +439,17 @@ def test_workflow_run_error_path(
     pytest.importorskip("agno.workflow.workflow")
     from agno.workflow.workflow import Workflow
 
-    workflow = Workflow(name="test-workflow", steps=[])
+    workflow = Workflow(
+        name="test-workflow", steps=[], session_id="workflow-instance-session"
+    )
+
+    def fail_workflow_execution(*args: Any, **kwargs: Any) -> None:
+        assert get_ambient_conversation_id() == "workflow-instance-session"
+        raise RuntimeError("workflow failure")
+
     with (
         patch.object(
-            Workflow, "_execute", side_effect=RuntimeError("workflow failure")
+            Workflow, "_execute", side_effect=fail_workflow_execution
         ),
         pytest.raises(RuntimeError, match="workflow failure"),
     ):
@@ -434,6 +459,10 @@ def test_workflow_run_error_path(
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_workflow test-workflow"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "workflow-instance-session"
+    )
     assert span.attributes.get("error.type") == "RuntimeError"
     assert span.status.status_code == StatusCode.ERROR
 
@@ -477,7 +506,11 @@ def test_workflow_arun_error_path(
     pytest.importorskip("agno.workflow.workflow")
     from agno.workflow.workflow import Workflow
 
-    workflow = Workflow(name="test-workflow-async", steps=[])
+    workflow = Workflow(
+        name="test-workflow-async",
+        steps=[],
+        session_id="workflow-instance-session",
+    )
 
     async def _run_async() -> None:
         with (
@@ -488,7 +521,9 @@ def test_workflow_arun_error_path(
             ),
             pytest.raises(RuntimeError, match="async workflow failure"),
         ):
-            await workflow.arun("test input")
+            await workflow.arun(
+                "test input", session_id="workflow-call-session"
+            )
 
     asyncio.run(_run_async())
 
@@ -496,6 +531,10 @@ def test_workflow_arun_error_path(
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_workflow test-workflow-async"
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
+        == "workflow-call-session"
+    )
     assert span.attributes.get("error.type") == "RuntimeError"
     assert span.status.status_code == StatusCode.ERROR
 

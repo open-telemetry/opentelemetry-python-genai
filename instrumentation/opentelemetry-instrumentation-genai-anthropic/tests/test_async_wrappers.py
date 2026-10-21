@@ -15,6 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 
 def _make_invocation():
@@ -27,11 +28,12 @@ def _make_invocation():
     )
 
 
-def _make_stream_wrapper(stream):
+def _make_stream_wrapper(stream, *, is_beta=False):
     return MessagesStreamWrapper(
         stream=stream,
         invocation=_make_invocation(),
         capture_content=False,
+        is_beta=is_beta,
     )
 
 
@@ -360,6 +362,15 @@ def test_sync_manager_enter_constructs_stream_wrapper():
         manager=_FakeSyncManager(stream=stream),
         invocation_factory=_make_invocation,
         capture_content=False,
+        messages_capture=IteratorCapture.from_property(
+            {}, "messages", enabled=False
+        ),
+        system_capture=IteratorCapture.from_property(
+            {}, "system", enabled=False
+        ),
+        tools_capture=IteratorCapture.from_property(
+            {}, "tools", enabled=False
+        ),
     )
 
     with wrapper as result:
@@ -376,6 +387,15 @@ def test_sync_manager_does_not_create_invocation_until_enter():
             factory_calls.append(True) or _make_invocation()
         ),
         capture_content=False,
+        messages_capture=IteratorCapture.from_property(
+            {}, "messages", enabled=False
+        ),
+        system_capture=IteratorCapture.from_property(
+            {}, "system", enabled=False
+        ),
+        tools_capture=IteratorCapture.from_property(
+            {}, "tools", enabled=False
+        ),
     )
 
     assert not factory_calls
@@ -538,6 +558,15 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
         manager=_FakeAsyncManager(stream=stream),
         invocation_factory=_make_invocation,
         capture_content=False,
+        messages_capture=IteratorCapture.from_property(
+            {}, "messages", enabled=False
+        ),
+        system_capture=IteratorCapture.from_property(
+            {}, "system", enabled=False
+        ),
+        tools_capture=IteratorCapture.from_property(
+            {}, "tools", enabled=False
+        ),
     )
 
     async with wrapper as result:
@@ -633,6 +662,50 @@ def test_stream_wrapper_does_not_pass_json_bufs_when_unsupported(monkeypatch):
 
     assert len(captured_kwargs) == 1
     assert "json_bufs" not in captured_kwargs[0]
+
+
+def test_beta_accumulate_failure_disables_beta_and_falls_back_to_standard(
+    monkeypatch,
+):
+    from opentelemetry.instrumentation.genai.anthropic import wrappers
+
+    monkeypatch.setattr(wrappers, "_accumulation_disabled", False)
+    monkeypatch.setattr(wrappers, "_beta_accumulate_takes_json_bufs", True)
+    monkeypatch.setattr(wrappers, "_beta_accumulate_accepts_headers", True)
+
+    beta_calls = []
+    standard_calls = []
+
+    def mock_beta_accumulate(**kwargs):
+        beta_calls.append(kwargs)
+        raise TypeError("Unexpected beta event")
+
+    def mock_accumulate(**kwargs):
+        standard_calls.append(kwargs)
+        return SimpleNamespace(
+            model="claude-test",
+            id="msg_1",
+            usage=None,
+            content=[],
+            stop_reason=None,
+        )
+
+    monkeypatch.setattr(
+        wrappers, "beta_accumulate_event", mock_beta_accumulate
+    )
+    monkeypatch.setattr(wrappers, "accumulate_event", mock_accumulate)
+
+    wrapper = _make_stream_wrapper(
+        _FakeSyncStream(events=["chunk1", "chunk2"]), is_beta=True
+    )
+
+    list(wrapper)
+
+    assert len(beta_calls) == 1
+    assert beta_calls[0]["json_bufs"] is wrapper._self_json_bufs
+    assert "request_headers" in beta_calls[0]
+    assert len(standard_calls) == 2
+    assert wrapper._self_beta_accumulation_disabled
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,1 @@
+Drop unmapped content blocks and non-text system instruction parts instead of recording them as type-only `GenericPart`.

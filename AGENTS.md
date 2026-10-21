@@ -233,6 +233,32 @@ as the reference:
   `instrument(completion_hook=…)` override) and ship a `custom_hook.py` example mirroring the
   OpenAI package.
 
+#### Capturing properties that may contain iterators
+
+- Use `opentelemetry.util.genai.iterator_capture.IteratorCapture` for captured request properties
+  that may contain iterators, including nested values. Wrap those properties, not all `kwargs`.
+  Don't drain or replay them for telemetry.
+- Use one instance per named property: `IteratorCapture.from_property(kwargs, "messages", enabled=capture_content)`.
+  It replaces that property in `kwargs`. Use `capture.extract(extractor)`
+  after SDK consumption, including failures and lazy stream entry.
+  The extractor receives a snapshot with `()` for unread iterators and `None`
+  for disabled or missing properties; `capture.snapshot()` exposes the raw snapshot.
+- Preserve file objects. Extend the util for missing support; don't write local wrappers.
+- Test nested generators, partial reads, errors, and files across supported sync/async and
+  streaming variants.
+
+```python
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
+
+capture = IteratorCapture.from_property(
+    kwargs, "messages", enabled=capture_content
+)
+try:
+    response = sdk_call(**kwargs)
+finally:
+    captured_messages = capture.extract(get_input_messages)
+```
+
 #### Streaming responses
 
 A streamed response only finishes once the caller has drained the stream, so the invocation must
@@ -313,6 +339,7 @@ Full transparency isn't always reachable — prefer the least intrusive option t
   [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py) and a JSON schema under `model/gen-ai/gen-ai-*.json`. genai-util should have models
   for them defined in `opentelemetry.util.genai.types`. Use these models, don't invent new types
   or hand-rolls dicts. 
+- Don't use the deprecated `GenericPart`. Map content to a specific part type or drop it.
 
 ### README
 

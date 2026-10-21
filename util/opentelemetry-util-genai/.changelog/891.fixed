@@ -1,0 +1,1 @@
+Log a warning instead of falling back silently to a no-op hook when `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` names a hook that cannot be loaded.

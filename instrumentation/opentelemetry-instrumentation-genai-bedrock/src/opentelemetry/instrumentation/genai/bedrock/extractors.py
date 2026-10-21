@@ -19,7 +19,6 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     BlobPart,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     InputMessage,
     MessagePart,
@@ -41,8 +40,8 @@ def _is_dict(val: object) -> TypeGuard[dict[str, Any]]:
     return isinstance(val, dict)
 
 
-def _is_list(val: object) -> TypeGuard[list[Any]]:
-    return isinstance(val, list)
+def _is_list(val: object) -> TypeGuard[Sequence[Any]]:
+    return isinstance(val, (list, tuple))
 
 
 def _first_not_none(*values: Any) -> Any:
@@ -180,7 +179,11 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         fmt = document.get("format", "pdf")
         source = document.get("source")
         content_bytes = source.get("bytes", b"") if _is_dict(source) else b""
-        mime_type = _DOC_MIME_TYPES.get(fmt, f"application/{fmt}")
+        mime_type = (
+            _DOC_MIME_TYPES.get(fmt, f"application/{fmt}")
+            if isinstance(fmt, str)
+            else None
+        )
         return BlobPart(
             content=content_bytes,
             mime_type=mime_type,
@@ -233,20 +236,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
             response=block.get("content"),
         )
 
-    # 7. Other Generic block types
-    for key in (
-        "video",
-        "audio",
-        "guardContent",
-        "cachePoint",
-        "citationsContent",
-        "searchResult",
-        "toolAddition",
-        "toolRemoval",
-    ):
-        if key in block:
-            return GenericPart(type=key)
-
     return None
 
 
@@ -282,11 +271,6 @@ def _extract_system_parts(
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(TextPart(content=text))
-            else:
-                for key in item:
-                    if key != "text":
-                        parts.append(GenericPart(type=key))
-                        break
     return parts
 
 

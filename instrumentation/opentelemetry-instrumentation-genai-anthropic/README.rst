@@ -46,6 +46,16 @@ Check out the `manual example <examples/manual>`_ for more details.
     )
 
 
+Supported Operations
+--------------------
+
+The instrumentation supports synchronous and asynchronous calls for:
+
+- ``messages.create``, ``messages.stream``, and ``messages.parse``
+- ``beta.messages.create``, ``beta.messages.stream``, and ``beta.messages.parse``
+- Raw and streaming response helpers (``with_raw_response`` and ``with_streaming_response``)
+
+
 Configuration
 -------------
 
@@ -85,4 +95,3 @@ References
 * `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
 * `Anthropic SDK (Python) <https://github.com/anthropics/anthropic-sdk-python>`_
 * `Anthropic Documentation <https://docs.anthropic.com/>`_
-
