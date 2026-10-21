@@ -460,6 +460,19 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("invoke_agent my_agent")
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 5)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+        # Chunk timing metrics describe inference streams, not invoke_agent.
+        self.assertEqual(
+            self.otel.get_metrics_data_named(
+                "gen_ai.client.operation.time_to_first_chunk"
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.otel.get_metrics_data_named(
+                "gen_ai.client.operation.time_per_output_chunk"
+            ),
+            [],
+        )
 
     def test_interaction_with_non_dict_tools_ignored(self) -> None:
         # SDK will reject this currently, so we just ignore it..
