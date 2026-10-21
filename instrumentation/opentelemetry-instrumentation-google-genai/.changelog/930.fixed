@@ -1,0 +1,1 @@
+Report text parts with `thought=True` as `ReasoningPart` instead of `TextPart` in `generate_content` and `generate_content_stream` messages.
