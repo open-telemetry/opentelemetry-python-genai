@@ -671,6 +671,20 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         ),
         (
             {
+                "input_token_details": {
+                    "cache_read": 4,
+                    "cache_creation": 0,
+                    "ephemeral_5m_input_tokens": 5,
+                    "ephemeral_1h_input_tokens": 6,
+                }
+            },
+            {
+                "gen_ai.usage.cache_write.input_tokens": 11,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 4,
+            },
+        ),
+        (
+            {
                 "input_token_details": {"text": 7, "image": 2, "audio": 1},
                 "output_token_details": {"text": 14, "image": 4, "audio": 2},
             },
@@ -685,7 +699,13 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         ),
         ({}, {}),
     ],
-    ids=["cache-creation", "cache-write", "modalities", "no-details"],
+    ids=[
+        "cache-creation",
+        "cache-write",
+        "anthropic-cache-ttl",
+        "modalities",
+        "no-details",
+    ],
 )
 async def test_chat_token_details(
     asynchronous: bool,
@@ -1984,6 +2004,27 @@ def test_extract_token_details_cache_write_key():
         "cache_write_input_tokens": 4,
         "cache_read_input_tokens": 2,
         "reasoning_tokens": 5,
+    }
+
+
+def test_extract_token_details_anthropic_ttl_breakdown():
+    # Shape produced by langchain-anthropic when Anthropic reports
+    # ``usage.cache_creation`` per cache TTL.
+    usage = {
+        "input_tokens": 22,
+        "output_tokens": 8,
+        "total_tokens": 30,
+        "input_token_details": {
+            "cache_read": 4,
+            "cache_creation": 0,
+            "ephemeral_5m_input_tokens": 5,
+            "ephemeral_1h_input_tokens": 0,
+        },
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 5,
+        "cache_read_input_tokens": 4,
     }
 
 

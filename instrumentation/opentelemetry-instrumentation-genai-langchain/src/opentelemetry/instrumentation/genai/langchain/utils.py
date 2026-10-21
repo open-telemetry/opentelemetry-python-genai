@@ -659,6 +659,19 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
     cache_write = _get_positive_int(input_details, "cache_write")
     if cache_write is None:
         cache_write = _get_positive_int(input_details, "cache_creation")
+    if cache_write is None:
+        # langchain-anthropic zeroes ``cache_creation`` when Anthropic reports
+        # the per-TTL breakdown, moving the count into these keys.
+        cache_write = (
+            sum(
+                _get_positive_int(input_details, key) or 0
+                for key in (
+                    "ephemeral_5m_input_tokens",
+                    "ephemeral_1h_input_tokens",
+                )
+            )
+            or None
+        )
     if cache_write is not None:
         token_details["cache_write_input_tokens"] = cache_write
 
