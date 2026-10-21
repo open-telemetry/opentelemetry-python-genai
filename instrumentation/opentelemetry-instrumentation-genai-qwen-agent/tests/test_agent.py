@@ -4,8 +4,12 @@
 """Tests for Agent.run() instrumentation (invoke_agent spans)."""
 # pylint: disable=redefined-outer-name
 
+import asyncio
+import gc
 import inspect
 import json
+from collections.abc import Iterator
+from types import GeneratorType
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +19,7 @@ from qwen_agent.llm import base as qwen_llm_base
 from qwen_agent.llm.schema import FunctionCall, Message
 from qwen_agent.tools.base import BaseTool, register_tool
 
+from opentelemetry import context, trace
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -219,9 +224,10 @@ def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
     assert isinstance(result, str)
     assert "sunny" in result
 
-    # The tool span is nested (transitively) under the invoke_agent span.
+    # The model client has finished before the agent executes its tools.
     assert tool_span.context.trace_id == agent_span.context.trace_id
     assert tool_span.parent is not None
+    assert tool_span.parent.span_id == agent_span.context.span_id
 
 
 def test_agent_run_error(span_exporter, instrument_no_content):
@@ -395,3 +401,132 @@ def test_nested_agent_runs_produce_nested_spans(
     assert len(child_spans) == 1
     assert child_spans[0].parent is not None
     assert child_spans[0].parent.span_id == parent_spans[0].context.span_id
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "complete",
+        "empty",
+        "provider_error",
+        "close",
+        "caller_error",
+        "abandon",
+    ],
+)
+@pytest.mark.parametrize("other_task", [False, True])
+def test_agent_stream_execution_context(
+    span_exporter,
+    tracer_provider,
+    instrument_no_content,
+    caplog,
+    outcome: str,
+    other_task: bool,
+) -> None:
+    tracer = tracer_provider.get_tracer(__name__)
+    agent = _StubAgent.create(name="ContextBot", llm=_StubLLM())
+    error = ConnectionError("stream failed")
+    active_spans = []
+    cleanup_spans = []
+
+    def fake_run(
+        messages: list[Message], **kwargs: object
+    ) -> Iterator[list[Message]]:
+        active_spans.append(trace.get_current_span())
+        if outcome == "empty":
+            return
+        try:
+            for content in ("first", "last"):
+                active_spans.append(trace.get_current_span())
+                with tracer.start_as_current_span("model call"):
+                    pass
+                yield [Message(role="assistant", content=content)]
+                if outcome == "provider_error":
+                    raise error
+        finally:
+            cleanup_spans.append(trace.get_current_span())
+
+    with tracer.start_as_current_span("caller") as caller:
+        caller_context = context.get_current()
+        with patch.object(_StubAgent, "_run", side_effect=fake_run):
+            stream = agent.run([Message(role="user", content="Go")])
+            assert context.get_current() is caller_context
+            assert isinstance(stream, GeneratorType)
+            assert not active_spans
+            assert not span_exporter.get_finished_spans()
+
+            def consume() -> None:
+                nonlocal stream
+                before = context.get_current()
+                if outcome == "empty":
+                    assert list(stream) == []
+                else:
+                    assert next(stream)[0].content == "first"
+                    assert context.get_current() is before
+                    with tracer.start_as_current_span("between chunks"):
+                        pass
+                    if outcome == "complete":
+                        assert next(stream)[0].content == "last"
+                        assert context.get_current() is before
+                        with pytest.raises(StopIteration):
+                            next(stream)
+                    elif outcome == "provider_error":
+                        with pytest.raises(ConnectionError) as raised:
+                            next(stream)
+                        assert raised.value is error
+                    elif outcome == "close":
+                        stream.close()
+                    elif outcome == "caller_error":
+                        with pytest.raises(ConnectionError) as raised:
+                            with stream:
+                                raise error
+                        assert raised.value is error
+                    else:
+                        stream = None
+                        gc.collect()
+                assert context.get_current() is before
+                if stream is not None:
+                    stream.close()
+                    assert context.get_current() is before
+
+            async def consume_in_task() -> None:
+                with tracer.start_as_current_span("consumer task"):
+                    consume()
+
+            async def dispatch() -> None:
+                await asyncio.create_task(consume_in_task())
+
+            if other_task:
+                asyncio.run(dispatch())
+            else:
+                consume()
+            assert context.get_current() is caller_context
+
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = _spans_named(span_exporter, "invoke_agent ContextBot")
+    assert agent_span.parent.span_id == caller.get_span_context().span_id
+    assert active_spans
+    assert all(
+        s.get_span_context() == agent_span.context for s in active_spans
+    )
+    if outcome not in ("empty", "abandon"):
+        assert len(cleanup_spans) == 1
+        assert cleanup_spans[0].get_span_context() == agent_span.context
+    for span in spans:
+        if span.name == "model call":
+            assert span.parent.span_id == agent_span.context.span_id
+        elif span.name == "between chunks":
+            expected_parent = (
+                _spans_named(span_exporter, "consumer task")[0].context
+                if other_task
+                else caller.get_span_context()
+            )
+            assert span.parent.span_id == expected_parent.span_id
+    if outcome in ("provider_error", "caller_error", "abandon"):
+        assert agent_span.status.status_code == StatusCode.ERROR
+        assert agent_span.attributes[ErrorAttributes.ERROR_TYPE] == (
+            "_OTHER" if outcome == "abandon" else "ConnectionError"
+        )
+    else:
+        assert agent_span.status.status_code != StatusCode.ERROR
+    assert "Failed to detach context" not in caplog.text

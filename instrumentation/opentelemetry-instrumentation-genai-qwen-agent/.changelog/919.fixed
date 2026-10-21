@@ -1,0 +1,1 @@
+Scope agent stream context to reads and cleanup, preserving caller context and nested spans.

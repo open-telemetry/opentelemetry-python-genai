@@ -50,10 +50,8 @@ class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
         invocation: LocalAgentInvocation,
         capture_content: bool,
     ) -> None:
-        super().__init__(stream)
-        # Deliberately not passed to super().__init__: the base class would
-        # mark the invocation as streamed and record per-chunk LLM streaming
-        # metrics, which don't apply to a local invoke_agent invocation.
+        super().__init__(stream, invocation)
+        invocation.suspend()
         self._self_agent_invocation = invocation
         self._self_capture_content = capture_content
         self._self_last_response: Any = None

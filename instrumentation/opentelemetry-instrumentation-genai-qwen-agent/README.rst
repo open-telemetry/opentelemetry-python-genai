@@ -49,6 +49,11 @@ Usage
     for responses in bot.run([{"role": "user", "content": "Hello!"}]):
         pass
 
+The agent span remains open until the run iterator is exhausted or closed.
+It is current only while the agent executes or the iterator is cleaned up;
+caller work between responses keeps the caller's context. Close the iterator
+when stopping early.
+
 Message content capture is disabled by default. Set
 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` to one of
 ``NO_CONTENT``, ``SPAN_ONLY``, ``EVENT_ONLY``, or ``SPAN_AND_EVENT`` to record
