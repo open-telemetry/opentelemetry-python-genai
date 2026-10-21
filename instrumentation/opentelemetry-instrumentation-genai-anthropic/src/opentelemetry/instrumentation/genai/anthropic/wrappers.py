@@ -328,6 +328,7 @@ class MessagesStreamWrapper(
     ):
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_message = None
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
@@ -386,6 +387,7 @@ class AsyncMessagesStreamWrapper(
     ):
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_message = None
         self._self_capture_content = capture_content
         self._self_message_telemetry_finalized = False
