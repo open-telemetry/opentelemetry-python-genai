@@ -322,9 +322,10 @@ def test_tool_call_execute_sync(
         span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID)
         == "call_sync_1"
     )
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"a": 3, "b": 4})
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"a":3,"b":4}'
+    )
     assert span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT) == "12"
 
 
@@ -365,9 +366,10 @@ def test_tool_call_aexecute_async(
         span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID)
         == "call_async_1"
     )
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"a": 3, "b": 4})
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"a":3,"b":4}'
+    )
     assert span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT) == "12"
 
 
@@ -720,9 +722,10 @@ def test_tool_stream_restores_caller_context(
     assert [s.get_span_context().span_id for s in inside] == [
         tool_span.context.span_id
     ] * 2
-    assert tool_span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"prefix": "chunk"})
+    assert (
+        tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"prefix":"chunk"}'
+    )
     assert (
         tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT)
         == "chunk_1chunk_2"
@@ -768,9 +771,10 @@ def test_async_tool_stream_restores_caller_context(
     assert [s.get_span_context().span_id for s in inside] == [
         tool_span.context.span_id
     ] * 2
-    assert tool_span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"prefix": "chunk"})
+    assert (
+        tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"prefix":"chunk"}'
+    )
     assert (
         tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT)
         == "chunk_1chunk_2"
@@ -797,9 +801,10 @@ def test_tool_call_execute_streaming_non_string_chunks(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"count": 2})
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"count":2}'
+    )
     assert json.loads(
         span.attributes[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT]
     ) == [{"index": 0}, {"index": 1}]
@@ -830,9 +835,10 @@ def test_tool_call_aexecute_streaming_non_string_chunks(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"count": 2})
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"count":2}'
+    )
     assert json.loads(
         span.attributes[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT]
     ) == [{"index": 0}, {"index": 1}]
@@ -875,9 +881,10 @@ def test_tool_stream_mid_iteration_error(
     tool_span = spans[0]
     assert tool_span.status.status_code == StatusCode.ERROR
     assert tool_span.attributes.get("error.type") == "ValueError"
-    assert tool_span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"prefix": "part"})
+    assert (
+        tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"prefix":"part"}'
+    )
     assert [s.get_span_context().span_id for s in inside] == [
         tool_span.context.span_id
     ] * 2
@@ -923,9 +930,10 @@ def test_async_tool_stream_mid_iteration_error(
     tool_span = spans[0]
     assert tool_span.status.status_code == StatusCode.ERROR
     assert tool_span.attributes.get("error.type") == "ValueError"
-    assert tool_span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"prefix": "part"})
+    assert (
+        tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"prefix":"part"}'
+    )
     assert [s.get_span_context().span_id for s in inside] == [
         tool_span.context.span_id
     ] * 2
@@ -981,9 +989,10 @@ def test_tool_stream_early_break(
     assert len(spans) == 1
     tool_span = spans[0]
     assert tool_span.status.status_code != StatusCode.ERROR
-    assert tool_span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"prefix": "part"})
+    assert (
+        tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"prefix":"part"}'
+    )
     assert (
         tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT)
         == "part_1"
@@ -1049,9 +1058,10 @@ def test_async_tool_stream_early_break(
     assert len(spans) == 1
     tool_span = spans[0]
     assert tool_span.status.status_code != StatusCode.ERROR
-    assert tool_span.attributes.get(
-        GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
-    ) == json.dumps({"prefix": "part"})
+    assert (
+        tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS)
+        == '{"prefix":"part"}'
+    )
     assert (
         tool_span.attributes.get(GenAIAttributes.GEN_AI_TOOL_CALL_RESULT)
         == "part_1"

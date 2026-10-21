@@ -212,6 +212,7 @@ class ChatStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None
@@ -234,6 +235,7 @@ class AsyncChatStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        invocation.suspend()
         self._self_choice_buffers = []
         self._self_capture_content = capture_content
         self._self_response_id = None

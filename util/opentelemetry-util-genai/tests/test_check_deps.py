@@ -257,6 +257,75 @@ class TestCheckWorkspaceDependencies(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("is not permitted", errors[0])
 
+    def test_dev_floor_with_finalized_workspace_version_passes(self):
+        self.workspace_packages = {
+            "opentelemetry-util-genai": (self.util_dir, "1.2b0"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0.dev, < 2"],
+            }
+        }
+        self.oldest_path.write_text(
+            "-e ../../util/opentelemetry-util-genai\n",
+            encoding="utf-8",
+        )
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            self.oldest_path,
+            self.repo_root,
+            self.workspace_packages,
+        )
+        self.assertEqual(errors, [])
+
+    def test_dev_floor_with_finalized_workspace_version_missing_editable_fails(
+        self,
+    ):
+        self.workspace_packages = {
+            "opentelemetry-util-genai": (self.util_dir, "1.2b0"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0.dev, < 2"],
+            }
+        }
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            None,
+            self.repo_root,
+            self.workspace_packages,
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("unreleased '1.2b0.dev'", errors[0])
+        self.assertIn("missing a local/editable install", errors[0])
+
+    def test_finalized_floor_with_dev_workspace_version_passes(self):
+        self.workspace_packages = {
+            "opentelemetry-util-genai": (self.util_dir, "1.2b0.dev"),
+        }
+        pyproject = {
+            "project": {
+                "name": "opentelemetry-instrumentation-test",
+                "dependencies": ["opentelemetry-util-genai >= 1.2b0, < 2"],
+            }
+        }
+        self.oldest_path.write_text(
+            "-e ../../util/opentelemetry-util-genai\n",
+            encoding="utf-8",
+        )
+        errors = check_workspace_dependencies(
+            self.pkg_dir,
+            pyproject,
+            self.oldest_path,
+            self.repo_root,
+            self.workspace_packages,
+        )
+        self.assertEqual(errors, [])
+
 
 class TestCheckInstrumentsMatch(unittest.TestCase):
     def setUp(self):

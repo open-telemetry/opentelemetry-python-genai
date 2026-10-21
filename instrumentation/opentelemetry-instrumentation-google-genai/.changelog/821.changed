@@ -1,0 +1,1 @@
+Record string tool call results as-is and drop only the arguments that cannot be converted. Previously string results were JSON-quoted, e.g. `done` was recorded as `"done"`, and one unconvertible argument dropped all arguments.

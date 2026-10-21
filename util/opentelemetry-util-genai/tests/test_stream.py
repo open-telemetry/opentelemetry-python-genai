@@ -4,24 +4,35 @@
 # pylint: disable=abstract-class-instantiated
 
 import asyncio
+import gc
 import inspect
 import timeit
+from collections.abc import AsyncGenerator, Generator, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextvars import ContextVar
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from opentelemetry.context import attach, detach
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import get_current_span
+from opentelemetry.trace import get_current_span, set_span_in_context
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._inference_invocation import (
+    SuppressedInferenceInvocation,
+)
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.stream import (
+    AbandonedStreamError,
     AsyncStreamManagerWrapper,
     AsyncStreamWrapper,
     AsyncToolStreamWrapper,
@@ -121,6 +132,17 @@ def test_sync_stream_wrapper_processes_chunks_and_stops():
         pass
 
     assert wrapper._self_stop_count == 1
+
+
+def test_sync_stream_wrapper_processes_chunks_when_suppressed():
+    invocation = MagicMock(spec=SuppressedInferenceInvocation)
+    stream = _FakeSyncStream(chunks=["chunk1", "chunk2"])
+    wrapper = _TestSyncStreamWrapper(stream, invocation=invocation)
+
+    assert next(wrapper) == "chunk1"
+    assert next(wrapper) == "chunk2"
+    assert wrapper._self_processed == ["chunk1", "chunk2"]
+    assert invocation._on_stream_chunk.call_count == 2
 
 
 def test_sync_stream_wrapper_processes_iterables():
@@ -238,6 +260,77 @@ def test_sync_stream_wrapper_stop_iteration_does_not_double_finalize():
     assert not wrapper._self_failures
 
 
+def test_sync_stream_wrapper_finalizes_abandoned_stream():
+    failures = []
+
+    class _RecordingWrapper(_TestSyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    wrapper = _RecordingWrapper(_FakeSyncStream(chunks=["a", "b"]))
+    # A caller raising inside a bare ``for`` body reaches neither __exit__ nor
+    # close(), so only __del__ is left to end the span.
+    with pytest.raises(RuntimeError):
+        for _ in wrapper:
+            raise RuntimeError("caller error")
+
+    del wrapper
+    gc.collect()
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_sync_stream_wrapper_finalizes_stream_abandoned_by_break():
+    processed = []
+    failures = []
+
+    class _RecordingWrapper(_TestSyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    def consume_first_chunk():
+        wrapper = _RecordingWrapper(_FakeSyncStream(chunks=["a", "b", "c"]))
+        for chunk in wrapper:
+            processed.append(chunk)
+            break
+
+    consume_first_chunk()
+    gc.collect()
+
+    # Breaking leaves the remaining chunks unread, so the span is finalized
+    # with only what the caller actually consumed.
+    assert processed == ["a"]
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_sync_stream_wrapper_abandon_does_not_refinalize_drained_stream():
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(chunks=["a"]))
+    assert list(wrapper) == ["a"]
+    assert wrapper._self_stop_count == 1
+
+    wrapper.__del__()
+
+    assert wrapper._self_stop_count == 1
+    assert not wrapper._self_failures
+
+
+def test_sync_stream_wrapper_abandon_does_not_override_failure():
+    error = ValueError("stream broke")
+    wrapper = _TestSyncStreamWrapper(_FakeSyncStream(error=error))
+
+    with pytest.raises(ValueError):
+        next(wrapper)
+
+    wrapper.__del__()
+
+    assert wrapper._self_failures == [error]
+    assert wrapper._self_stop_count == 0
+
+
 class _FakeAsyncStream:
     def __init__(self, chunks=None, error=None, close_error=None):
         self._chunks = list(chunks or [])
@@ -311,6 +404,20 @@ def test_async_stream_wrapper_processes_chunks_and_stops():
             pass
 
         assert wrapper._self_stop_count == 1
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_processes_chunks_when_suppressed():
+    async def exercise():
+        invocation = MagicMock(spec=SuppressedInferenceInvocation)
+        stream = _FakeAsyncStream(chunks=["chunk1", "chunk2"])
+        wrapper = _TestAsyncStreamWrapper(stream, invocation=invocation)
+
+        assert await anext(wrapper) == "chunk1"
+        assert await anext(wrapper) == "chunk2"
+        assert wrapper._self_processed == ["chunk1", "chunk2"]
+        assert invocation._on_stream_chunk.call_count == 2
 
     asyncio.run(exercise())
 
@@ -448,6 +555,71 @@ def test_async_stream_wrapper_stop_iteration_does_not_double_finalize():
 
         assert wrapper._self_stop_count == 1
         assert not wrapper._self_failures
+
+    asyncio.run(exercise())
+
+
+def test_async_stream_wrapper_finalizes_abandoned_stream():
+    failures = []
+
+    class _RecordingWrapper(_TestAsyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    async def exercise():
+        wrapper = _RecordingWrapper(_FakeAsyncStream(chunks=["a", "b"]))
+        # Neither __aexit__ nor close() runs when the caller raises inside a
+        # bare ``async for`` body, leaving __del__ to end the span.
+        with pytest.raises(RuntimeError):
+            async for _ in wrapper:
+                raise RuntimeError("caller error")
+
+    asyncio.run(exercise())
+    gc.collect()
+
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_async_stream_wrapper_finalizes_stream_abandoned_by_break():
+    processed = []
+    failures = []
+
+    class _RecordingWrapper(_TestAsyncStreamWrapper):
+        def _on_stream_error(self, error):
+            super()._on_stream_error(error)
+            failures.append(error)
+
+    async def consume_first_chunk():
+        wrapper = _RecordingWrapper(_FakeAsyncStream(chunks=["a", "b", "c"]))
+        async for chunk in wrapper:
+            processed.append(chunk)
+            break
+
+    asyncio.run(consume_first_chunk())
+    gc.collect()
+
+    # Breaking leaves the remaining chunks unread, so the span is finalized
+    # with only what the caller actually consumed.
+    assert processed == ["a"]
+    assert len(failures) == 1
+    assert isinstance(failures[0], AbandonedStreamError)
+
+
+def test_async_stream_wrapper_abandon_does_not_override_failure():
+    error = ValueError("stream broke")
+
+    async def exercise():
+        wrapper = _TestAsyncStreamWrapper(_FakeAsyncStream(error=error))
+
+        with pytest.raises(ValueError):
+            await anext(wrapper)
+
+        wrapper.__del__()
+
+        assert wrapper._self_failures == [error]
+        assert wrapper._self_stop_count == 0
 
     asyncio.run(exercise())
 
@@ -838,6 +1010,77 @@ def test_finalize_on_aclose_finalizes_when_aclose_raises():
         assert finalized == [True]
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("close_error", [None, RuntimeError("close failure")])
+def test_finalize_on_close_runs_inside_execution_context(close_error):
+    active = ContextVar("active", default=False)
+    seen: list[bool] = []
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class Closable(_FakeClosable):
+        def close(self):
+            seen.append(active.get())
+            super().close()
+
+    proxy = finalize_on_close(
+        Closable(close_error=close_error),
+        lambda: seen.append(active.get()),
+        execution_context=scope,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="close failure")
+        if close_error
+        else nullcontext()
+    ):
+        proxy.close()
+
+    assert seen == [True, True]
+    assert not active.get()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_error", [None, RuntimeError("close failure")])
+async def test_finalize_on_aclose_runs_inside_execution_context(close_error):
+    active = ContextVar("active", default=False)
+    seen: list[bool] = []
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class Closable(_FakeClosable):
+        async def aclose(self):
+            seen.append(active.get())
+            await super().aclose()
+
+    proxy = finalize_on_aclose(
+        Closable(close_error=close_error),
+        lambda: seen.append(active.get()),
+        execution_context=scope,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="close failure")
+        if close_error
+        else nullcontext()
+    ):
+        await proxy.aclose()
+
+    assert seen == [True, True]
+    assert not active.get()
 
 
 class _FakeInvocation:
@@ -1338,6 +1581,46 @@ def test_async_manager_wrapper_fails_invocation_when_exit_raises_before_enter():
     asyncio.run(exercise())
 
 
+def test_abandoned_stream_records_error_status_and_type():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from opentelemetry.trace.status import StatusCode
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    handler = TelemetryHandler(tracer_provider=provider)
+
+    invocation = handler.inference(
+        provider="test-provider", request_model="test-model"
+    )
+    wrapper = _TestSyncStreamWrapper(
+        _FakeSyncStream(chunks=["a", "b"]), invocation=invocation
+    )
+    wrapper.__del__()
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "abandoned stream"
+    assert span.attributes.get("error.type") == "_OTHER"
+
+
+def test_abandoned_stream_catches_base_exception_in_del():
+    class _BaseExceptionOnErrorWrapper(_TestSyncStreamWrapper):
+        def _on_stream_error(self, error):
+            raise asyncio.CancelledError("cancelled during cleanup")
+
+    wrapper = _BaseExceptionOnErrorWrapper(_FakeSyncStream(chunks=["a"]))
+    # Must not raise out of __del__
+    wrapper.__del__()
+
+
 def test_sync_tool_stream_wrapper_lifecycle():
     invocation, span_exporter = _started_tool_invocation()
     stream = _FakeSyncStream(chunks=["chunk1", "chunk2"])
@@ -1436,6 +1719,22 @@ def test_sync_tool_stream_wrapper_non_string_chunks():
     assert spans[0].attributes["gen_ai.tool.call.result"] == gen_ai_json_dumps(
         chunks
     )
+
+
+def test_tool_stream_wrapper_converts_model_chunks():
+    class Model:
+        def model_dump(self):
+            return {"k": "v"}
+
+    invocation, span_exporter = _started_tool_invocation()
+    wrapper = SyncToolStreamWrapper(
+        _FakeSyncStream(chunks=[Model(), {"n": 1}]), invocation
+    )
+
+    list(wrapper)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes["gen_ai.tool.call.result"] == '[{"k":"v"},{"n":1}]'
 
 
 def test_async_tool_stream_wrapper_non_string_chunks():
@@ -1607,3 +1906,557 @@ def test_async_tool_stream_wrapper_finalizes_failure_on_del():
         assert spans[0].attributes["error.type"] == "GeneratorExit"
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_sync_execution_scope_includes_send_throw_and_close(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    closed: list[bool] = []
+    error = ConnectionError("stream failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestSyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+        def _process_chunk(self, chunk: Any) -> None:
+            assert active.get()
+            super()._process_chunk(chunk)
+
+        def _on_stream_end(self) -> None:
+            assert active.get()
+            super()._on_stream_end()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            assert active.get()
+            super()._on_stream_error(error)
+
+    def produce() -> Generator[str, str, None]:
+        assert active.get()
+        try:
+            value = yield "first"
+            assert active.get()
+            assert value == "sent"
+            try:
+                yield "second"
+            except ConnectionError as caught:
+                assert caught is error
+                assert active.get()
+                if failure:
+                    raise
+                yield "recovered"
+        finally:
+            assert active.get()
+            closed.append(True)
+
+    wrapper = ScopedWrapper(produce())
+    assert next(wrapper) == "first"
+    assert not active.get()
+    assert wrapper.send("sent") == "second"
+    assert not active.get()
+    if failure:
+        with pytest.raises(ConnectionError) as raised:
+            wrapper.throw(error)
+        assert raised.value is error
+        assert wrapper._self_failures == [error]
+    else:
+        assert wrapper.throw(error) == "recovered"
+    assert not active.get()
+    wrapper.close()
+    assert not active.get()
+    assert closed == [True]
+    assert wrapper._self_stop_count == (0 if failure else 1)
+    assert not hasattr(ScopedWrapper(_FakeSyncStream()), "send")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_async_execution_scope_includes_asend_athrow_and_close(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    closed: list[bool] = []
+    error = ConnectionError("stream failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+        def _process_chunk(self, chunk: Any) -> None:
+            assert active.get()
+            super()._process_chunk(chunk)
+
+        def _on_stream_end(self) -> None:
+            assert active.get()
+            super()._on_stream_end()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            assert active.get()
+            super()._on_stream_error(error)
+
+    async def produce() -> AsyncGenerator[str, str]:
+        assert active.get()
+        try:
+            value = yield "first"
+            assert active.get()
+            assert value == "sent"
+            try:
+                yield "second"
+            except ConnectionError as caught:
+                assert caught is error
+                assert active.get()
+                if failure:
+                    raise
+                yield "recovered"
+        finally:
+            assert active.get()
+            closed.append(True)
+
+    wrapper = ScopedWrapper(produce())
+    assert await anext(wrapper) == "first"
+    assert not active.get()
+    assert await wrapper.asend("sent") == "second"
+    assert not active.get()
+    if failure:
+        with pytest.raises(ConnectionError) as raised:
+            await wrapper.athrow(error)
+        assert raised.value is error
+        assert wrapper._self_failures == [error]
+    else:
+        assert await wrapper.athrow(error) == "recovered"
+    assert not active.get()
+    await wrapper.aclose()
+    assert not active.get()
+    assert closed == [True]
+    assert wrapper._self_stop_count == (0 if failure else 1)
+    assert not hasattr(ScopedWrapper(_FakeAsyncStream()), "asend")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_sync_manager_exit_runs_inside_stream_execution_scope(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    exits: list[bool] = []
+    error = RuntimeError("exit failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestSyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    class ScopedManagerWrapper(SyncStreamManagerWrapper):
+        def _wrap_stream(self, stream, invocation):
+            return ScopedWrapper(stream, invocation=invocation)
+
+    class Manager(_FakeSyncManager):
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            # The SDK closes its stream here, so this is stream cleanup.
+            exits.append(active.get())
+            return super().__exit__(exc_type, exc_val, exc_tb)
+
+    stream = _FakeSyncStream(chunks=["a"])
+    manager = Manager(stream, exit_error=error if failure else None)
+    wrapper = ScopedManagerWrapper(manager, _FakeInvocation)
+    invocation = None
+
+    with pytest.raises(RuntimeError) if failure else nullcontext():
+        with wrapper as stream_wrapper:
+            invocation = stream_wrapper._self_invocation
+            assert not active.get()
+            assert next(stream_wrapper) == "a"
+            assert not active.get()
+
+    assert exits == [True]
+    assert not active.get()
+    assert invocation is not None
+    if failure:
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+    else:
+        assert invocation.failures == []
+        assert invocation.stop_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_async_manager_exit_runs_inside_stream_execution_scope(
+    failure: bool,
+) -> None:
+    active = ContextVar("active", default=False)
+    exits: list[bool] = []
+    error = RuntimeError("exit failed")
+
+    @contextmanager
+    def scope() -> Iterator[None]:
+        token = active.set(True)
+        try:
+            yield
+        finally:
+            active.reset(token)
+
+    class ScopedWrapper(_TestAsyncStreamWrapper):
+        def _execution_context(self) -> AbstractContextManager[None]:
+            return scope()
+
+    class ScopedManagerWrapper(AsyncStreamManagerWrapper):
+        def _wrap_stream(self, stream, invocation):
+            return ScopedWrapper(stream, invocation=invocation)
+
+    class Manager(_FakeAsyncManager):
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            exits.append(active.get())
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+
+    stream = _FakeAsyncStream(chunks=["a"])
+    manager = Manager(stream, exit_error=error if failure else None)
+    wrapper = ScopedManagerWrapper(manager, _FakeInvocation)
+    invocation = None
+
+    with pytest.raises(RuntimeError) if failure else nullcontext():
+        async with wrapper as stream_wrapper:
+            invocation = stream_wrapper._self_invocation
+            assert not active.get()
+            assert await anext(stream_wrapper) == "a"
+            assert not active.get()
+
+    assert exits == [True]
+    assert not active.get()
+    assert invocation is not None
+    if failure:
+        assert invocation.failures == [error]
+        assert invocation.stop_count == 0
+    else:
+        assert invocation.failures == []
+        assert invocation.stop_count == 1
+
+
+class _ActivatingInvocation:
+    """Invocation double that records whether reads ran inside activate()."""
+
+    def __init__(self, suspended: bool) -> None:
+        self._suspended = suspended
+        self.active = False
+        self.activations = 0
+
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def fail(self, error: Any) -> None:
+        pass
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        self.activations += 1
+        self.active = True
+        try:
+            yield
+        finally:
+            self.active = False
+
+
+@pytest.mark.parametrize("attach", [True, False])
+def test_default_execution_context_follows_suspended(attach: bool):
+    invocation = _ActivatingInvocation(attach)
+    seen: list[bool] = []
+
+    class Wrapper(_TestSyncStreamWrapper):
+        def _process_chunk(self, chunk: Any) -> None:
+            seen.append(invocation.active)
+            super()._process_chunk(chunk)
+
+    wrapper = Wrapper(iter(["a", "b"]), invocation)
+    assert list(wrapper) == ["a", "b"]
+    assert seen == [attach, attach]
+    # one activation per read: two chunks and the read that ends the stream
+    assert invocation.activations == (3 if attach else 0)
+    assert invocation.active is False
+
+
+def test_default_execution_context_without_suspended_flag_is_a_noop():
+    class Bare:
+        def _on_stream_chunk(self, chunk_at: float) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def fail(self, error: Any) -> None:
+            pass
+
+    wrapper = _TestSyncStreamWrapper(iter(["a"]), Bare())
+    assert list(wrapper) == ["a"]
+
+
+def _suspended_tool_invocation():
+    """A real invocation started under a caller span, then suspended as a stream wrapper expects."""
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(
+        SimpleSpanProcessor(InMemorySpanExporter())
+    )
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="abandoned_tool",
+    )
+    invocation.suspend()
+    return invocation
+
+
+@pytest.mark.parametrize(
+    "wrapper_cls", [_TestSyncStreamWrapper, SyncToolStreamWrapper]
+)
+def test_abandoned_sync_stream_finalizes_inside_execution_context(wrapper_cls):
+    invocation = _suspended_tool_invocation()
+    spans_at_finalize = []
+
+    class _RecordingWrapper(wrapper_cls):
+        def _on_stream_error(self, error):
+            spans_at_finalize.append(get_current_span())
+            super()._on_stream_error(error)
+
+    wrapper = _RecordingWrapper(iter(["a", "b"]), invocation)
+    with pytest.raises(RuntimeError):
+        for _ in wrapper:
+            raise RuntimeError("caller error")
+
+    del wrapper
+    gc.collect()
+
+    assert spans_at_finalize == [invocation.span]
+    assert get_current_span() is not invocation.span
+
+
+@pytest.mark.parametrize(
+    "wrapper_cls", [_TestAsyncStreamWrapper, AsyncToolStreamWrapper]
+)
+def test_abandoned_async_stream_finalizes_inside_execution_context(
+    wrapper_cls,
+):
+    invocation = _suspended_tool_invocation()
+    spans_at_finalize = []
+
+    class _RecordingWrapper(wrapper_cls):
+        def _on_stream_error(self, error):
+            spans_at_finalize.append(get_current_span())
+            super()._on_stream_error(error)
+
+    async def chunks():
+        yield "a"
+        yield "b"
+
+    async def exercise():
+        wrapper = _RecordingWrapper(chunks(), invocation)
+        with pytest.raises(RuntimeError):
+            async for _ in wrapper:
+                raise RuntimeError("caller error")
+
+    asyncio.run(exercise())
+    gc.collect()
+
+    assert spans_at_finalize == [invocation.span]
+    assert get_current_span() is not invocation.span
+
+
+def test_default_execution_context_leaves_suppressed_inference_invocation_alone():
+    """A nested inference invocation never attached itself, so reads don't activate it."""
+    from opentelemetry.util.genai._inference_invocation import (  # pylint: disable=import-outside-toplevel
+        SuppressedInferenceInvocation,
+    )
+    from opentelemetry.util.genai.handler import (  # pylint: disable=import-outside-toplevel
+        TelemetryHandler,
+    )
+
+    handler = TelemetryHandler(tracer_provider=TracerProvider())
+    outer = handler.inference("openai", request_model="model")
+    try:
+        inner = handler.inference("openai", request_model="model")
+        assert isinstance(inner, SuppressedInferenceInvocation)
+        inner.suspend()
+        assert not inner._suspended
+
+        wrapper = _TestSyncStreamWrapper(iter(["a"]), inner)
+        assert list(wrapper) == ["a"]
+        assert wrapper._self_finalized
+        assert get_current_span() is outer.span
+    finally:
+        outer.stop()
+
+
+def _parent_and_attached_invocation():
+    """A caller span made current, then a real invocation started under it and left attached."""
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(
+        SimpleSpanProcessor(InMemorySpanExporter())
+    )
+    parent = tracer_provider.get_tracer(__name__).start_span("caller")
+    token = attach(set_span_in_context(parent))
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="attached_tool",
+    )
+    assert get_current_span() is invocation.span
+    return parent, token, invocation
+
+
+@pytest.mark.parametrize("ending", ["exhaust", "error", "close"])
+def test_default_execution_context_leaves_unsuspended_invocation_alone(ending):
+    """An instrumentation that never calls suspend() must still end with the parent current."""
+    parent, token, invocation = _parent_and_attached_invocation()
+    try:
+
+        def chunks():
+            yield "a"
+            if ending == "error":
+                raise RuntimeError("boom")
+            yield "b"
+
+        wrapper = _TestSyncStreamWrapper(chunks(), invocation)
+        if ending == "exhaust":
+            assert list(wrapper) == ["a", "b"]
+        elif ending == "error":
+            with pytest.raises(RuntimeError):
+                list(wrapper)
+        else:
+            assert next(iter(wrapper)) == "a"
+            wrapper.close()
+        assert wrapper._self_finalized
+        assert get_current_span() is parent
+    finally:
+        detach(token)
+        parent.end()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["exhaust", "error", "close"])
+async def test_default_execution_context_leaves_unsuspended_invocation_alone_async(
+    ending,
+):
+    parent, token, invocation = _parent_and_attached_invocation()
+    try:
+
+        async def chunks():
+            yield "a"
+            if ending == "error":
+                raise RuntimeError("boom")
+            yield "b"
+
+        wrapper = _TestAsyncStreamWrapper(chunks(), invocation)
+        if ending == "exhaust":
+            assert [c async for c in wrapper] == ["a", "b"]
+        elif ending == "error":
+            with pytest.raises(RuntimeError):
+                _ = [c async for c in wrapper]
+        else:
+            assert await wrapper.__anext__() == "a"
+            await wrapper.aclose()
+        assert wrapper._self_finalized
+        assert get_current_span() is parent
+    finally:
+        detach(token)
+        parent.end()
+
+
+def test_default_execution_context_activates_suspended_invocation():
+    parent, token, invocation = _parent_and_attached_invocation()
+    try:
+        invocation.suspend()
+        assert get_current_span() is parent
+        seen: list[Any] = []
+
+        class Wrapper(_TestSyncStreamWrapper):
+            def _process_chunk(self, chunk: Any) -> None:
+                seen.append(get_current_span())
+                super()._process_chunk(chunk)
+
+        wrapper = Wrapper(iter(["a", "b"]), invocation)
+        for _ in wrapper:
+            assert get_current_span() is parent
+        assert seen == [invocation.span, invocation.span]
+        assert get_current_span() is parent
+    finally:
+        detach(token)
+        parent.end()
+
+
+def test_tool_stream_wrapper_records_no_chunk_timing_metrics():
+    reader = InMemoryMetricReader()
+    invocation = ToolInvocation(
+        tracer=TracerProvider().get_tracer(__name__),
+        instruments=_Instruments(
+            MeterProvider(metric_readers=[reader]).get_meter(__name__)
+        ),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="metrics_tool",
+    )
+    assert list(SyncToolStreamWrapper(iter(["a", "b"]), invocation)) == [
+        "a",
+        "b",
+    ]
+
+    names: set[str] = set()
+    data = reader.get_metrics_data()
+    for resource_metrics in data.resource_metrics if data else []:
+        for scope_metrics in resource_metrics.scope_metrics:
+            names.update(m.name for m in scope_metrics.metrics)
+    assert names == {"gen_ai.execute_tool.duration"}
+
+
+def test_tool_stream_wrapper_leaves_detached_tool_invocation_alone():
+    """A tool invocation created with _attach_to_context=False is never made current by the wrapper."""
+    caller_span = get_current_span()
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    invocation = ToolInvocation(
+        tracer=tracer_provider.get_tracer(__name__),
+        instruments=_Instruments(MeterProvider().get_meter(__name__)),
+        logger=MagicMock(),
+        completion_hook=MagicMock(spec=CompletionHook),
+        name="detached_tool",
+        _attach_to_context=False,
+    )
+    assert get_current_span() is caller_span
+    inside: list[Any] = []
+
+    def tool_body():
+        inside.append(get_current_span())
+        yield "a"
+
+    assert list(SyncToolStreamWrapper(tool_body(), invocation)) == ["a"]
+    assert inside == [caller_span]
+    assert get_current_span() is caller_span
+    assert len(span_exporter.get_finished_spans()) == 1

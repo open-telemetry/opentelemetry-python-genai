@@ -177,6 +177,78 @@ def incomplete_text_stream_sse_body(text: str) -> bytes:
     )
 
 
+def incomplete_thinking_text_stream_sse_body(
+    thinking: str, text: str
+) -> bytes:
+    events: list[tuple[str, dict[str, object]]] = [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_incomplete_thinking",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": thinking},
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                },
+                "usage": {"output_tokens": 5},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return b"".join(
+        f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+        for name, payload in events
+    )
+
+
 def assert_multimodal_input(span: ReadableSpan) -> None:
     value = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert value is not None

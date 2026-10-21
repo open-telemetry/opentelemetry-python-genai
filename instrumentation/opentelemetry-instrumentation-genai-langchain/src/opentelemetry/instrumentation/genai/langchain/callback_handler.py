@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
@@ -30,7 +29,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     resolve_agent_name,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
-    _legacy_function_call_request,
+    _ai_message_parts,
     _message_name,
     _normalize_role,
     extract_token_details,
@@ -54,12 +53,13 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.types import (
     InputMessage,
-    MessagePart,
     OutputMessage,
     RetrievalDocument,
     Role,
-    TextPart,
-    ToolCallRequestPart,
+)
+from opentelemetry.util.genai.utils import (
+    object_to_any_value,
+    tool_arguments_to_any_value,
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
@@ -166,12 +166,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         self,
         telemetry_handler: TelemetryHandler,
         *,
-        _attach_to_context: bool = True,
         invocation_manager: _InvocationManager | None = None,
     ) -> None:
         super().__init__()
         self._telemetry_handler = telemetry_handler
-        self._attach_to_context = _attach_to_context
         self._invocation_manager = (
             invocation_manager
             if invocation_manager is not None
@@ -221,7 +219,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 name=workflow_name_override or workflow_name,
                 context=parent_context,
                 conversation_id=conversation_id,
-                _attach_to_context=self._attach_to_context,
+                _attach_to_context=False,
             )
             if capture_content:
                 workflow.input_messages = make_input_message(inputs)
@@ -255,7 +253,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         agent_name=suggested_agent_name,
                         context=parent_context,
                         conversation_id=conversation_id,
-                        _attach_to_context=self._attach_to_context,
+                        _attach_to_context=False,
                     )
                     if capture_content:
                         agent.input_messages = make_input_message(inputs)
@@ -281,7 +279,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     agent_name=None,
                     context=parent_context,
                     conversation_id=conversation_id,
-                    _attach_to_context=self._attach_to_context,
+                    _attach_to_context=False,
                 )
                 agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
@@ -442,7 +440,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             request_model=request_model,
             context=parent_context,
             conversation_id=_conversation_id(metadata),
-            _attach_to_context=self._attach_to_context,
+            _attach_to_context=False,
         )
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
@@ -528,7 +526,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     chat_generation, "generation_info", None
                 )
                 if generation_info is not None:
-                    finish_reason = generation_info.get("finish_reason")
+                    # ChatOllama spells its stop reason `done_reason`;
+                    # fall back to it so a successful run is not later
+                    # recorded as `"error"`.
+                    finish_reason = generation_info.get(
+                        "finish_reason"
+                    ) or generation_info.get("done_reason")
 
                 if chat_generation.message:
                     # Responses API (RAPI) may include the served model in the
@@ -568,60 +571,33 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or chat_generation.message.response_metadata.get(
                                 "stop_reason"
                             )
+                            or chat_generation.message.response_metadata.get(
+                                "done_reason"
+                            )
                         )
                     finish_reason = finish_reason or "error"
 
                     name_str = _message_name(chat_generation.message)
 
-                    if finish_reason in ("tool_calls", "tool_use"):
-                        tool_calls: list[ToolCallRequestPart] = []
-                        for tool_call in chat_generation.message.tool_calls:
-                            tool_call_request = ToolCallRequestPart(
-                                name=tool_call["name"],
-                                id=tool_call["id"],
-                                arguments=tool_call["args"],
-                            )
-                            tool_calls.append(tool_call_request)
-                        output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value,
-                            parts=cast(list[MessagePart], tool_calls),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
-                    elif (
-                        legacy_call := _legacy_function_call_request(
+                    # Build parts via ``_ai_message_parts`` so text, reasoning
+                    # and tool calls are all preserved. Only decode content when
+                    # capture is enabled; finish reason, usage, model and id are
+                    # collected unconditionally below.
+                    if self._telemetry_handler.should_capture_content():
+                        message_parts = _ai_message_parts(
                             chat_generation.message
                         )
-                    ) is not None:
-                        # Pre-tools OpenAI ``function_call`` present in
-                        # ``additional_kwargs`` — surface it as a tool-call
-                        # request part like the modern ``tool_calls`` path.
-                        output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value,
-                            parts=cast(list[MessagePart], [legacy_call]),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
-                    else:
-                        parts = [
-                            TextPart(
-                                content=chat_generation.message.content,
-                                type="text",
+                        # Skip empty messages, consistent with
+                        # ``to_output_messages``.
+                        if message_parts:
+                            output_message = OutputMessage(
+                                role=_normalize_role(chat_generation.message)
+                                or Role.ASSISTANT.value,
+                                parts=message_parts,
+                                finish_reason=finish_reason,
+                                name=name_str,
                             )
-                        ]
-                        role = (
-                            _normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value
-                        )
-                        output_message = OutputMessage(
-                            role=role,
-                            parts=cast(list[MessagePart], parts),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
-                    output_messages.append(output_message)
+                            output_messages.append(output_message)
                     finish_reasons.append(finish_reason)
 
                     # Get token usage if available
@@ -733,14 +709,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             name = serialized.get("name") or "unknown"
             description = serialized.get("description")
 
-        arguments: Any
-        if inputs is not None:
-            arguments = inputs
-        else:
-            try:
-                arguments = json.loads(input_str)
-            except (json.JSONDecodeError, ValueError):
-                arguments = input_str
         agent_name, _ = self._find_agent_context(parent_run_id)
         parent_context = self._invocation_manager.get_parent_context(
             parent_run_id
@@ -751,10 +719,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             tool_type="function",
             agent_name=agent_name,
             context=parent_context,
-            _attach_to_context=self._attach_to_context,
+            _attach_to_context=False,
         )
         tool_invocation.tool_description = description
-        tool_invocation.arguments = arguments
+        if tool_invocation.should_capture_content:
+            tool_invocation.arguments = tool_arguments_to_any_value(
+                inputs if inputs is not None else input_str
+            )
         tool_call_id = kwargs.get("tool_call_id")
         if tool_call_id:
             tool_invocation.tool_call_id = tool_call_id
@@ -776,7 +747,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         end_tool_call_id = getattr(output, "tool_call_id", None)
         if end_tool_call_id and not tool_invocation.tool_call_id:
             tool_invocation.tool_call_id = end_tool_call_id
-        tool_invocation.tool_result = getattr(output, "content", None)
+        if tool_invocation.should_capture_content:
+            tool_invocation.tool_result = object_to_any_value(
+                getattr(output, "content", output)
+            )
         tool_invocation.stop()
         self._invocation_manager.delete_invocation_state(run_id=run_id)
 
@@ -815,7 +789,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             provider=provider,
             request_model=request_model,
             context=parent_context,
-            _attach_to_context=self._attach_to_context,
+            _attach_to_context=False,
         )
         retrieval.query_text = query
         self._invocation_manager.add_invocation_state(
@@ -861,6 +835,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
         invocation.fail(error)
         self._invocation_manager.delete_invocation_state(run_id=run_id)
+
+    def on_interrupt(self, event: Any) -> None:
+        """Accept LangGraph's graph interrupt event without recording it."""
+
+    def on_resume(self, event: Any) -> None:
+        """Accept LangGraph's graph resume event without recording it."""
 
     def _find_agent_context(
         self, run_id: UUID | None

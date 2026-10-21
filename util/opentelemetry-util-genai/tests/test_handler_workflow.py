@@ -48,16 +48,12 @@ class _WorkflowTestBase(TestCase):
 
 
 class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
-    # ------------------------------------------------------------------
-    # start_workflow
-    # ------------------------------------------------------------------
-
-    def test_start_workflow_creates_span(self) -> None:
+    def test_workflow_creates_span(self) -> None:
         invocation = self.handler.workflow(name="my_workflow")
         self.assertIsNot(invocation.span, INVALID_SPAN)
         invocation.stop()
 
-    def test_start_workflow_span_name(self) -> None:
+    def test_workflow_span_name(self) -> None:
         invocation = self.handler.workflow(name="my_pipeline")
         invocation.stop()
 
@@ -65,7 +61,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(spans[0].name, "invoke_workflow my_pipeline")
 
-    def test_start_workflow_span_name_without_name(self) -> None:
+    def test_workflow_span_name_without_name(self) -> None:
         invocation = self.handler.workflow(name=None)
         invocation.stop()
 
@@ -90,7 +86,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         spans = self._get_finished_spans()
         self.assertNotIn(GenAI.GEN_AI_CONVERSATION_ID, spans[0].attributes)
 
-    def test_start_workflow_span_kind_is_internal(self) -> None:
+    def test_workflow_span_kind_is_internal(self) -> None:
         invocation = self.handler.workflow(name="wf")
         invocation.stop()
 
@@ -98,13 +94,13 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(len(spans), 1)
         self.assertEqual(spans[0].kind, SpanKind.INTERNAL)
 
-    def test_start_workflow_records_monotonic_start(self) -> None:
+    def test_workflow_records_monotonic_start(self) -> None:
         with patch("timeit.default_timer", return_value=500.0):
             invocation = self.handler.workflow(name="wf")
         self.assertEqual(invocation._monotonic_start_s, 500.0)
         invocation.stop()
 
-    def test_start_workflow_sets_workflow_name_attribute(self) -> None:
+    def test_workflow_sets_workflow_name_attribute(self) -> None:
         invocation = self.handler.workflow(name="my_pipeline")
         invocation.stop()
 
@@ -113,7 +109,7 @@ class TelemetryHandlerWorkflowTest(_WorkflowTestBase):
         self.assertEqual(value, "my_pipeline")
         self.assertIsInstance(value, str)
 
-    def test_start_workflow_without_name_omits_workflow_name_attribute(
+    def test_workflow_without_name_omits_workflow_name_attribute(
         self,
     ) -> None:
         invocation = self.handler.workflow(name=None)
@@ -280,7 +276,7 @@ class TelemetryHandlerWorkflowContextManagerTest(_WorkflowTestBase):
 
 
 class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
-    def test_start_workflow_passes_sampling_attributes_at_span_creation(
+    def test_workflow_passes_sampling_attributes_at_span_creation(
         self,
     ) -> None:
         """Verify that sampling-relevant attributes are available at start_span() time for workflows."""

@@ -28,12 +28,16 @@ from .interactions import (
 
 
 class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
+    # BaseInstrumentor is a singleton: __init__ re-runs on the existing
+    # instance, so snapshots live on the class and are never reset here.
+    _generate_content_snapshot: object | None = None
+    _interactions_snapshot: object | None = None
+    _embedding_snapshot: object | None = None
+
     def __init__(
         self, generate_content_config_key_allowlist: AllowList | None = None
     ):
-        self._generate_content_snapshot = None
-        self._interactions_snapshot = None
-        self._embedding_snapshot = None
+        super().__init__()
         self._generate_content_config_key_allowlist = (
             generate_content_config_key_allowlist
             or AllowList.from_env(
@@ -76,6 +80,12 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
         self._embedding_snapshot = instrument_embeddings(telemetry_handler)
 
     def _uninstrument(self, **kwargs: Any):
-        uninstrument_generate_content(self._generate_content_snapshot)
-        uninstrument_interactions(self._interactions_snapshot)
-        uninstrument_embeddings(self._embedding_snapshot)
+        if self._generate_content_snapshot is not None:
+            uninstrument_generate_content(self._generate_content_snapshot)
+            self._generate_content_snapshot = None
+        if self._interactions_snapshot is not None:
+            uninstrument_interactions(self._interactions_snapshot)
+            self._interactions_snapshot = None
+        if self._embedding_snapshot is not None:
+            uninstrument_embeddings(self._embedding_snapshot)
+            self._embedding_snapshot = None

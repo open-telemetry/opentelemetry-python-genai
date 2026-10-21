@@ -1,17 +1,14 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for on_chain_start / on_chain_end / on_chain_error in
-OpenTelemetryLangChainCallbackHandler.
+"""Offline public-API callback integration tests and message-helper unit tests."""
 
-All TelemetryHandler interactions are mocked so that these tests exercise only
-the callback-handler logic and the invocation-manager bookkeeping.
-"""
+from __future__ import annotations
 
 import base64
+import json
 import math
 import uuid
-from unittest import mock
 
 import pytest
 from langchain_core.documents import Document
@@ -35,7 +32,18 @@ from langchain_core.outputs import (
     ChatGenerationChunk,
     LLMResult,
 )
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from tests._api import (
+    FakeChatModel,
+    FakeRetriever,
+    finished_chat,
+    finished_span,
+    invoke,
+)
 
+from opentelemetry import trace
+from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
@@ -53,14 +61,23 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
     to_input_messages,
     to_output_messages,
 )
-from opentelemetry.util.genai.invocation import (
-    InferenceInvocation,
-    LocalAgentInvocation,
-    RetrievalInvocation,
-    WorkflowInvocation,
+from opentelemetry.instrumentation.genai.langchain.version import __version__
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     BlobPart,
+    ContentCapturingMode,
     FilePart,
     InputMessage,
     OutputMessage,
@@ -70,703 +87,897 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-
-def _make_agent_inv_mock() -> mock.MagicMock:
-    """Return a spec'd LocalAgentInvocation mock."""
-    agent_inv = mock.MagicMock(spec=LocalAgentInvocation)
-    agent_inv.agent_id = None
-    return agent_inv
-
-
-def _make_retrieval_inv_mock() -> mock.MagicMock:
-    retrieval_inv = mock.MagicMock(spec=RetrievalInvocation)
-    retrieval_inv.query_text = None
-    retrieval_inv.documents = None
-    return retrieval_inv
-
-
-def _make_handler():
-    """Return a handler wired to a MagicMock TelemetryHandler."""
-    telemetry = mock.MagicMock()
-
-    # workflow returns a mock WorkflowInvocation
-    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
-    telemetry.workflow.return_value = workflow_inv
-
-    agent_inv = _make_agent_inv_mock()
-    telemetry.invoke_local_agent.return_value = agent_inv
-
-    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
-    return handler, telemetry, workflow_inv, agent_inv
-
-
-def _make_handler_with_retrieval():
-    """Like _make_handler but also wires up a retrieval mock."""
-    handler, telemetry, workflow_inv, agent_inv = _make_handler()
-    retrieval_inv = _make_retrieval_inv_mock()
-    telemetry.retrieval.return_value = retrieval_inv
-    return handler, telemetry, retrieval_inv
-
-
-def _run_id():
-    return uuid.uuid4()
-
-
-# ---------------------------------------------------------------------------
-# on_chain_start – INVOKE_WORKFLOW
-# ---------------------------------------------------------------------------
-
-
-class TestOnChainStartWorkflow:
-    def test_workflow_span_created(self):
-        handler, telemetry, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        # LangGraph graph serialized dict triggers workflow classification
-        handler.on_chain_start(
-            serialized={"name": "LangGraph", "id": ["langgraph"]},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        telemetry.workflow.assert_called_once()
-        assert (
-            handler._invocation_manager.get_invocation(run_id) is workflow_inv
-        )
-
-    def test_workflow_name_from_serialized(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "MyLangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        telemetry.workflow.assert_called_once_with(
-            name="MyLangGraph",
-            context=None,
-            conversation_id=None,
-            _attach_to_context=True,
-        )
-
-    def test_workflow_name_overridden_by_metadata(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "MyLangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"workflow_name": "custom_workflow"},
-        )
-
-        telemetry.workflow.assert_called_once_with(
-            name="custom_workflow",
-            context=None,
-            conversation_id=None,
-            _attach_to_context=True,
-        )
-
-    def test_workflow_conversation_id_from_metadata(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "MyLangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"thread_id": "t1"},
-        )
-
-        assert telemetry.workflow.call_args.kwargs["conversation_id"] == "t1"
-
-    def test_workflow_registered_in_invocation_manager(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        assert (
-            handler._invocation_manager.get_invocation(run_id) is workflow_inv
-        )
-
-    def test_child_agent_passes_parent_context_to_telemetry_handler(self):
-        handler, telemetry, workflow_inv, _ = _make_handler()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=parent_id,
-            parent_run_id=None,
-        )
-        telemetry.invoke_local_agent.reset_mock()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=child_id,
-            parent_run_id=parent_id,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="math_agent",
-            context=workflow_inv.context,
-            conversation_id=None,
-            _attach_to_context=True,
-        )
-
-
-# ---------------------------------------------------------------------------
-# on_chain_start – INVOKE_AGENT
-# ---------------------------------------------------------------------------
-
-
-class TestOnChainStartAgent:
-    def test_new_agent_span_created(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent", "ls_provider": "openai"},
-        )
-
-        telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="math_agent",
-            context=None,
-            conversation_id=None,
-            _attach_to_context=True,
-        )
-        assert (
-            handler._invocation_manager.get_agent_name(run_id) == "math_agent"
-        )
-        assert handler._invocation_manager.get_invocation(run_id) is agent_inv
-
-    def test_agent_name_heuristic_sets_standard_agent_attributes(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        telemetry.should_capture_content.return_value = True
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={},
-            inputs={"messages": [HumanMessage(content="Solve this")]},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"thread_id": "thread-abc"},
-            name="AgentExecutor",
-        )
-        handler.on_chain_end(
-            outputs={"messages": [AIMessage(content="Solved")]},
-            run_id=run_id,
-        )
-
-        telemetry.workflow.assert_not_called()
-        telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="AgentExecutor",
-            context=None,
-            conversation_id="thread-abc",
-            _attach_to_context=True,
-        )
-        assert agent_inv.input_messages[0].parts[0].content == "Solve this"
-        assert agent_inv.output_messages[0].parts[0].content == "Solved"
-        agent_inv.stop.assert_called_once_with()
-
-    def test_agent_metadata_set(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("run_name", "metadata", "expected_name"),
+    [
+        ("MyLangGraph", {}, "invoke_workflow MyLangGraph"),
+        (
+            "MyLangGraph",
+            {"workflow_name": "custom_workflow"},
+            "invoke_workflow custom_workflow",
+        ),
+        ("math_agent", {}, "invoke_agent math_agent"),
+        (
+            "calculate",
+            {
                 "agent_name": "math_agent",
-                "agent_id": "agent-123",
                 "agent_description": "does math",
-                "thread_id": "thread-abc",
+                "agent_id": "ignored",
             },
-        )
+            "invoke_agent math_agent",
+        ),
+        ("AgentExecutor", {}, "invoke_agent AgentExecutor"),
+    ],
+)
+async def test_chain_classification_and_completion(
+    asynchronous: bool,
+    run_name: str,
+    metadata: dict[str, object],
+    expected_name: str,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    chain = RunnableLambda(
+        lambda state: {"messages": [AIMessage(content="Solved")]}
+    ).with_config(run_name=run_name, metadata=metadata)
+    result = await invoke(
+        chain, {"messages": [HumanMessage(content="Solve this")]}, asynchronous
+    )
+    assert result["messages"][0].content == "Solved"
+    span = finished_span(span_exporter, expected_name)
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert span.status.status_code == StatusCode.UNSET
+    attrs = span.attributes
+    assert attrs is not None
+    assert attrs[GenAI.GEN_AI_OPERATION_NAME] == expected_name.split()[0]
+    if "agent_description" in metadata:
+        assert attrs[GenAI.GEN_AI_AGENT_DESCRIPTION] == "does math"
+        assert GenAI.GEN_AI_AGENT_ID not in attrs
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert inputs[0]["parts"] == [
+            {"type": "text", "content": "Solve this"}
+        ]
+        assert outputs[0]["parts"] == [{"type": "text", "content": "Solved"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
-        assert agent_inv.agent_id is None
-        assert agent_inv.agent_description == "does math"
-        assert (
-            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
-            == "thread-abc"
-        )
 
-    def test_conversation_id_prefers_thread_id_over_session_id(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("agent", [False, True], ids=["workflow", "agent"])
+@pytest.mark.parametrize("inputs", [{}, {"user_query": "plan a trip"}])
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        {},
+        {"messages": [HumanMessage(content="hi")]},
+        {
+            "messages": [
+                AIMessage(content="intermediate"),
+                AIMessage(content="final answer"),
+            ]
+        },
+    ],
+    ids=["empty", "no-assistant", "last-assistant"],
+)
+async def test_chain_input_and_output_capture(
+    asynchronous: bool,
+    agent: bool,
+    inputs: dict[str, object],
+    outputs: dict[str, object],
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    chain = RunnableLambda(lambda state: outputs).with_config(
+        run_name="math_agent" if agent else "MyLangGraph"
+    )
+    assert await invoke(chain, inputs, asynchronous) == outputs
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+    attrs = span.attributes
+    assert attrs is not None
+    if content_capture == ContentCapturingMode.SPAN_ONLY and inputs:
+        captured = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert json.loads(captured[0]["parts"][0]["content"]) == inputs
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+    if (
+        content_capture == ContentCapturingMode.SPAN_ONLY
+        and outputs.get("messages")
+        and isinstance(outputs["messages"][-1], AIMessage)
+    ):
+        captured = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert len(captured) == 1
+        assert captured[0]["parts"] == [
+            {"type": "text", "content": "final answer"}
+        ]
+    else:
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={
-                "agent_name": "math_agent",
-                "thread_id": "t1",
-                "session_id": "s1",
-            },
-        )
 
-        assert (
-            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
-            == "t1"
-        )
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("parent_name", ["MyLangGraph", "math_agent"])
+@pytest.mark.parametrize(
+    "child_name", ["weather_agent", "math_agent", "Math_Agent"]
+)
+async def test_nested_agent_parenting_and_deduplication(
+    asynchronous: bool,
+    parent_name: str,
+    child_name: str,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    child = RunnableLambda(
+        lambda state: {"messages": [AIMessage(content="done")]}
+    ).with_config(run_name=child_name)
 
-    def test_conversation_id_prefers_session_id_over_conversation_id(self):
-        """thread_id > session_id > conversation_id is the resolution order."""
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
+    def run(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return child.invoke(state, config)
 
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={
-                "agent_name": "math_agent",
-                "conversation_id": "c1",
-                "session_id": "s1",
-            },
-        )
+    async def arun(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return await child.ainvoke(state, config)
 
-        assert (
-            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
-            == "s1"
-        )
+    # The intermediate runnable has no agent/workflow classification of its own.
+    intermediate = RunnableLambda(run, afunc=arun).with_config(
+        run_name="internal"
+    )
 
-    def test_duplicate_agent_name_does_not_create_new_span(self):
-        """When the nearest ancestor already has the same agent name, no new
-        AgentInvocation span is created; the run is still tracked with None."""
-        handler, telemetry, _, agent_inv = _make_handler()
-        parent_run_id = _run_id()
-        child_run_id = _run_id()
+    def root(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return intermediate.invoke(state, config)
 
-        # Register the parent agent
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=parent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-        telemetry.invoke_local_agent.reset_mock()
+    async def aroot(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return await intermediate.ainvoke(state, config)
 
-        # A child chain with the same agent name should NOT create a new span
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=child_run_id,
-            parent_run_id=parent_run_id,
-            metadata={"agent_name": "math_agent"},
-        )
+    parent = RunnableLambda(root, afunc=aroot).with_config(
+        run_name=parent_name
+    )
+    result = await invoke(parent, {}, asynchronous)
+    assert result["messages"][0].content == "done"
+    spans = span_exporter.get_finished_spans()
+    deduplicated = parent_name.lower() == child_name.lower()
+    assert len(spans) == (1 if deduplicated else 2)
+    assert all(s.status.status_code == StatusCode.UNSET for s in spans)
+    if not deduplicated:
+        child_span = finished_span(span_exporter, f"invoke_agent {child_name}")
+        parent_span = next(s for s in spans if s is not child_span)
+        assert child_span.parent is not None
+        assert child_span.parent.span_id == parent_span.context.span_id
+        assert child_span.context.trace_id == parent_span.context.trace_id
 
-        telemetry.invoke_local_agent.assert_not_called()
-        assert handler._invocation_manager.get_invocation(child_run_id) is None
 
-    def test_different_agent_name_creates_new_span(self):
-        """A child chain with a different agent name creates a new AgentInvocation."""
-        handler, telemetry, _, _ = _make_handler()
-        parent_run_id = _run_id()
-        child_run_id = _run_id()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("run_name", ["MyLangGraph", "math_agent"])
+async def test_chain_error_and_subsequent_run(
+    asynchronous: bool,
+    run_name: str,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    error = ValueError("chain failed")
 
-        # First agent
-        first_agent_inv = _make_agent_inv_mock()
-        second_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.side_effect = [
-            first_agent_inv,
-            second_agent_inv,
+    def fail(state: dict[str, object]) -> dict[str, object]:
+        raise error
+
+    failing = RunnableLambda(fail).with_config(run_name=run_name)
+    with pytest.raises(ValueError) as raised:
+        await invoke(failing, {}, asynchronous)
+    assert raised.value is error
+    successful = RunnableLambda(lambda state: {}).with_config(
+        run_name=run_name
+    )
+    assert await invoke(successful, {}, asynchronous) == {}
+    failed, succeeded = span_exporter.get_finished_spans()
+    assert failed.status.status_code == StatusCode.ERROR
+    assert failed.attributes[error_attributes.ERROR_TYPE] == "ValueError"
+    assert succeeded.status.status_code == StatusCode.UNSET
+    assert succeeded.parent is None
+    assert failed.context.trace_id != succeeded.context.trace_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_prompt_sequence_calls_real_callback_managers(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", "Calculate accurately."), ("human", "{question}")]
+    )
+    model = FakeChatModel(
+        responses=[
+            AIMessage(
+                content="12",
+                usage_metadata={
+                    "input_tokens": 5,
+                    "output_tokens": 2,
+                    "total_tokens": 7,
+                },
+            )
+        ]
+    )
+    chain = (prompt | model).with_config(
+        run_name="arithmetic", metadata={"otel_workflow_span": True}
+    )
+    assert (
+        await invoke(chain, {"question": "What is 3 * 4?"}, asynchronous)
+    ).content == "12"
+    assert len(span_exporter.get_finished_spans()) == 2
+    chat = finished_chat(span_exporter)
+    workflow = finished_span(span_exporter, "invoke_workflow arithmetic")
+    assert workflow.status.status_code == StatusCode.UNSET
+    assert chat.parent is not None
+    assert chat.parent.span_id == workflow.context.span_id
+    assert chat.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 5
+    assert chat.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 2
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        inputs = json.loads(chat.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert [m["role"] for m in inputs] == ["system", "user"]
+        assert inputs[1]["parts"] == [
+            {"type": "text", "content": "What is 3 * 4?"}
         ]
 
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=parent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
 
-        handler.on_chain_start(
-            serialized={"name": "weather_agent"},
-            inputs={},
-            run_id=child_run_id,
-            parent_run_id=parent_run_id,
-            metadata={"agent_name": "weather_agent"},
-        )
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("reason_key", "reason", "legacy", "with_text"),
+    [
+        ("finish_reason", "tool_calls", False, False),
+        ("finish_reason", "tool_calls", False, True),
+        ("stopReason", "tool_use", False, False),
+        ("stop_reason", "tool_use", False, False),
+        ("done_reason", "stop", False, True),
+        ("finish_reason", "function_call", True, False),
+    ],
+)
+async def test_chat_response_parts_and_finish_reason(
+    asynchronous: bool,
+    reason_key: str,
+    reason: str,
+    legacy: bool,
+    with_text: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    call = {"name": "get_weather", "id": "call_123", "args": {"city": "Paris"}}
+    response = AIMessage(
+        content="Checking the weather..." if with_text else "",
+        name="weather_bot",
+        tool_calls=[] if legacy else [call],
+        additional_kwargs=(
+            {
+                "function_call": {
+                    "name": "get_weather",
+                    "arguments": '{"city":"Paris"}',
+                }
+            }
+            if legacy
+            else {}
+        ),
+        response_metadata={reason_key: reason}
+        if reason_key.startswith("stop")
+        else {},
+    )
+    model = FakeChatModel(
+        responses=[response],
+        generation_info=None
+        if reason_key.startswith("stop")
+        else {reason_key: reason},
+    )
+    result = await invoke(
+        model, [HumanMessage(content="Weather?", name="Alice")], asynchronous
+    )
+    assert result.content == response.content
+    span = finished_chat(span_exporter)
+    attrs = span.attributes
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (reason,)
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert inputs[0]["name"] == "Alice"
+        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert output["name"] == "weather_bot"
+        assert output["role"] == "assistant"
+        assert output["finish_reason"] == reason
+        parts = output["parts"]
+        assert parts[-1]["type"] == "tool_call"
+        assert parts[-1]["name"] == "get_weather"
+        assert parts[-1]["arguments"] == {"city": "Paris"}
+        if not legacy:
+            assert parts[-1]["id"] == "call_123"
+        assert len(parts) == (2 if with_text else 1)
+        if with_text:
+            assert parts[0] == {
+                "type": "text",
+                "content": "Checking the weather...",
+            }
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_chat_multiple_generations_keep_finish_reason_alignment(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    generations = [
+        ChatGeneration(
+            message=AIMessage(content="First"),
+            generation_info={"finish_reason": "stop"},
+        ),
+        ChatGeneration(
+            message=AIMessage(content="Second"), generation_info=None
+        ),
+        ChatGeneration(message=AIMessage(content="Third"), generation_info={}),
+        ChatGeneration(
+            message=AIMessage(content="Fourth"),
+            generation_info={"finish_reason": "length"},
+        ),
+    ]
+    model = FakeChatModel(
+        responses=[AIMessage(content="unused")], generations=generations
+    )
+    messages = [[HumanMessage(content="Give alternatives.")]]
+    result = (
+        await model.agenerate(messages)
+        if asynchronous
+        else model.generate(messages)
+    )
+    assert len(result.generations[0]) == 4
+    attrs = finished_chat(span_exporter).attributes
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "stop",
+        "error",
+        "error",
+        "length",
+    )
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert [m["finish_reason"] for m in outputs] == [
+            "stop",
+            "error",
+            "error",
+            "length",
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("details", "expected"),
+    [
+        (
+            {
+                "input_token_details": {"cache_creation": 3, "cache_read": 2},
+                "output_token_details": {"reasoning": 5},
+            },
+            {
+                "gen_ai.usage.cache_write.input_tokens": 3,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 2,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 5,
+            },
+        ),
+        (
+            {"input_token_details": {"cache_write": 7, "cache_read": 3}},
+            {
+                "gen_ai.usage.cache_write.input_tokens": 7,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 3,
+            },
+        ),
+        (
+            {
+                "input_token_details": {"text": 7, "image": 2, "audio": 1},
+                "output_token_details": {"text": 14, "image": 4, "audio": 2},
+            },
+            {
+                "gen_ai.usage.text.input_tokens": 7,
+                "gen_ai.usage.image.input_tokens": 2,
+                "gen_ai.usage.audio.input_tokens": 1,
+                "gen_ai.usage.text.output_tokens": 14,
+                "gen_ai.usage.image.output_tokens": 4,
+                "gen_ai.usage.audio.output_tokens": 2,
+            },
+        ),
+        ({}, {}),
+    ],
+    ids=["cache-creation", "cache-write", "modalities", "no-details"],
+)
+async def test_chat_token_details(
+    asynchronous: bool,
+    details: dict[str, object],
+    expected: dict[str, int],
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(
+        responses=[
+            AIMessage(
+                content="hi",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    **details,
+                },
+            )
+        ]
+    )
+    assert (await invoke(model, "Hello", asynchronous)).content == "hi"
+    attrs = finished_chat(span_exporter).attributes
+    assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
+    assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 20
+    for name, value in expected.items():
+        assert attrs[name] == value
+        assert type(attrs[name]) is int
+    detail_names = [
+        "gen_ai.usage.cache_write.input_tokens",
+        GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+        GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+        *[
+            f"gen_ai.usage.{modality}.{direction}_tokens"
+            for modality in ("text", "image", "audio")
+            for direction in ("input", "output")
+        ],
+    ]
+    assert all(
+        name not in attrs for name in detail_names if name not in expected
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    (
+        "metadata",
+        "generation_info",
+        "llm_output",
+        "expected_model",
+        "expected_id",
+    ),
+    [
+        (
+            {"headers": {"x-ms-served-model": "served"}},
+            {},
+            None,
+            "served",
+            None,
+        ),
+        (
+            {"headers": {"X-MS-Served-Model": "served"}},
+            {},
+            {"model_name": "body", "id": "resp_123"},
+            "served",
+            "resp_123",
+        ),
+        ({}, {}, {"model": "body"}, "body", None),
+        (
+            {"model_name": "message-model", "id": "msg_123"},
+            {"model_name": "generation-model"},
+            None,
+            "message-model",
+            "msg_123",
+        ),
+        (
+            {},
+            {"model_name": "generation-model", "id": "gen_123"},
+            None,
+            "generation-model",
+            "gen_123",
+        ),
+        (
+            {},
+            {"model_name": "generation-model"},
+            {"model_name": "body"},
+            "body",
+            None,
+        ),
+        ({"headers": {"x-request-id": "ignored"}}, {}, None, None, None),
+        ({"headers": {"x-ms-served-model": " "}}, {}, None, None, None),
+    ],
+)
+async def test_chat_response_model_and_id_resolution(
+    asynchronous: bool,
+    metadata: dict[str, object],
+    generation_info: dict[str, object],
+    llm_output: dict[str, object] | None,
+    expected_model: str | None,
+    expected_id: str | None,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(
+        responses=[AIMessage(content="hello", response_metadata=metadata)],
+        generation_info={"finish_reason": "stop", **generation_info},
+        llm_output=llm_output,
+    )
+    assert (await invoke(model, "Hello", asynchronous)).content == "hello"
+    attrs = finished_chat(span_exporter).attributes
+    assert attrs.get(GenAI.GEN_AI_RESPONSE_MODEL) == expected_model
+    assert attrs.get(GenAI.GEN_AI_RESPONSE_ID) == expected_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("metadata", "generation_info", "expected_model", "expected_id"),
+    [
+        (
+            {"model_name": "message-model", "id": "msg_123"},
+            {},
+            "message-model",
+            "msg_123",
+        ),
+        (
+            {},
+            {"model_name": "generation-model", "id": "gen_123"},
+            "generation-model",
+            "gen_123",
+        ),
+        (
+            {"model_name": "message-model"},
+            {"model_name": "generation-model"},
+            "message-model",
+            None,
+        ),
+        (
+            {"headers": {"x-ms-served-model": "served"}},
+            {"model_name": "generation-model"},
+            "served",
+            None,
+        ),
+        ({}, {}, None, None),
+    ],
+)
+async def test_streamed_chat_response(
+    asynchronous: bool,
+    metadata: dict[str, object],
+    generation_info: dict[str, object],
+    expected_model: str | None,
+    expected_id: str | None,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(
+        responses=[AIMessage(content="unused")],
+        chunks=[
+            ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="hello", response_metadata=metadata
+                ),
+                generation_info={"finish_reason": "stop", **generation_info},
+            )
+        ],
+    )
+    chunks = (
+        [chunk async for chunk in model.astream("Hello")]
+        if asynchronous
+        else list(model.stream("Hello"))
+    )
+    assert "".join(str(chunk.content) for chunk in chunks) == "hello"
+    attrs = finished_chat(span_exporter).attributes
+    assert attrs.get(GenAI.GEN_AI_RESPONSE_MODEL) == expected_model
+    assert attrs.get(GenAI.GEN_AI_RESPONSE_ID) == expected_id
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert output["role"] == "assistant"
+        assert output["parts"] == [{"type": "text", "content": "hello"}]
+    else:
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+async def test_chat_error(
+    asynchronous: bool,
+    streaming: bool,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    error = ConnectionError("provider unavailable")
+    model = FakeChatModel(
+        responses=[AIMessage(content="first chunk")],
+        error=None if streaming else error,
+        stream_error=error if streaming else None,
+    )
+    with pytest.raises(ConnectionError) as raised:
+        if streaming:
+            if asynchronous:
+                async for _ in model.astream("Hello"):
+                    pass
+            else:
+                list(model.stream("Hello"))
+        else:
+            await invoke(model, "Hello", asynchronous)
+    assert raised.value is error
+    span = finished_span(span_exporter, "chat test-model")
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "ConnectionError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"ls_vector_store_provider": "Chroma"},
+        {
+            "ls_vector_store_provider": "Chroma",
+            "ls_embedding_model": "embedding-model",
+        },
+    ],
+)
+@pytest.mark.parametrize("score", [None, 0.85, 0, True, "high", math.inf])
+async def test_retriever_invocation(
+    asynchronous: bool,
+    metadata: dict[str, str],
+    score: object,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    documents = [
+        Document(
+            page_content="doc one", id="doc-1", metadata={"score": score}
+        ),
+        Document(page_content="doc two"),
+    ]
+    retriever = FakeRetriever(documents=documents).with_config(
+        metadata=metadata
+    )
+    assert (
+        await invoke(retriever, "semantic search query", asynchronous)
+        == documents
+    )
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+    attrs = span.attributes
+    assert attrs[GenAI.GEN_AI_OPERATION_NAME] == "retrieval"
+    assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == metadata.get(
+        "ls_vector_store_provider"
+    )
+    assert attrs.get(GenAI.GEN_AI_REQUEST_MODEL) == metadata.get(
+        "ls_embedding_model"
+    )
+    assert GenAI.GEN_AI_CONVERSATION_ID not in attrs
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
         assert (
-            handler._invocation_manager.get_invocation(child_run_id)
-            is second_agent_inv
+            attrs[GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT] == "semantic search query"
         )
-        assert (
-            handler._invocation_manager.get_agent_name(child_run_id)
-            == "weather_agent"
+        captured = json.loads(attrs[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS])
+        assert len(captured) == 2
+        assert captured[0]["id"] == "doc-1"
+        expected_score = (
+            score
+            if type(score) in (int, float) and math.isfinite(score)
+            else None
         )
-
-    def test_agent_name_comparison_is_case_insensitive(self):
-        handler, telemetry, _, _ = _make_handler()
-        parent_run_id = _run_id()
-        child_run_id = _run_id()
-
-        parent_agent_inv = _make_agent_inv_mock()
-        telemetry.invoke_local_agent.return_value = parent_agent_inv
-
-        handler.on_chain_start(
-            serialized={"name": "Math_Agent"},
-            inputs={},
-            run_id=parent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "Math_Agent"},
-        )
-        telemetry.invoke_local_agent.reset_mock()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=child_run_id,
-            parent_run_id=parent_run_id,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        # Same name (case-insensitive) → no new span
-        telemetry.invoke_local_agent.assert_not_called()
-
-    def test_no_agent_name_registers_none_invocation(self):
-        """When resolve_agent_name returns None the run_id must still be
-        registered so that child traversal works."""
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
-
-        # metadata has otel_agent_span=True so classify_chain_run → INVOKE_AGENT,
-        # but no agent_name / kwargs name / serialized name, so resolve_agent_name
-        # returns None.
-        handler.on_chain_start(
-            serialized={},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"otel_agent_span": True},
-        )
-
-        telemetry.invoke_local_agent.assert_not_called()
-        # run_id must still be registered (with None invocation) so traversal works
-        assert run_id in handler._invocation_manager._invocations
-        assert handler._invocation_manager.get_invocation(run_id) is None
-
-    def test_same_name_grandchild_finds_agent_through_unnamed_parent(self):
-        """Even when an intermediate node has no agent name, a deeper child
-        must still be able to walk up and find a grandparent AgentInvocation."""
-        handler, telemetry, _, _ = _make_handler()
-        grandparent_id = _run_id()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        # Grandparent: a known agent
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=grandparent_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        # Parent: INVOKE_AGENT but no resolvable name → registers None
-        telemetry.invoke_local_agent.reset_mock()
-        handler.on_chain_start(
-            serialized={},
-            inputs={},
-            run_id=parent_id,
-            parent_run_id=grandparent_id,
-            metadata={"otel_agent_span": True},
-        )
-
-        # A same-name grandchild must deduplicate against the grandparent agent.
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=child_id,
-            parent_run_id=parent_id,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        telemetry.invoke_local_agent.assert_not_called()
-        assert handler._invocation_manager.get_invocation(child_id) is None
+        assert captured[0].get("score") == expected_score
+        assert captured[1].get("id") is None
+        assert all(d.get("content") is None for d in captured)
+    else:
+        assert GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT not in attrs
+        assert GenAI.GEN_AI_RETRIEVAL_DOCUMENTS not in attrs
 
 
-# ---------------------------------------------------------------------------
-# on_chain_start – unclassified
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "error"])
+async def test_retriever_parenting_and_error(
+    asynchronous: bool,
+    fail: bool,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    error = RuntimeError("retrieval failed")
+    retriever = FakeRetriever(error=error if fail else None)
 
+    def retrieve(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {"documents": retriever.invoke("query", config=config)}
 
-class TestOnChatModelStartConversationId:
-    def test_conversation_id_from_metadata(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
+    async def aretrieve(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {"documents": await retriever.ainvoke("query", config=config)}
 
-        handler.on_chat_model_start(
-            serialized={"name": "ChatOpenAI"},
-            messages=[[HumanMessage(content="What is 3 * 4?")]],
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"ls_provider": "openai", "thread_id": "t1"},
-            invocation_params={"model_name": "gpt-4"},
-        )
-
-        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
-
-    def test_no_conversation_id_available(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chat_model_start(
-            serialized={"name": "ChatOpenAI"},
-            messages=[[HumanMessage(content="What is 3 * 4?")]],
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"ls_provider": "openai"},
-            invocation_params={"model_name": "gpt-4"},
-        )
-
-        assert telemetry.inference.call_args.kwargs["conversation_id"] is None
-
-    def test_chat_model_passes_parent_context_to_telemetry_handler(self):
-        handler, telemetry, _, _ = _make_handler()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
-        handler._invocation_manager.add_invocation_state(
-            parent_id, None, parent_wf
-        )
-
-        handler.on_chat_model_start(
-            serialized={"name": "ChatOpenAI"},
-            messages=[[HumanMessage(content="What is 3 * 4?")]],
-            run_id=child_id,
-            parent_run_id=parent_id,
-            metadata={"ls_provider": "openai"},
-            invocation_params={"model_name": "gpt-4"},
-        )
-
-        telemetry.inference.assert_called_once_with(
-            "openai",
-            request_model="gpt-4",
-            context=parent_wf.context,
-            conversation_id=None,
-            _attach_to_context=True,
+    workflow = RunnableLambda(retrieve, afunc=aretrieve).with_config(
+        run_name="MyLangGraph"
+    )
+    if fail:
+        with pytest.raises(RuntimeError) as raised:
+            await invoke(workflow, {}, asynchronous)
+        assert raised.value is error
+    else:
+        assert await invoke(workflow, {}, asynchronous) == {"documents": []}
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    parent = finished_span(span_exporter, "invoke_workflow MyLangGraph")
+    child = next(
+        s
+        for s in spans
+        if s.attributes[GenAI.GEN_AI_OPERATION_NAME] == "retrieval"
+    )
+    assert child.parent is not None
+    assert child.parent.span_id == parent.context.span_id
+    assert all(
+        s.status.status_code
+        == (StatusCode.ERROR if fail else StatusCode.UNSET)
+        for s in spans
+    )
+    if fail:
+        assert all(
+            s.attributes[error_attributes.ERROR_TYPE] == "RuntimeError"
+            for s in spans
         )
 
 
-class TestOnChainStartUnclassified:
-    def test_unclassified_chain_registers_none_and_no_span(self):
-        handler, telemetry, _, _ = _make_handler()
-        run_id = _run_id()
-        parent_run_id = _run_id()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_multimodal_input_content_capture(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    monkeypatch: pytest.MonkeyPatch,
+    instrument_langchain: None,
+) -> None:
+    if content_capture == ContentCapturingMode.NO_CONTENT:
 
-        # Register the parent first so that the child links correctly
-        handler._invocation_manager.add_invocation_state(
-            parent_run_id, None, None
+        def unexpected_decode(block: object) -> None:
+            pytest.fail("Content-disabled calls must not decode media")
+
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.langchain.utils._media_part",
+            unexpected_decode,
         )
+    model = FakeChatModel(responses=[AIMessage(content="a red pixel")])
+    message = HumanMessage(
+        name="Alice",
+        content=[
+            {"type": "text", "text": "What's in this image?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
+            },
+        ],
+    )
+    assert (
+        await invoke(model, [message], asynchronous)
+    ).content == "a red pixel"
+    attrs = finished_chat(span_exporter).attributes
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (captured,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert captured["name"] == "Alice"
+        assert captured["parts"][0] == {
+            "type": "text",
+            "content": "What's in this image?",
+        }
+        blob = captured["parts"][1]
+        assert blob["type"] == "blob"
+        assert base64.b64decode(blob["content"]) == _REAL_PNG_BYTES
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
 
-        handler.on_chain_start(
-            serialized={"name": "SomeInternalChain"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=parent_run_id,
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_sync_and_async_execution_context(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    before = trace.get_current_span().get_span_context()
+    observed = []
+
+    def run(state: dict[str, object]) -> dict[str, object]:
+        observed.append(trace.get_current_span().get_span_context())
+        return {}
+
+    async def arun(state: dict[str, object]) -> dict[str, object]:
+        observed.append(trace.get_current_span().get_span_context())
+        return {}
+
+    chain = RunnableLambda(run, afunc=arun).with_config(run_name="MyLangGraph")
+    assert await invoke(chain, {}, asynchronous) == {}
+    span = finished_span(span_exporter, "invoke_workflow MyLangGraph")
+    assert span.status.status_code == StatusCode.UNSET
+    assert observed == [span.context]
+    assert trace.get_current_span().get_span_context() == before
+
+
+# A completed callback without a preceding start is not emitted by LangChain.
+@pytest.mark.parametrize("operation", ["chain", "retriever", "llm"])
+@pytest.mark.parametrize("error", [False, True], ids=["end", "error"])
+def test_unknown_completion_is_ignored(
+    operation: str,
+    error: bool,
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = OpenTelemetryLangChainCallbackHandler(
+        TelemetryHandler(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            instrumentation_scope_name="opentelemetry.instrumentation.genai.langchain",
+            instrumentation_scope_version=__version__,
         )
-
-        telemetry.workflow.assert_not_called()
-        telemetry.invoke_local_agent.assert_not_called()
-        assert run_id in handler._invocation_manager._invocations
-        assert handler._invocation_manager.get_invocation(run_id) is None
-
-
-# ---------------------------------------------------------------------------
-# on_chain_end
-# ---------------------------------------------------------------------------
-
-
-class TestOnChainEnd:
-    def test_workflow_invocation_stopped_on_chain_end(self):
-        handler, telemetry, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
+    )
+    run_id = uuid.uuid4()
+    if error:
+        getattr(handler, f"on_{operation}_error")(
+            RuntimeError("boom"), run_id=run_id
         )
+    elif operation == "chain":
+        handler.on_chain_end({}, run_id=run_id)
+    elif operation == "retriever":
+        handler.on_retriever_end([], run_id=run_id)
+    else:
+        handler.on_llm_end(LLMResult(generations=[]), run_id=run_id)
+    assert not span_exporter.get_finished_spans()
 
-        handler.on_chain_end(outputs={}, run_id=run_id)
 
-        workflow_inv.stop.assert_called_once()
-
-    def test_agent_invocation_stopped_on_chain_end(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
+# Runnable APIs always supply a name. A nameless, unannounced agent callback
+# can only be exercised directly; announced agents are covered via create_agent.
+@pytest.mark.parametrize("error", [False, True], ids=["end", "error"])
+def test_nameless_unannounced_agent_completion(
+    error: bool,
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = OpenTelemetryLangChainCallbackHandler(
+        TelemetryHandler(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            instrumentation_scope_name="opentelemetry.instrumentation.genai.langchain",
+            instrumentation_scope_version=__version__,
         )
-
-        handler.on_chain_end(outputs={}, run_id=run_id)
-
-        agent_inv.stop.assert_called_once()
-
-    def test_none_invocation_on_chain_end_does_not_raise(self):
-        """on_chain_end for a run registered with None invocation (unclassified
-        or duplicate agent) must silently do nothing."""
-        handler, _, _, _ = _make_handler()
-        run_id = _run_id()
-
-        handler._invocation_manager.add_invocation_state(run_id, None, None)
-
-        # Must not raise
-        handler.on_chain_end(outputs={}, run_id=run_id)
-
-    def test_unknown_run_id_on_chain_end_does_not_raise(self):
-        handler, _, _, _ = _make_handler()
-        handler.on_chain_end(outputs={}, run_id=_run_id())
-
-    def test_invocation_state_cleaned_up_after_chain_end(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        handler.on_chain_end(outputs={}, run_id=run_id)
-
-        assert run_id not in handler._invocation_manager._invocations
-
-
-# ---------------------------------------------------------------------------
-# on_chain_error
-# ---------------------------------------------------------------------------
-
-
-class TestOnChainError:
-    def test_workflow_invocation_failed_on_chain_error(self):
-        handler, telemetry, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        err = RuntimeError("something went wrong")
-        handler.on_chain_error(error=err, run_id=run_id)
-
-        workflow_inv.fail.assert_called_once_with(err)
-
-    def test_agent_invocation_failed_on_chain_error(self):
-        handler, telemetry, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        err = ValueError("agent failed")
-        handler.on_chain_error(error=err, run_id=run_id)
-
-        agent_inv.fail.assert_called_once_with(err)
-
-    def test_none_invocation_on_chain_error_does_not_raise(self):
-        handler, _, _, _ = _make_handler()
-        run_id = _run_id()
-
-        handler._invocation_manager.add_invocation_state(run_id, None, None)
-
-        handler.on_chain_error(error=RuntimeError("boom"), run_id=run_id)
-
-    def test_unknown_run_id_on_chain_error_does_not_raise(self):
-        handler, _, _, _ = _make_handler()
-        handler.on_chain_error(error=RuntimeError("boom"), run_id=_run_id())
-
-    def test_invocation_state_cleaned_up_after_chain_error(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        handler.on_chain_error(error=RuntimeError("boom"), run_id=run_id)
-
-        assert run_id not in handler._invocation_manager._invocations
-
-
-class TestAgentAncestryPublicBehavior:
-    def test_named_child_under_workflow_opens_agent_layer(self):
-        handler, telemetry, workflow_inv, _ = _make_handler()
-        workflow_id = _run_id()
-        child_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=workflow_id,
-            parent_run_id=None,
-        )
-        telemetry.invoke_local_agent.reset_mock()
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=child_id,
-            parent_run_id=workflow_id,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        telemetry.invoke_local_agent.assert_called_once_with(
-            agent_name="math_agent",
-            context=workflow_inv.context,
-            conversation_id=None,
-            _attach_to_context=True,
-        )
+    )
+    run_id = uuid.uuid4()
+    handler.on_chain_start(
+        {}, {}, run_id=run_id, metadata={"otel_agent_span": True}
+    )
+    assert run_id in handler._invocation_manager._invocations
+    assert handler._invocation_manager.get_invocation(run_id) is None
+    if error:
+        handler.on_chain_error(RuntimeError("boom"), run_id=run_id)
+    else:
+        handler.on_chain_end({}, run_id=run_id)
+    assert run_id not in handler._invocation_manager._invocations
+    assert not span_exporter.get_finished_spans()
 
 
 # ---------------------------------------------------------------------------
@@ -1080,870 +1291,6 @@ class TestSerialize:
         assert result == '"hello"'
 
 
-# ---------------------------------------------------------------------------
-# input_messages / output_messages set on invocations via callback handler
-# ---------------------------------------------------------------------------
-
-
-class TestInputMessagesOnInvocations:
-    def test_workflow_input_messages_set_from_messages_key(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-        msg = HumanMessage(content="What is the weather?")
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={"messages": [msg]},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        assigned = workflow_inv.input_messages
-        assert len(assigned) == 1
-        assert assigned[0].role == "user"
-        assert assigned[0].parts[0].content == "What is the weather?"
-
-    def test_workflow_input_messages_set_from_state_fallback(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={"user_query": "plan a trip"},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        assigned = workflow_inv.input_messages
-        assert len(assigned) == 1
-        assert "user_query" in assigned[0].parts[0].content
-        assert "plan a trip" in assigned[0].parts[0].content
-
-    def test_workflow_input_messages_empty_for_empty_inputs(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        assert workflow_inv.input_messages == []
-
-    def test_agent_input_messages_set_from_messages_key(self):
-        handler, _, _, agent_inv = _make_handler()
-        run_id = _run_id()
-        msg = HumanMessage(content="Solve x+2=5")
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={"messages": [msg]},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        assigned = agent_inv.input_messages
-        assert len(assigned) == 1
-        assert assigned[0].parts[0].content == "Solve x+2=5"
-
-    def test_agent_input_messages_set_from_state_fallback(self):
-        handler, _, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={"problem": "integrate x^2"},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        assigned = agent_inv.input_messages
-        assert len(assigned) == 1
-        assert "integrate x^2" in assigned[0].parts[0].content
-
-
-class TestOutputMessagesOnInvocations:
-    def test_workflow_output_messages_set_on_chain_end(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        ai_msg = AIMessage(content="The final answer is 42")
-        handler.on_chain_end(
-            outputs={"messages": [ai_msg]},
-            run_id=run_id,
-        )
-
-        assigned = workflow_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].role == "assistant"
-        assert assigned[0].parts[0].content == "The final answer is 42"
-
-    def test_workflow_output_messages_only_last_ai_message(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        msgs = [
-            AIMessage(content="intermediate tool call"),
-            AIMessage(content="final answer"),
-        ]
-        handler.on_chain_end(outputs={"messages": msgs}, run_id=run_id)
-
-        assigned = workflow_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].parts[0].content == "final answer"
-
-    def test_workflow_output_messages_empty_when_no_ai_messages(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        handler.on_chain_end(
-            outputs={"messages": [HumanMessage(content="hi")]},
-            run_id=run_id,
-        )
-
-        assert workflow_inv.output_messages == []
-
-    def test_workflow_output_messages_empty_for_empty_outputs(self):
-        handler, _, workflow_inv, _ = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "LangGraph"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-        )
-
-        handler.on_chain_end(outputs={}, run_id=run_id)
-
-        assert workflow_inv.output_messages == []
-
-    def test_agent_output_messages_set_on_chain_end(self):
-        handler, _, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        ai_msg = AIMessage(content="x = 3")
-        handler.on_chain_end(outputs={"messages": [ai_msg]}, run_id=run_id)
-
-        assigned = agent_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].parts[0].content == "x = 3"
-
-    def test_agent_output_messages_only_last_ai_message(self):
-        handler, _, _, agent_inv = _make_handler()
-        run_id = _run_id()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent"},
-        )
-
-        msgs = [
-            AIMessage(content="let me think..."),
-            AIMessage(content="the answer is 7"),
-        ]
-        handler.on_chain_end(outputs={"messages": msgs}, run_id=run_id)
-
-        assigned = agent_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].parts[0].content == "the answer is 7"
-
-
-# ---------------------------------------------------------------------------
-# on_llm_end – tool call finish reasons
-# ---------------------------------------------------------------------------
-
-
-def _make_llm_invocation_mock() -> mock.MagicMock:
-    return mock.MagicMock(spec=InferenceInvocation)
-
-
-def _make_handler_with_llm_invocation(
-    run_id: uuid.UUID,
-) -> tuple[
-    OpenTelemetryLangChainCallbackHandler, mock.MagicMock, mock.MagicMock
-]:
-    """Return a handler with an InferenceInvocation pre-registered for run_id."""
-    telemetry = mock.MagicMock()
-    llm_inv = _make_llm_invocation_mock()
-    telemetry.inference.return_value = llm_inv
-
-    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
-    handler._invocation_manager.add_invocation_state(run_id, None, llm_inv)
-    return handler, telemetry, llm_inv
-
-
-class TestOnLlmEndToolCalls:
-    def test_openai_tool_calls_finish_reason_produces_tool_call_request(self):
-        """finish_reason='tool_calls' (OpenAI) must produce ToolCallRequestPart parts."""
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        tool_call = {
-            "name": "get_weather",
-            "id": "call_123",
-            "args": {"location": "Paris"},
-        }
-        ai_msg = AIMessage(
-            content="", tool_calls=[tool_call], response_metadata={}
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assigned: list[OutputMessage] = llm_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].finish_reason == "tool_calls"
-        assert llm_inv.finish_reasons == ["tool_calls"]
-        assert len(assigned[0].parts) == 1
-        part = assigned[0].parts[0]
-        assert isinstance(part, ToolCallRequestPart)
-        assert part.name == "get_weather"
-        assert part.id == "call_123"
-        assert part.arguments == {"location": "Paris"}
-
-    def test_bedrock_tool_use_finish_reason_produces_tool_call_request(self):
-        """finish_reason='tool_use' (Bedrock/Anthropic) must produce ToolCallRequestPart parts."""
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        tool_call = {
-            "name": "get_weather",
-            "id": "tooluse_abc",
-            "args": {"location": "London"},
-        }
-        ai_msg = AIMessage(
-            content="",
-            tool_calls=[tool_call],
-            response_metadata={"stopReason": "tool_use"},
-        )
-        # Bedrock path: generation_info is None; stopReason comes from response_metadata
-        gen = ChatGeneration(message=ai_msg, generation_info=None)
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assigned: list[OutputMessage] = llm_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].finish_reason == "tool_use"
-        assert llm_inv.finish_reasons == ["tool_use"]
-        assert len(assigned[0].parts) == 1
-        part = assigned[0].parts[0]
-        assert isinstance(part, ToolCallRequestPart)
-        assert part.name == "get_weather"
-        assert part.id == "tooluse_abc"
-        assert part.arguments == {"location": "London"}
-
-    def test_on_llm_end_preserves_finish_reasons_positional_alignment(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        gen1 = ChatGeneration(
-            message=AIMessage(content="First"),
-            generation_info={"finish_reason": "stop"},
-        )
-        gen2 = ChatGeneration(
-            message=AIMessage(
-                content="Second",
-                response_metadata={"model_name": "gpt-4"},
-            ),
-            generation_info=None,
-        )
-        gen3 = ChatGeneration(
-            message=AIMessage(content="Third"),
-            generation_info={},
-        )
-        gen4 = ChatGeneration(
-            message=AIMessage(content="Fourth"),
-            generation_info={"finish_reason": "length"},
-        )
-        response = LLMResult(generations=[[gen1, gen2, gen3, gen4]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.finish_reasons == ["stop", "error", "error", "length"]
-        assert [m.finish_reason for m in llm_inv.output_messages] == [
-            "stop",
-            "error",
-            "error",
-            "length",
-        ]
-
-    def test_on_llm_end_preserves_message_name(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(content="Hello!", name="assistant_bot")
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assigned: list[OutputMessage] = llm_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].name == "assistant_bot"
-
-    def test_on_llm_end_tool_calls_preserves_message_name(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        tool_call = {
-            "name": "get_weather",
-            "id": "call_123",
-            "args": {"location": "Paris"},
-        }
-        ai_msg = AIMessage(
-            content="",
-            tool_calls=[tool_call],
-            name="tool_caller_bot",
-            response_metadata={},
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assigned: list[OutputMessage] = llm_inv.output_messages
-        assert len(assigned) == 1
-        assert assigned[0].name == "tool_caller_bot"
-
-
-# ---------------------------------------------------------------------------
-# on_tool_start
-# ---------------------------------------------------------------------------
-
-
-class TestOnToolStart:
-    def test_tool_passes_parent_context_to_telemetry_handler(self):
-        handler, telemetry, _, _ = _make_handler()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
-        handler._invocation_manager.add_invocation_state(
-            parent_id, None, parent_wf
-        )
-
-        handler.on_tool_start(
-            serialized={"name": "search"},
-            input_str="query",
-            run_id=child_id,
-            parent_run_id=parent_id,
-        )
-
-        telemetry.tool.assert_called_once_with(
-            name="search",
-            tool_type="function",
-            agent_name=None,
-            context=parent_wf.context,
-            _attach_to_context=True,
-        )
-
-
-# ---------------------------------------------------------------------------
-# on_retriever_start / on_retriever_end / on_retriever_error
-# ---------------------------------------------------------------------------
-
-
-class TestOnRetrieverStart:
-    def test_retrieval_span_created(self):
-        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="what is AI?",
-            run_id=run_id,
-        )
-
-        telemetry.retrieval.assert_called_once()
-        assert (
-            handler._invocation_manager.get_invocation(run_id) is retrieval_inv
-        )
-
-    def test_conversation_id_not_passed_to_invocation(self):
-        """semconv does not define gen_ai.conversation.id for retrieval."""
-        handler, telemetry, _ = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="what is AI?",
-            run_id=run_id,
-            metadata={"thread_id": "t1"},
-        )
-
-        assert "conversation_id" not in telemetry.retrieval.call_args.kwargs
-
-    def test_query_text_set_on_invocation(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="semantic search query",
-            run_id=run_id,
-        )
-
-        assert retrieval_inv.query_text == "semantic search query"
-
-    def test_provider_passed_from_metadata(self):
-        handler, telemetry, _ = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="q",
-            run_id=run_id,
-            metadata={"ls_vector_store_provider": "Chroma"},
-        )
-
-        telemetry.retrieval.assert_called_once_with(
-            provider="Chroma",
-            request_model=None,
-            context=None,
-            _attach_to_context=True,
-        )
-
-    def test_provider_none_when_metadata_absent(self):
-        handler, telemetry, _ = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="q",
-            run_id=run_id,
-        )
-
-        telemetry.retrieval.assert_called_once_with(
-            provider=None,
-            request_model=None,
-            context=None,
-            _attach_to_context=True,
-        )
-
-    def test_request_model_passed_from_ls_embedding_model(self):
-        handler, telemetry, _ = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="q",
-            run_id=run_id,
-            metadata={
-                "ls_vector_store_provider": "Chroma",
-                "ls_embedding_model": "text-embedding-3-small",
-            },
-        )
-
-        telemetry.retrieval.assert_called_once_with(
-            provider="Chroma",
-            request_model="text-embedding-3-small",
-            context=None,
-            _attach_to_context=True,
-        )
-
-    def test_request_model_none_when_ls_embedding_model_absent(self):
-        handler, telemetry, _ = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="q",
-            run_id=run_id,
-            metadata={"ls_vector_store_provider": "Chroma"},
-        )
-
-        telemetry.retrieval.assert_called_once_with(
-            provider="Chroma",
-            request_model=None,
-            context=None,
-            _attach_to_context=True,
-        )
-
-    def test_registered_in_invocation_manager(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(
-            serialized={},
-            query="q",
-            run_id=run_id,
-        )
-
-        assert run_id in handler._invocation_manager._invocations
-        assert (
-            handler._invocation_manager.get_invocation(run_id) is retrieval_inv
-        )
-
-    def test_retriever_passes_parent_context_to_telemetry_handler(self):
-        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
-        parent_id = _run_id()
-        child_id = _run_id()
-
-        # register parent workflow in invocation manager
-        parent_wf = mock.MagicMock(spec=WorkflowInvocation)
-        handler._invocation_manager.add_invocation_state(
-            parent_id, None, parent_wf
-        )
-
-        handler.on_retriever_start(
-            serialized={},
-            query="q",
-            run_id=child_id,
-            parent_run_id=parent_id,
-        )
-
-        telemetry.retrieval.assert_called_once_with(
-            provider=None,
-            request_model=None,
-            context=parent_wf.context,
-            _attach_to_context=True,
-        )
-
-
-class TestOnRetrieverEnd:
-    def test_invocation_stopped(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[], run_id=run_id)
-
-        retrieval_inv.stop.assert_called_once()
-
-    def test_documents_use_shared_model_without_content(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        docs = [
-            Document(page_content="doc one", metadata={"source": "s1"}),
-            Document(page_content="doc two", metadata={}),
-        ]
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=docs, run_id=run_id)
-
-        assigned = retrieval_inv.documents
-        assert assigned == [RetrievalDocument(), RetrievalDocument()]
-        assert all(isinstance(doc, RetrievalDocument) for doc in assigned)
-
-    def test_document_id_included_when_present(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        doc = Document(page_content="text", id="doc-123", metadata={})
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[doc], run_id=run_id)
-
-        assert retrieval_inv.documents[0].id == "doc-123"
-
-    def test_document_id_none_when_absent(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        doc = Document(page_content="text", metadata={})
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[doc], run_id=run_id)
-
-        assert retrieval_inv.documents[0].id is None
-
-    def test_state_cleaned_up_after_end(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[], run_id=run_id)
-
-        assert run_id not in handler._invocation_manager._invocations
-
-    def test_documents_not_set_when_content_disabled(self):
-        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-        telemetry.should_capture_content.return_value = False
-
-        docs = [Document(page_content="secret", metadata={})]
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=docs, run_id=run_id)
-
-        assert retrieval_inv.documents is None
-
-    def test_documents_set_when_content_enabled(self):
-        handler, telemetry, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-        telemetry.should_capture_content.return_value = True
-
-        docs = [Document(page_content="visible", metadata={})]
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=docs, run_id=run_id)
-
-        assert retrieval_inv.documents == [RetrievalDocument()]
-
-    def test_unknown_run_id_does_not_raise(self):
-        handler, _, _ = _make_handler_with_retrieval()
-        handler.on_retriever_end(documents=[], run_id=_run_id())
-
-    def test_document_score_from_attribute(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        class DuckDoc:
-            page_content = "text"
-            id = "doc-1"
-            score = 0.85
-            metadata = {}
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
-
-        assert retrieval_inv.documents[0].score == 0.85
-
-    def test_document_score_from_metadata(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        doc = Document(
-            page_content="text", id="doc-2", metadata={"score": 0.92}
-        )
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[doc], run_id=run_id)
-
-        assert retrieval_inv.documents[0].score == 0.92
-
-    def test_document_score_precedence(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        class DuckDoc:
-            page_content = "text"
-            id = "doc-3"
-            score = 0.9
-            metadata = {"score": 0.5}
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
-
-        assert retrieval_inv.documents[0].score == 0.9
-
-    def test_document_score_fallback_to_metadata_when_attr_is_none(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        class DuckDoc:
-            page_content = "text"
-            id = "doc-4"
-            score = None
-            metadata = {"score": 0.77}
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[DuckDoc()], run_id=run_id)
-
-        assert retrieval_inv.documents[0].score == 0.77
-
-    def test_document_score_zero_preserved(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        class DuckDoc:
-            page_content = "text"
-            id = "doc-5"
-            score = 0.0
-
-        doc_meta = Document(
-            page_content="text-meta", id="doc-6", metadata={"score": 0}
-        )
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(
-            documents=[DuckDoc(), doc_meta], run_id=run_id
-        )
-
-        assert retrieval_inv.documents[0].score == 0.0
-        assert retrieval_inv.documents[1].score == 0
-
-    @pytest.mark.parametrize(
-        "invalid_score",
-        ["high", True, False, [1.0], {"val": 1}],
-    )
-    def test_document_score_non_numeric_ignored(self, invalid_score):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        doc = Document(page_content="text", metadata={"score": invalid_score})
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(documents=[doc], run_id=run_id)
-
-        assert retrieval_inv.documents[0].score is None
-
-    @pytest.mark.parametrize(
-        "non_finite_score",
-        [
-            float("nan"),
-            float("inf"),
-            float("-inf"),
-            math.nan,
-            math.inf,
-            -math.inf,
-        ],
-    )
-    def test_document_score_non_finite_ignored(self, non_finite_score):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        class DuckDocAttr:
-            page_content = "attr text"
-            score = non_finite_score
-
-        doc_meta = Document(
-            page_content="meta text", metadata={"score": non_finite_score}
-        )
-        doc_dict = {"page_content": "dict text", "score": non_finite_score}
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(
-            documents=[DuckDocAttr(), doc_meta, doc_dict], run_id=run_id
-        )
-
-        for item in retrieval_inv.documents:
-            assert item.score is None
-
-    def test_document_score_plain_dict_and_duck_typed(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        dict_doc_1 = {
-            "page_content": "dict content 1",
-            "id": "dict-1",
-            "score": 0.88,
-        }
-        dict_doc_2 = {
-            "content": "dict content 2",
-            "metadata": {"score": 0.72},
-        }
-        dict_doc_3 = {
-            "page_content": None,
-            "content": "dict content fallback when page_content is None",
-            "id": "dict-3",
-            "score": 0.64,
-        }
-
-        class CustomDuckDoc:
-            page_content = "duck content"
-            id = "duck-1"
-            score = 0.95
-
-        class CustomDuckDocContentFallback:
-            content = "duck content fallback"
-            id = "duck-2"
-            score = 0.81
-
-        class CustomDuckDocNonePageContentFallback:
-            page_content = None
-            content = "duck content fallback when page_content is None"
-            id = "duck-3"
-            score = 0.55
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(
-            documents=[
-                dict_doc_1,
-                dict_doc_2,
-                dict_doc_3,
-                CustomDuckDoc(),
-                CustomDuckDocContentFallback(),
-                CustomDuckDocNonePageContentFallback(),
-            ],
-            run_id=run_id,
-        )
-
-        assert retrieval_inv.documents == [
-            RetrievalDocument(id="dict-1", score=0.88),
-            RetrievalDocument(score=0.72),
-            RetrievalDocument(id="dict-3", score=0.64),
-            RetrievalDocument(id="duck-1", score=0.95),
-            RetrievalDocument(id="duck-2", score=0.81),
-            RetrievalDocument(id="duck-3", score=0.55),
-        ]
-
-    def test_document_score_non_mapping_metadata(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        class DuckDocNoMeta:
-            page_content = "text"
-            id = "doc-no-meta"
-
-        class DuckDocStringMeta:
-            page_content = "text"
-            id = "doc-str-meta"
-            metadata = "not-a-mapping"
-
-        class DuckDocNoneMeta:
-            page_content = "text"
-            id = "doc-none-meta"
-            metadata = None
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_end(
-            documents=[
-                DuckDocNoMeta(),
-                DuckDocStringMeta(),
-                DuckDocNoneMeta(),
-            ],
-            run_id=run_id,
-        )
-
-        for item in retrieval_inv.documents:
-            assert item.score is None
-
-
 class TestExtractDocumentScore:
     def test_attribute_score(self):
         class Obj:
@@ -2161,169 +1508,6 @@ class TestDocumentToRetrievalDocument:
         )
 
 
-class TestOnRetrieverError:
-    def test_invocation_failed(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        err = RuntimeError("retrieval failed")
-        handler.on_retriever_error(error=err, run_id=run_id)
-
-        retrieval_inv.fail.assert_called_once_with(err)
-
-    def test_state_cleaned_up_after_error(self):
-        handler, _, retrieval_inv = _make_handler_with_retrieval()
-        run_id = _run_id()
-
-        handler.on_retriever_start(serialized={}, query="q", run_id=run_id)
-        handler.on_retriever_error(error=RuntimeError("boom"), run_id=run_id)
-
-        assert run_id not in handler._invocation_manager._invocations
-
-    def test_unknown_run_id_does_not_raise(self):
-        handler, _, _ = _make_handler_with_retrieval()
-        handler.on_retriever_error(
-            error=RuntimeError("boom"), run_id=_run_id()
-        )
-
-
-# on_llm_end – token usage break-downs
-# ---------------------------------------------------------------------------
-
-
-class TestOnLlmEndTokenDetails:
-    def test_cache_and_reasoning_tokens_set_on_invocation(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hi there",
-            usage_metadata={
-                "input_tokens": 10,
-                "output_tokens": 20,
-                "total_tokens": 30,
-                "input_token_details": {
-                    "cache_creation": 3,
-                    "cache_read": 2,
-                },
-                "output_token_details": {"reasoning": 5},
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.input_tokens == 10
-        assert llm_inv.cache_write_input_tokens == 3
-        assert llm_inv.cache_read_input_tokens == 2
-        assert llm_inv.thinking_tokens == 5
-        assert llm_inv.output_tokens == 20
-
-    def test_cache_write_tokens_set_on_invocation(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hi there",
-            usage_metadata={
-                "input_tokens": 15,
-                "output_tokens": 25,
-                "total_tokens": 40,
-                "input_token_details": {
-                    "cache_write": 7,
-                    "cache_read": 3,
-                },
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.input_tokens == 15
-        assert llm_inv.cache_write_input_tokens == 7
-        assert llm_inv.cache_read_input_tokens == 3
-        assert llm_inv.output_tokens == 25
-
-    def test_modality_tokens_set_on_invocation(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hi",
-            usage_metadata={
-                "input_tokens": 100,
-                "output_tokens": 50,
-                "total_tokens": 150,
-                "input_token_details": {
-                    "text": 70,
-                    "image": 20,
-                    "audio": 10,
-                },
-                "output_token_details": {
-                    "text": 35,
-                    "image": 10,
-                    "audio": 5,
-                },
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        # The breakdown is applied by InferenceInvocation, so the handler's
-        # contract is the pairs it forwards. util-genai covers the mapping
-        # from those pairs onto span attributes.
-        assert llm_inv.input_tokens == 100
-        assert llm_inv.output_tokens == 50
-        # LangChain's pydantic model reorders the details mapping, so compare
-        # the pairs rather than their order.
-        (input_pairs,), _ = llm_inv.set_input_tokens.call_args
-        assert sorted(input_pairs) == [
-            ("audio", 10),
-            ("image", 20),
-            ("text", 70),
-        ]
-        (output_pairs,), _ = llm_inv.set_output_tokens.call_args
-        assert sorted(output_pairs) == [
-            ("audio", 5),
-            ("image", 10),
-            ("text", 35),
-        ]
-
-    def test_absent_token_details_forward_none(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hi",
-            usage_metadata={
-                "input_tokens": 1,
-                "output_tokens": 2,
-                "total_tokens": 3,
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        llm_inv.set_input_tokens.assert_called_once_with(None)
-        llm_inv.set_output_tokens.assert_called_once_with(None)
-
-
 # ---------------------------------------------------------------------------
 # utils.extract_token_details
 # ---------------------------------------------------------------------------
@@ -2433,37 +1617,6 @@ def test_extract_token_details_boolean_and_non_int_omitted():
     assert extract_token_details(usage) == {}
 
 
-def test_legacy_function_call_finish_reason_produces_tool_call_request():
-    """Pre-tools OpenAI ``function_call`` must surface as a ToolCallRequestPart."""
-    run_id = _run_id()
-    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-    ai_msg = AIMessage(
-        content="",
-        additional_kwargs={
-            "function_call": {
-                "name": "get_weather",
-                "arguments": '{"city": "Paris"}',
-            }
-        },
-    )
-    gen = ChatGeneration(
-        message=ai_msg,
-        generation_info={"finish_reason": "function_call"},
-    )
-    response = LLMResult(generations=[[gen]])
-
-    handler.on_llm_end(response=response, run_id=run_id)
-
-    assigned: list[OutputMessage] = llm_inv.output_messages
-    assert len(assigned) == 1
-    assert len(assigned[0].parts) == 1
-    part = assigned[0].parts[0]
-    assert isinstance(part, ToolCallRequestPart)
-    assert part.name == "get_weather"
-    assert part.arguments == {"city": "Paris"}
-
-
 # ---------------------------------------------------------------------------
 # utils - legacy OpenAI function_call (_legacy_function_call_request)
 # ---------------------------------------------------------------------------
@@ -2520,143 +1673,6 @@ def test_to_input_messages_includes_legacy_function_call():
 
 
 # ---------------------------------------------------------------------------
-# on_llm_end – response model resolution (RAPI header + llm_output)
-# ---------------------------------------------------------------------------
-
-
-class TestOnLlmEndResponseModel:
-    def test_served_model_from_rapi_header(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hello",
-            response_metadata={
-                "headers": {"x-ms-served-model": "gpt-4.1-2025-04-14"}
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.response_model_name == "gpt-4.1-2025-04-14"
-
-    def test_served_model_header_case_insensitive(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hello",
-            response_metadata={
-                "headers": {"X-MS-Served-Model": "gpt-4.1-2025-04-14"}
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.response_model_name == "gpt-4.1-2025-04-14"
-
-    def test_served_model_overrides_llm_output_model_name(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(
-            content="hello",
-            response_metadata={
-                "headers": {"x-ms-served-model": "served-from-header"}
-            },
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(
-            generations=[[gen]],
-            llm_output={"model_name": "gpt-4.1-body", "id": "resp_123"},
-        )
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.response_model_name == "served-from-header"
-        assert llm_inv.response_id == "resp_123"
-
-    def test_llm_output_model_fallback(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        ai_msg = AIMessage(content="hello", response_metadata={})
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(
-            generations=[[gen]], llm_output={"model": "gpt-4.1-fallback"}
-        )
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.response_model_name == "gpt-4.1-fallback"
-
-    def test_unsupported_header_ignored(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-        llm_inv.response_model_name = None
-
-        ai_msg = AIMessage(
-            content="hello",
-            response_metadata={"headers": {"x-request-id": "abc-123"}},
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.response_model_name is None
-
-    def test_empty_header_value_ignored(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-        llm_inv.response_model_name = "gpt-4o"
-
-        ai_msg = AIMessage(
-            content="hello",
-            response_metadata={"headers": {"x-ms-served-model": " "}},
-        )
-        gen = ChatGeneration(
-            message=ai_msg, generation_info={"finish_reason": "stop"}
-        )
-        response = LLMResult(generations=[[gen]])
-
-        handler.on_llm_end(response=response, run_id=run_id)
-
-        assert llm_inv.response_model_name == "gpt-4o"
-
-
-# ---------------------------------------------------------------------------
-# on_llm_end – streamed output messages
-# ---------------------------------------------------------------------------
-
-
-def test_streamed_output_message_role_is_assistant():
-    run_id = _run_id()
-    handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-    gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
-
-    handler.on_llm_end(response=LLMResult(generations=[[gen]]), run_id=run_id)
-
-    (output_message,) = llm_inv.output_messages
-    assert output_message.role == "assistant"
-
-
-# ---------------------------------------------------------------------------
 # utils._normalize_role
 # ---------------------------------------------------------------------------
 
@@ -2703,164 +1719,6 @@ def test_normalize_role_returns_none_for_unmapped_class():
 def test_chat_message_role_reaches_the_input_side():
     (message,) = to_input_messages([ChatMessage(content="hi", role="custom")])
     assert message.role == "custom"
-
-
-# on_llm_end – streamed responses
-#
-# Streaming reaches on_llm_end with an LLMResult that LangChain assembles from
-# the merged chunks alone, so ``llm_output`` — the usual source of
-# ``gen_ai.response.model`` and ``gen_ai.response.id`` — is never populated.
-# ---------------------------------------------------------------------------
-
-
-class TestOnLlmEndStreamedResponse:
-    def test_model_and_id_from_response_metadata(self):
-        """Both fields are read off the message's ``response_metadata``.
-
-        LangChain fills it with the union of ``generation_info`` and whatever
-        the provider wrote onto the message, so this is the one place that
-        covers every provider. The ``generation_info`` half of that union is
-        covered end to end by
-        ``test_chat_openai_streamed_response_model``, which drives a
-        real ``.stream()`` so LangChain performs the copy.
-        """
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        gen = ChatGenerationChunk(
-            message=AIMessageChunk(
-                content="hello",
-                response_metadata={
-                    "model_name": "claude-sonnet-4-5",
-                    "id": "msg_01ABC",
-                },
-            )
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_model_name == "claude-sonnet-4-5"
-        assert llm_inv.response_id == "msg_01ABC"
-
-    def test_model_from_generation_info(self):
-        """A generation that skipped LangChain's merge still reports."""
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        gen = ChatGenerationChunk(
-            message=AIMessageChunk(content="hello"),
-            generation_info={"model_name": "claude-sonnet-4-5"},
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_model_name == "claude-sonnet-4-5"
-
-    def test_response_metadata_wins_over_generation_info(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        gen = ChatGenerationChunk(
-            message=AIMessageChunk(
-                content="hello",
-                response_metadata={"model_name": "from-response-metadata"},
-            ),
-            generation_info={"model_name": "from-generation-info"},
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_model_name == "from-response-metadata"
-
-    def test_message_id_not_used_as_response_id(self):
-        """LangChain puts its own run id on ``message.id`` when the provider
-        supplies none, which must not surface as ``gen_ai.response.id``."""
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-        llm_inv.response_id = None
-
-        gen = ChatGenerationChunk(
-            message=AIMessageChunk(
-                content="hello", id=f"run--{run_id}", chunk_position="last"
-            )
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_id is None
-
-    def test_llm_output_takes_precedence(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        gen = ChatGenerationChunk(
-            message=AIMessageChunk(content="hello"),
-            generation_info={"model_name": "from-generation"},
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(
-                generations=[[gen]],
-                llm_output={"model_name": "from-llm-output"},
-            ),
-            run_id=run_id,
-        )
-
-        assert llm_inv.response_model_name == "from-llm-output"
-
-    def test_served_model_header_takes_precedence(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-
-        gen = ChatGenerationChunk(
-            message=AIMessageChunk(
-                content="hello",
-                response_metadata={
-                    "headers": {"x-ms-served-model": "served-from-header"}
-                },
-            ),
-            generation_info={"model_name": "from-generation"},
-        )
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_model_name == "served-from-header"
-
-    def test_no_model_reported_leaves_attribute_unset(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-        llm_inv.response_model_name = None
-
-        gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_model_name is None
-
-    def test_no_id_reported_leaves_attribute_unset(self):
-        run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
-        llm_inv.response_id = None
-
-        gen = ChatGenerationChunk(message=AIMessageChunk(content="hello"))
-
-        handler.on_llm_end(
-            response=LLMResult(generations=[[gen]]), run_id=run_id
-        )
-
-        assert llm_inv.response_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -3398,130 +2256,22 @@ def test_to_input_messages_extracts_image_part():
     assert blob.content == b"ABC"
 
 
-def test_on_chat_model_start_skips_input_messages_when_content_disabled():
-    """Gating happens in the callback handler, not inside the utils."""
-    run_id = _run_id()
-    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
-    telemetry.should_capture_content.return_value = False
-
-    content = [
-        {"type": "text", "text": "What's in this image?"},
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
-        },
-    ]
-    handler.on_chat_model_start(
-        serialized={},
-        messages=[[HumanMessage(content=content)]],
-        run_id=_run_id(),
-        invocation_params={"model_name": "gpt-4o"},
-    )
-
-    assert llm_inv.input_messages == []
-
-
-def test_on_chat_model_start_captures_input_messages_when_content_enabled():
-    run_id = _run_id()
-    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
-    telemetry.should_capture_content.return_value = True
-
-    content = [
-        {"type": "text", "text": "What's in this image?"},
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{_REAL_PNG_B64}"},
-        },
-    ]
-    handler.on_chat_model_start(
-        serialized={},
-        messages=[[HumanMessage(content=content)]],
-        run_id=_run_id(),
-        invocation_params={"model_name": "gpt-4o"},
-    )
-
-    parts = llm_inv.input_messages[0].parts
-    assert any(isinstance(p, TextPart) for p in parts)
-    blob = next(p for p in parts if isinstance(p, BlobPart))
-    assert blob.content == _REAL_PNG_BYTES
-
-
-def test_on_chat_model_start_preserves_message_name():
-    run_id = _run_id()
-    handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
-    telemetry.should_capture_content.return_value = True
-
-    handler.on_chat_model_start(
-        serialized={},
-        messages=[[HumanMessage(content="Hello", name="Alice")]],
-        run_id=run_id,
-        invocation_params={"model_name": "gpt-4o"},
-    )
-
-    assert len(llm_inv.input_messages) == 1
-    assert llm_inv.input_messages[0].name == "Alice"
-
-
-def test_explicit_attach_to_context_false():
-    telemetry = mock.MagicMock()
-    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
-    telemetry.workflow.return_value = workflow_inv
-
-    handler = OpenTelemetryLangChainCallbackHandler(
-        telemetry, _attach_to_context=False
-    )
-    run_id = _run_id()
-
-    handler.on_chain_start(
-        serialized={"name": "LangGraph", "id": ["langgraph"]},
-        inputs={},
-        run_id=run_id,
-        parent_run_id=None,
-    )
-
-    telemetry.workflow.assert_called_once_with(
-        name="LangGraph",
-        context=None,
-        conversation_id=None,
-        _attach_to_context=False,
-    )
-
-
-def test_sync_defaults_attach_to_context_true():
-    telemetry = mock.MagicMock()
-    workflow_inv = mock.MagicMock(spec=WorkflowInvocation)
-    telemetry.workflow.return_value = workflow_inv
-
-    handler = OpenTelemetryLangChainCallbackHandler(telemetry)
-    run_id = _run_id()
-
-    handler.on_chain_start(
-        serialized={"name": "LangGraph", "id": ["langgraph"]},
-        inputs={},
-        run_id=run_id,
-        parent_run_id=None,
-    )
-
-    telemetry.workflow.assert_called_once_with(
-        name="LangGraph",
-        context=None,
-        conversation_id=None,
-        _attach_to_context=True,
-    )
-
-
-def test_instrumentor_routes_sync_and_async_callback_managers():
+def test_instrumentor_shares_handler_across_callback_managers(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+) -> None:
     from langchain_core.callbacks.manager import (
         AsyncCallbackManager,
         CallbackManager,
     )
 
-    from opentelemetry.instrumentation.genai.langchain import (
-        LangChainInstrumentor,
-    )
-
-    LangChainInstrumentor().instrument()
-    try:
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
         cm = CallbackManager([])
         sync_handlers = [
             h
@@ -3529,7 +2279,6 @@ def test_instrumentor_routes_sync_and_async_callback_managers():
             if isinstance(h, OpenTelemetryLangChainCallbackHandler)
         ]
         assert len(sync_handlers) == 1
-        assert sync_handlers[0]._attach_to_context is True
         assert sync_handlers[0].run_inline is False
 
         acm = AsyncCallbackManager([])
@@ -3539,7 +2288,5 @@ def test_instrumentor_routes_sync_and_async_callback_managers():
             if isinstance(h, OpenTelemetryLangChainCallbackHandler)
         ]
         assert len(async_handlers) == 1
-        assert async_handlers[0]._attach_to_context is False
+        assert sync_handlers[0] is async_handlers[0]
         assert async_handlers[0].run_inline is False
-    finally:
-        LangChainInstrumentor().uninstrument()

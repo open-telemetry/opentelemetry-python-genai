@@ -1,0 +1,1 @@
+Record tool call arguments as compact JSON for any valid JSON input and non-string results as JSON. Previously only JSON objects were normalized and results went through `str()`, e.g. arguments `[1, 2]` were recorded as `[1, 2]`, now `[1,2]`; `null` arguments are no longer recorded.

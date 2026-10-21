@@ -68,10 +68,9 @@ For releasing every package that has towncrier changelog fragments:
    - Publishes each ready package to PyPI.
    - Creates a GitHub release tag (`<pkg>==<version>`) on `main` for each.
    - Opens a PR bumping released packages to the next minor `.dev` version.
-4. Review and merge the post-release version-bump PR. If a workspace package
-   (e.g. `opentelemetry-util-genai`) was released at a new floor required by
-   other packages, remove its `-e` editable install from
-   `tests/requirements.oldest.txt` in that PR so `deps-check` passes.
+     The bump also removes local installs from `tests/requirements.oldest.txt`
+     for workspace dependencies whose declared floor is now released.
+4. Review and merge the post-release version-bump PR.
 
 Packages without changelog fragments are skipped during prepare and logged in
 the workflow output.

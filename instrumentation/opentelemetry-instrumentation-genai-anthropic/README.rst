@@ -85,4 +85,3 @@ References
 * `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
 * `Anthropic SDK (Python) <https://github.com/anthropics/anthropic-sdk-python>`_
 * `Anthropic Documentation <https://docs.anthropic.com/>`_
-

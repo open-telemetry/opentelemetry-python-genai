@@ -16,6 +16,7 @@ on:
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-portkey
         - opentelemetry-instrumentation-genai-qwen-agent
+        - opentelemetry-instrumentation-genai-qwenpaw
         - opentelemetry-instrumentation-genai-smolagents
         - opentelemetry-util-genai
         description: 'Package to release'
@@ -39,7 +40,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-${{ inputs.package }}
           path: dist/

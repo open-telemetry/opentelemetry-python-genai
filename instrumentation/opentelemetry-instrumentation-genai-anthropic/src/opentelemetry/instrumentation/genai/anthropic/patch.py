@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from anthropic.types import Message as AnthropicMessage
@@ -16,6 +16,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 from ._raw_response import wrap_raw_response
 from .messages_extractors import (
@@ -96,19 +97,6 @@ def _fail_context_manager_response(
         )
 
 
-def _materialize_tools(kwargs: dict[str, Any]) -> None:
-    """Replace a one-shot ``tools`` iterator with a list.
-
-    ``tools`` is typed as an iterable, so it may be a generator, and both the
-    SDK and the tool definitions read it. Call this before either of them does:
-    ``create`` reads the request after this wrapper, but ``stream`` serializes
-    it while building the manager, before the invocation is created.
-    """
-    tools = kwargs.get("tools")
-    if isinstance(tools, Iterator):
-        kwargs["tools"] = list(cast("Iterator[Any]", tools))
-
-
 def _is_raw_response(result: object) -> bool:
     """Whether ``result`` is a raw-response object to route through the proxy.
 
@@ -144,15 +132,31 @@ def messages_create(
         | AnthropicStream[RawMessageStreamEvent]
         | MessagesStreamWrapper[None]
     ):
-        _materialize_tools(kwargs)
-        invocation = _create_invocation(
-            handler, instance, args, kwargs, capture_content
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", capture_content
         )
+        system_capture = IteratorCapture.from_property(
+            kwargs, "system", capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", capture_content
+        )
+        invocation = _create_invocation(handler, instance, args, kwargs)
         try:
-            # ``Any``: through ``with_raw_response`` / ``with_streaming_response``
-            # this returns a response object that ``create``'s annotations do
-            # not describe, so the checks below cannot be narrowed away.
-            result: Any = wrapped(*args, **kwargs)
+            try:
+                # Raw response variants return types outside create's
+                # annotations, so Any keeps the checks below reachable.
+                result: Any = wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(get_input_messages) or []
+                )
+                invocation.system_instruction = (
+                    system_capture.extract(get_system_instruction) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    get_tool_definitions
+                )
         except BaseException as exc:
             invocation.fail(exc)
             raise
@@ -203,13 +207,30 @@ def async_messages_create(
         | AnthropicAsyncStream[RawMessageStreamEvent]
         | AsyncMessagesStreamWrapper[None]
     ):
-        _materialize_tools(kwargs)
-        invocation = _create_invocation(
-            handler, instance, args, kwargs, capture_content
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", capture_content
         )
+        system_capture = IteratorCapture.from_property(
+            kwargs, "system", capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", capture_content
+        )
+        invocation = _create_invocation(handler, instance, args, kwargs)
         try:
-            # See ``messages_create`` on why this is Any.
-            result: Any = await wrapped(*args, **kwargs)
+            try:
+                # See ``messages_create`` on why this is Any.
+                result: Any = await wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(get_input_messages) or []
+                )
+                invocation.system_instruction = (
+                    system_capture.extract(get_system_instruction) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    get_tool_definitions
+                )
         except BaseException as exc:
             invocation.fail(exc)
             raise
@@ -239,7 +260,6 @@ def _create_invocation(
     instance: Messages | AsyncMessages,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-    capture_content: bool,
 ) -> InferenceInvocation:
     params = extract_params(*args, **kwargs)
     attributes = get_llm_request_attributes(params, instance)
@@ -259,15 +279,6 @@ def _create_invocation(
         server_address=server_address,
         server_port=server_port,
     )
-    invocation.input_messages = (
-        get_input_messages(params.messages) if capture_content else []
-    )
-    invocation.system_instruction = (
-        get_system_instruction(params.system) if capture_content else []
-    )
-    invocation.tool_definitions = (
-        get_tool_definitions(params.tools) if capture_content else None
-    )
     invocation.attributes = attributes
     return invocation
 
@@ -284,13 +295,22 @@ def messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> MessagesStreamManagerWrapper[Any]:
-        _materialize_tools(kwargs)
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", capture_content
+        )
+        system_capture = IteratorCapture.from_property(
+            kwargs, "system", capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", capture_content
+        )
         return MessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
-            lambda: _create_invocation(
-                handler, instance, args, kwargs, capture_content
-            ),
+            lambda: _create_invocation(handler, instance, args, kwargs),
             capture_content,
+            messages_capture=messages_capture,
+            system_capture=system_capture,
+            tools_capture=tools_capture,
         )
 
     return cast(
@@ -310,13 +330,22 @@ def async_messages_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> AsyncMessagesStreamManagerWrapper[Any]:
-        _materialize_tools(kwargs)
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", capture_content
+        )
+        system_capture = IteratorCapture.from_property(
+            kwargs, "system", capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", capture_content
+        )
         return AsyncMessagesStreamManagerWrapper(
             wrapped(*args, **kwargs),
-            lambda: _create_invocation(
-                handler, instance, args, kwargs, capture_content
-            ),
+            lambda: _create_invocation(handler, instance, args, kwargs),
             capture_content,
+            messages_capture=messages_capture,
+            system_capture=system_capture,
+            tools_capture=tools_capture,
         )
 
     return cast(

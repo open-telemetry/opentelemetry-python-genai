@@ -28,12 +28,16 @@ from opentelemetry.util.genai.stream import (
     finalize_on_aclose,
     finalize_on_close,
 )
-from opentelemetry.util.genai.types import MessagePart, OutputMessage
+from opentelemetry.util.genai.types import OutputMessage
 
-from .messages_extractors import set_invocation_response_attributes
+from .messages_extractors import (
+    get_input_messages,
+    get_system_instruction,
+    get_tool_definitions,
+    set_invocation_response_attributes,
+)
 from .utils import (
     StreamBlockState,
-    convert_content_to_parts,
     create_stream_block_state,
     stream_block_state_to_part,
     update_stream_block_state,
@@ -66,6 +70,9 @@ if TYPE_CHECKING:
     from anthropic.types.parsed_message import ParsedMessage
 
     from opentelemetry.util.genai.invocation import InferenceInvocation
+    from opentelemetry.util.genai.iterator_capture import IteratorCapture
+
+
 ResponseFormatT = TypeVar("ResponseFormatT")
 accumulate_event = cast("Callable[..., Message] | None", _sdk_accumulate_event)
 
@@ -122,7 +129,6 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     _self_block_states: dict[int, StreamBlockState]
     _self_seen_message_stop: bool
     _self_stop_reason: str | None
-    _self_output_tokens: int | None
 
     def _is_incomplete_response(self) -> bool:
         stop_reason = self._self_stop_reason
@@ -138,22 +144,18 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         )
 
     def _partial_output_messages(self) -> list[OutputMessage] | None:
-        if self._self_block_states:
-            snapshot_content = getattr(self._self_message, "content", [])
-            parts: list[MessagePart] = []
-            for index, state in sorted(self._self_block_states.items()):
-                if state.type == "text" and index < len(snapshot_content):
-                    snapshot_text = getattr(
-                        snapshot_content[index], "text", None
-                    )
-                    if isinstance(snapshot_text, str) and snapshot_text:
-                        state.text = snapshot_text
-                if (part := stream_block_state_to_part(state)) is not None:
-                    parts.append(part)
-        elif self._self_message is not None:
-            parts = convert_content_to_parts(self._self_message.content)
-        else:
-            return None
+        block_states = self._self_block_states.copy()
+        if self._self_message is not None:
+            # text_stream bypasses event tracking; tool snapshots may hold placeholders.
+            for index, block in enumerate(self._self_message.content):
+                if block.type in ("text", "thinking"):
+                    block_states[index] = create_stream_block_state(block)
+
+        parts = [
+            part
+            for _, state in sorted(block_states.items())
+            if (part := stream_block_state_to_part(state)) is not None
+        ]
         if not parts:
             return None
 
@@ -178,8 +180,6 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
             self._self_message,
             self._self_capture_content and not incomplete_response,
         )
-        if incomplete_response or self._self_output_tokens is not None:
-            self._self_invocation.output_tokens = self._self_output_tokens
         if incomplete_response:
             self._self_invocation.finish_reasons = ["error"]
             if (
@@ -194,6 +194,15 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
     def _fail(self, exc: BaseException) -> None:
         if self._self_message_telemetry_finalized:
             return
+        self._adopt_sdk_snapshot()
+        message = self._self_message
+        if message is not None:
+            capture_content = self._self_capture_content and bool(
+                message.content
+            )
+            _set_response_attributes(
+                self._self_invocation, message, capture_content
+            )
         self._self_invocation.fail(exc)
         self._self_message_telemetry_finalized = True
 
@@ -267,6 +276,11 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
         | ParsedMessageStreamEvent[ResponseFormatT],
     ) -> None:
         chunk_type = getattr(chunk, "type", None)
+        if not self._self_capture_content and chunk_type in (
+            "content_block_start",
+            "content_block_delta",
+        ):
+            return
         if chunk_type == "content_block_start":
             if not self._self_capture_content:
                 return
@@ -298,11 +312,6 @@ class _MessagesStreamMixin(Generic[ResponseFormatT]):
                 stop_reason = getattr(delta, "stop_reason", None)
                 if isinstance(stop_reason, str):
                     self._self_stop_reason = stop_reason
-            usage = getattr(chunk, "usage", None)
-            if usage is not None:
-                output_tokens = getattr(usage, "output_tokens", None)
-                if isinstance(output_tokens, int):
-                    self._self_output_tokens = output_tokens
             return
 
         if chunk_type == "message_stop":
@@ -333,7 +342,6 @@ class MessagesStreamWrapper(
         self._self_block_states = {}
         self._self_seen_message_stop = False
         self._self_stop_reason = None
-        self._self_output_tokens = None
 
     @property
     def response(self) -> _http_lib.Response:
@@ -378,7 +386,6 @@ class AsyncMessagesStreamWrapper(
         self._self_block_states = {}
         self._self_seen_message_stop = False
         self._self_stop_reason = None
-        self._self_output_tokens = None
 
     @property
     def response(self) -> _http_lib.Response:
@@ -417,9 +424,32 @@ class MessagesStreamManagerWrapper(
         manager: MessageStreamManager[ResponseFormatT],
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
+        *,
+        messages_capture: IteratorCapture,
+        system_capture: IteratorCapture,
+        tools_capture: IteratorCapture,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
+        self._self_messages_capture = messages_capture
+        self._self_system_capture = system_capture
+        self._self_tools_capture = tools_capture
+
+    def _enter_manager(
+        self, invocation: InferenceInvocation
+    ) -> MessageStream[ResponseFormatT]:
+        try:
+            return super()._enter_manager(invocation)
+        finally:
+            invocation.input_messages = (
+                self._self_messages_capture.extract(get_input_messages) or []
+            )
+            invocation.system_instruction = (
+                self._self_system_capture.extract(get_system_instruction) or []
+            )
+            invocation.tool_definitions = self._self_tools_capture.extract(
+                get_tool_definitions
+            )
 
     def _wrap_stream(
         self,
@@ -450,9 +480,32 @@ class AsyncMessagesStreamManagerWrapper(
         manager: AsyncMessageStreamManager[ResponseFormatT],
         invocation_factory: Callable[[], InferenceInvocation],
         capture_content: bool,
+        *,
+        messages_capture: IteratorCapture,
+        system_capture: IteratorCapture,
+        tools_capture: IteratorCapture,
     ):
         super().__init__(manager, invocation_factory)
         self._self_capture_content = capture_content
+        self._self_messages_capture = messages_capture
+        self._self_system_capture = system_capture
+        self._self_tools_capture = tools_capture
+
+    async def _enter_manager(
+        self, invocation: InferenceInvocation
+    ) -> AsyncMessageStream[ResponseFormatT]:
+        try:
+            return await super()._enter_manager(invocation)
+        finally:
+            invocation.input_messages = (
+                self._self_messages_capture.extract(get_input_messages) or []
+            )
+            invocation.system_instruction = (
+                self._self_system_capture.extract(get_system_instruction) or []
+            )
+            invocation.tool_definitions = self._self_tools_capture.extract(
+                get_tool_definitions
+            )
 
     def _wrap_stream(
         self,

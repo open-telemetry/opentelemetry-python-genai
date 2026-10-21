@@ -1,0 +1,16 @@
+[project]
+name = "otel-genai-suppress-inference-event-declarative"
+version = "0.0.0"
+description = "Declarative configuration example demonstrating how to suppress GenAI inference events."
+requires-python = ">=3.10"
+dependencies = [
+  "openai>=1.0.0",
+  "opentelemetry-api>=1.45.1",
+  "opentelemetry-sdk>=1.45.1",
+  "opentelemetry-distro>=0.66b1",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.1",
+  "opentelemetry-instrumentation-genai-openai>=1.1b0",
+]
+
+[tool.uv]
+package = false

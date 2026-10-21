@@ -20,12 +20,13 @@ from collections.abc import (
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from agno.agent import RunOutput
+    from agno.agent import Agent, RunOutput
     from agno.knowledge.document.base import Document
     from agno.knowledge.knowledge import Knowledge
     from agno.run.workflow import WorkflowRunOutput
-    from agno.team import TeamRunOutput
+    from agno.team import Team, TeamRunOutput
     from agno.tools.function import FunctionCall, FunctionExecutionResult
+    from agno.workflow.workflow import Workflow
 
     AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
 
@@ -65,7 +66,7 @@ from opentelemetry.util.genai.types import (
     Role,
     TextPart,
 )
-from opentelemetry.util.genai.utils import get_argument
+from opentelemetry.util.genai.utils import get_argument, object_to_any_value
 
 logger = logging.getLogger(__name__)
 
@@ -248,17 +249,17 @@ def _extract_input_content(input_val: Any) -> str:
 def _extract_output_content(result: Any) -> str:
     if result is None:
         return ""
+    return format_content(_extract_output_value(result))
+
+
+def _extract_output_value(result: Any) -> Any:
     content = _get_property_value(result, "content")
     if content is not None:
-        return format_content(content)
+        return content
     val = _get_property_value(result, "result")
     if val is not None:
-        return format_content(val)
-    return format_content(result)
-
-
-def _extract_arguments_str(args_val: Any) -> str:
-    return format_content(args_val)
+        return val
+    return result
 
 
 def _set_tool_invocation_input(
@@ -266,9 +267,7 @@ def _set_tool_invocation_input(
     instance: FunctionCall,
 ) -> None:
     if invocation.should_capture_content:
-        arguments = instance.arguments
-        if arguments is not None:
-            invocation.arguments = _extract_arguments_str(arguments)
+        invocation.arguments = object_to_any_value(instance.arguments)
 
 
 def _fail_tool_invocation(
@@ -291,7 +290,9 @@ def _set_tool_invocation_output(
     if result.status == "failure":
         return
     if invocation.should_capture_content:
-        invocation.tool_result = _extract_output_content(result)
+        invocation.tool_result = object_to_any_value(
+            _extract_output_value(result)
+        )
 
 
 def _set_invocation_input(
@@ -311,6 +312,18 @@ def _set_invocation_input(
                     role=Role.USER.value, parts=[TextPart(content=content_str)]
                 )
             ]
+
+
+def _resolve_conversation_id(
+    instance: Agent | Team | Workflow,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    wrapped: Callable[..., object],
+) -> str | None:
+    session_id = get_argument("session_id", wrapped, args, kwargs)
+    if session_id is None:
+        session_id = instance.session_id
+    return str(session_id) if session_id is not None else None
 
 
 def _extract_finish_reason(result: object) -> str:
@@ -347,6 +360,7 @@ def _start_agent_invocation(
     wrapped: Callable[..., Any],
 ) -> LocalAgentInvocation:
     agent_name = getattr(instance, "name", None)
+    conversation_id = _resolve_conversation_id(instance, args, kwargs, wrapped)
     model_obj = get_argument("model", wrapped, args, kwargs) or getattr(
         instance, "model", None
     )
@@ -361,6 +375,7 @@ def _start_agent_invocation(
     invocation = handler.invoke_local_agent(
         agent_name=str(agent_name) if agent_name else None,
         request_model=str(request_model) if request_model else None,
+        conversation_id=conversation_id,
     )
     description = getattr(instance, "description", None)
     if description:
@@ -581,7 +596,10 @@ def _start_workflow_invocation(
     wrapped: Callable[..., Any],
 ) -> WorkflowInvocation:
     workflow_name = getattr(instance, "name", None)
-    invocation = handler.workflow(name=workflow_name)
+    conversation_id = _resolve_conversation_id(instance, args, kwargs, wrapped)
+    invocation = handler.workflow(
+        name=workflow_name, conversation_id=conversation_id
+    )
     _set_invocation_input(
         invocation, instance, args, kwargs, capture_content, wrapped
     )

@@ -1,0 +1,14 @@
+file_format: "0.4"
+logger_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp:
+            protocol: http/protobuf
+  logger_configurator/development:
+    loggers:
+      # matches all instrumentations in our repo:
+      # opentelemetry-instrumentation-genai-* and opentelemetry-instrumentation-google-genai
+      - name: "opentelemetry.instrumentation*genai*"
+        config:
+          enabled: false

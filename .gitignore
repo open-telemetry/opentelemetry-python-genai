@@ -78,4 +78,5 @@ MIGRATION_REPORT.md
 
 # dev sample projects
 dev/uv.lock
+examples/**/uv.lock
 

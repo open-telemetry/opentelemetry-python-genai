@@ -9,7 +9,13 @@ from typing import Any, TypeGuard
 from urllib.parse import urlparse
 
 from opentelemetry.semconv._incubating.attributes import aws_attributes
-from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.invocation import (
+    EmbeddingInvocation,
+    GenAIInvocation,
+    InferenceInvocation,
+    RemoteAgentInvocation,
+    RetrievalInvocation,
+)
 from opentelemetry.util.genai.types import (
     BlobPart,
     FunctionToolDefinition,
@@ -20,6 +26,7 @@ from opentelemetry.util.genai.types import (
     Modality,
     OutputMessage,
     ReasoningPart,
+    RetrievalDocument,
     Role,
     SystemInstructionPart,
     TextPart,
@@ -284,7 +291,7 @@ def _extract_system_parts(
 
 
 def _extract_guardrail_id(
-    params: dict[str, Any], invocation: InferenceInvocation
+    params: dict[str, Any], invocation: GenAIInvocation
 ) -> None:
     guardrail_id = params.get("guardrailIdentifier")
     if not guardrail_id and _is_dict(params.get("guardrailConfig")):
@@ -818,3 +825,353 @@ def extract_invoke_model_response(
                     finish_reason=finish_reason or "error",
                 )
             ]
+
+
+def is_embedding_model(model_id: str | None) -> bool:
+    """Return True if the model ID corresponds to an embedding model.
+
+    Every Bedrock embedding model ID contains ``embed`` (``amazon.titan-embed-*``,
+    ``cohere.embed-*``, ``twelvelabs.*-embed-*``), and no text generation model does. The
+    match is deliberately broad so that new embedding models are not reported as chat
+    completions.
+    """
+    if not model_id:
+        return False
+    return "embed" in model_id.lower()
+
+
+def extract_embedding_request(
+    api_params: dict[str, Any],
+    invocation: EmbeddingInvocation,
+) -> None:
+    """Populate request attributes from InvokeModel api_params onto the embedding invocation."""
+    _extract_guardrail_id(api_params, invocation)
+
+    body = _parse_body(api_params.get("body"))
+    if not _is_dict(body):
+        return
+
+    # Dimensions (e.g. Titan Text v2 dimensions or embeddingConfig.outputEmbeddingLength)
+    emb_config = body.get("embeddingConfig")
+    emb_config_dict = emb_config if _is_dict(emb_config) else None
+    dimensions = _safe_int(
+        _first_not_none(
+            body.get("dimensions"),
+            emb_config_dict.get("outputEmbeddingLength")
+            if emb_config_dict
+            else None,
+        )
+    )
+    if dimensions is not None:
+        invocation.dimension_count = dimensions
+
+    # Encoding formats (e.g. Cohere embedding_types)
+    raw_formats = _first_not_none(
+        body.get("embedding_types"),
+        body.get("embeddingTypes"),
+        body.get("encoding_format"),
+        body.get("encoding_formats"),
+    )
+    if _is_list(raw_formats):
+        formats = [str(fmt) for fmt in raw_formats if fmt is not None]
+        if formats:
+            invocation.encoding_formats = formats
+    elif isinstance(raw_formats, str) and raw_formats:
+        invocation.encoding_formats = [raw_formats]
+
+
+def extract_embedding_response(
+    response: dict[str, Any],
+    raw_body_bytes: bytes,
+    invocation: EmbeddingInvocation,
+) -> None:
+    """Populate response attributes from InvokeModel embedding response."""
+    # 1. Token counts and response model from response headers (case-insensitive)
+    resp_meta = response.get("ResponseMetadata")
+    http_headers = (
+        resp_meta.get("HTTPHeaders") if _is_dict(resp_meta) else None
+    )
+    if _is_dict(http_headers):
+        headers_lower: dict[str, str] = {
+            str(k).lower(): str(v) for k, v in http_headers.items()
+        }
+        if invocation.input_tokens is None:
+            invocation.input_tokens = _safe_int(
+                headers_lower.get("x-amzn-bedrock-input-token-count")
+            )
+        model_header = headers_lower.get("x-amzn-bedrock-model-id")
+        if model_header and invocation.response_model_name is None:
+            invocation.response_model_name = model_header
+
+    body = _parse_body(raw_body_bytes)
+    if not _is_dict(body):
+        return
+
+    # 2. Token counts from payload if not in headers
+    if invocation.input_tokens is None:
+        token_count = body.get("inputTextTokenCount")
+        if token_count is None and _is_dict(body.get("meta")):
+            meta = body["meta"]
+            if _is_dict(meta.get("billed_units")):
+                token_count = meta["billed_units"].get("input_tokens")
+        invocation.input_tokens = _safe_int(token_count)
+
+    # 3. Dimension count from embeddings in body
+    embedding = body.get("embedding")
+    if _is_list(embedding):
+        invocation.dimension_count = len(embedding)
+    else:
+        embeddings = body.get("embeddings")
+        if _is_list(embeddings) and embeddings:
+            first = embeddings[0]
+            if _is_list(first):
+                invocation.dimension_count = len(first)
+        elif _is_dict(embeddings):
+            for emb_list in embeddings.values():
+                if _is_list(emb_list) and emb_list:
+                    first = emb_list[0]
+                    if _is_list(first):
+                        invocation.dimension_count = len(first)
+                        break
+
+
+def extract_invoke_agent_request(
+    api_params: dict[str, Any],
+    invocation: RemoteAgentInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = api_params.get("sessionId")
+    if session_id:
+        invocation.conversation_id = str(session_id)
+
+    if capture_content:
+        input_text = api_params.get("inputText")
+        if input_text is not None:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=str(input_text))],
+                )
+            ]
+
+
+def extract_retrieve_request(
+    api_params: dict[str, Any],
+    invocation: RetrievalInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    raw_kb_id = api_params.get("knowledgeBaseId")
+    if raw_kb_id:
+        invocation.attributes[aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID] = (
+            str(raw_kb_id)
+        )
+
+    retrieval_config = api_params.get("retrievalConfiguration")
+    if _is_dict(retrieval_config):
+        vector_search_config = retrieval_config.get(
+            "vectorSearchConfiguration"
+        )
+        if _is_dict(vector_search_config):
+            top_k = vector_search_config.get("numberOfResults")
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+
+    if capture_content:
+        retrieval_query = api_params.get("retrievalQuery")
+        if _is_dict(retrieval_query):
+            query_text = retrieval_query.get("text")
+            if query_text is not None:
+                invocation.query_text = str(query_text)
+
+
+def _extract_model_from_arn(model_arn: Any) -> str | None:
+    if not model_arn:
+        return None
+    arn_str = str(model_arn)
+    for prefix in ("foundation-model/", "inference-profile/"):
+        if prefix in arn_str:
+            return arn_str.split(prefix, 1)[1]
+    return arn_str
+
+
+def extract_retrieve_and_generate_model(
+    api_params: dict[str, Any],
+) -> str | None:
+    rag_config = api_params.get("retrieveAndGenerateConfiguration")
+    if not _is_dict(rag_config):
+        return None
+    for sub_key in (
+        "knowledgeBaseConfiguration",
+        "externalSourcesConfiguration",
+    ):
+        sub_cfg = rag_config.get(sub_key)
+        if _is_dict(sub_cfg) and sub_cfg.get("modelArn"):
+            return _extract_model_from_arn(sub_cfg.get("modelArn"))
+    return None
+
+
+def extract_retrieve_and_generate_request(
+    api_params: dict[str, Any],
+    invocation: InferenceInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = api_params.get("sessionId")
+    if session_id:
+        invocation.conversation_id = str(session_id)
+
+    if capture_content:
+        input_obj = api_params.get("input")
+        if _is_dict(input_obj):
+            input_text = input_obj.get("text")
+            if input_text is not None:
+                invocation.input_messages = [
+                    InputMessage(
+                        role=Role.USER.value,
+                        parts=[TextPart(content=str(input_text))],
+                    )
+                ]
+
+    rag_config = api_params.get("retrieveAndGenerateConfiguration")
+    if not _is_dict(rag_config):
+        return
+
+    gen_config: dict[str, Any] | None = None
+    kb_config = rag_config.get("knowledgeBaseConfiguration")
+    if _is_dict(kb_config):
+        kb_id = kb_config.get("knowledgeBaseId")
+        if kb_id:
+            invocation.attributes[
+                aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID
+            ] = str(kb_id)
+
+        if _is_dict(kb_config.get("generationConfiguration")):
+            gen_config = kb_config["generationConfiguration"]
+
+    ext_config = rag_config.get("externalSourcesConfiguration")
+    if (
+        gen_config is None
+        and _is_dict(ext_config)
+        and _is_dict(ext_config.get("generationConfiguration"))
+    ):
+        gen_config = ext_config["generationConfiguration"]
+
+    if _is_dict(gen_config):
+        guardrail_cfg = gen_config.get("guardrailConfiguration")
+        if _is_dict(guardrail_cfg):
+            guardrail_id = guardrail_cfg.get("guardrailId")
+            if guardrail_id:
+                invocation.attributes[
+                    aws_attributes.AWS_BEDROCK_GUARDRAIL_ID
+                ] = str(guardrail_id)
+
+        inf_cfg = gen_config.get("inferenceConfig")
+        if _is_dict(inf_cfg):
+            text_inf = inf_cfg.get("textInferenceConfig")
+            if _is_dict(text_inf):
+                if "temperature" in text_inf:
+                    invocation.temperature = _safe_float(
+                        text_inf.get("temperature")
+                    )
+                if "topP" in text_inf:
+                    invocation.top_p = _safe_float(text_inf.get("topP"))
+                if "maxTokens" in text_inf:
+                    invocation.max_tokens = _safe_int(
+                        text_inf.get("maxTokens")
+                    )
+                stop_seq = text_inf.get("stopSequences")
+                if _is_list(stop_seq):
+                    invocation.stop_sequences = [
+                        str(s) for s in stop_seq if s is not None
+                    ]
+
+        add_fields = gen_config.get("additionalModelRequestFields")
+        if _is_dict(add_fields):
+            top_k = _first_not_none(
+                add_fields.get("topK"), add_fields.get("top_k")
+            )
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+            if invocation.seed is None and "seed" in add_fields:
+                invocation.seed = _safe_int(add_fields.get("seed"))
+
+
+def extract_retrieve_and_generate_response(
+    response: dict[str, Any],
+    invocation: InferenceInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = response.get("sessionId")
+    if session_id and not invocation.conversation_id:
+        invocation.conversation_id = str(session_id)
+
+    guardrail_action = response.get("guardrailAction")
+    finish_reason = (
+        "content_filter" if guardrail_action == "INTERVENED" else "stop"
+    )
+    invocation.finish_reasons = [finish_reason]
+
+    if not capture_content:
+        return
+
+    output = response.get("output")
+    if _is_dict(output):
+        text = output.get("text")
+        if text is not None:
+            invocation.output_messages = [
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[TextPart(content=str(text))],
+                    finish_reason=finish_reason,
+                )
+            ]
+
+
+def extract_retrieve_response(
+    response: dict[str, Any],
+    invocation: RetrievalInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    if not capture_content:
+        return
+
+    results = response.get("retrievalResults")
+    if not _is_list(results):
+        return
+
+    docs: list[RetrievalDocument] = []
+    for item in results:
+        if not _is_dict(item):
+            continue
+
+        document_id: str | None = None
+        raw_doc_id = item.get("documentId")
+        if raw_doc_id is not None:
+            document_id = str(raw_doc_id)
+
+        # `location` is a union keyed by data source (s3Location, webLocation, …), each
+        # holding a single `uri`/`url` member. Scanning generically keeps new AWS data
+        # source types working; sqlLocation has no locator and is skipped.
+        location = item.get("location")
+        if document_id is None and _is_dict(location):
+            for key, value in location.items():
+                if key == "type" or not _is_dict(value):
+                    continue
+                locator = _first_not_none(
+                    value.get("uri"), value.get("url"), value.get("id")
+                )
+                if locator is not None:
+                    document_id = str(locator)
+                    break
+
+        score = _safe_float(item.get("score"))
+
+        if document_id is not None or score is not None:
+            docs.append(RetrievalDocument(id=document_id, score=score))
+
+    if docs:
+        invocation.documents = docs

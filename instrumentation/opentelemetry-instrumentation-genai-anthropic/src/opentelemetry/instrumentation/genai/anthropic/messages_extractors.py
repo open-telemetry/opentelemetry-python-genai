@@ -120,6 +120,8 @@ def get_input_messages(
         return []
     result: list[InputMessage] = []
     for message in messages:
+        if "role" not in message or "content" not in message:
+            continue
         role = message["role"]
         parts = convert_content_to_parts(message["content"])
         result.append(InputMessage(role=role, parts=parts))
@@ -204,7 +206,7 @@ def get_output_messages_from_message(
         OutputMessage(
             role=message.role,
             parts=parts,
-            finish_reason=finish_reason or "",
+            finish_reason=finish_reason,
         )
     ]
 

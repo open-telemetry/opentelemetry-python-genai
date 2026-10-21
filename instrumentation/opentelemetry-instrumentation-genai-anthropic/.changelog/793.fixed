@@ -1,0 +1,1 @@
+Preserve available Anthropic partial response content when a stream fails.

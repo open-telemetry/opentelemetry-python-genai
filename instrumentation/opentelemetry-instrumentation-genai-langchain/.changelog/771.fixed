@@ -1,0 +1,1 @@
+langchain: record `message.tool_calls` on the output message even when the provider spells the stop reason differently (e.g. ChatOllama `done_reason`) instead of dropping them

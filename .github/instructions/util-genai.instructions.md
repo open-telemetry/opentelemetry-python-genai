@@ -37,6 +37,9 @@ land the semconv change first.
 
 - Do not remove or rename public objects. Deprecate first via a docstring note pointing to the
   replacement (not `@deprecated` — unreliable).
+- The `check-util-api` CI job fails when a public object is removed or its signature changes
+  compared to main. When a PR does this on purpose, ask it to list which released
+  instrumentations it checked, in this repo and in opentelemetry-python-contrib.
 - Private modules and module-private objects start with `_`.
 - Default to internal (`_`-prefixed) unless instrumentations need it public.
 - Flag every `Any` in the public API (anything not under a `_`-prefixed module) — parameters,
@@ -45,16 +48,16 @@ land the semconv change first.
 
 ## 4. Invocation shape
 
-- `start_*()` factories must accept all sampling-relevant semconv attributes as parameters.
+- Factory methods must accept all sampling-relevant semconv attributes as parameters.
   Attributes also marked required by semconv must be required parameters (no default value).
-- `start_*()` factories must map 1:1 to distinct semconv operation types (inference, embeddings,
+- Factory methods must map 1:1 to distinct semconv operation types (inference, embeddings,
   tool execution, agent invocation, workflow invocation). Names must match the operation
-  unambiguously — e.g., `create_agent` vs `invoke_agent` are distinct ops; `start_agent()` alone
+  unambiguously — e.g., `create_agent` vs `invoke_agent` are distinct ops; `agent()` alone
   is ambiguous.
-- Each operation exposes both a factory (`start_inference(...)`) and a context-manager
-  (`inference(...)`) form.
+- Each operation exposes a factory such as `inference(...)`; returned invocations may also be
+  used as context managers.
 - Never construct invocation types directly (`InferenceInvocation(...)`) — skips span creation,
-  silent no-ops. Always use `handler.start_*()` or the context manager.
+  silent no-ops. Always use the corresponding `handler` factory.
 
 ## 5. Exception handling
 

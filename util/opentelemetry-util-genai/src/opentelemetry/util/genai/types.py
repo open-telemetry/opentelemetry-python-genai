@@ -391,6 +391,8 @@ class Error:
         )
 
         error_type = type_resolver(exception) if type_resolver else None
+        if error_type is None and hasattr(exception, "_gen_ai_error_type"):
+            error_type = getattr(exception, "_gen_ai_error_type")
         return cls(
             message=str(exception),
             type=error_type or fq_exception_type(exception),

@@ -1,0 +1,1 @@
+Record tool call arguments as compact JSON and non-string results as JSON. Previously arguments were recorded as given and results through `str()`, e.g. a result of `{"temp": 20}` was recorded as `{'temp': 20}`, now `{"temp":20}`.

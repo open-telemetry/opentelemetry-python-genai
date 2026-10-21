@@ -15,6 +15,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 
 def _make_invocation():
@@ -200,7 +201,7 @@ def test_stream_wrapper_finalization_records_thinking_tokens(
             "opentelemetry.instrumentation.genai.anthropic"
         ),
     )
-    invocation = handler.start_inference(
+    invocation = handler.inference(
         provider="anthropic",
         request_model="claude-sonnet-4-20250514",
     )
@@ -360,6 +361,15 @@ def test_sync_manager_enter_constructs_stream_wrapper():
         manager=_FakeSyncManager(stream=stream),
         invocation_factory=_make_invocation,
         capture_content=False,
+        messages_capture=IteratorCapture.from_property(
+            {}, "messages", enabled=False
+        ),
+        system_capture=IteratorCapture.from_property(
+            {}, "system", enabled=False
+        ),
+        tools_capture=IteratorCapture.from_property(
+            {}, "tools", enabled=False
+        ),
     )
 
     with wrapper as result:
@@ -376,6 +386,15 @@ def test_sync_manager_does_not_create_invocation_until_enter():
             factory_calls.append(True) or _make_invocation()
         ),
         capture_content=False,
+        messages_capture=IteratorCapture.from_property(
+            {}, "messages", enabled=False
+        ),
+        system_capture=IteratorCapture.from_property(
+            {}, "system", enabled=False
+        ),
+        tools_capture=IteratorCapture.from_property(
+            {}, "tools", enabled=False
+        ),
     )
 
     assert not factory_calls
@@ -538,6 +557,15 @@ async def test_async_manager_enter_constructs_async_stream_wrapper():
         manager=_FakeAsyncManager(stream=stream),
         invocation_factory=_make_invocation,
         capture_content=False,
+        messages_capture=IteratorCapture.from_property(
+            {}, "messages", enabled=False
+        ),
+        system_capture=IteratorCapture.from_property(
+            {}, "system", enabled=False
+        ),
+        tools_capture=IteratorCapture.from_property(
+            {}, "tools", enabled=False
+        ),
     )
 
     async with wrapper as result:
