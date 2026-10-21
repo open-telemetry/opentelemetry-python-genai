@@ -339,6 +339,7 @@ Full transparency isn't always reachable — prefer the least intrusive option t
   [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py) and a JSON schema under `model/gen-ai/gen-ai-*.json`. genai-util should have models
   for them defined in `opentelemetry.util.genai.types`. Use these models, don't invent new types
   or hand-rolls dicts. 
+- Don't use the deprecated `GenericPart`. Map content to a specific part type or drop it.
 
 ### README
 

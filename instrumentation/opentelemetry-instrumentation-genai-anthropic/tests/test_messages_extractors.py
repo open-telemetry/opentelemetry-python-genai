@@ -33,7 +33,6 @@ from opentelemetry.util.genai.types import (
     CompactionPart,
     FilePart,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     ServerToolCallPart,
     ServerToolCallResponsePart,
@@ -410,7 +409,7 @@ def test_nested_content_document_source_preserves_part_order():
     ]
 
 
-def test_iterator_document_source_is_preserved_without_consuming():
+def test_iterator_document_source_is_dropped_without_consuming():
     def document_content():
         yield {"type": "text", "text": "First"}
         yield {"type": "text", "text": "Second"}
@@ -425,7 +424,7 @@ def test_iterator_document_source_is_preserved_without_consuming():
         ]
     )
 
-    assert parts == [GenericPart(type="blob")]
+    assert not parts
     assert list(content) == [
         {"type": "text", "text": "First"},
         {"type": "text", "text": "Second"},
@@ -445,7 +444,7 @@ def test_iterator_document_source_is_preserved_without_consuming():
         ("document", "application/pdf", BytesIO(b"document")),
     ],
 )
-def test_file_backed_base64_source_is_preserved_without_reading(
+def test_file_backed_base64_source_is_dropped_without_reading(
     block_type, media_type, data
 ):
     initial_position = data.tell() if isinstance(data, BytesIO) else None
@@ -460,8 +459,7 @@ def test_file_backed_base64_source_is_preserved_without_reading(
         }
     )
 
-    assert isinstance(part, GenericPart)
-    assert part.type == "blob"
+    assert part is None
     if initial_position is not None:
         assert data.tell() == initial_position
 
@@ -953,7 +951,7 @@ def test_convert_beta_blocks_when_available():
                 "from": {"model": "model-a"},
                 "to": {"model": "model-b"},
             },
-            GenericPart,
+            type(None),
         ),
     ],
 )

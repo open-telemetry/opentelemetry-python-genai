@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from os import PathLike
 from typing import TYPE_CHECKING, Any, cast
 
 from anthropic.types import (
@@ -26,7 +25,6 @@ from opentelemetry.util.genai.types import (
     BlobPart,
     CompactionPart,
     FilePart,
-    GenericPart,
     MessagePart,
     Modality,
     ReasoningPart,
@@ -149,16 +147,14 @@ def _extract_base64_blob(
 ) -> MessagePart | None:
     """Convert an Anthropic base64 source to a GenAI message part.
 
-    String data becomes a ``BlobPart``; file-backed data is represented as a
-    ``GenericPart`` without being read.
+    String data becomes a ``BlobPart``; file-backed data is dropped so it is
+    never read.
     """
     if not isinstance(source, dict):
         return None
     source_dict = cast(dict[str, object], source)
     data = source_dict.get("data")
     if not isinstance(data, str):
-        if isinstance(data, PathLike) or callable(getattr(data, "read", None)):
-            return GenericPart(type="blob")
         return None
     decoded = decode_base64(data)
     if decoded is None:
@@ -238,8 +234,9 @@ def _extract_document_source(source: object) -> list[MessagePart]:
         content = source_dict.get("content")
         if isinstance(content, str):
             return [TextPart(content=content)]
+        # Dropped rather than consumed: the SDK still needs to read it.
         if isinstance(content, Iterator):
-            return [GenericPart(type="blob")]
+            return []
         if isinstance(content, Iterable):
             return convert_content_to_parts(
                 cast("Iterable[ContentBlock | ContentBlockParam]", content)
@@ -364,9 +361,7 @@ def _convert_dict_block_to_part(
             content=content if isinstance(content, str) else None
         )
 
-    return (
-        GenericPart(type=str(block_type)) if block_type is not None else None
-    )
+    return None
 
 
 def _convert_content_block_to_part(
