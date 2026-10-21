@@ -1,0 +1,1 @@
+Log a debug record when the raw embedding response body cannot be parsed for ``usageMetadata``, instead of dropping input tokens silently.

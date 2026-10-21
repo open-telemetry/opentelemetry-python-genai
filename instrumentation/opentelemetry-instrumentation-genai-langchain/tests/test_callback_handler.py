@@ -57,13 +57,13 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     _extract_prompt_context,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _ai_message_parts,
     _legacy_function_call_request,
     _media_part,
     _normalize_role,
     extract_token_details,
     make_input_message,
     make_last_output_message,
-    make_output_message,
     serialize,
     to_input_messages,
     to_output_messages,
@@ -92,7 +92,6 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     FilePart,
     InputMessage,
-    OutputMessage,
     RetrievalDocument,
     TextPart,
     ToolCallRequestPart,
@@ -1562,101 +1561,11 @@ class TestMakeInputMessage:
 
 
 # ---------------------------------------------------------------------------
-# utils.make_output_message / make_last_output_message
+# utils.to_output_messages / make_last_output_message
 # ---------------------------------------------------------------------------
 
 
-class TestMakeOutputMessage:
-    def test_returns_empty_list_for_non_dict(self):
-        assert make_output_message("not a dict") == []
-        assert make_output_message(None) == []
-
-    def test_returns_empty_list_when_no_messages_key(self):
-        assert make_output_message({"output": "hi"}) == []
-
-    def test_returns_empty_list_when_messages_is_none(self):
-        assert make_output_message({"messages": None}) == []
-
-    def test_ai_message_produces_assistant_output(self):
-        ai_msg = AIMessage(content="The answer is 42")
-        result = make_output_message({"messages": [ai_msg]})
-
-        assert len(result) == 1
-        assert isinstance(result[0], OutputMessage)
-        assert result[0].role == "assistant"
-        assert result[0].finish_reason == ""
-        assert result[0].parts[0].content == "The answer is 42"
-
-    @pytest.mark.parametrize(
-        "assistant_entry",
-        [
-            {"role": "assistant", "content": "Hello"},
-            ("ai", "Hello"),
-        ],
-    )
-    def test_message_like_assistant_entry_produces_assistant_output(
-        self, assistant_entry
-    ):
-        result = make_output_message({"messages": [assistant_entry]})
-
-        assert len(result) == 1
-        assert result[0].role == "assistant"
-        assert result[0].parts[0].content == "Hello"
-
-    def test_malformed_entry_keeps_convertible_assistant_entries(self):
-        result = make_output_message(
-            {
-                "messages": [
-                    {"role": "not_a_real_role", "content": "dropped"},
-                    None,
-                    {"role": "assistant", "content": "kept"},
-                ]
-            }
-        )
-
-        assert len(result) == 1
-        assert result[0].parts[0].content == "kept"
-
-    def test_non_ai_message_skipped(self):
-        human_msg = HumanMessage(content="Hello")
-        result = make_output_message({"messages": [human_msg]})
-        assert result == []
-
-    def test_ai_message_with_empty_content_skipped(self):
-        ai_msg = AIMessage(content="")
-        result = make_output_message({"messages": [ai_msg]})
-        assert result == []
-
-    def test_multiple_ai_messages_all_returned(self):
-        msgs = [
-            AIMessage(content="First response"),
-            AIMessage(content="Second response"),
-        ]
-        result = make_output_message({"messages": msgs})
-
-        assert len(result) == 2
-        assert result[0].parts[0].content == "First response"
-        assert result[1].parts[0].content == "Second response"
-
-    def test_mixed_messages_only_ai_returned(self):
-        msgs = [
-            HumanMessage(content="question"),
-            AIMessage(content="answer"),
-            HumanMessage(content="follow-up"),
-        ]
-        result = make_output_message({"messages": msgs})
-
-        assert len(result) == 1
-        assert result[0].parts[0].content == "answer"
-
-    def test_finish_reason_default_is_empty_string(self):
-        # Workflow/agent output spans must not fabricate a finish reason:
-        # util-genai filters empty strings out of
-        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
-        # while the per-call inference spans report the real values.
-        result = make_output_message({"messages": [AIMessage(content="hi")]})
-        assert result[0].finish_reason == ""
-
+class TestToOutputMessages:
     def test_to_output_messages_propagates_explicit_finish_reason(self):
         # The inference path passes the provider's finish_reason through
         # ``to_output_messages``; the converter must forward it onto every
@@ -1714,12 +1623,94 @@ class TestMakeLastOutputMessage:
     def test_returns_empty_for_empty_outputs(self):
         assert make_last_output_message({}) == []
 
+    @pytest.mark.parametrize(
+        "data",
+        ["not a dict", None, {"output": "hi"}, {"messages": None}],
+    )
+    def test_returns_empty_without_messages_list(self, data):
+        assert make_last_output_message(data) == []
+
+    def test_tuple_assistant_entry_produces_assistant_output(self):
+        result = make_last_output_message({"messages": [("ai", "Hello")]})
+
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].parts[0].content == "Hello"
+
+    def test_finish_reason_default_is_empty_string(self):
+        # Workflow/agent output spans must not fabricate a finish reason:
+        # util-genai filters empty strings out of
+        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
+        # while the per-call inference spans report the real values.
+        result = make_last_output_message(
+            {"messages": [AIMessage(content="hi")]}
+        )
+        assert result[0].finish_reason == ""
+
     def test_single_ai_message_returned(self):
         ai_msg = AIMessage(content="only response")
         result = make_last_output_message({"messages": [ai_msg]})
 
         assert len(result) == 1
         assert result[0].parts[0].content == "only response"
+
+    def test_skips_trailing_empty_ai_message(self):
+        msgs = [
+            AIMessage(content="final answer"),
+            AIMessage(content=""),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    @pytest.mark.parametrize(
+        "trailing_entry",
+        [
+            HumanMessage(content="next question"),
+            ToolMessage(content="tool result", tool_call_id="call_1"),
+            {"role": "not_a_real_role", "content": "dropped"},
+            {"content": "no role key"},
+            ("human",),
+            None,
+        ],
+    )
+    def test_skips_trailing_non_output_entry(self, trailing_entry):
+        msgs = [AIMessage(content="final answer"), trailing_entry]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    def test_accepts_generator_messages(self):
+        msgs = (AIMessage(content=text) for text in ("intermediate", "final"))
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final"
+
+    def test_does_not_convert_earlier_ai_messages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        converted: list[str] = []
+
+        def recording_parts(message: AIMessage):
+            converted.append(str(message.content))
+            return _ai_message_parts(message)
+
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.langchain.utils._ai_message_parts",
+            recording_parts,
+        )
+        msgs = [
+            AIMessage(content="first"),
+            HumanMessage(content="next question"),
+            AIMessage(content="final answer"),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert result[0].parts[0].content == "final answer"
+        assert converted == ["final answer"]
 
 
 # ---------------------------------------------------------------------------

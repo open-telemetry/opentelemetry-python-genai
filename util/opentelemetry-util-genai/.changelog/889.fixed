@@ -1,0 +1,1 @@
+Treat a queue size below 1 for `OTEL_INSTRUMENTATION_GENAI_UPLOAD_MAX_QUEUE_SIZE` as invalid and fall back to the default instead of disabling uploads.

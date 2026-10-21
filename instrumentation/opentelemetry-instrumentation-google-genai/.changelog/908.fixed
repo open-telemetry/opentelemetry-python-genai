@@ -1,0 +1,1 @@
+Report a streamed `generate_content_stream` response as one output message per candidate instead of one per chunk.

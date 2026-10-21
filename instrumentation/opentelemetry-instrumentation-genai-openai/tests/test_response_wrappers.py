@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
+    AsyncFetchResponseStreamWrapper,
     AsyncResponseStreamManagerWrapper,
     AsyncResponseStreamWrapper,
     FetchResponseStreamWrapper,
@@ -617,3 +618,39 @@ def test_fetch_stream_transport_error_event_still_fails_the_fetch():
     assert calls["stop"] == 0
     (error,) = calls["fail"]
     assert error.type == "rate_limit_exceeded"
+
+
+_COMPACTION_ITEM_EVENT = SimpleNamespace(
+    type="response.output_item.done",
+    item={"id": "cmp_1", "type": "compaction", "encrypted_content": "opaque"},
+)
+
+
+def test_inference_stream_records_streamed_compaction():
+    invocation, _ = _capturing_invocation()
+    wrapper = _make_stream_wrapper(_FakeSyncStream(), invocation=invocation)
+
+    wrapper.process_event(_COMPACTION_ITEM_EVENT)
+
+    assert invocation.conversation_compacted is True
+
+
+@pytest.mark.parametrize(
+    ("wrapper_type", "stream"),
+    [
+        (FetchResponseStreamWrapper, _FakeSyncStream()),
+        (AsyncFetchResponseStreamWrapper, _FakeAsyncStream()),
+    ],
+    ids=["sync", "async"],
+)
+def test_fetch_stream_ignores_replayed_compaction(wrapper_type, stream):
+    """Compaction in a replay belongs to the original generation."""
+    invocation, calls = _capturing_fetch_invocation()
+    wrapper = wrapper_type(
+        stream=stream, invocation=invocation, capture_content=False
+    )
+
+    wrapper.process_event(_COMPACTION_ITEM_EVENT)
+
+    assert not hasattr(invocation, "conversation_compacted")
+    assert calls == {"stop": 0, "fail": []}
