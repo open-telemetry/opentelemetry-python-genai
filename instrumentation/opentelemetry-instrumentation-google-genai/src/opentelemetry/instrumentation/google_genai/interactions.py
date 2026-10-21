@@ -117,7 +117,6 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     Error,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     InputMessage,
     MessagePart,
@@ -389,9 +388,6 @@ def _interactions_input_to_messages(
                 modality=Modality.DOCUMENT,
                 uri=_get_field(item, "uri") or "",
             )
-            parts.append(part)
-        elif isinstance(item_type, str):
-            part = GenericPart(type=item_type)
             parts.append(part)
 
     return [InputMessage(role=Role.USER.value, parts=parts)]

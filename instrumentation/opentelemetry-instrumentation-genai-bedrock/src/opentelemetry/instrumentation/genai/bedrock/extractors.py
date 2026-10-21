@@ -19,7 +19,6 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     BlobPart,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     InputMessage,
     MessagePart,
@@ -237,20 +236,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
             response=block.get("content"),
         )
 
-    # 7. Other Generic block types
-    for key in (
-        "video",
-        "audio",
-        "guardContent",
-        "cachePoint",
-        "citationsContent",
-        "searchResult",
-        "toolAddition",
-        "toolRemoval",
-    ):
-        if key in block:
-            return GenericPart(type=key)
-
     return None
 
 
@@ -286,11 +271,6 @@ def _extract_system_parts(
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(TextPart(content=text))
-            else:
-                for key in item:
-                    if key != "text":
-                        parts.append(GenericPart(type=key))
-                        break
     return parts
 
 

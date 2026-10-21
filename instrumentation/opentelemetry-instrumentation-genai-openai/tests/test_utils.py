@@ -49,6 +49,10 @@ DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 REASONING_MODEL = "gpt-5.1"
 FETCH_RESPONSE_OPERATION_NAME = "fetch_response"
+# TODO: use the semconv constant once released in
+# opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
+# in https://github.com/open-telemetry/semantic-conventions-genai/pull/162.
+GEN_AI_CONVERSATION_COMPACTED = "gen_ai.conversation.compacted"
 # TODO: use the semconv constants once these attributes are released in
 # opentelemetry-semantic-conventions. Added to the GenAI semantic conventions
 # in https://github.com/open-telemetry/semantic-conventions-genai/pull/353.
@@ -69,6 +73,22 @@ CACHEABLE_MESSAGES = [
     {"role": "user", "content": "Reply with OK only."},
 ]
 USER_ONLY_PROMPT = [{"role": "user", "content": "Say this is a test"}]
+COMPACTED_INPUT = [
+    *USER_ONLY_PROMPT,
+    {
+        "type": "compaction",
+        "id": "cmp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237031",
+        "encrypted_content": "gAAAAABpCompactedConversationStateOpaquePayload==",
+    },
+]
+COMPACTION_CONTEXT_MANAGEMENT = [
+    {"type": "compaction", "compact_threshold": 1000}
+]
+COMPACTION_MODEL = "gpt-5.4"
+# Well past ``compact_threshold`` so the server compacts during the request.
+COMPACTION_TRIGGER_INPUT = (
+    "Remember this sentence for later. " * 400 + "Now say this is a test."
+)
 REASONING_PROMPT = [
     {
         "role": "user",

@@ -1,0 +1,1 @@
+Reduce message conversion when capturing workflow and agent `gen_ai.output.messages`.

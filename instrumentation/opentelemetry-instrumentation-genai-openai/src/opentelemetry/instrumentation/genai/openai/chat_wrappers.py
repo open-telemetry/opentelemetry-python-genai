@@ -89,6 +89,10 @@ class _ChatStreamMixin:
                     choice.delta.content
                 )
 
+            refusal = getattr(choice.delta, "refusal", None)
+            if isinstance(refusal, str):
+                self._self_choice_buffers[choice.index].append_refusal(refusal)
+
             if choice.delta.tool_calls is not None:
                 for tool_call in choice.delta.tool_calls:
                     self._self_choice_buffers[choice.index].append_tool_call(
@@ -126,6 +130,10 @@ class _ChatStreamMixin:
                 message.parts.append(
                     TextPart(content="".join(choice.text_content))
                 )
+            # A refused completion streams its text in `refusal` deltas
+            # instead of `content`.
+            if refusal := "".join(choice.refusal):
+                message.parts.append(TextPart(content=refusal))
             if choice.tool_calls_buffers:
                 tool_calls = []
                 for tool_call in filter(None, choice.tool_calls_buffers):

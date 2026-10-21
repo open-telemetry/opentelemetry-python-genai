@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import timeit
+from dataclasses import dataclass, field
 
 from opentelemetry._logs import Logger
 from opentelemetry.context import Context
@@ -20,6 +21,25 @@ from opentelemetry.util.genai._invocation import (
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AnyValue, AttributeValue
+
+
+@dataclass
+class ToolData:
+    """Typed data container for a tool invocation."""
+
+    tool_name: str | None = None
+    tool_type: str | None = None
+    agent_name: str | None = None
+    tool_call_id: str | None = None
+    tool_description: str | None = None
+    tool_call_arguments: AnyValue | None = None
+    tool_call_result: AnyValue | None = None
+    attributes: dict[str, AttributeValue] = field(
+        default_factory=dict[str, AttributeValue]
+    )
+    metric_attributes: dict[str, AttributeValue] = field(
+        default_factory=dict[str, AttributeValue]
+    )
 
 
 class ToolInvocation(GenAIInvocation):
@@ -76,6 +96,13 @@ class ToolInvocation(GenAIInvocation):
             )
             if v is not None
         }
+        self._data: ToolData = ToolData(
+            tool_name=name,
+            tool_type=tool_type,
+            agent_name=agent_name,
+            tool_call_id=tool_call_id,
+            tool_description=tool_description,
+        )
         super().__init__(
             tracer,
             instruments,
@@ -88,38 +115,81 @@ class ToolInvocation(GenAIInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
             content_capturing_mode=content_capturing_mode,
+            attributes=self._data.attributes,
+            metric_attributes=self._data.metric_attributes,
         )
         self._name: str = name
-        self.tool_result: AnyValue | None = None
-        # Since arguments and tool_result can be expensive to serialize,
-        # it's recommended to check the content capture flag in the
-        # instrumentation library before assigning these attributes
-        # to the invocation.
-        self.arguments: AnyValue | None = None
-        self.tool_call_id: str | None = tool_call_id
-        self.tool_description: str | None = tool_description
         self._tool_type: str | None = tool_type
         self._agent_name: str | None = agent_name
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
+
+    @property
+    def name(self) -> str | None:
+        return self._data.tool_name
+
+    @property
+    def tool_type(self) -> str | None:
+        return self._data.tool_type
+
+    @property
+    def agent_name(self) -> str | None:
+        return self._data.agent_name
+
+    @property
+    def tool_call_id(self) -> str | None:
+        return self._data.tool_call_id
+
+    @tool_call_id.setter
+    def tool_call_id(self, value: str | None) -> None:
+        self._data.tool_call_id = value
+
+    @property
+    def tool_description(self) -> str | None:
+        return self._data.tool_description
+
+    @tool_description.setter
+    def tool_description(self, value: str | None) -> None:
+        self._data.tool_description = value
+
+    @property
+    def arguments(self) -> AnyValue | None:
+        return self._data.tool_call_arguments
+
+    @arguments.setter
+    def arguments(self, value: AnyValue | None) -> None:
+        self._data.tool_call_arguments = value
+
+    @property
+    def tool_result(self) -> AnyValue | None:
+        return self._data.tool_call_result
+
+    @tool_result.setter
+    def tool_result(self, value: AnyValue | None) -> None:
+        self._data.tool_call_result = value
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_TOOL_NAME: self._name,
+            GenAI.GEN_AI_TOOL_NAME: self._data.tool_name or self._name,
         }
-        if self._tool_type is not None:
-            attrs[GenAI.GEN_AI_TOOL_TYPE] = self._tool_type
-        if self._agent_name is not None:
-            attrs[GenAI.GEN_AI_AGENT_NAME] = self._agent_name
+        if self._data.tool_type is not None:
+            attrs[GenAI.GEN_AI_TOOL_TYPE] = self._data.tool_type
+        if self._data.agent_name is not None:
+            attrs[GenAI.GEN_AI_AGENT_NAME] = self._data.agent_name
         attrs.update(self.metric_attributes)
         return attrs
 
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
         capture_content_on_span = self._should_capture_content_on_span
         optional_attrs = (
-            (GenAI.GEN_AI_TOOL_CALL_ID, self.tool_call_id),
-            (GenAI.GEN_AI_TOOL_DESCRIPTION, self.tool_description),
-            (GenAI.GEN_AI_AGENT_NAME, self._agent_name),
+            (GenAI.GEN_AI_TOOL_TYPE, self._data.tool_type),
+            (GenAI.GEN_AI_TOOL_CALL_ID, self._data.tool_call_id),
+            (GenAI.GEN_AI_TOOL_DESCRIPTION, self._data.tool_description),
+            (GenAI.GEN_AI_AGENT_NAME, self._data.agent_name),
             (
                 GenAI.GEN_AI_TOOL_CALL_ARGUMENTS,
                 _json_dumps_unless_str(self.arguments)
