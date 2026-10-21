@@ -120,7 +120,9 @@ def test_each_model_call_gets_the_prompt_that_built_its_input(span_exporter):
 
 @pytest.mark.usefixtures("instrumented")
 def test_hub_prompt_reports_repo_and_commit(span_exporter):
-    prompt = ChatPromptTemplate.from_messages([("human", "Weather in {city}?")])
+    prompt = ChatPromptTemplate.from_messages(
+        [("human", "Weather in {city}?")]
+    )
     prompt.metadata = {
         "lc_hub_owner": "acme",
         "lc_hub_repo": "weather-now",
