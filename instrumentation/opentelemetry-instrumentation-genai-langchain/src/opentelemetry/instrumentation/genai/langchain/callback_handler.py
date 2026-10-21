@@ -16,6 +16,7 @@ from langchain_core.outputs import (
     GenerationChunk,
     LLMResult,
 )
+from langchain_core.prompt_values import PromptValue
 
 from opentelemetry.instrumentation.genai.langchain.agent_context import (
     claim_agent,
@@ -75,14 +76,17 @@ CONVERSATION_ID_METADATA_KEYS = (
 _PROMPT_TEMPLATE_TYPES = {"ChatPromptTemplate", "PromptTemplate"}
 
 
-def _prompt_template_type(runnable: Mapping[str, Any]) -> str | None:
+def _class_name(runnable: Mapping[str, Any]) -> str | None:
     runnable_id = runnable.get("id")
     if not isinstance(runnable_id, Sequence) or isinstance(runnable_id, str):
         return None
-    runnable_id = cast(Sequence[str], runnable_id)
-    template_type = runnable_id[-1] if runnable_id else None
-    if not isinstance(template_type, str):
-        return None
+    runnable_id = cast(Sequence[object], runnable_id)
+    class_name = runnable_id[-1] if runnable_id else None
+    return class_name if isinstance(class_name, str) else None
+
+
+def _prompt_template_type(runnable: Mapping[str, Any]) -> str | None:
+    template_type = _class_name(runnable)
     return template_type if template_type in _PROMPT_TEMPLATE_TYPES else None
 
 
@@ -94,15 +98,26 @@ def _string_sequence(value: object) -> list[str]:
     ]
 
 
+def _string_metadata(
+    metadata: Mapping[str, Any] | None, *keys: str
+) -> str | None:
+    for key in keys:
+        value = (metadata or {}).get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            return str(value)
+    return None
+
+
 def _extract_prompt_context(
     runnable: Mapping[str, Any],
     inputs: object,
     metadata: Mapping[str, Any] | None,
     *,
     capture_variables: bool = True,
+    run_type: str | None = None,
 ) -> _PromptContext | None:
-    template_type = _prompt_template_type(runnable)
-    if template_type is None:
+    # LangChain reports every BasePromptTemplate subclass with run_type "prompt".
+    if _prompt_template_type(runnable) is None and run_type != "prompt":
         return None
 
     raw_template_kwargs = runnable.get("kwargs")
@@ -115,16 +130,26 @@ def _extract_prompt_context(
     if not isinstance(name, str):
         name = template_kwargs.get("name")
     if not isinstance(name, str):
+        # Prompts pulled from LangChain Hub carry their repo and commit.
+        name = _string_metadata(metadata, "lc_hub_repo")
+    if not isinstance(name, str):
         runnable_name = runnable.get("name")
+        # An unnamed template reports its class name, which names nothing.
         name = (
             runnable_name
             if isinstance(runnable_name, str)
             and runnable_name not in _PROMPT_TEMPLATE_TYPES
+            and runnable_name != _class_name(runnable)
             else None
         )
+    version = (
+        _string_metadata(metadata, "prompt_version", "lc_hub_commit_hash")
+        if name is not None
+        else None
+    )
 
     if not capture_variables:
-        return _PromptContext(name=name, variables={})
+        return _PromptContext(name=name, variables={}, version=version)
 
     required_variables = _string_sequence(
         template_kwargs.get("input_variables")
@@ -172,7 +197,9 @@ def _extract_prompt_context(
                 continue
             effective_variables[key] = value
 
-    return _PromptContext(name=name, variables=effective_variables)
+    return _PromptContext(
+        name=name, variables=effective_variables, version=version
+    )
 
 
 def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
@@ -410,6 +437,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             inputs,
             metadata,
             capture_variables=capture_content,
+            run_type=kwargs.get("run_type"),
         ):
             self._invocation_manager.set_prompt_context(run_id, prompt_context)
 
@@ -421,7 +449,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
-        self._invocation_manager.publish_prompt_context(run_id)
+        prompt_context = self._invocation_manager.publish_prompt_context(
+            run_id
+        )
+        if prompt_context is not None and isinstance(outputs, PromptValue):
+            # The value carries its template to whichever model it reaches.
+            self._invocation_manager.set_prompt_value_context(
+                outputs, prompt_context
+            )
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
             invocation, (WorkflowInvocation, LocalAgentInvocation)
@@ -553,8 +588,14 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_context = self._invocation_manager.get_parent_context(
             parent_run_id
         )
-        prompt_context = self._invocation_manager.consume_prompt_context(
-            parent_run_id
+        # Consume the sibling prompt either way, so a later model call under the
+        # same parent cannot take it; the model's own input wins when known.
+        sibling_prompt_context = (
+            self._invocation_manager.consume_prompt_context(parent_run_id)
+        )
+        prompt_context = (
+            self._invocation_manager.pop_model_prompt_context(run_id)
+            or sibling_prompt_context
         )
         llm_invocation = self._telemetry_handler.inference(
             provider,
@@ -565,6 +606,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         if prompt_context is not None:
             llm_invocation.prompt_name = prompt_context.name
+            llm_invocation.prompt_version = prompt_context.version
             llm_invocation.prompt_variables = prompt_context.variables
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
