@@ -152,10 +152,6 @@ class _BedrockConverseStreamMixin:
                         self._self_reasoning_blocks.get(idx, "")
                         + rc_delta["text"]
                     )
-                elif _is_dict(rc_delta) and "redactedContent" in rc_delta:
-                    # Same as the non-streaming path: a redacted block is an
-                    # empty reasoning part.
-                    self._self_reasoning_blocks.setdefault(idx, "")
             elif "toolUse" in delta:
                 tool_delta = delta["toolUse"]
                 input_str = tool_delta.get("input", "")

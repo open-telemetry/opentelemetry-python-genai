@@ -138,8 +138,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         reasoning_text = reasoning.get("reasoningText")
         if _is_dict(reasoning_text) and "text" in reasoning_text:
             return ReasoningPart(content=reasoning_text["text"])
-        if "redactedContent" in reasoning:
-            return ReasoningPart(content="")
     if block_type in ("thinking", "redacted_thinking"):
         content = block.get("thinking") or block.get("data") or ""
         return ReasoningPart(content=str(content))

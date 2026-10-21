@@ -469,7 +469,7 @@ def test_stream_wrapper_with_reasoning(tracer_provider) -> None:
     assert invocation.finish_reasons == ["stop"]
 
 
-def test_stream_wrapper_with_redacted_reasoning(tracer_provider) -> None:
+def test_stream_wrapper_skips_redacted_reasoning(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     invocation = handler.inference(provider="aws.bedrock")
     wrapper = BedrockConverseStreamWrapper(
@@ -500,5 +500,5 @@ def test_stream_wrapper_with_redacted_reasoning(tracer_provider) -> None:
     )
     wrapper._on_stream_end()
     parts = invocation.output_messages[0].parts
-    assert [part.type for part in parts] == ["reasoning", "text"]
-    assert getattr(parts[0], "content") == ""
+    assert [part.type for part in parts] == ["text"]
+    assert getattr(parts[0], "content") == "Here is the result."

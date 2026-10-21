@@ -460,9 +460,7 @@ def test_extract_content_block_reasoning() -> None:
     part2 = extract_content_block(
         {"reasoningContent": {"redactedContent": b"redacted_bytes"}}
     )
-    assert part2 is not None
-    assert part2.type == "reasoning"
-    assert getattr(part2, "content") == ""
+    assert part2 is None
 
 
 def test_extract_content_block_document() -> None:

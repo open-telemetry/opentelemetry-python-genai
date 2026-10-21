@@ -1,1 +1,1 @@
-Keep redacted reasoning blocks in streamed Converse output, as the non-streamed path does.
+Stop recording an empty reasoning part for redacted Converse reasoning content, in both the streamed and the non-streamed path.
