@@ -1,0 +1,1 @@
+Skip input message processing for unnamed agents when content capture is disabled.
