@@ -1,0 +1,1 @@
+Restore output messages and finish reasons on streamed `interactions.create` spans.
