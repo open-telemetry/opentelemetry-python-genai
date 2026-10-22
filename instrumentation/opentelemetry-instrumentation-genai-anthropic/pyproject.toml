@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instruments = ["anthropic >=2.1, <3"]
+instruments = ["anthropic >= 0.51.0, < 3"]
 
 [project.entry-points.opentelemetry_instrumentor]
 anthropic = "opentelemetry.instrumentation.genai.anthropic:AnthropicInstrumentor"
