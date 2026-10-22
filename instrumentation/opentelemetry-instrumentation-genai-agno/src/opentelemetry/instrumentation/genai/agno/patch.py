@@ -20,19 +20,13 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
     from agno.knowledge.knowledge import Knowledge
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
-
-    class _HasToolExecution(Protocol):
-        tool_execution: ToolExecution | None
-
-    RawToolItem = ToolExecution | _HasToolExecution | Mapping[str, object]
-    RawTools = str | Iterable[RawToolItem] | RawToolItem
 
 from wrapt import register_post_import_hook, wrap_function_wrapper
 
