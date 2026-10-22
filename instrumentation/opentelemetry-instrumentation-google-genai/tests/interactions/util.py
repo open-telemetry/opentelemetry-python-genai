@@ -128,7 +128,7 @@ def create_mock_content_event() -> Any:
 
 def create_mock_completed_event(interaction: Any) -> Any:
     event = unittest.mock.MagicMock()
-    event.event_type = "interaction_completed"
+    event.event_type = "interaction.completed"
     event.interaction = interaction
     return event
 
