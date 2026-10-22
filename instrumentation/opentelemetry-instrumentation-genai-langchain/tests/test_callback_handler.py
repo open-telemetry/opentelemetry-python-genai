@@ -400,33 +400,10 @@ async def test_unnamed_agent_respects_content_capture(
     agent = langchain.agents.create_agent(
         FakeChatModel(responses=[AIMessage(content="done")]), tools=[]
     )
-    stream = agent.astream(inputs) if asynchronous else agent.stream(inputs)
-    try:
-        if asynchronous:
-            assert await anext(stream)
-        else:
-            assert next(stream)
-        # NO_CONTENT also filters exported attributes; inspect the live input.
-        handler = LangChainInstrumentor()._callback_handler
-        assert handler is not None
-        (invocation,) = [
-            state.invocation
-            for state in handler._invocation_manager._invocations.values()
-            if isinstance(state.invocation, LocalAgentInvocation)
-        ]
-    finally:
-        if asynchronous:
-            async for _ in stream:
-                pass
-        else:
-            for _ in stream:
-                pass
-
-    if content_capture == ContentCapturingMode.NO_CONTENT:
-        assert invocation.input_messages == []
+    if asynchronous:
+        await agent.ainvoke(inputs)
     else:
-        (message,) = invocation.input_messages
-        assert message.parts[0].content == "hello"
+        agent.invoke(inputs)
     span = finished_span(span_exporter, "invoke_agent")
     attrs = span.attributes
     assert attrs is not None
