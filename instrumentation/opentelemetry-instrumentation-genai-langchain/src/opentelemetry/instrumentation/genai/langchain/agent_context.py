@@ -158,15 +158,24 @@ def _announce_at_stream_start(
     # A generator body runs in the consumer's context, so the announcement lands
     # where the callbacks fire - on the first ``next()``, not here.
     iterator = iter(stream)
-    entry = _push(name)
+    delegating = False
     try:
-        first = next(iterator)
-    except StopIteration:
-        return
+        entry = _push(name)
+        try:
+            first = next(iterator)
+        except StopIteration:
+            return
+        finally:
+            _pop(entry)
+        yield first
+        # yield from forwards close itself once delegation has started.
+        delegating = True
+        yield from iterator
     finally:
-        _pop(entry)
-    yield first
-    yield from iterator
+        if not delegating:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
 
 
 async def _announce_at_astream_start(
@@ -174,13 +183,18 @@ async def _announce_at_astream_start(
 ) -> AsyncIterator[Any]:
     """Announce ``name`` for the first step of ``stream`` only."""
     iterator = stream.__aiter__()
-    entry = _push(name)
     try:
-        first = await iterator.__anext__()
-    except StopAsyncIteration:
-        return
+        entry = _push(name)
+        try:
+            first = await iterator.__anext__()
+        except StopAsyncIteration:
+            return
+        finally:
+            _pop(entry)
+        yield first
+        async for chunk in iterator:
+            yield chunk
     finally:
-        _pop(entry)
-    yield first
-    async for chunk in iterator:
-        yield chunk
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
