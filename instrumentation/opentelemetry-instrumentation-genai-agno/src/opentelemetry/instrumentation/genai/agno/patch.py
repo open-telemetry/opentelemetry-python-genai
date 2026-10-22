@@ -873,7 +873,7 @@ def _tool_call_aexecute(
             raise
         return _handle_tool_result(invocation, instance, result)
 
-    return cast(Callable[..., Any], traced_method)
+    return traced_method
 
 
 def _start_workflow_invocation(
@@ -1138,7 +1138,7 @@ def _workflow_aexecute(
             invocation.fail(error)
             raise
 
-    return cast(Callable[..., Any], traced_method)
+    return traced_method
 
 
 def _workflow_aexecute_stream(
@@ -1382,4 +1382,4 @@ def _knowledge_asearch(
         invocation.stop()
         return result
 
-    return cast(Callable[..., Any], traced_method)
+    return traced_method
