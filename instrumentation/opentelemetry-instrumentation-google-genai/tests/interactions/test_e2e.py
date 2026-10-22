@@ -3,6 +3,7 @@
 
 import json
 import os
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -10,15 +11,19 @@ import yaml
 from google.genai import Client
 from google.genai.types import HttpOptions
 
+from opentelemetry._logs import get_logger_provider
 from opentelemetry.instrumentation.google_genai import (
     GoogleGenAiSdkInstrumentor,
 )
 from opentelemetry.instrumentation.google_genai.interactions import (
     _HAS_INTERACTIONS,
 )
+from opentelemetry.metrics import get_meter_provider
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
+from opentelemetry.trace import get_tracer_provider
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -276,6 +281,9 @@ def _assert_streamed_create_span(
     span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
     assert span is not None
     assert span.attributes["gen_ai.request.stream"] is True
+    # Content capture is off, so this comes from the status alone.
+    assert "gen_ai.output.messages" not in span.attributes
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
     # Compare against the SDK's own parsed completed event, so the cassette
     # pins the real event name and payload.
     assert interaction.id
@@ -299,7 +307,7 @@ def _assert_streamed_create_span(
 
 @pytest.mark.vcr
 def test_sync_interactions_create_stream(
-    client: Client, otel_mocker: OTelMocker
+    client: Client, otel_mocker: OTelMocker, no_content_capture: None
 ) -> None:
     events = list(
         client.interactions.create(
@@ -315,7 +323,7 @@ def test_sync_interactions_create_stream(
 @pytest.mark.vcr
 @pytest.mark.asyncio
 async def test_async_interactions_create_stream(
-    client: Client, otel_mocker: OTelMocker
+    client: Client, otel_mocker: OTelMocker, no_content_capture: None
 ) -> None:
     stream = await client.aio.interactions.create(
         model=_STREAM_MODEL,
@@ -327,20 +335,95 @@ async def test_async_interactions_create_stream(
     _assert_streamed_create_span(otel_mocker, events)
 
 
-@pytest.fixture(name="capture_content")
-def fixture_capture_content(instrumentor, monkeypatch: pytest.MonkeyPatch):
-    """Re-instrument with content capture enabled.
+def _instrument_with_content_capture(
+    instrumentor: GoogleGenAiSdkInstrumentor, mode: str
+) -> Iterator[None]:
+    """Re-instrument with the given content-capture mode.
 
     TelemetryHandler snapshots the content-capture setting when it is built, so
-    the env var has to be set before instrument() runs — and the autouse
-    instrumentation fixture has already run by the time a test body executes.
+    the autouse instrumentation, already built by the time a test body runs,
+    has to be replaced.
     """
     instrumentor.uninstrument()
-    monkeypatch.setenv(
-        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
-    )
+    with instrument(
+        instrumentor,
+        tracer_provider=get_tracer_provider(),
+        logger_provider=get_logger_provider(),
+        meter_provider=get_meter_provider(),
+        content_capture=mode,
+        # A completion hook left configured elsewhere in the session would
+        # turn content capture back on.
+        extra_env={"OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": ""},
+    ):
+        yield
+    # The autouse fixture expects instrumentation to be active at teardown.
     instrumentor.instrument()
-    yield
+
+
+@pytest.fixture(name="capture_content")
+def fixture_capture_content(
+    instrumentor: GoogleGenAiSdkInstrumentor, otel_mocker: OTelMocker
+) -> Iterator[None]:
+    yield from _instrument_with_content_capture(instrumentor, "SPAN_ONLY")
+
+
+@pytest.fixture(name="no_content_capture")
+def fixture_no_content_capture(
+    instrumentor: GoogleGenAiSdkInstrumentor, otel_mocker: OTelMocker
+) -> Iterator[None]:
+    yield from _instrument_with_content_capture(instrumentor, "NO_CONTENT")
+
+
+def _assert_streamed_create_output(
+    otel_mocker: OTelMocker, events: list[Any]
+) -> None:
+    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    assert span is not None
+    # Text deltas only: the thought step's signature must not leak in.
+    expected_output = "".join(
+        event.delta.text
+        for event in events
+        if event.event_type == "step.delta"
+        and getattr(event.delta, "type", None) == "text"
+    )
+    assert expected_output
+    [message] = json.loads(span.attributes["gen_ai.output.messages"])
+    assert message["role"] == "assistant"
+    assert message["parts"] == [{"type": "text", "content": expected_output}]
+    assert message["finish_reason"] == "stop"
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_stream")
+def test_sync_interactions_create_stream_output(
+    client: Client, otel_mocker: OTelMocker, capture_content: None
+) -> None:
+    events = list(
+        client.interactions.create(
+            model=_STREAM_MODEL,
+            input="Hello, how can you help me today?",
+            stream=True,
+        )
+    )
+
+    _assert_streamed_create_output(otel_mocker, events)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_stream")
+@pytest.mark.asyncio
+async def test_async_interactions_create_stream_output(
+    client: Client, otel_mocker: OTelMocker, capture_content: None
+) -> None:
+    stream = await client.aio.interactions.create(
+        model=_STREAM_MODEL,
+        input="Hello, how can you help me today?",
+        stream=True,
+    )
+    events = [event async for event in stream]
+
+    _assert_streamed_create_output(otel_mocker, events)
 
 
 # `interactions.get` — the query string differs between the two SDK module
