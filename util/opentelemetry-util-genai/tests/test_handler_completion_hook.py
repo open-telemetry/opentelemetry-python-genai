@@ -419,21 +419,28 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         self.assertEqual(kwargs["inputs"], [])
         self.assertEqual(kwargs["outputs"], [])
 
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+    )
     def test_tool_hook_can_redact_span_attributes(self):
+        seen_before_redaction = []
+
         def redact(*, span, **kwargs):
+            seen_before_redaction.append(
+                span.attributes.get("gen_ai.tool.call.arguments")
+            )
             span.set_attribute("gen_ai.tool.call.arguments", "[REDACTED]")
 
         hook = MagicMock(on_completion=redact)
         handler = self._make_handler(hook)
 
-        with patch.dict(
-            os.environ,
-            {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
-        ):
-            invocation = handler.tool("get_weather")
-            invocation.arguments = {"token": "secret"}
-            invocation.stop()
+        invocation = handler.tool("get_weather")
+        invocation.arguments = {"token": "secret"}
+        invocation.stop()
 
+        self.assertEqual(len(seen_before_redaction), 1)
+        self.assertIn("secret", seen_before_redaction[0])
         span = self.span_exporter.get_finished_spans()[0]
         self.assertEqual(
             span.attributes["gen_ai.tool.call.arguments"], "[REDACTED]"
