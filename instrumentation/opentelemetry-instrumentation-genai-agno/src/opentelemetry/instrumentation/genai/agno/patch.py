@@ -45,18 +45,13 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     extract_session_id,
-    extract_user_id,
     format_content,
     format_retrieval_document,
     prepare_tool_definitions,
-    set_invocation_user_id,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
     ErrorTypeValues,
-)
-from opentelemetry.semconv._incubating.attributes.user_attributes import (
-    USER_ID,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
@@ -658,11 +653,6 @@ def _start_agent_invocation(
         _set_invocation_input(
             invocation, instance, args, kwargs, capture_content, wrapped
         )
-        session_id = extract_session_id(
-            instance, args, kwargs, wrapped=wrapped
-        )
-        if session_id:
-            invocation.conversation_id = str(session_id)
 
     tool_defs = prepare_tool_definitions(getattr(instance, "tools", None))
     invocation.tool_definitions = tool_defs
@@ -687,7 +677,6 @@ def _start_tool_invocation(
     if tool_desc:
         invocation.tool_description = str(tool_desc)
     _set_tool_invocation_input(invocation, instance)
-    set_invocation_user_id(invocation, instance)
     return invocation
 
 
@@ -713,9 +702,6 @@ def _agent_run(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        user_id = extract_user_id(instance, args, kwargs, wrapped=wrapped)
-        if user_id is not None:
-            invocation.attributes[USER_ID] = user_id
         try:
             result = wrapped(*args, **kwargs)
             if isinstance(result, Iterator):
@@ -726,14 +712,6 @@ def _agent_run(
                 )
 
             _set_invocation_output(invocation, result, capture_content)
-            set_invocation_user_id(
-                invocation,
-                instance,
-                args,
-                kwargs,
-                run_response=result,
-                wrapped=wrapped,
-            )
             invocation.stop()
             return result
         except BaseException as error:
@@ -768,9 +746,6 @@ def _agent_arun(
                 wrapped=wrapped,
                 is_continue=is_continue,
             )
-            set_invocation_user_id(
-                invocation, instance, args, kwargs, wrapped=wrapped
-            )
             invocation.fail(error)
             raise
 
@@ -784,9 +759,6 @@ def _agent_arun(
                 wrapped=wrapped,
                 is_continue=is_continue,
             )
-            user_id = extract_user_id(instance, args, kwargs, wrapped=wrapped)
-            if user_id is not None:
-                invocation.attributes[USER_ID] = user_id
             return AsyncAgnoAgentStreamWrapper(
                 result,
                 invocation,
@@ -806,11 +778,6 @@ def _agent_arun(
                     wrapped=wrapped,
                     is_continue=is_continue,
                 )
-                user_id = extract_user_id(
-                    instance, args, kwargs, wrapped=wrapped
-                )
-                if user_id is not None:
-                    invocation.attributes[USER_ID] = user_id
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
@@ -822,14 +789,6 @@ def _agent_arun(
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
-                    )
-                    set_invocation_user_id(
-                        invocation,
-                        instance,
-                        args,
-                        kwargs,
-                        run_response=response,
-                        wrapped=wrapped,
                     )
                     invocation.stop()
                     return response
@@ -848,18 +807,7 @@ def _agent_arun(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        set_invocation_user_id(
-            invocation, instance, args, kwargs, wrapped=wrapped
-        )
         _set_invocation_output(invocation, result, capture_content)
-        set_invocation_user_id(
-            invocation,
-            instance,
-            args,
-            kwargs,
-            run_response=result,
-            wrapped=wrapped,
-        )
         invocation.stop()
         return result
 
@@ -959,11 +907,6 @@ def _start_workflow_invocation(
         _set_invocation_input(
             invocation, instance, args, kwargs, capture_content, wrapped
         )
-        session_id = extract_session_id(
-            instance, args, kwargs, wrapped=wrapped
-        )
-        if session_id:
-            invocation.conversation_id = str(session_id)
     return invocation
 
 
@@ -989,9 +932,6 @@ def _workflow_run(
             wrapped=wrapped,
             is_continue=is_continue,
         )
-        user_id = extract_user_id(instance, args, kwargs, wrapped=wrapped)
-        if user_id is not None:
-            invocation.attributes[USER_ID] = user_id
         try:
             result = wrapped(*args, **kwargs)
             if isinstance(result, Iterator):
@@ -1002,14 +942,6 @@ def _workflow_run(
                 )
 
             _set_invocation_output(invocation, result, capture_content)
-            set_invocation_user_id(
-                invocation,
-                instance,
-                args,
-                kwargs,
-                run_response=result,
-                wrapped=wrapped,
-            )
             invocation.stop()
             return result
         except BaseException as error:
@@ -1063,9 +995,6 @@ def _workflow_arun(
                 wrapped=wrapped,
                 is_continue=is_continue,
             )
-            set_invocation_user_id(
-                invocation, instance, args, kwargs, wrapped=wrapped
-            )
             invocation.fail(error)
             raise
 
@@ -1080,9 +1009,6 @@ def _workflow_arun(
                 wrapped=wrapped,
                 is_continue=is_continue,
             )
-            user_id = extract_user_id(instance, args, kwargs, wrapped=wrapped)
-            if user_id is not None:
-                invocation.attributes[USER_ID] = user_id
             return AsyncAgnoWorkflowStreamWrapper(
                 result,
                 invocation,
@@ -1102,11 +1028,6 @@ def _workflow_arun(
                     wrapped=wrapped,
                     is_continue=is_continue,
                 )
-                user_id = extract_user_id(
-                    instance, args, kwargs, wrapped=wrapped
-                )
-                if user_id is not None:
-                    invocation.attributes[USER_ID] = user_id
                 sub_token = _ACTIVE_FOREGROUND_WORKFLOWS.set(
                     _ACTIVE_FOREGROUND_WORKFLOWS.get() | {instance_id}
                 )
@@ -1121,14 +1042,6 @@ def _workflow_arun(
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
-                    )
-                    set_invocation_user_id(
-                        invocation,
-                        instance,
-                        args,
-                        kwargs,
-                        run_response=response,
-                        wrapped=wrapped,
                     )
                     invocation.stop()
                     return response
@@ -1151,24 +1064,58 @@ def _workflow_arun(
                 wrapped=wrapped,
                 is_continue=is_continue,
             )
-            set_invocation_user_id(
-                invocation, instance, args, kwargs, wrapped=wrapped
-            )
             _set_invocation_output(invocation, result, capture_content)
-            set_invocation_user_id(
-                invocation,
-                instance,
-                args,
-                kwargs,
-                run_response=result,
-                wrapped=wrapped,
-            )
             invocation.stop()
             return result
         finally:
             _ACTIVE_FOREGROUND_WORKFLOWS.reset(token)
 
     return traced_method
+
+
+def _start_background_workflow_invocation(
+    handler: TelemetryHandler,
+    instance: Any,
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    capture_content: bool,
+) -> WorkflowInvocation:
+    bound_args = bind_arguments(wrapped, args, kwargs)
+    run_resp = bound_args.get("workflow_run_response")
+    session_obj = bound_args.get("session")
+    session_id_val = (
+        bound_args.get("session_id")
+        or getattr(run_resp, "session_id", None)
+        or getattr(session_obj, "session_id", None)
+    )
+    session_id = (
+        str(session_id_val)
+        if session_id_val is not None
+        else extract_session_id(instance, args, kwargs, wrapped=wrapped)
+    )
+    exec_input = bound_args.get("execution_input")
+    input_val = getattr(exec_input, "input", None) or getattr(
+        run_resp, "input", None
+    )
+
+    workflow_name = getattr(instance, "name", None)
+    invocation = handler.workflow(
+        name=workflow_name,
+        conversation_id=session_id,
+    )
+
+    if capture_content and input_val is not None:
+        content_str = _extract_input_content(input_val)
+        if content_str:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=content_str)],
+                )
+            ]
+
+    return invocation
 
 
 def _workflow_aexecute(
@@ -1185,62 +1132,12 @@ def _workflow_aexecute(
         if id(instance) in _ACTIVE_FOREGROUND_WORKFLOWS.get():
             return await wrapped(*args, **kwargs)
 
-        bound_args = bind_arguments(wrapped, args, kwargs)
-        run_resp = bound_args.get("workflow_run_response")
-        session_obj = bound_args.get("session")
-        session_id_val = (
-            bound_args.get("session_id")
-            or getattr(run_resp, "session_id", None)
-            or getattr(session_obj, "session_id", None)
+        invocation = _start_background_workflow_invocation(
+            handler, instance, wrapped, args, kwargs, capture_content
         )
-        session_id = (
-            str(session_id_val)
-            if session_id_val is not None
-            else extract_session_id(instance, args, kwargs, wrapped=wrapped)
-        )
-        user_id_val = (
-            bound_args.get("user_id")
-            or getattr(run_resp, "user_id", None)
-            or getattr(session_obj, "user_id", None)
-        )
-        user_id = (
-            str(user_id_val)
-            if user_id_val is not None
-            else extract_user_id(instance, args, kwargs, wrapped=wrapped)
-        )
-        exec_input = bound_args.get("execution_input")
-        input_val = getattr(exec_input, "input", None) or getattr(
-            run_resp, "input", None
-        )
-
-        workflow_name = getattr(instance, "name", None)
-        invocation = handler.workflow(name=workflow_name)
-        if session_id is not None:
-            invocation.conversation_id = str(session_id)
-        if user_id is not None:
-            invocation.attributes[USER_ID] = str(user_id)
-
-        if capture_content and input_val is not None:
-            content_str = _extract_input_content(input_val)
-            if content_str:
-                invocation.input_messages = [
-                    InputMessage(
-                        role=Role.USER.value,
-                        parts=[TextPart(content=content_str)],
-                    )
-                ]
-
         try:
             result = await wrapped(*args, **kwargs)
             _set_invocation_output(invocation, result, capture_content)
-            set_invocation_user_id(
-                invocation,
-                instance,
-                args,
-                kwargs,
-                run_response=result,
-                wrapped=wrapped,
-            )
             invocation.stop()
             return result
         except BaseException as error:
@@ -1264,51 +1161,9 @@ def _workflow_aexecute_stream(
         if id(instance) in _ACTIVE_FOREGROUND_WORKFLOWS.get():
             return wrapped(*args, **kwargs)
 
-        bound_args = bind_arguments(wrapped, args, kwargs)
-        run_resp = bound_args.get("workflow_run_response")
-        session_obj = bound_args.get("session")
-        session_id_val = (
-            bound_args.get("session_id")
-            or getattr(run_resp, "session_id", None)
-            or getattr(session_obj, "session_id", None)
+        invocation = _start_background_workflow_invocation(
+            handler, instance, wrapped, args, kwargs, capture_content
         )
-        session_id = (
-            str(session_id_val)
-            if session_id_val is not None
-            else extract_session_id(instance, args, kwargs, wrapped=wrapped)
-        )
-        user_id_val = (
-            bound_args.get("user_id")
-            or getattr(run_resp, "user_id", None)
-            or getattr(session_obj, "user_id", None)
-        )
-        user_id = (
-            str(user_id_val)
-            if user_id_val is not None
-            else extract_user_id(instance, args, kwargs, wrapped=wrapped)
-        )
-        exec_input = bound_args.get("execution_input")
-        input_val = getattr(exec_input, "input", None) or getattr(
-            run_resp, "input", None
-        )
-
-        workflow_name = getattr(instance, "name", None)
-        invocation = handler.workflow(name=workflow_name)
-        if session_id is not None:
-            invocation.conversation_id = str(session_id)
-        if user_id is not None:
-            invocation.attributes[USER_ID] = str(user_id)
-
-        if capture_content and input_val is not None:
-            content_str = _extract_input_content(input_val)
-            if content_str:
-                invocation.input_messages = [
-                    InputMessage(
-                        role=Role.USER.value,
-                        parts=[TextPart(content=content_str)],
-                    )
-                ]
-
         try:
             result = wrapped(*args, **kwargs)
             if isinstance(result, AsyncIterator):
@@ -1347,18 +1202,12 @@ def _workflow_aexecute_workflow_agent(
             if (sid := getattr(run_context, "session_id", None)) is not None
             else extract_session_id(instance, args, kwargs, wrapped=wrapped)
         )
-        user_id = (
-            str(uid)
-            if (uid := getattr(run_context, "user_id", None)) is not None
-            else extract_user_id(instance, args, kwargs, wrapped=wrapped)
-        )
 
         workflow_name = getattr(instance, "name", None)
-        invocation = handler.workflow(name=workflow_name)
-        if session_id is not None:
-            invocation.conversation_id = str(session_id)
-        if user_id is not None:
-            invocation.attributes[USER_ID] = str(user_id)
+        invocation = handler.workflow(
+            name=workflow_name,
+            conversation_id=session_id,
+        )
 
         if capture_content and user_input is not None:
             content_str = _extract_input_content(user_input)
@@ -1399,14 +1248,6 @@ def _workflow_aexecute_workflow_agent(
                     _set_invocation_output(
                         invocation, response, capture_content
                     )
-                    set_invocation_user_id(
-                        invocation,
-                        instance,
-                        args,
-                        kwargs,
-                        run_response=response,
-                        wrapped=wrapped,
-                    )
                     invocation.stop()
                     return response
                 except BaseException as error:
@@ -1416,18 +1257,7 @@ def _workflow_aexecute_workflow_agent(
             return _await_result()
 
         try:
-            set_invocation_user_id(
-                invocation, instance, args, kwargs, wrapped=wrapped
-            )
             _set_invocation_output(invocation, result, capture_content)
-            set_invocation_user_id(
-                invocation,
-                instance,
-                args,
-                kwargs,
-                run_response=result,
-                wrapped=wrapped,
-            )
             invocation.stop()
             return result
         except BaseException as error:
@@ -1486,7 +1316,6 @@ def _start_retrieval_invocation(
         if request_model is not None
         else None,
     )
-    set_invocation_user_id(invocation, instance, args, kwargs, wrapped=wrapped)
 
     if invocation.should_capture_content:
         query = get_argument("query", wrapped, args, kwargs)

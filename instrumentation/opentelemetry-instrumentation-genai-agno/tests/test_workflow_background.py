@@ -9,9 +9,15 @@ import asyncio
 import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from agno.agent import Agent
 from agno.models.response import ModelResponse
 from agno.run.workflow import RunStatus
+
+try:
+    from agno.workflow.agent import WorkflowAgent
+except ImportError:
+    WorkflowAgent = None
 from agno.workflow.workflow import Workflow
 from tests.mock_model import MockModel
 
@@ -21,9 +27,6 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_CONVERSATION_ID,
     GEN_AI_OPERATION_NAME,
-)
-from opentelemetry.semconv._incubating.attributes.user_attributes import (
-    USER_ID,
 )
 from opentelemetry.trace.status import StatusCode
 
@@ -89,11 +92,11 @@ def test_workflow_background_execution_non_streaming(
     assert span.status.status_code != StatusCode.ERROR
 
 
-def test_workflow_background_execution_identity(
+def test_workflow_background_execution_session_id(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that background workflow captures user_id and session_id attributes."""
+    """Test that background workflow captures session_id attribute."""
 
     async def quick_step(step_input: str) -> str:
         return "quick done"
@@ -107,7 +110,6 @@ def test_workflow_background_execution_identity(
         placeholder = await workflow.arun(
             "bg input",
             background=True,
-            user_id="bg-user-999",
             session_id="bg-sess-888",
         )
         assert placeholder.status == RunStatus.pending
@@ -119,7 +121,6 @@ def test_workflow_background_execution_identity(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes.get(USER_ID) == "bg-user-999"
     assert span.attributes.get(GEN_AI_CONVERSATION_ID) == "bg-sess-888"
 
 
@@ -369,3 +370,115 @@ def test_workflow_background_streaming_caller_close(
     assert len(spans) == 1
     span = spans[0]
     assert span.name == "invoke_workflow test-bg-stream-close-workflow"
+
+
+@pytest.mark.skipif(
+    not hasattr(Workflow, "_arun_background_stream_ws"),
+    reason="Background streaming via SSE is not supported in this agno version",
+)
+def test_workflow_background_streaming_sse(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    async def step(step_input: str):
+        yield "chunk"
+
+    workflow = Workflow(name="bg-sse", steps=[step])
+    _setup_mock_db_if_needed(workflow)
+
+    async def _test() -> None:
+        stream = workflow.arun("input", background=True, stream=True)
+        if inspect.isawaitable(stream):
+            stream = await stream
+        if hasattr(stream, "__aiter__"):
+            async for _ in stream:
+                pass
+        await _wait_for_background_tasks()
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "invoke_workflow bg-sse"
+    assert spans[0].status.status_code != StatusCode.ERROR
+
+
+@pytest.mark.skipif(
+    not hasattr(Workflow, "_arun_background_stream_ws"),
+    reason="Background streaming via SSE is not supported in this agno version",
+)
+def test_workflow_background_streaming_sse_error(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    async def failing(execution_input: object):
+        yield "chunk"
+        raise RuntimeError("boom")
+
+    workflow = Workflow(name="bg-sse-fail", steps=failing)
+    _setup_mock_db_if_needed(workflow)
+
+    async def _test() -> None:
+        stream = workflow.arun("input", background=True, stream=True)
+        if inspect.isawaitable(stream):
+            stream = await stream
+        if hasattr(stream, "__aiter__"):
+            try:
+                async for _ in stream:
+                    pass
+            except Exception:
+                pass
+        await _wait_for_background_tasks()
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.skipif(
+    WorkflowAgent is None,
+    reason="WorkflowAgent not available in this agno version",
+)
+def test_workflow_background_workflow_agent(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that background workflow with WorkflowAgent emits workflow and agent spans."""
+    assert WorkflowAgent is not None
+    wf_agent = WorkflowAgent(model=MockModel(id="mock-model"))
+    workflow = Workflow(name="test-bg-wf-agent", agent=wf_agent)
+    mock_output = ModelResponse(content="Agent output inside workflow agent")
+
+    async def _test() -> None:
+        with patch(
+            "agno.models.base.Model.aresponse", return_value=mock_output
+        ):
+            placeholder = await workflow.arun("test input", background=True)
+            assert placeholder.status == RunStatus.pending
+            await _wait_for_background_tasks()
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    wf_spans = [
+        s
+        for s in spans
+        if s.attributes.get(GEN_AI_OPERATION_NAME) == "invoke_workflow"
+    ]
+    agent_spans = [
+        s
+        for s in spans
+        if s.attributes.get(GEN_AI_OPERATION_NAME) == "invoke_agent"
+    ]
+    assert len(wf_spans) == 1
+    assert len(agent_spans) == 1
+
+    wf_span = wf_spans[0]
+    agent_span = agent_spans[0]
+
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == wf_span.context.span_id
