@@ -10,7 +10,6 @@ from opentelemetry.instrumentation.google_genai.message import (
     to_system_instructions,
 )
 from opentelemetry.util.genai.types import (
-    GenericPart,
     ReasoningPart,
     ServerToolCallPart,
     ServerToolCallResponsePart,
@@ -42,11 +41,7 @@ class TestGoogleGenAiMessage(unittest.TestCase):
         instructions = to_system_instructions(content=content)
         self.assertEqual(
             instructions,
-            [
-                TextPart(content="Be concise"),
-                GenericPart(type="blob"),
-                GenericPart(type="uri"),
-            ],
+            [TextPart(content="Be concise")],
         )
 
     def test_to_system_instructions_thought_part(self):
@@ -54,7 +49,7 @@ class TestGoogleGenAiMessage(unittest.TestCase):
             parts=[genai_types.Part(text="Let me think.", thought=True)]
         )
         instructions = to_system_instructions(content=content)
-        self.assertEqual(instructions, [GenericPart(type="reasoning")])
+        self.assertEqual(instructions, [])
 
     def test_to_system_instructions_empty_or_unknown_part(self):
         content = genai_types.Content(parts=[genai_types.Part()])
