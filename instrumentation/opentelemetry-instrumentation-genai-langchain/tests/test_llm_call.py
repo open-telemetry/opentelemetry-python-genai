@@ -1736,29 +1736,52 @@ def test_chat_openai_reasoning_token_details(
 def test_chat_anthropic_claude_sonnet_cache_token_details(
     span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
 ):
+    # Anthropic only caches prompts above a minimum length.
+    llm = chat_anthropic_claude_sonnet.model_copy(
+        update={"model": "claude-sonnet-5-5", "temperature": None}
+    )
     messages = [
-        SystemMessage(content="You are a helpful assistant!"),
+        SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant! " * 500,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        ),
         HumanMessage(content="What is the capital of France?"),
     ]
 
-    chat_anthropic_claude_sonnet.invoke(messages)
+    llm.invoke(messages)
+    llm.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    span = spans[0]
-
-    assert span.attributes.get("gen_ai.usage.cache_write.input_tokens") == 5
+    assert len(spans) == 2
+    write_span, read_span = spans
 
     assert (
-        span.attributes.get(
+        write_span.attributes.get("gen_ai.usage.cache_write.input_tokens")
+        == 5003
+    )
+    assert (
+        gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        not in write_span.attributes
+    )
+
+    assert (
+        read_span.attributes.get(
             gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
         )
-        == 4
+        == 5003
     )
+    assert "gen_ai.usage.cache_write.input_tokens" not in read_span.attributes
 
-    assert (
-        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
-    )
+    for span in spans:
+        assert (
+            span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 5017
+        )
 
 
 def test_chat_openai_streamed_response_model(

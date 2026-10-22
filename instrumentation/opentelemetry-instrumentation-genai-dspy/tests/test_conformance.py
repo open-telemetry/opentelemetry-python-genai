@@ -21,6 +21,7 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.embedder import EmbedderScenario
+from .conformance.lm import LMScenario
 from .conformance.react import ReActScenario
 from .conformance.react_v2 import ReActV2Scenario
 from .conformance.retrieve import (
@@ -35,6 +36,7 @@ from .conformance.tool import ToolScenario
     "scenario",
     [
         pytest.param(EmbedderScenario()),
+        pytest.param(LMScenario()),
         pytest.param(ReActScenario()),
         pytest.param(ReActV2Scenario()),
         pytest.param(RetrieveScenario()),
