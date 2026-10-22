@@ -46,7 +46,7 @@ importlib-metadata==9.0.1
 packaging==26.3
 wrapt==2.5.1
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
-grpcio>=1.84.0; implementation_name != "pypy"
+grpcio>=1.84.1; implementation_name != "pypy"
 grpcio<1.84.1; implementation_name == "pypy"
 
 -e util/opentelemetry-util-genai
