@@ -1,0 +1,1 @@
+Record the response id, model, token usage and output messages on streamed `interactions.create` spans by matching the SDK's `interaction.completed` event.
