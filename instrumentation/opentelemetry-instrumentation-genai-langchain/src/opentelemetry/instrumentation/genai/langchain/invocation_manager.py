@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TypeAlias
@@ -30,6 +31,7 @@ _AnyInvocation: TypeAlias = (
 class _PromptContext:
     name: str | None
     variables: Mapping[str, object]
+    version: str | None = None
 
 
 @dataclass
@@ -50,6 +52,12 @@ class _InvocationManager:
         # Map from run_id -> _InvocationState, to keep track of invocations and parent/child relationships
         # TODO: TTL cache to avoid memory leaks in long-running processes.
         self._invocations: dict[UUID, _InvocationState] = {}
+        # Prompt contexts of the prompt values that prompt runs returned, keyed
+        # by object id while the value is alive.
+        self._prompt_values: dict[int, _PromptContext] = {}
+        # Prompt contexts of chat model runs whose input is one of those values,
+        # keyed by the run id chosen before the run starts.
+        self._model_prompt_contexts: dict[UUID, _PromptContext] = {}
 
     def add_invocation_state(
         self,
@@ -98,10 +106,11 @@ class _InvocationManager:
         if invocation_state is not None:
             invocation_state.prompt_context = prompt_context
 
-    def publish_prompt_context(self, run_id: UUID) -> None:
+    def publish_prompt_context(self, run_id: UUID) -> _PromptContext | None:
         invocation_state = self._invocations.get(run_id)
         if invocation_state is None or invocation_state.prompt_context is None:
-            return
+            return None
+        prompt_context = invocation_state.prompt_context
         parent_run_id = invocation_state.parent_run_id
         parent_state = (
             self._invocations.get(parent_run_id)
@@ -109,10 +118,33 @@ class _InvocationManager:
             else None
         )
         if parent_state is not None:
-            parent_state.pending_prompt_contexts.append(
-                invocation_state.prompt_context
-            )
+            parent_state.pending_prompt_contexts.append(prompt_context)
         invocation_state.prompt_context = None
+        return prompt_context
+
+    def set_prompt_value_context(
+        self, prompt_value: object, prompt_context: _PromptContext
+    ) -> None:
+        """Remember which template produced ``prompt_value``, while it is alive."""
+        key = id(prompt_value)
+        try:
+            weakref.finalize(prompt_value, self._prompt_values.pop, key, None)
+        except TypeError:
+            return  # not weak-referenceable, so its id could be reused
+        self._prompt_values[key] = prompt_context
+
+    def get_prompt_value_context(
+        self, prompt_value: object
+    ) -> _PromptContext | None:
+        return self._prompt_values.get(id(prompt_value))
+
+    def set_model_prompt_context(
+        self, run_id: UUID, prompt_context: _PromptContext
+    ) -> None:
+        self._model_prompt_contexts[run_id] = prompt_context
+
+    def pop_model_prompt_context(self, run_id: UUID) -> _PromptContext | None:
+        return self._model_prompt_contexts.pop(run_id, None)
 
     def consume_prompt_context(
         self, parent_run_id: UUID | None
