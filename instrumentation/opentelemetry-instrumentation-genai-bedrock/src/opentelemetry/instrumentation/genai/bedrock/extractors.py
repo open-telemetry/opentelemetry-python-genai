@@ -328,14 +328,14 @@ def extract_converse_request(
             if text_format_str in ("json", "text"):
                 invocation.output_type = text_format_str
 
-    # Prompt variables (opt-in under content capture)
     prompt_variables = kwargs.get("promptVariables")
     if capture_content and _is_dict(prompt_variables):
+        variables: dict[str, str] = {}
         for var_name, var_val in prompt_variables.items():
             if _is_dict(var_val) and "text" in var_val:
-                invocation.attributes[f"gen_ai.prompt.variable.{var_name}"] = (
-                    str(var_val["text"])
-                )
+                variables[var_name] = str(var_val["text"])
+        if variables:
+            invocation.prompt_variables = variables
 
     # system instruction
     raw_system = kwargs.get("system")

@@ -7,6 +7,7 @@ import json
 
 import pytest
 from botocore.exceptions import ClientError
+from botocore.stub import Stubber
 
 from opentelemetry.instrumentation.genai.bedrock.extractors import (
     extract_content_block,
@@ -606,39 +607,44 @@ def test_extract_converse_request_guardrail_and_prompt_variables(
             == "sgi5gkybzqak"
         )
         assert invocation.output_type == "json"
-        assert (
-            invocation.attributes.get("gen_ai.prompt.variable.user_name")
-            == "Alice"
-        )
-        assert (
-            invocation.attributes.get("gen_ai.prompt.variable.language")
-            == "French"
-        )
+        assert invocation.prompt_variables == {
+            "user_name": "Alice",
+            "language": "French",
+        }
 
 
-def test_extract_converse_request_prompt_variables_no_content(
-    tracer_provider,
+def test_converse_prompt_variables_no_content(
+    bedrock_client,
+    instrument_no_content,
+    span_exporter,
+    log_exporter,
 ) -> None:
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(provider="aws.bedrock") as invocation:
-        extract_converse_request(
-            {
-                "guardrailConfig": {
-                    "guardrailIdentifier": "sgi5gkybzqak",
-                },
-                "promptVariables": {
-                    "user_name": {"text": "Alice"},
-                },
-            },
-            invocation,
-            capture_content=False,
-        )
+    params = {
+        "modelId": "amazon.nova-micro-v1:0",
+        "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
+        "guardrailConfig": {
+            "guardrailIdentifier": "sgi5gkybzqak",
+            "guardrailVersion": "1",
+        },
+        "promptVariables": {"user_name": {"text": "Alice"}},
+    }
+    response = {
+        "output": {
+            "message": {"role": "assistant", "content": [{"text": "Hi"}]}
+        },
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+    with Stubber(bedrock_client) as stubber:
+        stubber.add_response("converse", response, params)
+        bedrock_client.converse(**params)
 
-        assert (
-            invocation.attributes.get(AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID)
-            == "sgi5gkybzqak"
-        )
-        assert "gen_ai.prompt.variable.user_name" not in invocation.attributes
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes or {}
+    assert attrs[AwsAttributes.AWS_BEDROCK_GUARDRAIL_ID] == "sgi5gkybzqak"
+    assert not any(k.startswith("gen_ai.prompt.variable.") for k in attrs)
+    assert log_exporter.get_finished_logs() == ()
 
 
 def test_extract_converse_request_system_instruction(tracer_provider) -> None:
