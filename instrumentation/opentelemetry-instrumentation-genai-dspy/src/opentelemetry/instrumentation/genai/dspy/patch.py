@@ -10,6 +10,7 @@ import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from copy import copy, deepcopy
+from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,13 +23,25 @@ from wrapt import (
 
 from opentelemetry.instrumentation.genai.dspy.utils import (
     SENTINEL_TOOL_NAMES,
+    LMRequestProtocol,
+    _get_field,
+    apply_usage_to_invocation,
     extract_input_content,
+    extract_lm_input_messages,
+    extract_lm_output_messages,
+    extract_lm_request_config,
     extract_output_content,
     prepare_tool_definitions,
+    resolve_provider,
+    resolve_request_model,
+    safe_float,
+    safe_int,
+    safe_stop_sequences,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -41,6 +54,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     bind_arguments,
+    get_argument,
     object_to_any_value,
 )
 
@@ -53,12 +67,25 @@ _REACT_V2_CLASS = "ReActV2"
 _EMBEDDINGS_MODULE = "dspy.retrievers.embeddings"
 _EMBEDDINGS_WITH_SCORES_CLASS = "EmbeddingsWithScores"
 
+
+@dataclass(slots=True)
+class _LMHistoryMetadata:
+    response: Any = None
+    usage: Any = None
+    model: str | None = None
+    response_model: str | None = None
+
+
 _in_retrieval_invocation: ContextVar[bool] = ContextVar(
     "_in_retrieval_invocation", default=False
+)
+_current_lm_history_entry: ContextVar[_LMHistoryMetadata | None] = ContextVar(
+    "_current_lm_history_entry", default=None
 )
 
 if TYPE_CHECKING:
     from dspy.adapters.types.tool import Tool
+    from dspy.clients.lm import LM
     from dspy.dsp.colbertv2 import ColBERTv2
     from dspy.primitives.module import Module
     from dspy.primitives.prediction import Prediction
@@ -66,6 +93,7 @@ if TYPE_CHECKING:
     from dspy.retrievers.retrieve import Retrieve
 
     _RetrieverInstance = Retrieve | ColBERTv2 | Embeddings
+    _FinishReasonFn = Callable[[Prediction], str | None]
     _BoundFunctionWrapper = BoundFunctionWrapper[Any, Any]
     _FunctionWrapper = FunctionWrapper[Any, Any]
 else:
@@ -245,12 +273,12 @@ def patch_dspy(handler: TelemetryHandler) -> None:
     _wrap_function(
         _REACT_MODULE,
         f"{_REACT_CLASS}.forward",
-        _react_forward(handler, "dspy.ReAct"),
+        _react_forward(handler, "dspy.ReAct", _react_finish_reason),
     )
     _wrap_function(
         _REACT_MODULE,
         f"{_REACT_CLASS}.aforward",
-        _react_aforward(handler, "dspy.ReAct"),
+        _react_aforward(handler, "dspy.ReAct", _react_finish_reason),
     )
 
     react_v2_cls = getattr(
@@ -260,14 +288,52 @@ def patch_dspy(handler: TelemetryHandler) -> None:
         _wrap_function(
             _REACT_V2_MODULE,
             f"{_REACT_V2_CLASS}.forward",
-            _react_forward(handler, "dspy.ReActV2"),
+            _react_forward(handler, "dspy.ReActV2", _react_v2_finish_reason),
         )
         if hasattr(react_v2_cls, "aforward"):
             _wrap_function(
                 _REACT_V2_MODULE,
                 f"{_REACT_V2_CLASS}.aforward",
-                _react_aforward(handler, "dspy.ReActV2"),
+                _react_aforward(
+                    handler, "dspy.ReActV2", _react_v2_finish_reason
+                ),
             )
+
+    if hasattr(dspy, "LM"):
+        lm_module = dspy.LM.__module__
+        lm_name = dspy.LM.__name__
+        _wrap_function(
+            lm_module,
+            f"{lm_name}.__call__",
+            _lm_call(handler),
+        )
+        _wrap_function(
+            lm_module,
+            f"{lm_name}.acall",
+            _lm_acall(handler),
+        )
+        if hasattr(dspy.LM, "update_history"):
+            _wrap_function(
+                lm_module,
+                f"{lm_name}.update_history",
+                _lm_update_history(),
+            )
+        if hasattr(dspy.LM, "_process_lm_response"):
+            _wrap_function(
+                lm_module,
+                f"{lm_name}._process_lm_response",
+                _lm_process_response(),
+            )
+        try:
+            import_module("dspy.clients.execution")
+
+            _wrap_function(
+                "dspy.clients.execution",
+                "finalize",
+                _lm_finalize(),
+            )
+        except (ImportError, AttributeError):
+            pass
 
 
 def unpatch_dspy() -> None:
@@ -305,6 +371,312 @@ def unpatch_dspy() -> None:
     if react_v2_cls is not None:
         unwrap(react_v2_cls, "forward")
         unwrap(react_v2_cls, "aforward")
+
+    if hasattr(dspy, "LM"):
+        unwrap(dspy.LM, "__call__")
+        unwrap(dspy.LM, "acall")
+        if hasattr(dspy.LM, "update_history"):
+            unwrap(dspy.LM, "update_history")
+        if hasattr(dspy.LM, "_process_lm_response"):
+            unwrap(dspy.LM, "_process_lm_response")
+        dspy_execution = sys.modules.get("dspy.clients.execution")
+        if dspy_execution is not None and hasattr(dspy_execution, "finalize"):
+            unwrap(dspy_execution, "finalize")
+
+
+def _start_lm_invocation(
+    handler: TelemetryHandler,
+    instance: LM,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    wrapped: Callable[..., Any],
+) -> InferenceInvocation:
+    req_obj: LMRequestProtocol | None = None
+    for candidate in (
+        kwargs.get("request"),
+        args[0] if args else None,
+        kwargs.get("prompt"),
+    ):
+        if isinstance(candidate, LMRequestProtocol):
+            req_obj = candidate
+            break
+
+    req_model = req_obj.model if req_obj is not None else None
+    provider = resolve_provider(instance, model=req_model)
+    request_model = resolve_request_model(instance, model=req_model)
+
+    invocation = handler.inference(
+        provider=provider,
+        request_model=request_model,
+    )
+
+    req_config = extract_lm_request_config(req_obj)
+    merged_kwargs = {
+        **getattr(instance, "kwargs", {}),
+        **req_config,
+        **kwargs,
+    }
+
+    invocation.temperature = safe_float(merged_kwargs.get("temperature"))
+    invocation.max_tokens = safe_int(merged_kwargs.get("max_tokens"))
+    invocation.top_p = safe_float(
+        merged_kwargs.get("top_p")
+        if merged_kwargs.get("top_p") is not None
+        else merged_kwargs.get("p")
+    )
+    invocation.frequency_penalty = safe_float(
+        merged_kwargs.get("frequency_penalty")
+    )
+    invocation.presence_penalty = safe_float(
+        merged_kwargs.get("presence_penalty")
+    )
+    invocation.seed = safe_int(merged_kwargs.get("seed"))
+
+    invocation.stop_sequences = safe_stop_sequences(merged_kwargs.get("stop"))
+
+    choice_count = safe_int(merged_kwargs.get("n"))
+    if choice_count is not None and choice_count != 1:
+        invocation.request_choice_count = choice_count
+
+    if handler.should_capture_content():
+        bound = bind_arguments(wrapped, args, kwargs)
+        invocation.input_messages = extract_lm_input_messages(bound)
+
+    return invocation
+
+
+def _lm_update_history() -> Callable[..., Any]:
+    """Capture the history entry in context to isolate concurrent calls from shared instance.history."""
+
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: LM,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        entry = get_argument("entry", wrapped, args, kwargs)
+        if entry is not None:
+            _current_lm_history_entry.set(
+                _LMHistoryMetadata(
+                    response=_get_field(entry, "response"),
+                    usage=_get_field(entry, "usage"),
+                    model=_get_field(entry, "model"),
+                    response_model=_get_field(entry, "response_model"),
+                )
+            )
+        return wrapped(*args, **kwargs)
+
+    return traced_method
+
+
+def _lm_process_response() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: LM,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        response = get_argument("response", wrapped, args, kwargs)
+        if response is not None:
+            _current_lm_history_entry.set(
+                _LMHistoryMetadata(
+                    response=response,
+                    usage=getattr(response, "usage", None),
+                    model=getattr(instance, "model", None),
+                    response_model=getattr(response, "model", None),
+                )
+            )
+        return wrapped(*args, **kwargs)
+
+    return traced_method
+
+
+def _lm_finalize() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        lm = get_argument("lm", wrapped, args, kwargs)
+        result = get_argument("result", wrapped, args, kwargs)
+        if result is not None:
+            raw = getattr(result, "raw", None)
+            responses = getattr(result, "responses", None)
+            _current_lm_history_entry.set(
+                _LMHistoryMetadata(
+                    response=raw if raw is not None else responses,
+                    usage=getattr(result, "usage", None),
+                    model=getattr(lm, "model", None),
+                    response_model=getattr(result, "response_model", None),
+                )
+            )
+        return wrapped(*args, **kwargs)
+
+    return traced_method
+
+
+def _set_lm_invocation_response(
+    handler: TelemetryHandler,
+    invocation: InferenceInvocation,
+    result: object,
+    history_entry: _LMHistoryMetadata | None = None,
+) -> None:
+    invocation.finish_reasons = []
+    finish_reasons = invocation.finish_reasons
+    assert finish_reasons is not None
+
+    if not isinstance(result, list):
+        model = getattr(result, "model", None)
+        if model:
+            invocation.response_model_name = str(model)
+        resp_id = getattr(result, "response_id", None) or getattr(
+            result, "id", None
+        )
+        if resp_id:
+            invocation.response_id = str(resp_id)
+
+        usage_as_dict = getattr(result, "usage_as_dict", None)
+        if callable(usage_as_dict):
+            usage_dict = usage_as_dict()
+            if isinstance(usage_dict, Mapping):
+                apply_usage_to_invocation(
+                    invocation, cast(Mapping[str, Any], usage_dict)
+                )
+        elif hasattr(result, "usage"):
+            apply_usage_to_invocation(invocation, getattr(result, "usage"))
+
+        outputs = getattr(result, "outputs", None)
+        if isinstance(outputs, Sequence):
+            for out in cast(Sequence[object], outputs):
+                if (fr := getattr(out, "finish_reason", None)) is not None:
+                    finish_reasons.append(str(fr))
+        elif (fr := getattr(result, "finish_reason", None)) is not None:
+            finish_reasons.append(str(fr))
+
+        if handler.should_capture_content():
+            invocation.output_messages = extract_lm_output_messages(
+                result, finish_reasons=invocation.finish_reasons
+            )
+        return
+
+    # DSPy 3.x LM calls return a legacy list by default unless experimental=True
+    # or an LMRequest is used. Only use the history_entry captured for this
+    # invocation; never fall back to shared instance.history.
+    entry = history_entry
+    if entry is not None:
+        resp_model = entry.response_model or entry.model
+        if resp_model:
+            invocation.response_model_name = str(resp_model)
+
+        if entry.usage is not None:
+            apply_usage_to_invocation(invocation, entry.usage)
+
+        resp_obj: Any = entry.response
+        if resp_obj is not None:
+            if isinstance(resp_obj, Sequence) and not isinstance(
+                resp_obj, (str, bytes, Mapping)
+            ):
+                resp_seq = cast(Sequence[Any], resp_obj)
+                if resp_seq:
+                    resp_id = _get_field(resp_seq[0], "id")
+                    if resp_id:
+                        invocation.response_id = str(resp_id)
+                for r in resp_seq:
+                    fr = _get_field(r, "finish_reason")
+                    if fr is None:
+                        choices = _get_field(r, "choices")
+                        if isinstance(choices, Sequence) and choices:
+                            fr = _get_field(
+                                cast(Sequence[object], choices)[0],
+                                "finish_reason",
+                            )
+                    if fr is not None:
+                        finish_reasons.append(str(fr))
+            else:
+                resp_id = _get_field(resp_obj, "id")
+                if resp_id:
+                    invocation.response_id = str(resp_id)
+
+                choices = _get_field(resp_obj, "choices")
+                if isinstance(choices, Sequence) and choices:
+                    for choice in cast(Sequence[object], choices):
+                        fr = _get_field(choice, "finish_reason")
+                        if fr is not None:
+                            finish_reasons.append(str(fr))
+                elif (fr := _get_field(resp_obj, "finish_reason")) is not None:
+                    finish_reasons.append(str(fr))
+                else:
+                    outputs = _get_field(resp_obj, "outputs")
+                    if isinstance(outputs, Sequence) and outputs:
+                        for out in cast(Sequence[object], outputs):
+                            fr = _get_field(out, "finish_reason")
+                            if fr is not None:
+                                finish_reasons.append(str(fr))
+
+    if handler.should_capture_content():
+        invocation.output_messages = extract_lm_output_messages(
+            cast(Sequence[object], result),
+            finish_reasons=invocation.finish_reasons,
+        )
+
+
+def _lm_call(handler: TelemetryHandler) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: LM,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_lm_invocation(
+            handler, instance, args, kwargs, wrapped
+        )
+        # Isolate per-call history metadata from concurrent calls on the shared LM instance.
+        token = _current_lm_history_entry.set(None)
+        try:
+            with invocation:
+                result = wrapped(*args, **kwargs)
+                history_entry = _current_lm_history_entry.get()
+                _set_lm_invocation_response(
+                    handler,
+                    invocation,
+                    result,
+                    history_entry=history_entry,
+                )
+                return result
+        finally:
+            _current_lm_history_entry.reset(token)
+
+    return traced_method
+
+
+def _lm_acall(handler: TelemetryHandler) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: LM,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        invocation = _start_lm_invocation(
+            handler, instance, args, kwargs, wrapped
+        )
+        # Isolate per-call history metadata from concurrent calls on the shared LM instance.
+        token = _current_lm_history_entry.set(None)
+        try:
+            with invocation:
+                result = await wrapped(*args, **kwargs)
+                history_entry = _current_lm_history_entry.get()
+                _set_lm_invocation_response(
+                    handler,
+                    invocation,
+                    result,
+                    history_entry=history_entry,
+                )
+                return result
+        finally:
+            _current_lm_history_entry.reset(token)
+
+    return traced_method
 
 
 def _extract_tool_arguments(
@@ -397,36 +769,86 @@ def _tool_acall(handler: TelemetryHandler) -> Callable[..., Any]:
     return traced_method
 
 
+def _extract_agent_inputs(
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Mapping[str, object]:
+    bound = bind_arguments(wrapped, args, kwargs)
+    input_args = bound.get("input_args")
+    if isinstance(input_args, Mapping):
+        return {
+            **{k: v for k, v in bound.items() if k != "input_args"},
+            **cast(Mapping[str, object], input_args),
+        }
+    return bound
+
+
 def _start_agent_invocation(
     handler: TelemetryHandler,
     instance: Module,
+    args: tuple[Any, ...],
     kwargs: dict[str, Any],
     agent_name: str,
+    wrapped: Callable[..., Any],
 ) -> LocalAgentInvocation:
     invocation = handler.invoke_local_agent(agent_name=agent_name)
-    if handler.should_capture_content() and kwargs:
-        content_str = extract_input_content(kwargs)
-        invocation.input_messages = [
-            InputMessage(role="user", parts=[TextPart(content=content_str)])
-        ]
+    if handler.should_capture_content():
+        agent_inputs = _extract_agent_inputs(wrapped, args, kwargs)
+        if agent_inputs:
+            content_str = extract_input_content(agent_inputs)
+            invocation.input_messages = [
+                InputMessage(
+                    role="user", parts=[TextPart(content=content_str)]
+                )
+            ]
 
     tools: Any = getattr(instance, "tools", None)
     invocation.tool_definitions = prepare_tool_definitions(tools)
     return invocation
 
 
+def _react_finish_reason(result: Prediction) -> str:
+    trajectory: Mapping[str, object] | None = getattr(
+        result, "trajectory", None
+    )
+    if isinstance(trajectory, Mapping):
+        tool_names = [
+            value
+            for key, value in trajectory.items()
+            if key.startswith("tool_name_")
+        ]
+        if tool_names and tool_names[-1] == "finish":
+            return "stop"
+    return "error"
+
+
+def _react_v2_finish_reason(result: Prediction) -> str | None:
+    termination_reason: object = getattr(result, "termination_reason", None)
+    if termination_reason == "submit":
+        return "stop"
+    if termination_reason in ("forced_submit", "parse_error"):
+        return "error"
+    return termination_reason if isinstance(termination_reason, str) else None
+
+
 def _set_agent_invocation_output(
+    handler: TelemetryHandler,
     invocation: LocalAgentInvocation,
     instance: Module,
     result: Prediction | None,
+    finish_reason: str | None,
 ) -> None:
+    if finish_reason is not None:
+        invocation.finish_reasons = [finish_reason]
+    if not handler.should_capture_content():
+        return
     signature: Any = getattr(instance, "signature", None)
     output_str = extract_output_content(result, signature)
     invocation.output_messages = [
         OutputMessage(
             role="assistant",
             parts=[TextPart(content=output_str)],
-            finish_reason="stop",
         )
     ]
 
@@ -434,6 +856,7 @@ def _set_agent_invocation_output(
 def _react_forward(
     handler: TelemetryHandler,
     agent_name: str,
+    finish_reason: _FinishReasonFn,
 ) -> Callable[..., Any]:
     def traced_method(
         wrapped: Callable[..., Any],
@@ -442,12 +865,13 @@ def _react_forward(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_agent_invocation(
-            handler, instance, dict(kwargs), agent_name
+            handler, instance, args, kwargs, agent_name, wrapped
         )
         with invocation:
             result = wrapped(*args, **kwargs)
-            if handler.should_capture_content():
-                _set_agent_invocation_output(invocation, instance, result)
+            _set_agent_invocation_output(
+                handler, invocation, instance, result, finish_reason(result)
+            )
             return result
 
     return traced_method
@@ -456,6 +880,7 @@ def _react_forward(
 def _react_aforward(
     handler: TelemetryHandler,
     agent_name: str,
+    finish_reason: _FinishReasonFn,
 ) -> Callable[..., Any]:
     async def traced_method(
         wrapped: Callable[..., Awaitable[Any]],
@@ -464,12 +889,13 @@ def _react_aforward(
         kwargs: dict[str, Any],
     ) -> Any:
         invocation = _start_agent_invocation(
-            handler, instance, dict(kwargs), agent_name
+            handler, instance, args, kwargs, agent_name, wrapped
         )
         with invocation:
             result = await wrapped(*args, **kwargs)
-            if handler.should_capture_content():
-                _set_agent_invocation_output(invocation, instance, result)
+            _set_agent_invocation_output(
+                handler, invocation, instance, result, finish_reason(result)
+            )
             return result
 
     return traced_method

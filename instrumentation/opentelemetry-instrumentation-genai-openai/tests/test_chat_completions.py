@@ -23,6 +23,7 @@ try:
 except ImportError:
     not_given = NOT_GIVEN
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -2018,3 +2019,22 @@ def chat_completion_multiple_tools_streaming(
 
 def assert_no_invalid_type_warning(caplog):
     assert "Invalid type" not in caplog.text
+
+
+def test_chat_completion_malformed_messages_reach_the_client(
+    span_exporter, instrument_with_content
+):
+    client = OpenAI(base_url="http://localhost:4242", max_retries=0)
+
+    # Content capture iterates `messages` before the client sees them.
+    with pytest.raises(APIConnectionError):
+        client.chat.completions.create(
+            model="gpt-4o-mini", messages=None, timeout=0.1
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
+    assert not trace.get_current_span().get_span_context().is_valid

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import types
 from unittest.mock import AsyncMock, MagicMock
 
 from google.genai.models import AsyncModels, Models
@@ -11,6 +12,10 @@ from google.genai.types import (
     EmbedContentResponse,
 )
 
+from opentelemetry.instrumentation.google_genai.embeddings import (
+    _RAW_RESPONSE_BODY,
+    _apply_embedding_response_attributes,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -165,3 +170,22 @@ class TestEmbeddings(TestCase):
 
         self.assertEqual(span.status.status_code, StatusCode.ERROR)
         self.assertEqual(span.status.description, "invalid model")
+
+    def test_malformed_raw_body_logs_debug(self):
+        invocation = types.SimpleNamespace()
+        token = _RAW_RESPONSE_BODY.set("{not valid json")
+        try:
+            with self.assertLogs(
+                "opentelemetry.instrumentation.google_genai.embeddings",
+                level="DEBUG",
+            ) as captured:
+                _apply_embedding_response_attributes(
+                    self.mock_response, invocation
+                )
+        finally:
+            _RAW_RESPONSE_BODY.reset(token)
+
+        self.assertTrue(
+            any("usageMetadata" in message for message in captured.output),
+            captured.output,
+        )

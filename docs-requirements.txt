@@ -1,20 +1,20 @@
-sphinx==9.1.0
+sphinx==9.1.1
 sphinx-rtd-theme==3.1.0
 sphinx-autodoc-typehints==3.13.10
 
 # Required by opentelemetry-util-genai
 fsspec>=2026.9.0
-wrapt>=2.4.1,<3.0.0
+wrapt>=2.5.1,<3.0.0
 
 # Required by instrumentation packages
-agno>=3.1.3
-anthropic>=1.13.0
-boto3>=1.43.113
-claude-agent-sdk>=0.2.165
-google-genai>=2.29.0
-langchain>=1.4.5
+agno>=3.1.9
+anthropic>=2.1.0
+boto3>=1.43.118
+claude-agent-sdk>=0.2.172
+google-genai>=2.32.0
+langchain>=1.4.7
 llama-index-core>=0.14.25
-openai>=3.16.2
-openai-agents>=0.22.3
+openai>=3.37.0
+openai-agents>=0.24.0
 smolagents>=1.26.0
 weaviate-client>=4.23.1

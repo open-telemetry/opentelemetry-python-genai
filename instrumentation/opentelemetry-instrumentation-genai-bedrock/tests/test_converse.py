@@ -27,7 +27,7 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.types import GenericPart, TextPart
+from opentelemetry.util.genai.types import TextPart
 
 
 @pytest.mark.vcr
@@ -326,6 +326,46 @@ def test_extract_converse_request_no_content(tracer_provider) -> None:
         assert invocation.temperature == 0.5
 
 
+def test_extract_converse_request_tuple_arrays(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    messages = ({"role": "user", "content": ({"text": "hello"},)},)
+    system = ({"text": "Be concise"},)
+    tool_config = {
+        "tools": (
+            {
+                "toolSpec": {
+                    "name": "get_weather",
+                    "inputSchema": {"json": {"type": "object"}},
+                }
+            },
+        )
+    }
+
+    with handler.inference(provider="aws.bedrock") as invocation:
+        extract_converse_request(
+            {
+                "messages": messages,
+                "system": system,
+                "toolConfig": tool_config,
+            },
+            invocation,
+        )
+
+        assert invocation.input_messages is not None
+        assert len(invocation.input_messages) == 1
+        input_message = invocation.input_messages[0]
+        assert input_message.role == "user"
+        assert len(input_message.parts) == 1
+        assert isinstance(input_message.parts[0], TextPart)
+        assert input_message.parts[0].content == "hello"
+        assert invocation.system_instruction is not None
+        assert len(invocation.system_instruction) == 1
+        assert isinstance(invocation.system_instruction[0], TextPart)
+        assert invocation.system_instruction[0].content == "Be concise"
+        assert len(invocation.tool_definitions) == 1
+        assert invocation.tool_definitions[0].name == "get_weather"
+
+
 def test_extract_converse_response_no_content(tracer_provider) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
     with handler.inference(provider="aws.bedrock") as invocation:
@@ -420,9 +460,7 @@ def test_extract_content_block_reasoning() -> None:
     part2 = extract_content_block(
         {"reasoningContent": {"redactedContent": b"redacted_bytes"}}
     )
-    assert part2 is not None
-    assert part2.type == "reasoning"
-    assert getattr(part2, "content") == ""
+    assert part2 is None
 
 
 def test_extract_content_block_document() -> None:
@@ -474,7 +512,7 @@ def test_extract_converse_response_reasoning(tracer_provider) -> None:
     assert getattr(out_msg.parts[1], "content") == "The answer is 42."
 
 
-def test_extract_content_block_generic_parts() -> None:
+def test_extract_content_block_unmapped_blocks_dropped() -> None:
     for key in (
         "video",
         "audio",
@@ -485,9 +523,7 @@ def test_extract_content_block_generic_parts() -> None:
         "toolAddition",
         "toolRemoval",
     ):
-        part = extract_content_block({key: {"foo": "bar"}})
-        assert part is not None
-        assert part.type == key
+        assert extract_content_block({key: {"foo": "bar"}}) is None
 
 
 def test_extract_content_block_anthropic_blocks() -> None:
@@ -624,7 +660,7 @@ def test_extract_converse_request_system_instruction(tracer_provider) -> None:
         ]
 
 
-def test_extract_converse_request_system_instruction_generic(
+def test_extract_converse_request_system_instruction_drops_non_text(
     tracer_provider,
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
@@ -642,6 +678,4 @@ def test_extract_converse_request_system_instruction_generic(
 
         assert invocation.system_instruction == [
             TextPart(content="Be concise"),
-            GenericPart(type="guardContent"),
-            GenericPart(type="cachePoint"),
         ]

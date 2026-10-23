@@ -8,24 +8,20 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from os import PathLike
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from anthropic.types import (
-    InputJSONDelta,
     RedactedThinkingBlock,
     ServerToolUseBlock,
     TextBlock,
-    TextDelta,
     ThinkingBlock,
-    ThinkingDelta,
     ToolUseBlock,
 )
 
 from opentelemetry.util.genai.types import (
     BlobPart,
+    CompactionPart,
     FilePart,
-    GenericPart,
     MessagePart,
     Modality,
     ReasoningPart,
@@ -53,6 +49,45 @@ if TYPE_CHECKING:
         ContentBlockParam,
         RawContentBlockDelta,
     )
+    from anthropic.types.beta import (
+        BetaContentBlock,
+        BetaContentBlockParam,
+        BetaRawContentBlockDelta,
+        BetaRedactedThinkingBlock,
+        BetaTextBlock,
+        BetaThinkingBlock,
+        BetaToolUseBlock,
+    )
+    from anthropic.types.beta import (
+        BetaMessage as AnthropicBetaMessage,
+    )
+else:
+    try:
+        import anthropic.types.beta as _beta_types
+    except (ImportError, AttributeError):
+        _beta_types = None
+
+    def _get_beta_type(name: str) -> type:
+        cls = getattr(_beta_types, name, None)
+        return cls if isinstance(cls, type) else type(name, (), {})
+
+    AnthropicBetaMessage = _get_beta_type("BetaMessage")
+    BetaRedactedThinkingBlock = _get_beta_type("BetaRedactedThinkingBlock")
+    BetaTextBlock = _get_beta_type("BetaTextBlock")
+    BetaThinkingBlock = _get_beta_type("BetaThinkingBlock")
+    BetaToolUseBlock = _get_beta_type("BetaToolUseBlock")
+
+
+__all__ = [
+    "AnthropicBetaMessage",
+    "convert_content_to_parts",
+    "create_stream_block_state",
+    "is_anthropic_async_stream",
+    "is_anthropic_stream",
+    "normalize_finish_reason",
+    "stream_block_state_to_part",
+    "update_stream_block_state",
+]
 
 
 def is_anthropic_stream(value: object) -> bool:
@@ -110,16 +145,14 @@ def _extract_base64_blob(
 ) -> MessagePart | None:
     """Convert an Anthropic base64 source to a GenAI message part.
 
-    String data becomes a ``BlobPart``; file-backed data is represented as a
-    ``GenericPart`` without being read.
+    String data becomes a ``BlobPart``; file-backed data is dropped so it is
+    never read.
     """
     if not isinstance(source, dict):
         return None
     source_dict = cast(dict[str, object], source)
     data = source_dict.get("data")
     if not isinstance(data, str):
-        if isinstance(data, PathLike) or callable(getattr(data, "read", None)):
-            return GenericPart(type="blob")
         return None
     decoded = decode_base64(data)
     if decoded is None:
@@ -199,8 +232,9 @@ def _extract_document_source(source: object) -> list[MessagePart]:
         content = source_dict.get("content")
         if isinstance(content, str):
             return [TextPart(content=content)]
+        # Dropped rather than consumed: the SDK still needs to read it.
         if isinstance(content, Iterator):
-            return [GenericPart(type="blob")]
+            return []
         if isinstance(content, Iterable):
             return convert_content_to_parts(
                 cast("Iterable[ContentBlock | ContentBlockParam]", content)
@@ -248,6 +282,21 @@ def _convert_dict_block_to_part(
             id=str(block_id) if block_id is not None else None,
         )
 
+    if block_type == "mcp_tool_use":
+        mcp_tool_call: dict[str, Any] = {
+            "type": block_type,
+            "arguments": block.get("input"),
+        }
+        for key in ("caller", "server_name"):
+            value = block.get(key)
+            if value is not None:
+                mcp_tool_call[key] = value
+        return ServerToolCallPart(
+            name=str(block.get("name", "")),
+            server_tool_call=mcp_tool_call,
+            id=str(block.get("id", "")),
+        )
+
     if block_type == "tool_result":
         return ToolCallResponsePart(
             response=block.get("content"),
@@ -269,6 +318,16 @@ def _convert_dict_block_to_part(
             id=str(tool_use_id) if tool_use_id is not None else None,
         )
 
+    if isinstance(block_type, str) and block_type.endswith("_tool_result"):
+        return ServerToolCallResponsePart(
+            server_tool_call_response={
+                key: value
+                for key, value in block.items()
+                if key != "tool_use_id"
+            },
+            id=str(block.get("tool_use_id", "")),
+        )
+
     if block_type in ("thinking", "redacted_thinking"):
         thinking = block.get("thinking") or block.get("data")
         return ReasoningPart(
@@ -285,20 +344,38 @@ def _convert_dict_block_to_part(
     if block_type in ("audio", "video", "file"):
         return _extract_base64_blob(block.get("source"), str(block_type))
 
+    if block_type == "container_upload":
+        file_id = block.get("file_id")
+        if isinstance(file_id, str):
+            return FilePart(
+                mime_type=None,
+                modality=Modality.DOCUMENT,
+                file_id=file_id,
+            )
+
+    if block_type == "compaction":
+        content = block.get("content")
+        return CompactionPart(
+            content=content if isinstance(content, str) else None
+        )
+
     return None
 
 
 def _convert_content_block_to_part(
-    block: ContentBlock | ContentBlockParam,
+    block: ContentBlock
+    | ContentBlockParam
+    | BetaContentBlock
+    | BetaContentBlockParam,
 ) -> MessagePart | None:
     """Convert an Anthropic content block to a MessagePart."""
     if isinstance(block, Mapping):
         return _convert_dict_block_to_part(cast(Mapping[str, object], block))
 
-    if isinstance(block, TextBlock):
+    if isinstance(block, (TextBlock, BetaTextBlock)):
         return TextPart(content=block.text)
 
-    if isinstance(block, ToolUseBlock):
+    if isinstance(block, (ToolUseBlock, BetaToolUseBlock)):
         return ToolCallRequestPart(
             arguments=block.input, name=block.name, id=block.id
         )
@@ -306,22 +383,53 @@ def _convert_content_block_to_part(
     if isinstance(block, ServerToolUseBlock):
         return _convert_dict_block_to_part(block.model_dump(exclude_none=True))
 
-    if isinstance(block, (ThinkingBlock, RedactedThinkingBlock)):
+    if isinstance(
+        block,
+        (
+            ThinkingBlock,
+            RedactedThinkingBlock,
+            BetaThinkingBlock,
+            BetaRedactedThinkingBlock,
+        ),
+    ):
         content = (
-            block.thinking if isinstance(block, ThinkingBlock) else block.data
+            block.thinking
+            if isinstance(block, (ThinkingBlock, BetaThinkingBlock))
+            else block.data
         )
         return ReasoningPart(content=content)
 
-    if block.type in _SERVER_TOOL_RESULT_TYPES:
+    if getattr(block, "type", None) in _SERVER_TOOL_RESULT_TYPES:
         return _convert_dict_block_to_part(
             cast(Mapping[str, object], block.model_dump(exclude_none=True))
         )
+
+    # Beta-only or unrecognized pydantic block types (e.g. MCP tool blocks,
+    # compaction, container_upload) have no dedicated branch above; dump and
+    # route them through the dict path instead of dropping them. Matches the
+    # explicit branches above in excluding unset fields (e.g. ``caller``)
+    # rather than leaking them into the recorded part.
+    model_dump = getattr(block, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(exclude_none=True)
+        except TypeError:
+            dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return _convert_dict_block_to_part(cast(Mapping[str, Any], dumped))
 
     return None
 
 
 def convert_content_to_parts(
-    content: str | Iterable[ContentBlock | ContentBlockParam] | None,
+    content: str
+    | Iterable[
+        ContentBlock
+        | ContentBlockParam
+        | BetaContentBlock
+        | BetaContentBlockParam
+    ]
+    | None,
 ) -> list[MessagePart]:
     if content is None:
         return []
@@ -340,11 +448,16 @@ def convert_content_to_parts(
     return parts
 
 
-def create_stream_block_state(content_block: ContentBlock) -> StreamBlockState:
-    if isinstance(content_block, TextBlock):
+def create_stream_block_state(
+    content_block: ContentBlock | BetaContentBlock,
+) -> StreamBlockState:
+    if content_block.type == "text":
         return StreamBlockState(type="text", text=content_block.text)
 
-    if isinstance(content_block, (ToolUseBlock, ServerToolUseBlock)):
+    if (
+        content_block.type == "tool_use"
+        or content_block.type == "server_tool_use"
+    ):
         return StreamBlockState(
             type="tool_use",
             tool_id=content_block.id,
@@ -352,27 +465,28 @@ def create_stream_block_state(content_block: ContentBlock) -> StreamBlockState:
             tool_input=content_block.input,
         )
 
-    if isinstance(content_block, ThinkingBlock):
+    if content_block.type == "thinking":
         return StreamBlockState(
             type="thinking", thinking=content_block.thinking
         )
 
-    if isinstance(content_block, RedactedThinkingBlock):
+    if content_block.type == "redacted_thinking":
         return StreamBlockState(type="redacted_thinking")
 
     return StreamBlockState(type=content_block.type)
 
 
 def update_stream_block_state(
-    state: StreamBlockState, delta: RawContentBlockDelta
+    state: StreamBlockState,
+    delta: RawContentBlockDelta | BetaRawContentBlockDelta,
 ) -> None:
-    if isinstance(delta, TextDelta):
+    if delta.type == "text_delta":
         state.type = "text"
         state.text += delta.text
-    elif isinstance(delta, InputJSONDelta):
+    elif delta.type == "input_json_delta":
         state.type = "tool_use"
         state.input_json += delta.partial_json
-    elif isinstance(delta, ThinkingDelta):
+    elif delta.type == "thinking_delta":
         state.type = "thinking"
         state.thinking += delta.thinking
 
