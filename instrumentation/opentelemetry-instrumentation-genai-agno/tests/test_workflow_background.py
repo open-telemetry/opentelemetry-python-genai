@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from agno.agent import Agent
+from agno.models.base import Model
 from agno.models.response import ModelResponse
 from agno.run.workflow import RunStatus
 
@@ -446,6 +448,15 @@ def test_workflow_background_workflow_agent(
     span_exporter,
 ) -> None:
     """Test that background workflow with WorkflowAgent emits workflow and agent spans."""
+    import agno
+    import packaging.version
+
+    if packaging.version.parse(agno.__version__) < packaging.version.parse(
+        "3.0.0"
+    ):
+        pytest.skip(
+            "Agno < 3.0.0 execute_workflow_background does not await _aexecute_workflow_agent"
+        )
     assert WorkflowAgent is not None
     wf_agent = WorkflowAgent(model=MockModel(id="mock-model"))
     workflow = Workflow(name="test-bg-wf-agent", agent=wf_agent)
@@ -482,3 +493,159 @@ def test_workflow_background_workflow_agent(
 
     assert agent_span.parent is not None
     assert agent_span.parent.span_id == wf_span.context.span_id
+
+
+@pytest.mark.skipif(
+    not hasattr(Workflow, "acontinue_run"),
+    reason="Workflow.acontinue_run not available in this agno version",
+)
+def test_acontinue_run_background_without_websocket_has_span(
+    instrument_agno, span_exporter
+) -> None:
+    from agno.run.workflow import WorkflowRunOutput
+
+    workflow = Workflow(name="cont-bg", steps=[], session_id="s")
+    paused = WorkflowRunOutput(
+        workflow_id="wf-1",
+        session_id="s",
+        status=RunStatus.paused,
+        paused_step_index=0,
+        step_requirements=[],
+    )
+
+    async def _run() -> None:
+        with (
+            patch.object(
+                Workflow,
+                "aget_session",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch.object(
+                Workflow,
+                "_acontinue_execute",
+                new_callable=AsyncMock,
+                return_value=paused,
+            ) as execute,
+        ):
+            await workflow.acontinue_run(
+                run_response=paused, input="go", background=True
+            )
+            execute.assert_awaited_once()  # ran inline
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["invoke_workflow cont-bg"]
+
+
+class ToolCallingModel(Model):
+    """Calls run_workflow once, then answers."""
+
+    def _next(self, messages):
+        if any(getattr(m, "role", None) == "tool" for m in messages or []):
+            return ModelResponse(role="assistant", content="done")
+        return ModelResponse(
+            role="assistant",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "run_workflow",
+                        "arguments": json.dumps({"query": "go"}),
+                    },
+                }
+            ],
+        )
+
+    def _parse_provider_response(self, response, **kwargs):
+        return response
+
+    def _parse_provider_response_delta(self, response):
+        return response
+
+    def invoke(self, *args, **kwargs):
+        return self._next(kwargs.get("messages"))
+
+    async def ainvoke(self, *args, **kwargs):
+        return self._next(kwargs.get("messages"))
+
+    def invoke_stream(self, *args, **kwargs):
+        yield self._next(kwargs.get("messages"))
+
+    async def ainvoke_stream(self, *args, **kwargs):
+        yield self._next(kwargs.get("messages"))
+
+
+def _workflow_spans(span_exporter):
+    return [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.attributes.get(GEN_AI_OPERATION_NAME) == "invoke_workflow"
+    ]
+
+
+@pytest.mark.skipif(
+    WorkflowAgent is None,
+    reason="WorkflowAgent not available in this agno version",
+)
+@pytest.mark.parametrize("background", [False, True])
+def test_workflow_agent_tool_call_single_workflow_span(
+    instrument_agno, span_exporter, background
+) -> None:
+    import agno
+    import packaging.version
+
+    if background and packaging.version.parse(
+        agno.__version__
+    ) < packaging.version.parse("3.0.0"):
+        pytest.skip(
+            "Agno < 3.0.0 execute_workflow_background does not await _aexecute_workflow_agent"
+        )
+
+    async def step(step_input) -> str:
+        return "step done"
+
+    workflow = Workflow(
+        name="wf-agent",
+        steps=[step],
+        agent=WorkflowAgent(model=ToolCallingModel(id="m")),
+    )
+
+    async def _run() -> None:
+        await workflow.arun("hi", background=background)
+        await _wait_for_background_tasks()
+
+    asyncio.run(_run())
+
+    names = sorted(s.name for s in span_exporter.get_finished_spans())
+    assert "execute_tool run_workflow" in names
+    assert len(_workflow_spans(span_exporter)) == 1, names
+
+
+@pytest.mark.skipif(
+    WorkflowAgent is None,
+    reason="WorkflowAgent not available in this agno version",
+)
+def test_workflow_agent_tool_call_foreground_stream_single_workflow_span(
+    instrument_agno, span_exporter
+) -> None:
+    async def step(step_input) -> str:
+        return "step done"
+
+    workflow = Workflow(
+        name="wf-agent-stream",
+        steps=[step],
+        agent=WorkflowAgent(model=ToolCallingModel(id="m")),
+    )
+
+    async def _run() -> None:
+        async for _ in workflow.arun("hi", stream=True):
+            pass
+
+    asyncio.run(_run())
+
+    names = sorted(s.name for s in span_exporter.get_finished_spans())
+    assert "execute_tool run_workflow" in names
+    assert len(_workflow_spans(span_exporter)) == 1, names

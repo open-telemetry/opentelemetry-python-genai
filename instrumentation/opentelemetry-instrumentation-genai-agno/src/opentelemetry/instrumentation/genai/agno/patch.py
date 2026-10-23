@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import contextvars
 import functools
 import logging
 import sys
@@ -21,6 +20,7 @@ from collections.abc import (
     Sequence,
 )
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
@@ -86,9 +86,7 @@ _WORKFLOW_CLASS = "Workflow"
 _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
 
-_ACTIVE_FOREGROUND_WORKFLOWS: contextvars.ContextVar[frozenset[int]] = (
-    contextvars.ContextVar("_ACTIVE_FOREGROUND_WORKFLOWS", default=frozenset())
-)
+_ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
 
 # wrapt has no unregister API for post-import hooks; monotonic generations
 # invalidate deferred hooks registered during prior instrumentation cycles.
@@ -257,6 +255,7 @@ def unpatch_agent() -> None:
     global _instrumentation_generation, _is_instrumented
     _instrumentation_generation += 1
     _is_instrumented = False
+    _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     def _safe_unwrap(target: Any, attr: str) -> None:
         try:
@@ -953,6 +952,29 @@ def _is_background_requested(
     return bool(get_argument("background", wrapped, args, kwargs))
 
 
+def _extract_workflow_run_id(
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> str | None:
+    try:
+        bound = bind_arguments(wrapped, args, kwargs)
+    except Exception:
+        bound = kwargs
+    if run_id := bound.get("run_id"):
+        return str(run_id)
+    if run_context := bound.get("run_context"):
+        if run_id := getattr(run_context, "run_id", None):
+            return str(run_id)
+    if run_resp := bound.get("workflow_run_response"):
+        if run_id := getattr(run_resp, "run_id", None):
+            return str(run_id)
+    if run_resp := bound.get("run_response"):
+        if run_id := getattr(run_resp, "run_id", None):
+            return str(run_id)
+    return None
+
+
 def _workflow_arun(
     handler: TelemetryHandler,
     *,
@@ -969,17 +991,29 @@ def _workflow_arun(
         # If background execution is requested, skip wrapping here.
         # Agno returns a pending placeholder immediately and runs execution
         # in a background task via _aexecute / _aexecute_stream.
-        if _is_background_requested(wrapped, args, kwargs):
+        if not is_continue and _is_background_requested(wrapped, args, kwargs):
             return wrapped(*args, **kwargs)
 
-        instance_id = id(instance)
-        token = _ACTIVE_FOREGROUND_WORKFLOWS.set(
-            _ACTIVE_FOREGROUND_WORKFLOWS.get() | {instance_id}
-        )
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if not run_id:
+            # Matches what agno does internally when no run id is set.
+            run_id = str(uuid4())
+            kwargs["run_id"] = run_id
+            if is_continue:
+                try:
+                    bound = bind_arguments(wrapped, args, kwargs)
+                    if run_resp := bound.get("run_response"):
+                        if not getattr(run_resp, "run_id", None):
+                            setattr(run_resp, "run_id", run_id)
+                except Exception:
+                    pass
+
+        _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
+
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
-            _ACTIVE_FOREGROUND_WORKFLOWS.reset(token)
+            _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
             invocation = _start_workflow_invocation(
                 handler,
                 instance,
@@ -993,7 +1027,6 @@ def _workflow_arun(
             raise
 
         if isinstance(result, AsyncIterator):
-            _ACTIVE_FOREGROUND_WORKFLOWS.reset(token)
             invocation = _start_workflow_invocation(
                 handler,
                 instance,
@@ -1007,6 +1040,7 @@ def _workflow_arun(
                 result,
                 invocation,
                 capture_content,
+                on_close=lambda: _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id),
             )
 
         if isinstance(result, Awaitable):
@@ -1022,17 +1056,19 @@ def _workflow_arun(
                     wrapped=wrapped,
                     is_continue=is_continue,
                 )
-                sub_token = _ACTIVE_FOREGROUND_WORKFLOWS.set(
-                    _ACTIVE_FOREGROUND_WORKFLOWS.get() | {instance_id}
-                )
+                discard_on_exit = True
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
                     if isinstance(response, AsyncIterator):
+                        discard_on_exit = False
                         return AsyncAgnoWorkflowStreamWrapper(
                             response,
                             invocation,
                             capture_content,
+                            on_close=lambda: _ACTIVE_WORKFLOW_RUN_IDS.discard(
+                                run_id
+                            ),
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
@@ -1043,9 +1079,9 @@ def _workflow_arun(
                     invocation.fail(error)
                     raise
                 finally:
-                    _ACTIVE_FOREGROUND_WORKFLOWS.reset(sub_token)
+                    if discard_on_exit:
+                        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
 
-            _ACTIVE_FOREGROUND_WORKFLOWS.reset(token)
             return _await_result()
 
         try:
@@ -1062,7 +1098,7 @@ def _workflow_arun(
             invocation.stop()
             return result
         finally:
-            _ACTIVE_FOREGROUND_WORKFLOWS.reset(token)
+            _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
 
     return traced_method
 
@@ -1123,9 +1159,12 @@ def _workflow_aexecute(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        if id(instance) in _ACTIVE_FOREGROUND_WORKFLOWS.get():
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if run_id and run_id in _ACTIVE_WORKFLOW_RUN_IDS:
             return await wrapped(*args, **kwargs)
 
+        if run_id:
+            _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
         invocation = _start_background_workflow_invocation(
             handler, instance, wrapped, args, kwargs, capture_content
         )
@@ -1137,6 +1176,9 @@ def _workflow_aexecute(
         except BaseException as error:
             invocation.fail(error)
             raise
+        finally:
+            if run_id:
+                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
 
     return traced_method
 
@@ -1152,9 +1194,12 @@ def _workflow_aexecute_stream(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        if id(instance) in _ACTIVE_FOREGROUND_WORKFLOWS.get():
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if run_id and run_id in _ACTIVE_WORKFLOW_RUN_IDS:
             return wrapped(*args, **kwargs)
 
+        if run_id:
+            _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
         invocation = _start_background_workflow_invocation(
             handler, instance, wrapped, args, kwargs, capture_content
         )
@@ -1165,9 +1210,18 @@ def _workflow_aexecute_stream(
                     result,
                     invocation,
                     capture_content,
+                    on_close=lambda: (
+                        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+                        if run_id
+                        else None
+                    ),
                 )
+            if run_id:
+                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
             return result
         except BaseException as error:
+            if run_id:
+                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
             invocation.fail(error)
             raise
 
@@ -1185,7 +1239,8 @@ def _workflow_aexecute_workflow_agent(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        if id(instance) in _ACTIVE_FOREGROUND_WORKFLOWS.get():
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if run_id and run_id in _ACTIVE_WORKFLOW_RUN_IDS:
             return wrapped(*args, **kwargs)
 
         bound_args = bind_arguments(wrapped, args, kwargs)
@@ -1213,9 +1268,14 @@ def _workflow_aexecute_workflow_agent(
                     )
                 ]
 
+        if run_id:
+            _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
+
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
+            if run_id:
+                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
             invocation.fail(error)
             raise
 
@@ -1224,20 +1284,32 @@ def _workflow_aexecute_workflow_agent(
                 result,
                 invocation,
                 capture_content,
+                on_close=lambda: (
+                    _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+                    if run_id
+                    else None
+                ),
             )
 
         if isinstance(result, Awaitable):
 
             @functools.wraps(wrapped)
             async def _await_result() -> object:
+                discard_on_exit = True
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
                     if isinstance(response, AsyncIterator):
+                        discard_on_exit = False
                         return AsyncAgnoWorkflowStreamWrapper(
                             response,
                             invocation,
                             capture_content,
+                            on_close=lambda: (
+                                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+                                if run_id
+                                else None
+                            ),
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
@@ -1247,6 +1319,9 @@ def _workflow_aexecute_workflow_agent(
                 except BaseException as error:
                     invocation.fail(error)
                     raise
+                finally:
+                    if discard_on_exit and run_id:
+                        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
 
             return _await_result()
 
@@ -1257,6 +1332,9 @@ def _workflow_aexecute_workflow_agent(
         except BaseException as error:
             invocation.fail(error)
             raise
+        finally:
+            if run_id:
+                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
 
     return traced_method
 
