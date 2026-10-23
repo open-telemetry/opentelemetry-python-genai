@@ -25,9 +25,6 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 - Support RetrievalDocument models on RetrievalInvocation.documents and
   finalize abandoned streams.
   ([#776](https://github.com/open-telemetry/opentelemetry-python-genai/pull/776))
-- Stream wrappers make a suspended invocation current only while a chunk is
-  read or the stream is cleaned up.
-  ([#817](https://github.com/open-telemetry/opentelemetry-python-genai/pull/817))
 - Add `object_to_any_value` and `tool_arguments_to_any_value` to convert
   arbitrary objects (models, dataclasses, datetimes, UUIDs, enums, objects with
   a custom `__str__`) into OpenTelemetry `AnyValue`, dropping values that
@@ -43,6 +40,9 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 ### Changed
 
+- Stream wrappers make a suspended invocation current only while a chunk is
+  read or the stream is cleaned up.
+  ([#817](https://github.com/open-telemetry/opentelemetry-python-genai/pull/817))
 - `ToolInvocation` always records non-string arguments and results as JSON
   strings and converts objects that are not JSON-serializable through
   `object_to_any_value`; previously primitives were recorded as-is and other
@@ -70,7 +70,7 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
   ``TelemetryHandler.fail_llm()``,
   ``TelemetryHandler.start_invoke_local_agent()``,
   ``TelemetryHandler.start_invoke_remote_agent()``, and
-  ``ToolInvocation.should_capture_content_on_span
+  ``ToolInvocation.should_capture_content_on_span()``.
   ([#823](https://github.com/open-telemetry/opentelemetry-python-genai/pull/823))
 
 ### Fixed

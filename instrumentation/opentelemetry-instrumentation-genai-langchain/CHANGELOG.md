@@ -28,8 +28,6 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 - Require `langchain >= 0.3.22`. Context propagation across LangGraph nodes
   requires LangGraph 0.3.18 or later.
   ([#818](https://github.com/open-telemetry/opentelemetry-python-genai/pull/818))
-- Validate LangChain instrumentation through offline public-API tests,
-  including tool-result capture.
   ([#884](https://github.com/open-telemetry/opentelemetry-python-genai/pull/884))
 
 ### Fixed
