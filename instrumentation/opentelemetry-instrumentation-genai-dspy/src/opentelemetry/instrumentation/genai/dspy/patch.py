@@ -1275,27 +1275,16 @@ def _wrap_get_litellm() -> Callable[..., Any]:
     return traced_method
 
 
-def _extract_model_and_batch_inputs(
+def _extract_model(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> tuple[Any, list[str]]:
-    model = args[0] if len(args) > 0 else kwargs.get("model")
-    batch_inputs: object = (
-        args[1]
-        if len(args) > 1
-        else kwargs.get("batch_inputs", kwargs.get("input", []))
-    )
-    if isinstance(batch_inputs, str):
-        return model, [batch_inputs]
-    if is_sequence(batch_inputs):
-        return model, [str(inp) for inp in batch_inputs]
-    return model, []
+) -> Any:
+    return args[0] if len(args) > 0 else kwargs.get("model")
 
 
 def _start_embedding_invocation(
     handler: TelemetryHandler,
     model: Any,
-    batch_inputs: Sequence[str],
     kwargs: Mapping[str, Any],
 ) -> EmbeddingInvocation:
     provider, request_model = resolve_embedder_provider_and_model(model)
@@ -1327,10 +1316,8 @@ def _embedder_compute_embeddings(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        model, batch_inputs = _extract_model_and_batch_inputs(args, kwargs)
-        invocation = _start_embedding_invocation(
-            handler, model, batch_inputs, kwargs
-        )
+        model = _extract_model(args, kwargs)
+        invocation = _start_embedding_invocation(handler, model, kwargs)
         token = _active_embedding_invocation.set(invocation)
         try:
             with invocation:
@@ -1354,10 +1341,8 @@ def _embedder_acompute_embeddings(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        model, batch_inputs = _extract_model_and_batch_inputs(args, kwargs)
-        invocation = _start_embedding_invocation(
-            handler, model, batch_inputs, kwargs
-        )
+        model = _extract_model(args, kwargs)
+        invocation = _start_embedding_invocation(handler, model, kwargs)
         token = _active_embedding_invocation.set(invocation)
         try:
             with invocation:

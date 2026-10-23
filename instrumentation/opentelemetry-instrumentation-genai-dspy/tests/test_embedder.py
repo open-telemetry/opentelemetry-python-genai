@@ -59,13 +59,13 @@ def test_sync_embedder_custom_callable_batch(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.name == "embeddings _custom_embed_fn"
+    assert span.name == "embeddings"
     assert span.status.status_code == StatusCode.UNSET
 
     attrs = span.attributes or {}
     assert attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "embeddings"
-    assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == "dspy"
-    assert attrs.get(GenAI.GEN_AI_REQUEST_MODEL) == "_custom_embed_fn"
+    assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == "unknown"
+    assert GenAI.GEN_AI_REQUEST_MODEL not in attrs
     assert attrs.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 4
     assert isinstance(attrs.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT), int)
 
@@ -133,7 +133,7 @@ async def test_async_embedder_custom_callable(
     assert span.name == "embeddings sentence-transformers/all-MiniLM-L6-v2"
     attrs = span.attributes or {}
     assert attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "embeddings"
-    assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == "dspy"
+    assert attrs.get(GenAI.GEN_AI_PROVIDER_NAME) == "unknown"
     assert (
         attrs.get(GenAI.GEN_AI_REQUEST_MODEL)
         == "sentence-transformers/all-MiniLM-L6-v2"
@@ -507,3 +507,39 @@ def test_nested_embedding_invocation_suppression(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].name == "embeddings parent_model"
+
+
+class _SentenceTransformerLike:
+    """Like SentenceTransformer: no `model_name` attribute."""
+
+    def encode(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
+        return [[0.1, 0.2] for _ in texts]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(_SentenceTransformerLike().encode, id="bound_method"),
+        pytest.param(_custom_embed_fn, id="function"),
+        pytest.param(lambda texts, **kw: [[0.1] for _ in texts], id="lambda"),
+    ],
+)
+def test_callable_without_model_name_has_no_request_model(
+    model: Any,
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        dspy.Embedder(model, caching=False)(["hello"])
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == "embeddings"
+    assert GenAI.GEN_AI_REQUEST_MODEL not in (span.attributes or {})
+    assert (span.attributes or {}).get(GenAI.GEN_AI_PROVIDER_NAME) == "unknown"

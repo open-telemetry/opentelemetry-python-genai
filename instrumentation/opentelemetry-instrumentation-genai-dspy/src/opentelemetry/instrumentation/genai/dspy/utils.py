@@ -168,10 +168,7 @@ def resolve_embedder_provider_and_model(
     model_or_instance: Any,
 ) -> tuple[str, str | None]:
     """Resolve (gen_ai.provider.name, gen_ai.request.model) from a DSPy Embedder or model."""
-    if hasattr(model_or_instance, "model"):
-        model = getattr(model_or_instance, "model", None)
-    else:
-        model = model_or_instance
+    model = model_or_instance
     if isinstance(model, str):
         provider_raw, model_name = parse_provider_and_model(model)
         if provider_raw:
@@ -183,19 +180,16 @@ def resolve_embedder_provider_and_model(
         for prefix, provider in _MODEL_PREFIX_TO_PROVIDER:
             if model_lower.startswith(prefix):
                 return provider, model_name
-        return "dspy", model_name
+        return "unknown", model_name
 
     if callable(model):
         bound_self = getattr(model, "__self__", None)
-        model_name_attr = (
-            getattr(model, "model_name", None)
-            or getattr(bound_self, "model_name", None)
-            or getattr(model, "__name__", None)
-            or type(model).__name__
+        model_name_attr = getattr(model, "model_name", None) or getattr(
+            bound_self, "model_name", None
         )
-        return "dspy", str(model_name_attr) if model_name_attr else None
+        return "unknown", str(model_name_attr) if model_name_attr else None
 
-    return "dspy", None
+    return "unknown", None
 
 
 def extract_server_address_and_port(
