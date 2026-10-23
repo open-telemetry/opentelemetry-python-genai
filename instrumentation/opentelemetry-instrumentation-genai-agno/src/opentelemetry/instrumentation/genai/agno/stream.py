@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from opentelemetry.instrumentation.genai.agno.utils import (
@@ -45,7 +46,10 @@ class _AgentStreamMixin:
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
-        if session_id and not self._self_agent_invocation.conversation_id:
+        if (
+            session_id is not None
+            and not self._self_agent_invocation.conversation_id
+        ):
             self._self_agent_invocation.conversation_id = str(session_id)
 
         metrics = getattr(chunk, "metrics", None)
@@ -185,10 +189,14 @@ class _WorkflowStreamMixin:
     _self_content_parts: list[str]
     _self_completed_content: str | None
     _self_finish_reason: str
+    _self_on_close: Callable[[], None] | None
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
-        if session_id and not self._self_workflow_invocation.conversation_id:
+        if (
+            session_id is not None
+            and not self._self_workflow_invocation.conversation_id
+        ):
             self._self_workflow_invocation.conversation_id = str(session_id)
 
         event_name = str(getattr(chunk, "event", ""))
@@ -235,30 +243,42 @@ class _WorkflowStreamMixin:
                     self._self_content_parts.append(content)
 
     def _finalize(self, error: BaseException | None = None) -> None:
-        if self._self_capture_content:
-            if self._self_completed_content is not None:
-                final_content = self._self_completed_content
-            elif self._self_content_parts:
-                final_content = self._self_content_parts[-1]
-            else:
-                final_content = ""
+        try:
+            if self._self_capture_content:
+                if self._self_completed_content is not None:
+                    final_content = self._self_completed_content
+                elif self._self_content_parts:
+                    final_content = self._self_content_parts[-1]
+                else:
+                    final_content = ""
 
-            if final_content:
-                finish_reason = (
-                    "error" if error is not None else self._self_finish_reason
-                )
-                self._self_workflow_invocation.output_messages = [
-                    OutputMessage(
-                        role="assistant",
-                        parts=[TextPart(content=final_content)],
-                        finish_reason=finish_reason,
+                if final_content:
+                    finish_reason = (
+                        "error"
+                        if error is not None
+                        else self._self_finish_reason
                     )
-                ]
+                    self._self_workflow_invocation.output_messages = [
+                        OutputMessage(
+                            role="assistant",
+                            parts=[TextPart(content=final_content)],
+                            finish_reason=finish_reason,
+                        )
+                    ]
 
-        if error is not None:
-            self._self_workflow_invocation.fail(error)
-        else:
-            self._self_workflow_invocation.stop()
+            if error is not None:
+                self._self_workflow_invocation.fail(error)
+            else:
+                self._self_workflow_invocation.stop()
+        finally:
+            if (
+                hasattr(self, "_self_on_close")
+                and self._self_on_close is not None
+            ):
+                try:
+                    self._self_on_close()
+                finally:
+                    self._self_on_close = None
 
     def _on_stream_end(self) -> None:
         self._finalize()
@@ -275,6 +295,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         stream: Any,
         invocation: WorkflowInvocation,
         capture_content: bool,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_workflow_invocation = invocation
@@ -282,6 +303,7 @@ class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_on_close = on_close
 
 
 class AsyncAgnoWorkflowStreamWrapper(
@@ -294,6 +316,7 @@ class AsyncAgnoWorkflowStreamWrapper(
         stream: Any,
         invocation: WorkflowInvocation,
         capture_content: bool,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream)
         self._self_workflow_invocation = invocation
@@ -301,3 +324,4 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_content_parts = []
         self._self_completed_content = None
         self._self_finish_reason = "stop"
+        self._self_on_close = on_close

@@ -1120,7 +1120,7 @@ def test_team_continue_run_dict_requirement(
             "Team.continue_run is not supported in this version of agno"
         )
     try:
-        from agno.run.requirement import RunRequirement  # noqa: F401
+        from agno.run.requirement import RunRequirement
     except ImportError:
         pytest.skip("RunRequirement is not supported in this version of agno")
 
@@ -1133,6 +1133,18 @@ def test_team_continue_run_dict_requirement(
         },
         "external_execution_result": "Delivered",
     }
+    if (
+        getattr(
+            getattr(RunRequirement.from_dict(req), "tool_execution", None),
+            "result",
+            None,
+        )
+        != "Delivered"
+    ):
+        pytest.skip(
+            "RunRequirement.from_dict does not support external_execution_result in this version"
+        )
+
     team = Team(name="t", members=[], model=MockModel(id="mock-model"))
     with patch(
         "agno.team._run.continue_run_dispatch",
@@ -2283,6 +2295,13 @@ def test_agent_continue_run_with_user_input_schema(
         tool_name="collect_info",
         user_input_schema=[field],
     )
+    target_mod = getattr(
+        agno.agent, "_run", getattr(agno.agent, "agent", None)
+    )
+    if not hasattr(target_mod, "continue_run_dispatch"):
+        pytest.skip(
+            "continue_run_dispatch is not supported in this version of agno"
+        )
     target = (
         "agno.agent._run.continue_run_dispatch"
         if hasattr(agno.agent, "_run")
@@ -2328,6 +2347,13 @@ def test_agent_continue_run_with_user_feedback_schema(
         tool_name="request_feedback",
         user_feedback_schema=[question],
     )
+    target_mod = getattr(
+        agno.agent, "_run", getattr(agno.agent, "agent", None)
+    )
+    if not hasattr(target_mod, "continue_run_dispatch"):
+        pytest.skip(
+            "continue_run_dispatch is not supported in this version of agno"
+        )
     target = (
         "agno.agent._run.continue_run_dispatch"
         if hasattr(agno.agent, "_run")
