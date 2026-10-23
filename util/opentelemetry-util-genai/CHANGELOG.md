@@ -15,6 +15,75 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Add SuppressedInferenceInvocation to deduplicate nested inference operations
+  and propagate context attributes.
+  ([#765](https://github.com/open-telemetry/opentelemetry-python-genai/pull/765))
+- Support RetrievalDocument models on RetrievalInvocation.documents and
+  finalize abandoned streams.
+  ([#776](https://github.com/open-telemetry/opentelemetry-python-genai/pull/776))
+- Stream wrappers make a suspended invocation current only while a chunk is
+  read or the stream is cleaned up.
+  ([#817](https://github.com/open-telemetry/opentelemetry-python-genai/pull/817))
+- Add `object_to_any_value` and `tool_arguments_to_any_value` to convert
+  arbitrary objects (models, dataclasses, datetimes, UUIDs, enums, objects with
+  a custom `__str__`) into OpenTelemetry `AnyValue`, dropping values that
+  cannot be converted. For example, `object_to_any_value({"when": date(2026, 1,
+  1), "cb": print})` returns `{"when": "2026-01-01"}`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+- Add context data propagation and nested operation suppression across GenAI
+  invocations.
+  ([#859](https://github.com/open-telemetry/opentelemetry-python-genai/pull/859))
+- Add IteratorCapture to observe nested request iterators lazily and expose
+  snapshots for telemetry extraction.
+  ([#873](https://github.com/open-telemetry/opentelemetry-python-genai/pull/873))
+
+### Changed
+
+- `ToolInvocation` always records non-string arguments and results as JSON
+  strings and converts objects that are not JSON-serializable through
+  `object_to_any_value`; previously primitives were recorded as-is and other
+  objects through `str()`, e.g. `arguments = 42` was recorded as `42`, now
+  `"42"`. Prompt variables set to `None` are no longer recorded; previously
+  they were recorded as `"null"`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+- Raise the minimum `fsspec` version in the `upload` extra to `2026.6.0` to
+  pick up a security fix.
+  ([#961](https://github.com/open-telemetry/opentelemetry-python-genai/pull/961))
+
+### Deprecated
+
+- Deprecate `GenericPart`; instrumentations should use a specific part type or
+  drop the content.
+  ([#936](https://github.com/open-telemetry/opentelemetry-python-genai/pull/936))
+
+### Removed
+
+- Remove the deprecated GenAI utility callables ``should_emit_event()``,
+  ``should_capture_content_on_spans()``,
+  ``TelemetryHandler.start_inference()``, ``TelemetryHandler.start_llm()``,
+  ``TelemetryHandler.start_embedding()``, ``TelemetryHandler.start_tool()``,
+  ``TelemetryHandler.start_workflow()``, ``TelemetryHandler.stop_llm()``,
+  ``TelemetryHandler.fail_llm()``,
+  ``TelemetryHandler.start_invoke_local_agent()``,
+  ``TelemetryHandler.start_invoke_remote_agent()``, and
+  ``ToolInvocation.should_capture_content_on_span
+  ([#823](https://github.com/open-telemetry/opentelemetry-python-genai/pull/823))
+
+### Fixed
+
+- Treat a queue size below 1 for
+  `OTEL_INSTRUMENTATION_GENAI_UPLOAD_MAX_QUEUE_SIZE` as invalid and fall back
+  to the default instead of disabling uploads.
+  ([#889](https://github.com/open-telemetry/opentelemetry-python-genai/pull/889))
+- Log a warning instead of falling back silently to a no-op hook when
+  `OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK` names a hook that cannot be
+  loaded.
+  ([#891](https://github.com/open-telemetry/opentelemetry-python-genai/pull/891))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

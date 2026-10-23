@@ -1,1 +1,0 @@
-Record `gen_ai.response.finish_reasons` on `dspy.ReAct` and `dspy.ReActV2` agent spans regardless of content capture.
