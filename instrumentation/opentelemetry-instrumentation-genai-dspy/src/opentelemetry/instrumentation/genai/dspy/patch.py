@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import sys
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from contextvars import ContextVar
 from copy import copy, deepcopy
 from dataclasses import dataclass
@@ -17,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 from wrapt import (
     BoundFunctionWrapper,
     FunctionWrapper,
+    ObjectProxy,
     apply_patch,
     resolve_path,
 )
@@ -26,12 +32,17 @@ from opentelemetry.instrumentation.genai.dspy.utils import (
     LMRequestProtocol,
     _get_field,
     apply_usage_to_invocation,
+    extract_embedding_dimension,
     extract_input_content,
     extract_lm_input_messages,
     extract_lm_output_messages,
     extract_lm_request_config,
     extract_output_content,
+    extract_server_address_and_port,
+    is_mapping,
+    is_sequence,
     prepare_tool_definitions,
+    resolve_embedder_provider_and_model,
     resolve_provider,
     resolve_request_model,
     safe_float,
@@ -41,6 +52,7 @@ from opentelemetry.instrumentation.genai.dspy.utils import (
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    EmbeddingInvocation,
     InferenceInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
@@ -67,6 +79,11 @@ _REACT_V2_CLASS = "ReActV2"
 _EMBEDDINGS_MODULE = "dspy.retrievers.embeddings"
 _EMBEDDINGS_WITH_SCORES_CLASS = "EmbeddingsWithScores"
 
+_EMBEDDING_MODULE = "dspy.clients.embedding"
+_COMPUTE_EMBEDDINGS = "_compute_embeddings"
+_ACOMPUTE_EMBEDDINGS = "_acompute_embeddings"
+_GET_LITELLM = "_get_litellm"
+
 
 @dataclass(slots=True)
 class _LMHistoryMetadata:
@@ -78,6 +95,9 @@ class _LMHistoryMetadata:
 
 _in_retrieval_invocation: ContextVar[bool] = ContextVar(
     "_in_retrieval_invocation", default=False
+)
+_active_embedding_invocation: ContextVar[EmbeddingInvocation | None] = (
+    ContextVar("_active_embedding_invocation", default=None)
 )
 _current_lm_history_entry: ContextVar[_LMHistoryMetadata | None] = ContextVar(
     "_current_lm_history_entry", default=None
@@ -96,9 +116,11 @@ if TYPE_CHECKING:
     _FinishReasonFn = Callable[[Prediction], str | None]
     _BoundFunctionWrapper = BoundFunctionWrapper[Any, Any]
     _FunctionWrapper = FunctionWrapper[Any, Any]
+    _ObjectProxy = ObjectProxy[Any]
 else:
     _BoundFunctionWrapper = BoundFunctionWrapper
     _FunctionWrapper = FunctionWrapper
+    _ObjectProxy = ObjectProxy
 
 
 class _CopyableBoundFunctionWrapper(_BoundFunctionWrapper):
@@ -299,6 +321,26 @@ def patch_dspy(handler: TelemetryHandler) -> None:
                 ),
             )
 
+    try:
+        import_module(_EMBEDDING_MODULE)
+        _wrap_function(
+            _EMBEDDING_MODULE,
+            _COMPUTE_EMBEDDINGS,
+            _embedder_compute_embeddings(handler),
+        )
+        _wrap_function(
+            _EMBEDDING_MODULE,
+            _ACOMPUTE_EMBEDDINGS,
+            _embedder_acompute_embeddings(handler),
+        )
+        _wrap_function(
+            _EMBEDDING_MODULE,
+            _GET_LITELLM,
+            _wrap_get_litellm(),
+        )
+    except (ImportError, AttributeError):
+        pass
+
     if hasattr(dspy, "LM"):
         lm_module = dspy.LM.__module__
         lm_name = dspy.LM.__name__
@@ -372,6 +414,11 @@ def unpatch_dspy() -> None:
         unwrap(react_v2_cls, "forward")
         unwrap(react_v2_cls, "aforward")
 
+    embedding_mod = sys.modules.get(_EMBEDDING_MODULE)
+    if embedding_mod is not None:
+        unwrap(embedding_mod, _COMPUTE_EMBEDDINGS)
+        unwrap(embedding_mod, _ACOMPUTE_EMBEDDINGS)
+        unwrap(embedding_mod, _GET_LITELLM)
     if hasattr(dspy, "LM"):
         unwrap(dspy.LM, "__call__")
         unwrap(dspy.LM, "acall")
@@ -1142,5 +1189,169 @@ def _retrieve_forward(
                 return result
         finally:
             _in_retrieval_invocation.reset(token)
+
+    return traced_method
+
+
+def _extract_encoding_formats(
+    merged_kwargs: Mapping[str, object],
+) -> list[str] | None:
+    encoding_format = merged_kwargs.get("encoding_format")
+    if encoding_format is None:
+        encoding_format = merged_kwargs.get("encoding_formats")
+    if isinstance(encoding_format, str) and encoding_format:
+        return [encoding_format]
+    if is_sequence(encoding_format):
+        formats = [str(fmt) for fmt in encoding_format if fmt is not None]
+        return formats or None
+    return None
+
+
+def _record_litellm_response(
+    invocation: EmbeddingInvocation, response: Any
+) -> None:
+    if response is None:
+        return
+
+    model: object = getattr(response, "model", None)
+    if model is None and is_mapping(response):
+        model = response.get("model")
+    if isinstance(model, str) and model:
+        invocation.response_model_name = model
+
+    usage: object = getattr(response, "usage", None)
+    if usage is None and is_mapping(response):
+        usage = response.get("usage")
+
+    if usage is not None:
+        prompt_tokens: object = getattr(usage, "prompt_tokens", None)
+        if prompt_tokens is None and is_mapping(usage):
+            prompt_tokens = usage.get("prompt_tokens")
+        if prompt_tokens is None:
+            prompt_tokens = getattr(usage, "input_tokens", None)
+            if prompt_tokens is None and is_mapping(usage):
+                prompt_tokens = usage.get("input_tokens")
+
+        tokens_int = safe_int(prompt_tokens)
+        if tokens_int is not None:
+            invocation.input_tokens = tokens_int
+
+
+class _LiteLLMProxy(_ObjectProxy):
+    """Proxy around LiteLLM module to capture embedding responses."""
+
+    def __init__(
+        self,
+        wrapped: Any,
+        invocation: EmbeddingInvocation,
+    ) -> None:
+        super().__init__(wrapped)
+        self._self_invocation = invocation
+
+    def embedding(self, *args: Any, **kwargs: Any) -> Any:
+        response = self.__wrapped__.embedding(*args, **kwargs)
+        _record_litellm_response(self._self_invocation, response)
+        return response
+
+    async def aembedding(self, *args: Any, **kwargs: Any) -> Any:
+        response = await self.__wrapped__.aembedding(*args, **kwargs)
+        _record_litellm_response(self._self_invocation, response)
+        return response
+
+
+def _wrap_get_litellm() -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        litellm_module = wrapped(*args, **kwargs)
+        inv = _active_embedding_invocation.get()
+        if inv is not None:
+            return _LiteLLMProxy(litellm_module, inv)
+        return litellm_module
+
+    return traced_method
+
+
+def _extract_model(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    return args[0] if len(args) > 0 else kwargs.get("model")
+
+
+def _start_embedding_invocation(
+    handler: TelemetryHandler,
+    model: Any,
+    kwargs: Mapping[str, Any],
+) -> EmbeddingInvocation:
+    provider, request_model = resolve_embedder_provider_and_model(model)
+
+    api_base = kwargs.get("api_base")
+    if api_base is None:
+        api_base = kwargs.get("base_url")
+    server_address, server_port = extract_server_address_and_port(api_base)
+
+    invocation = handler.embedding(
+        provider=provider,
+        request_model=request_model,
+        server_address=server_address,
+        server_port=server_port,
+    )
+
+    invocation.dimension_count = safe_int(kwargs.get("dimensions"))
+    invocation.encoding_formats = _extract_encoding_formats(kwargs)
+
+    return invocation
+
+
+def _embedder_compute_embeddings(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        model = _extract_model(args, kwargs)
+        invocation = _start_embedding_invocation(handler, model, kwargs)
+        token = _active_embedding_invocation.set(invocation)
+        try:
+            with invocation:
+                result = wrapped(*args, **kwargs)
+                invocation.dimension_count = extract_embedding_dimension(
+                    result
+                )
+                return result
+        finally:
+            _active_embedding_invocation.reset(token)
+
+    return traced_method
+
+
+def _embedder_acompute_embeddings(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        model = _extract_model(args, kwargs)
+        invocation = _start_embedding_invocation(handler, model, kwargs)
+        token = _active_embedding_invocation.set(invocation)
+        try:
+            with invocation:
+                result = await wrapped(*args, **kwargs)
+                invocation.dimension_count = extract_embedding_dimension(
+                    result
+                )
+                return result
+        finally:
+            _active_embedding_invocation.reset(token)
 
     return traced_method
