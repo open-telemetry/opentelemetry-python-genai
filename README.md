@@ -13,18 +13,18 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 
 | Instrumentation | Supported Package | Version |
 | --------------- | ----------------- | ------- |
-| [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.0.0, < 4 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-agno/) |
-| [opentelemetry-instrumentation-genai-anthropic](./instrumentation/opentelemetry-instrumentation-genai-anthropic) | anthropic >= 0.51.0, < 3 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-anthropic/) |
-| [opentelemetry-instrumentation-genai-bedrock](./instrumentation/opentelemetry-instrumentation-genai-bedrock) | boto3 >= 1.40.46, < 2 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-bedrock/) |
-| [opentelemetry-instrumentation-genai-dspy](./instrumentation/opentelemetry-instrumentation-genai-dspy) | dspy >= 3.3.0, < 4 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-dspy/) |
-| [opentelemetry-instrumentation-genai-langchain](./instrumentation/opentelemetry-instrumentation-genai-langchain) | langchain >= 0.3.22, < 2 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-langchain/) |
-| [opentelemetry-instrumentation-genai-llama-index](./instrumentation/opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19, < 1, llama-index-instrumentation >= 0.4.3, < 1, llama-index-workflows >= 2.17.1, != 2.24.0, < 3 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-llama-index/) |
-| [opentelemetry-instrumentation-genai-openai](./instrumentation/opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0, < 4 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai/) |
-| [opentelemetry-instrumentation-genai-openai-agents](./instrumentation/opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3, < 1 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai-agents/) |
-| [opentelemetry-instrumentation-genai-portkey](./instrumentation/opentelemetry-instrumentation-genai-portkey) | portkey-ai >= 1.0.0, < 3 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-portkey/) |
-| [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20, < 1 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwen-agent/) |
+| [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.3.9, < 4 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-agno/) |
+| [opentelemetry-instrumentation-genai-anthropic](./instrumentation/opentelemetry-instrumentation-genai-anthropic) | anthropic >= 0.51.0, < 3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-anthropic/) |
+| [opentelemetry-instrumentation-genai-bedrock](./instrumentation/opentelemetry-instrumentation-genai-bedrock) | boto3 >= 1.40.46, < 2 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-bedrock/) |
+| [opentelemetry-instrumentation-genai-dspy](./instrumentation/opentelemetry-instrumentation-genai-dspy) | dspy >= 3.3.0, < 4 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-dspy/) |
+| [opentelemetry-instrumentation-genai-langchain](./instrumentation/opentelemetry-instrumentation-genai-langchain) | langchain >= 0.3.22, < 2 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-langchain/) |
+| [opentelemetry-instrumentation-genai-llama-index](./instrumentation/opentelemetry-instrumentation-genai-llama-index) | llama-index-core >= 0.14.19, < 1, llama-index-instrumentation >= 0.4.3, < 1, llama-index-workflows >= 2.17.1, != 2.24.0, < 3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-llama-index/) |
+| [opentelemetry-instrumentation-genai-openai](./instrumentation/opentelemetry-instrumentation-genai-openai) | openai >= 1.26.0, < 4 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai/) |
+| [opentelemetry-instrumentation-genai-openai-agents](./instrumentation/opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3, < 1 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai-agents/) |
+| [opentelemetry-instrumentation-genai-portkey](./instrumentation/opentelemetry-instrumentation-genai-portkey) | portkey-ai >= 1.0.0, < 3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-portkey/) |
+| [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20, < 1 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwen-agent/) |
 | [opentelemetry-instrumentation-genai-smolagents](./instrumentation/opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0, < 2 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-smolagents/) |
-| [opentelemetry-instrumentation-google-genai](./instrumentation/opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-google-genai/) |
+| [opentelemetry-instrumentation-google-genai](./instrumentation/opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-google-genai/) |
 
 ## Unreleased Instrumentations
 
