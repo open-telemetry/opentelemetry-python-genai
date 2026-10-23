@@ -1,0 +1,1 @@
+Do not invoke completion hook for local agent and workflow invocations.

@@ -153,7 +153,7 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
             "s3://bucket/inputs.json",
         )
 
-    def test_workflow_hook_called_on_stop_with_messages(self):
+    def test_workflow_hook_not_called_on_stop(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
 
@@ -169,21 +169,14 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         ]
 
         invocation = handler.workflow(name="my-workflow")
+        self.assertFalse(invocation.should_capture_content)
         invocation.input_messages = input_messages
         invocation.output_messages = output_messages
         invocation.stop()
 
-        hook.on_completion.assert_called_once()
-        kwargs = hook.on_completion.call_args.kwargs
-        self.assertEqual(kwargs["inputs"], input_messages)
-        self.assertEqual(kwargs["outputs"], output_messages)
-        self.assertEqual(kwargs["system_instruction"], [])
-        # Workflows don't carry tool_definitions — must be None, not [].
-        self.assertIsNone(kwargs["tool_definitions"])
-        self.assertIsNotNone(kwargs["span"])
-        self.assertIsNone(kwargs["log_record"])
+        hook.on_completion.assert_not_called()
 
-    def test_workflow_hook_called_on_fail(self):
+    def test_workflow_hook_not_called_on_fail(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
 
@@ -193,22 +186,9 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         ]
         invocation.fail(RuntimeError("workflow failed"))
 
-        hook.on_completion.assert_called_once()
-        kwargs = hook.on_completion.call_args.kwargs
-        self.assertIsNotNone(kwargs["span"])
+        hook.on_completion.assert_not_called()
 
-    def test_workflow_hook_called_with_empty_messages_when_none_set(self):
-        hook = MagicMock()
-        handler = self._make_handler(hook)
-
-        handler.workflow(name="my-workflow").stop()
-
-        hook.on_completion.assert_called_once()
-        kwargs = hook.on_completion.call_args.kwargs
-        self.assertEqual(kwargs["inputs"], [])
-        self.assertEqual(kwargs["outputs"], [])
-
-    def test_local_agent_hook_called_on_stop_with_messages(self):
+    def test_local_agent_hook_not_called_on_stop(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
 
@@ -234,22 +214,16 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         invocation = handler.invoke_local_agent(
             request_model="gpt-4", agent_name="Math Tutor"
         )
+        self.assertFalse(invocation.should_capture_content)
         invocation.input_messages = input_messages
         invocation.output_messages = output_messages
         invocation.system_instruction = system_instruction
         invocation.tool_definitions = tool_definitions
         invocation.stop()
 
-        hook.on_completion.assert_called_once()
-        kwargs = hook.on_completion.call_args.kwargs
-        self.assertEqual(kwargs["inputs"], input_messages)
-        self.assertEqual(kwargs["outputs"], output_messages)
-        self.assertEqual(kwargs["system_instruction"], system_instruction)
-        self.assertEqual(kwargs["tool_definitions"], tool_definitions)
-        self.assertIsNotNone(kwargs["span"])
-        self.assertIsNone(kwargs.get("log_record"))
+        hook.on_completion.assert_not_called()
 
-    def test_local_agent_hook_called_on_fail(self):
+    def test_local_agent_hook_not_called_on_fail(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
 
@@ -259,9 +233,34 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         ]
         invocation.fail(RuntimeError("agent failed"))
 
-        hook.on_completion.assert_called_once()
-        kwargs = hook.on_completion.call_args.kwargs
-        self.assertIsNotNone(kwargs["span"])
+        hook.on_completion.assert_not_called()
+
+    def test_retrieval_hook_not_called(self):
+        hook = MagicMock()
+        handler = self._make_handler(hook)
+
+        invocation = handler.retrieval(data_source_id="ds-1")
+        self.assertFalse(invocation.should_capture_content)
+        invocation.query_text = "search query"
+        invocation.stop()
+
+        failed_inv = handler.retrieval(data_source_id="ds-1")
+        failed_inv.fail(RuntimeError("retrieval failed"))
+
+        hook.on_completion.assert_not_called()
+
+    def test_embedding_and_tool_hook_not_called(self):
+        hook = MagicMock()
+        handler = self._make_handler(hook)
+
+        emb_inv = handler.embedding("openai", request_model="text-embedding-3")
+        self.assertFalse(emb_inv.should_capture_content)
+        emb_inv.stop()
+
+        tool_inv = handler.tool("get_weather")
+        tool_inv.stop()
+
+        hook.on_completion.assert_not_called()
 
     def test_remote_agent_hook_called_on_stop_with_messages(self):
         hook = MagicMock()
@@ -316,18 +315,19 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         kwargs = hook.on_completion.call_args.kwargs
         self.assertIsNotNone(kwargs["span"])
 
-    def test_agent_hook_called_with_empty_messages_when_none_set(self):
+    def test_remote_agent_hook_called_with_empty_messages_when_none_set(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
 
         handler.invoke_local_agent().stop()
         handler.invoke_remote_agent("openai").stop()
 
-        for call in hook.on_completion.call_args_list:
-            self.assertEqual(call.kwargs["inputs"], [])
-            self.assertEqual(call.kwargs["outputs"], [])
-            self.assertEqual(call.kwargs["system_instruction"], [])
-            self.assertIsNone(call.kwargs["tool_definitions"])
+        hook.on_completion.assert_called_once()
+        kwargs = hook.on_completion.call_args.kwargs
+        self.assertEqual(kwargs["inputs"], [])
+        self.assertEqual(kwargs["outputs"], [])
+        self.assertEqual(kwargs["system_instruction"], [])
+        self.assertIsNone(kwargs["tool_definitions"])
 
     def test_agent_hook_not_called_when_not_set(self):
         # No hook — stop should not raise

@@ -18,7 +18,10 @@ from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
 )
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.completion_hook import (
+    CompletionHook,
+    _NoOpCompletionHook,
+)
 from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
@@ -83,7 +86,7 @@ class WorkflowInvocation(GenAIInvocation):
             tracer,
             instruments,
             logger,
-            completion_hook,
+            _NoOpCompletionHook(),
             operation_name=_operation_name,
             span_name=f"{_operation_name} {name}" if name else _operation_name,
             span_kind=SpanKind.INTERNAL,
@@ -177,10 +180,6 @@ class WorkflowInvocation(GenAIInvocation):
             attributes[GenAI.GEN_AI_WORKFLOW_NAME] = self._data.workflow_name
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
-        self._call_completion_hook(
-            inputs=self.input_messages,
-            outputs=self.output_messages,
-        )
         self._record_metrics()
 
     def _record_metrics(self) -> None:

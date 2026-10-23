@@ -90,7 +90,7 @@ class EmbeddingInvocation(GenAIInvocation):
             tracer,
             instruments,
             logger,
-            completion_hook,
+            _NoOpCompletionHook(),
             operation_name=_operation_name,
             span_name=f"{_operation_name} {request_model}"
             if request_model
