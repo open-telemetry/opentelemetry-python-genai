@@ -587,6 +587,54 @@ async def test_runnable_stream_close(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("consumed", [1, 2])
+async def test_agent_stream_close(
+    clients, span_exporter, tracer_provider, asynchronous: bool, consumed: int
+) -> None:
+    agents = pytest.importorskip("langchain.agents")
+    create_agent = getattr(agents, "create_agent", None)
+    if create_agent is None:
+        pytest.skip("create_agent requires a newer langchain version")
+    agent = create_agent(_model(clients), tools=[], name="cleanup_agent")
+    with tracer_provider.get_tracer("test").start_as_current_span(
+        "request"
+    ) as root:
+        before = context.get_current()
+        stream = (
+            agent.astream(
+                {"messages": [("user", "hello")]}, stream_mode="values"
+            )
+            if asynchronous
+            else agent.stream(
+                {"messages": [("user", "hello")]}, stream_mode="values"
+            )
+        )
+        for _ in range(consumed):
+            if asynchronous:
+                assert await anext(stream)
+            else:
+                assert next(stream)
+            assert context.get_current() is before
+        if asynchronous:
+            await stream.aclose()
+        else:
+            stream.close()
+        assert context.get_current() is before
+    (agent_span,) = [
+        span
+        for span in _spans(span_exporter, _LC_SCOPE)
+        if span.name == "invoke_agent cleanup_agent"
+    ]
+    assert agent_span.parent == root.get_span_context()
+    assert agent_span.status.status_code == StatusCode.ERROR
+    assert (
+        agent_span.attributes[error_attributes.ERROR_TYPE] == "GeneratorExit"
+    )
+    _assert_no_runs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("composite", ["sequence", "parallel"])
 async def test_composite_stream_attaches_each_context_once(
     clients, span_exporter, monkeypatch, asynchronous: bool, composite: str

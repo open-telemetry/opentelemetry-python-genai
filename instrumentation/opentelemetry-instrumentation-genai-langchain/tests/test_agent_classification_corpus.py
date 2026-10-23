@@ -230,6 +230,38 @@ def test_stream_close_after_first_item_withdraws_announcement() -> None:
     assert agent_context._pending.get() == ()
 
 
+@pytest.mark.parametrize("consumed", [1, 2])
+@pytest.mark.parametrize("ending", ["close", "error", "exhausted"])
+def test_stream_cleanup_closes_source_and_withdraws_announcement(
+    consumed: int, ending: str
+) -> None:
+    closed = []
+
+    def source():
+        try:
+            yield from range(3)
+        finally:
+            closed.append(True)
+
+    iterator = source()
+    stream = _wrapped_stream(iterator)
+    try:
+        for expected in range(consumed):
+            assert next(stream) == expected
+            assert agent_context._pending.get() == ()
+        if ending == "close":
+            stream.close()
+        elif ending == "error":
+            with pytest.raises(RuntimeError, match="consumer failed"):
+                stream.throw(RuntimeError("consumer failed"))
+        else:
+            assert list(stream) == list(range(consumed, 3))
+        assert closed == [True]
+        assert agent_context._pending.get() == ()
+    finally:
+        iterator.close()
+
+
 @pytest.mark.asyncio
 async def test_astream_exception_before_first_item_withdraws_announcement() -> (
     None
@@ -272,6 +304,40 @@ async def test_astream_close_after_first_item_withdraws_announcement() -> None:
     assert agent_context._pending.get() == ()
     await stream.aclose()
     assert agent_context._pending.get() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumed", [1, 2])
+@pytest.mark.parametrize("ending", ["close", "error", "exhausted"])
+async def test_astream_cleanup_closes_source_and_withdraws_announcement(
+    consumed: int, ending: str
+) -> None:
+    closed = []
+
+    async def source():
+        try:
+            for item in range(3):
+                yield item
+        finally:
+            closed.append(True)
+
+    iterator = source()
+    stream = _wrapped_astream(iterator)
+    try:
+        for expected in range(consumed):
+            assert await stream.__anext__() == expected
+            assert agent_context._pending.get() == ()
+        if ending == "close":
+            await stream.aclose()
+        elif ending == "error":
+            with pytest.raises(RuntimeError, match="consumer failed"):
+                await stream.athrow(RuntimeError("consumer failed"))
+        else:
+            assert [item async for item in stream] == list(range(consumed, 3))
+        assert closed == [True]
+        assert agent_context._pending.get() == ()
+    finally:
+        await iterator.aclose()
 
 
 def test_unnamed_create_agent_has_no_placeholder_name(
