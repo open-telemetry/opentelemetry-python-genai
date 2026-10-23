@@ -76,6 +76,10 @@ jobs:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.enumerate.outputs.packages) }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ matrix.package }}
@@ -103,6 +107,7 @@ jobs:
         with:
           packages-dir: dist/
           skip-existing: true
+          attestations: true
 
   github_release:
     needs: [enumerate, publish]
@@ -130,13 +135,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
-          persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the post-release branch
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Bump repository version to next dev version
-        run: uv run --with packaging ./scripts/version_utils.py bump --dev
+        run: uv run --no-project --exclude-newer 3d --with packaging ./scripts/version_utils.py bump --dev
 
       - name: Regenerate instrumentations README
         run: python ./scripts/generate_instrumentation_readme.py
@@ -153,6 +158,7 @@ jobs:
 
       - name: Open pull request for post-release updates on main
         env:
+          PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         run: |
           if git diff --quiet; then
@@ -165,7 +171,7 @@ jobs:
           branch="otelbot/bump-after-release-all-$(date +%Y%m%d)"
 
           git commit -a -m "$message"
-          git push origin HEAD:"$branch"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"$branch"
           gh pr create --title "$message" \
                        --body "$body" \
                        --head "$branch" \

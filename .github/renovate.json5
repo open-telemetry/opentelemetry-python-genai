@@ -4,6 +4,9 @@
     "config:best-practices",
     "helpers:pinGitHubActionDigestsToSemver"
   ],
+  // Wait 3 days before proposing updates to allow PyPI / upstream registries
+  // to quarantine compromised releases (e.g. LiteLLM v1.107.0).
+  "minimumReleaseAge": "3 days",
   // requirements.oldest.txt pins exist to test against the oldest
   // supported versions and must not be auto-updated.
   "ignorePaths": ["**/requirements.oldest.txt"],

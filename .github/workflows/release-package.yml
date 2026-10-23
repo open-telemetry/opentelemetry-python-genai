@@ -29,6 +29,10 @@ run-name: "Release: ${{ inputs.package }}"
 
 jobs:
   build:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: $/.github/workflows/_release-build.yml
     with:
       package: ${{ inputs.package }}
@@ -50,14 +54,16 @@ jobs:
         with:
           packages-dir: dist/
           skip-existing: true
+          attestations: true
 
   finalize:
-    needs: publish
+    needs: [build, publish]
     permissions:
       contents: write
     uses: $/.github/workflows/_release-finalize.yml
     with:
       package: ${{ inputs.package }}
+      ref: ${{ needs.build.outputs.built_sha }}
       bump_after_release: true
     secrets:
       OTELBOT_PRIVATE_KEY: ${{ secrets.OTELBOT_PRIVATE_KEY }}

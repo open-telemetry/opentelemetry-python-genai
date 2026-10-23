@@ -88,6 +88,7 @@ runs:
     - name: Create pull request
       shell: bash
       env:
+        PUSH_TOKEN: ${{ github.token }}
         GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         INPUTS_OPERATION: ${{ inputs.operation }}
       run: |
@@ -103,7 +104,7 @@ runs:
         esac
 
         git commit -a -m "$title"
-        git push origin HEAD:"$branch"
+        git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"$branch"
         gh pr create --title "$title" \
                      --body "$title." \
                      --head "$branch" \

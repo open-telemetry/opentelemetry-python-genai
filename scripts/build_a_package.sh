@@ -20,6 +20,10 @@
 
 set -ev
 
+# Exclude packages uploaded within the last 3 days across all uv invocations,
+# ensuring build backend dependencies (e.g. hatchling) also inherit the cutoff.
+export UV_EXCLUDE_NEWER=3d
+
 if [ $PACKAGE_NAME ]; then
   pkg_name=${PACKAGE_NAME}
   pkg_version=${VERSION}
@@ -34,10 +38,17 @@ fi
 
 
 # Validate version against PEP 440 conventions: https://packaging.pypa.io/en/latest/version.html
-uv run --with packaging python -c "from packaging.version import Version; Version('${pkg_version}')"
+uv run --no-project --exclude-newer 3d --with packaging python -c "from packaging.version import Version; Version('${pkg_version}')"
 
 basedir=$(git rev-parse --show-toplevel)
 cd $basedir
+
+# Ensure no untracked or modified files exist in the checkout before building
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Error! Working tree is dirty before build:"
+  git status --porcelain
+  exit 1
+fi
 
 distdir=${basedir}/dist
 mkdir -p $distdir
@@ -72,3 +83,35 @@ fi
 
 # Build a wheel for the source distribution
 uv build --wheel --out-dir ${distdir} $pkg_tar_gz_file
+
+# Audit built wheel contents against startup-hook (.pth / sitecustomize.py)
+# and *.data/ injection attacks (e.g., LiteLLM v1.107.0 supply-chain vector).
+python3 - "$distdir" "$pkg_name" "$pkg_version" <<'PYEOF'
+import pathlib
+import sys
+import zipfile
+
+distdir = pathlib.Path(sys.argv[1])
+pkg_name_norm = sys.argv[2].replace("-", "_")
+pkg_version = sys.argv[3]
+expected_dist_info = f"{pkg_name_norm}-{pkg_version}.dist-info/"
+
+wheels = list(distdir.glob(f"{pkg_name_norm}-{pkg_version}-*.whl"))
+if len(wheels) != 1:
+    sys.exit(f"Error! Expected exactly 1 wheel in {distdir}, found: {wheels}")
+
+with zipfile.ZipFile(wheels[0]) as zf:
+    for name in zf.namelist():
+        basename = pathlib.PurePosixPath(name).name
+        if name.endswith(".pth") or basename in {"sitecustomize.py", "usercustomize.py"}:
+            sys.exit(f"Error! Forbidden startup hook file in wheel: {name}")
+        if f"{pkg_name_norm}-{pkg_version}.data/" in name or ".data/" in name.split("/")[0]:
+            sys.exit(f"Error! Unexpected .data/ directory entry in wheel: {name}")
+        if not (name.startswith("opentelemetry/") or name.startswith(expected_dist_info)):
+            sys.exit(
+                f"Error! Unexpected top-level path in wheel: {name} "
+                f"(expected 'opentelemetry/' or '{expected_dist_info}')"
+            )
+
+print(f"Verified wheel contents for {wheels[0].name} ({len(zf.namelist())} files).")
+PYEOF

@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the prepared release branch
+          persist-credentials: false
 
       - name: Verify branch
         run: |
@@ -110,6 +110,7 @@ jobs:
 
       - name: Create pull request
         env:
+          PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
           PACKAGES: ${{ steps.packages.outputs.packages }}
           COUNT: ${{ steps.packages.outputs.count }}
@@ -127,7 +128,7 @@ jobs:
           fi
 
           git commit -a -m "$title"
-          git push origin HEAD:"$branch"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"$branch"
           pr_url=$(gh pr create --title "$title" \
                                 --body "$body" \
                                 --head "$branch" \
