@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 import unittest.mock
 from typing import Any
@@ -581,6 +582,109 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
             '[{"role":"assistant","parts":[{"content":"Partial answer.","type":"text"}],"finish_reason":null,"name":null}]',
+        )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            # A configured completion hook turns content capture back on.
+            "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "",
+        },
+    )
+    def test_streaming_survives_content_accumulation_error(self) -> None:
+        # e.g. pydantic refusing to serialize deeply nested tool arguments.
+        failing_step = unittest.mock.MagicMock()
+        failing_step.model_dump.side_effect = ValueError("depth exceeded")
+        # Like a real completion event: metadata only, no steps or text.
+        interaction = create_mock_interaction(
+            output_text="", input_tokens=5, output_tokens=8
+        )
+        interaction.steps = None
+        events = [
+            create_mock_step_event("step.start", 0, step_type="model_output"),
+            create_mock_step_event("step.delta", 0, text="before failure"),
+            create_mock_step_event("step.start", 1, step=failing_step),
+            create_mock_step_event("step.delta", 0, text="after failure"),
+            create_mock_completed_event(interaction),
+        ]
+        self.mock_create.side_effect = lambda *args, **kwargs: events
+        received = self.run_streaming_interaction(
+            model="gemini-2.5-flash", input="Streaming test", stream=True
+        )
+        self.assertEqual(received, events)
+        [span] = self.otel.get_finished_spans()
+        self.assertEqual(span.status.status_code, trace.StatusCode.UNSET)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+        self.assertEqual(
+            span.attributes["gen_ai.response.finish_reasons"], ("stop",)
+        )
+        # Neither the text before the failure nor after it is reported as a
+        # complete response.
+        messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, "[]")
+        )
+        captured_text = [
+            part["content"]
+            for message in messages
+            for part in message["parts"]
+            if part.get("type") == "text" and part.get("content")
+        ]
+        self.assertEqual(captured_text, [])
+
+    @patch.dict(
+        "os.environ",
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+            "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "",
+        },
+    )
+    def test_streaming_survives_content_rebuild_error(self) -> None:
+        interaction = create_mock_interaction(
+            output_text="", input_tokens=5, output_tokens=8
+        )
+        interaction.steps = None
+        interaction.status = "requires_action"
+        events = [
+            create_mock_step_event(
+                "step.start",
+                0,
+                step={"type": "function_call", "id": "call-1", "name": "f"},
+            ),
+            create_mock_step_event(
+                "step.delta",
+                0,
+                delta={"type": "arguments_delta", "arguments": '{"a": 1}'},
+            ),
+            create_mock_completed_event(interaction),
+        ]
+        self.mock_create.side_effect = lambda *args, **kwargs: events
+        # e.g. json.loads hitting the recursion limit on deeply nested
+        # arguments.
+        with patch(
+            "opentelemetry.instrumentation.google_genai.interactions._maybe_json",
+            side_effect=RecursionError("maximum recursion depth exceeded"),
+        ):
+            received = self.run_streaming_interaction(
+                model="gemini-2.5-flash", input="Streaming test", stream=True
+            )
+        self.assertEqual(received, events)
+        [span] = self.otel.get_finished_spans()
+        self.assertEqual(span.status.status_code, trace.StatusCode.UNSET)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 8)
+        self.assertEqual(
+            span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
+        )
+        messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, "[]")
+        )
+        self.assertFalse(
+            [
+                part
+                for message in messages
+                for part in message["parts"]
+                if part["type"] == "tool_call"
+            ]
         )
 
     def test_interaction_with_non_dict_tools_ignored(self) -> None:

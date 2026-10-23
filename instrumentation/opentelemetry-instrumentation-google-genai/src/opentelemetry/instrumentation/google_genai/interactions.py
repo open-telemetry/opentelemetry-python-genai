@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import (
     AsyncIterable,
@@ -132,6 +133,8 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
     UriPart,
 )
+
+_logger = logging.getLogger(__name__)
 
 # Interaction.status values that differ from the gen_ai.response.status value
 # set. `in_progress`, `completed`, `failed`, `cancelled` and `incomplete` are
@@ -576,7 +579,17 @@ class _InteractionStreamMixin:
         event_type = _get_field(chunk, "event_type")
         if event_type in ("step.start", "step.delta"):
             if self._self_capture_content:
-                self._self_content.add(chunk)
+                try:
+                    self._self_content.add(chunk)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    # A payload the accumulator can't handle must not break the
+                    # caller's stream; drop the captured output instead.
+                    self._self_capture_content = False
+                    self._self_content = _StreamedContent()
+                    _logger.debug(
+                        "Failed to accumulate interaction stream content",
+                        exc_info=True,
+                    )
             return
         if interaction := _interaction_from_event(chunk):
             self._self_last_interaction = interaction
@@ -592,7 +605,15 @@ class _InteractionStreamMixin:
         raise NotImplementedError
 
     def _record_response(self) -> None:
-        streamed_parts = self._self_content.parts()
+        try:
+            streamed_parts = self._self_content.parts()
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Same as a failed accumulation: drop the captured output.
+            streamed_parts = []
+            self._self_capture_content = False
+            _logger.debug(
+                "Failed to rebuild interaction stream content", exc_info=True
+            )
         if self._self_last_interaction:
             self._record_interaction(
                 self._self_last_interaction, streamed_parts
