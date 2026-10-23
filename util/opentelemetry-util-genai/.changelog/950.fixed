@@ -1,0 +1,1 @@
+Call the completion hook for tool invocations so tool arguments and results reach registered hooks.
