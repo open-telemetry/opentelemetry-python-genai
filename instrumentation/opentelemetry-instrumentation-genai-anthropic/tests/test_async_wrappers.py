@@ -24,6 +24,7 @@ def _make_invocation():
         request_model=None,
         stop=lambda: None,
         fail=lambda error: None,
+        suspend=lambda: None,
         _on_stream_chunk=lambda chunk_at: None,
     )
 

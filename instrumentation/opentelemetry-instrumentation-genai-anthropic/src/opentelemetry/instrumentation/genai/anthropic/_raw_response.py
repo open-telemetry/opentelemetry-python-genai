@@ -540,6 +540,9 @@ def wrap_raw_response(
         invocation.stop()
         return result
 
+    # The stream wrapper is built only on ``parse()``, possibly in another
+    # context, so the span must not stay current until then.
+    invocation.suspend()
     return RawResponseProxy(
         result, invocation, capture_content, is_beta=is_beta
     )
