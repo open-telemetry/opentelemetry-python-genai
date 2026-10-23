@@ -14,6 +14,8 @@ from wrapt import wrap_function_wrapper
 from opentelemetry.instrumentation.genai.portkey.utils import (
     create_inference_invocation,
     is_streaming,
+    prepare_input_messages,
+    prepare_tool_definitions,
     set_response_properties,
 )
 from opentelemetry.instrumentation.genai.portkey.wrappers import (
@@ -22,6 +24,7 @@ from opentelemetry.instrumentation.genai.portkey.wrappers import (
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +101,25 @@ def _sync_completions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", enabled=capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", enabled=capture_content
+        )
         invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content, is_prompt=is_prompt
+            handler, instance, kwargs, is_prompt=is_prompt
         )
         try:
-            result = wrapped(*args, **kwargs)
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(prepare_input_messages) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    prepare_tool_definitions
+                )
             if is_streaming(kwargs):
                 return PortkeyStreamWrapper(
                     result, invocation, capture_content
@@ -131,11 +148,25 @@ def _async_completions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", enabled=capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", enabled=capture_content
+        )
         invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content, is_prompt=is_prompt
+            handler, instance, kwargs, is_prompt=is_prompt
         )
         try:
-            result = await wrapped(*args, **kwargs)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(prepare_input_messages) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    prepare_tool_definitions
+                )
             if is_streaming(kwargs):
                 return AsyncPortkeyStreamWrapper(
                     result, invocation, capture_content

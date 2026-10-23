@@ -23,3 +23,5 @@
 #
 # There is no test-only dependency to pin: portkey-ai has none that isn't already provided by a
 # declared bound or by the shared test fixtures.
+
+-e util/opentelemetry-util-genai
