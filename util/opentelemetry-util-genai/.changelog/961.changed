@@ -1,0 +1,1 @@
+Raise the minimum `fsspec` version in the `upload` extra to `2026.6.0` to pick up a security fix.

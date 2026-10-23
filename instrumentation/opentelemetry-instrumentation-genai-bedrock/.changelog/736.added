@@ -1,0 +1,1 @@
+Add instrumentation for ``bedrock-agent-runtime.invoke_inline_agent``.

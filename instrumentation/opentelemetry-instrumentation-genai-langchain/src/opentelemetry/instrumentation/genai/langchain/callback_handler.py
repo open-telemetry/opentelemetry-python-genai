@@ -388,7 +388,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     conversation_id=conversation_id,
                     _attach_to_context=False,
                 )
-                agent.input_messages = make_input_message(inputs)
+                if capture_content:
+                    agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
                     run_id, parent_run_id, agent
                 )
@@ -690,6 +691,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     ):
                         finish_reason = (
                             chat_generation.message.response_metadata.get(
+                                "finish_reason"
+                            )
+                            or chat_generation.message.response_metadata.get(
                                 "stopReason"
                             )
                             or chat_generation.message.response_metadata.get(
