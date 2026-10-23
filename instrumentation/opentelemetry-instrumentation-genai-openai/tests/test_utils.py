@@ -900,9 +900,17 @@ def assert_embedding_attributes(
         hasattr(span, "attributes")
         and "gen_ai.embeddings.dimension.count" in span.attributes
     ):
-        # If dimensions were specified, verify that they match the actual dimensions
-        assert span.attributes["gen_ai.embeddings.dimension.count"] == len(
-            response.data[0].embedding
+        embedding = response.data[0].embedding
+        if isinstance(embedding, str):
+            # OpenAI base64 embeddings contain four bytes per float32 value.
+            embedding_bytes = base64.b64decode(embedding, validate=True)
+            assert len(embedding_bytes) % 4 == 0
+            expected_dimensions = len(embedding_bytes) // 4
+        else:
+            expected_dimensions = len(embedding)
+        assert (
+            span.attributes["gen_ai.embeddings.dimension.count"]
+            == expected_dimensions
         )
 
 
