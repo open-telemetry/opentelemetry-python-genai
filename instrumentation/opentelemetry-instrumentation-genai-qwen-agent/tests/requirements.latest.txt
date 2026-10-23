@@ -43,9 +43,9 @@ qwen-agent==0.0.34
 # requires Python >= 3.11 while this env also runs on 3.10.
 numpy
 soundfile==0.14.0
-python-dateutil==2.9.0.post0
+python-dateutil==3.0.0
 tqdm==4.70.1
-wrapt==2.4.1
+wrapt==2.5.1
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e util/opentelemetry-util-genai

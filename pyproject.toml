@@ -42,6 +42,11 @@ override-dependencies = [
   "opentelemetry-api ~= 1.45",
   "opentelemetry-sdk ~= 1.45",
 ]
+# qwenpaw caps onnxruntime<1.24, which has no cp314 wheels; uv ignores wheel
+# tags when forking, so without this it picks one version for all Pythons.
+constraint-dependencies = [
+  "onnxruntime >= 1.24; python_version >= '3.14'",
+]
 
 # https://docs.astral.sh/uv/reference/settings/#sources
 [tool.uv.sources]

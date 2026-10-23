@@ -137,8 +137,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         reasoning_text = reasoning.get("reasoningText")
         if _is_dict(reasoning_text) and "text" in reasoning_text:
             return ReasoningPart(content=reasoning_text["text"])
-        if "redactedContent" in reasoning:
-            return ReasoningPart(content="")
     if block_type in ("thinking", "redacted_thinking"):
         content = block.get("thinking") or block.get("data") or ""
         return ReasoningPart(content=str(content))
@@ -938,6 +936,125 @@ def extract_invoke_agent_request(
                     parts=[TextPart(content=str(input_text))],
                 )
             ]
+
+
+def _extract_functions(ag: dict[str, Any]) -> list[dict[str, Any]]:
+    schema = ag.get("functionSchema")
+    if not _is_dict(schema):
+        return []
+    functions = schema.get("functions")
+    if not _is_list(functions):
+        return []
+    return [f for f in functions if _is_dict(f)]
+
+
+def _convert_bedrock_parameters_to_json_schema(
+    params: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Convert Bedrock parameter detail map to a standard JSON Schema object."""
+    if not params:
+        return {"type": "object", "properties": {}}
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for prop_name, prop_def in params.items():
+        if not _is_dict(prop_def):
+            continue
+        prop_schema: dict[str, Any] = {}
+        for k, v in prop_def.items():
+            if k == "required":
+                if v is True:
+                    required.append(prop_name)
+            else:
+                prop_schema[k] = v
+        properties[prop_name] = prop_schema
+
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def extract_invoke_inline_agent_request(
+    api_params: dict[str, Any],
+    invocation: RemoteAgentInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    guardrail_cfg = api_params.get("guardrailConfiguration")
+    if _is_dict(guardrail_cfg):
+        guardrail_id = guardrail_cfg.get("guardrailIdentifier")
+        if guardrail_id:
+            invocation.attributes[aws_attributes.AWS_BEDROCK_GUARDRAIL_ID] = (
+                str(guardrail_id)
+            )
+
+    kbs = api_params.get("knowledgeBases")
+    if _is_list(kbs) and kbs and _is_dict(kbs[0]):
+        kb_id = kbs[0].get("knowledgeBaseId")
+        if kb_id:
+            invocation.attributes[
+                aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID
+            ] = str(kb_id)
+
+    action_groups = api_params.get("actionGroups")
+    if _is_list(action_groups):
+        tool_defs: list[ToolDefinition] = []
+        for ag in action_groups:
+            if not _is_dict(ag):
+                continue
+            for func in _extract_functions(ag):
+                name = str(func.get("name", ""))
+                desc = func.get("description")
+                params = func.get("parameters")
+                tool_defs.append(
+                    FunctionToolDefinition(
+                        name=name,
+                        description=str(desc) if desc is not None else None,
+                        parameters=_convert_bedrock_parameters_to_json_schema(
+                            params
+                        ),
+                    )
+                )
+            sig = ag.get("parentActionGroupSignature")
+            if sig:
+                tool_defs.append(
+                    GenericToolDefinition(
+                        name=ag.get("actionGroupName", str(sig)),
+                        type=str(sig),
+                    )
+                )
+        if tool_defs:
+            invocation.tool_definitions = tool_defs
+
+    if capture_content:
+        instruction = api_params.get("instruction")
+        if instruction is not None:
+            invocation.system_instruction = [
+                TextPart(content=str(instruction))
+            ]
+
+        input_text = api_params.get("inputText")
+        if input_text is not None:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=str(input_text))],
+                )
+            ]
+
+
+def extract_invoke_inline_agent_model(
+    api_params: dict[str, Any],
+) -> str | None:
+    raw_model = api_params.get("foundationModel")
+    if not raw_model:
+        return None
+    return _extract_model_from_arn(raw_model) or str(raw_model)
 
 
 def extract_retrieve_request(

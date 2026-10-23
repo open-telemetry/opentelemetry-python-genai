@@ -1,1 +1,0 @@
-Deprecate `GenericPart`; instrumentations should use a specific part type or drop the content.

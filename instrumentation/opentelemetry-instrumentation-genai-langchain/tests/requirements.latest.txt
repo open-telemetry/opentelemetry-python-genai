@@ -14,12 +14,12 @@
 
 # Latest version requirements for langchain unit tests.
 
-langchain==1.4.6
+langchain==1.4.7
 langchain-openai==1.7.2
-langchain-aws==1.8.2
+langchain-aws==1.9.0
 langchain-google-genai==4.4.2
 langchain-anthropic==1.7.6
-boto3==1.43.116
+boto3==1.43.118
 
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-langchain[instruments]
