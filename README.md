@@ -23,6 +23,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 | [opentelemetry-instrumentation-genai-openai-agents](./instrumentation/opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3, < 1 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai-agents/) |
 | [opentelemetry-instrumentation-genai-portkey](./instrumentation/opentelemetry-instrumentation-genai-portkey) | portkey-ai >= 1.0.0, < 3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-portkey/) |
 | [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20, < 1 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwen-agent/) |
+| [opentelemetry-instrumentation-genai-qwenpaw](./instrumentation/opentelemetry-instrumentation-genai-qwenpaw) | qwenpaw >= 1.1.0, < 2.0.0; python_version < '3.14' | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwenpaw/) |
 | [opentelemetry-instrumentation-genai-smolagents](./instrumentation/opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0, < 2 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-smolagents/) |
 | [opentelemetry-instrumentation-google-genai](./instrumentation/opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-google-genai/) |
 
@@ -30,10 +31,9 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 
 | Instrumentation | Supported Package | Version | Status |
 | --------------- | ----------------- | ------- | ------ |
-| [opentelemetry-instrumentation-genai-claude-agent-sdk](./instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14, < 1 | 1.3b0.dev | skeleton |
-| [opentelemetry-instrumentation-genai-crewai](./instrumentation/opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1, < 2 | 1.3b0.dev | skeleton |
-| [opentelemetry-instrumentation-genai-qwenpaw](./instrumentation/opentelemetry-instrumentation-genai-qwenpaw) | qwenpaw >= 1.1.0, < 2.0.0; python_version < '3.14' | 1.3b0 | to be released |
-| [opentelemetry-instrumentation-genai-weaviate-client](./instrumentation/opentelemetry-instrumentation-genai-weaviate-client) | weaviate-client >= 3.0.0, <5.0.0 | 1.3b0.dev | skeleton |
+| [opentelemetry-instrumentation-genai-claude-agent-sdk](./instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk) | claude-agent-sdk >= 0.1.14, < 1 | 1.4b0.dev | skeleton |
+| [opentelemetry-instrumentation-genai-crewai](./instrumentation/opentelemetry-instrumentation-genai-crewai) | crewai >= 1.10.1, < 2 | 1.4b0.dev | skeleton |
+| [opentelemetry-instrumentation-genai-weaviate-client](./instrumentation/opentelemetry-instrumentation-genai-weaviate-client) | weaviate-client >= 3.0.0, <5.0.0 | 1.4b0.dev | skeleton |
 <!-- end -->
 
 ## Contributing
