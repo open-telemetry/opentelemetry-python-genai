@@ -1,0 +1,1 @@
+Rebuild captured output messages for streamed `interactions.create` spans, and derive finish reasons from the interaction status for streamed and non-streamed creates.
