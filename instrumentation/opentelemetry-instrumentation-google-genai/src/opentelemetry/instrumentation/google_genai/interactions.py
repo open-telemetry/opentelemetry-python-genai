@@ -555,7 +555,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
 
     def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
         event_type = _get_field(chunk, "event_type")
-        if event_type == "interaction_completed":
+        if event_type == "interaction.completed":
             interaction = _get_field(chunk, "interaction")
             if interaction:
                 self._self_last_interaction = interaction
@@ -587,7 +587,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
 
     def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
         event_type = _get_field(chunk, "event_type")
-        if event_type == "interaction_completed":
+        if event_type == "interaction.completed":
             interaction = _get_field(chunk, "interaction")
             if interaction:
                 self._self_last_interaction = interaction

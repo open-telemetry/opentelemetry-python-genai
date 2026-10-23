@@ -1,1 +1,0 @@
-Restore caller context between Google GenAI stream reads while preserving invocation context during iteration and cleanup.

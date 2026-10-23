@@ -3,6 +3,7 @@
 
 import json
 import os
+from typing import Any
 
 import pytest
 import yaml
@@ -258,6 +259,72 @@ async def test_async_interactions_create(
             actual = list(actual)
         assert actual == expected, name
         assert type(actual) is type(expected), name
+
+
+# gemini-2.5-flash returned 404 with a newly created key.
+_STREAM_MODEL = "gemini-3.8-flash"
+
+
+def _assert_streamed_create_span(
+    otel_mocker: OTelMocker, events: list[Any]
+) -> None:
+    [interaction] = [
+        event.interaction
+        for event in events
+        if event.event_type == "interaction.completed"
+    ]
+    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    assert span is not None
+    assert span.attributes["gen_ai.request.stream"] is True
+    # Compare against the SDK's own parsed completed event, so the cassette
+    # pins the real event name and payload.
+    assert interaction.id
+    assert span.attributes["gen_ai.response.id"] == interaction.id
+    assert span.attributes["gen_ai.response.model"] == interaction.model
+    assert interaction.usage.total_input_tokens > 0
+    assert interaction.usage.total_output_tokens > 0
+    assert (
+        span.attributes["gen_ai.usage.input_tokens"]
+        == interaction.usage.total_input_tokens
+    )
+    assert (
+        span.attributes["gen_ai.usage.output_tokens"]
+        == interaction.usage.total_output_tokens
+    )
+    assert isinstance(span.attributes["gen_ai.response.id"], str)
+    assert isinstance(span.attributes["gen_ai.response.model"], str)
+    assert isinstance(span.attributes["gen_ai.usage.input_tokens"], int)
+    assert isinstance(span.attributes["gen_ai.usage.output_tokens"], int)
+
+
+@pytest.mark.vcr
+def test_sync_interactions_create_stream(
+    client: Client, otel_mocker: OTelMocker
+) -> None:
+    events = list(
+        client.interactions.create(
+            model=_STREAM_MODEL,
+            input="Hello, how can you help me today?",
+            stream=True,
+        )
+    )
+
+    _assert_streamed_create_span(otel_mocker, events)
+
+
+@pytest.mark.vcr
+@pytest.mark.asyncio
+async def test_async_interactions_create_stream(
+    client: Client, otel_mocker: OTelMocker
+) -> None:
+    stream = await client.aio.interactions.create(
+        model=_STREAM_MODEL,
+        input="Hello, how can you help me today?",
+        stream=True,
+    )
+    events = [event async for event in stream]
+
+    _assert_streamed_create_span(otel_mocker, events)
 
 
 @pytest.fixture(name="capture_content")
