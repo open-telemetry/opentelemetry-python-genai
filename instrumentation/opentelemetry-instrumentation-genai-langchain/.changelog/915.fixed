@@ -1,0 +1,1 @@
+Declare dependency on langchain-core instead of langchain in instrumentation_dependencies, allowing apps with only langchain-core (such as LangGraph) to be instrumented.
