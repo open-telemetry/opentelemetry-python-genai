@@ -31,4 +31,3 @@ Deprecated==1.2.14
 importlib-metadata==6.11.0
 packaging==24.0
 
-# The stream execution hook is not released yet.
