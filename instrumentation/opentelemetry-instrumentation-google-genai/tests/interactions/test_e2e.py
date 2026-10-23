@@ -23,7 +23,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
 from opentelemetry.test_util_genai.instrumentor import instrument
-from opentelemetry.trace import get_tracer_provider
+from opentelemetry.trace import StatusCode, get_tracer_provider
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -424,6 +424,347 @@ async def test_async_interactions_create_stream_output(
     events = [event async for event in stream]
 
     _assert_streamed_create_output(otel_mocker, events)
+
+
+_WEATHER_TOOL = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city.",
+    "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+_TOOL_CALL_INPUT = "What is the weather in Paris right now?"
+
+
+def _assert_streamed_tool_call(
+    otel_mocker: OTelMocker, events: list[Any], content_mode: str
+) -> None:
+    [interaction] = [
+        event.interaction
+        for event in events
+        if event.event_type == "interaction.completed"
+    ]
+    assert interaction.status == "requires_action"
+    [call] = [
+        event.step
+        for event in events
+        if event.event_type == "step.start"
+        and event.step.type == "function_call"
+    ]
+    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    assert span is not None
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("tool_calls",)
+    if content_mode == "no_content_capture":
+        assert "gen_ai.output.messages" not in span.attributes
+        return
+    [message] = json.loads(span.attributes["gen_ai.output.messages"])
+    assert message["finish_reason"] == "tool_calls"
+    assert message["parts"] == [
+        {
+            "type": "tool_call",
+            "id": call.id,
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        }
+    ]
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_stream_tool_call")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_stream_tool_call(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    events = list(
+        client.interactions.create(
+            model=_STREAM_MODEL,
+            input=_TOOL_CALL_INPUT,
+            tools=[_WEATHER_TOOL],
+            stream=True,
+        )
+    )
+
+    _assert_streamed_tool_call(otel_mocker, events, content_mode)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_stream_tool_call")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_stream_tool_call(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    stream = await client.aio.interactions.create(
+        model=_STREAM_MODEL,
+        input=_TOOL_CALL_INPUT,
+        tools=[_WEATHER_TOOL],
+        stream=True,
+    )
+    events = [event async for event in stream]
+
+    _assert_streamed_tool_call(otel_mocker, events, content_mode)
+
+
+class _ErrorInjectingEvents:
+    """Raises ``error`` after ``fail_after`` events read from the SDK stream."""
+
+    def __init__(
+        self, inner: Any, fail_after: int, error: BaseException
+    ) -> None:
+        self._inner = inner
+        self._remaining = fail_after
+        self._error = error
+
+    def __iter__(self) -> "_ErrorInjectingEvents":
+        return self
+
+    def __next__(self) -> Any:
+        if self._remaining == 0:
+            raise self._error
+        self._remaining -= 1
+        return next(self._inner)
+
+    def __aiter__(self) -> "_ErrorInjectingEvents":
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._remaining == 0:
+            raise self._error
+        self._remaining -= 1
+        return await self._inner.__anext__()
+
+
+def _inject_stream_error(
+    stream: Any, fail_after: int, error: BaseException
+) -> None:
+    # The SDK stream reads its events from `generator`, or from `_iterator` in
+    # the older `_interactions` module layout.
+    name = "generator" if hasattr(stream, "generator") else "_iterator"
+    setattr(
+        stream,
+        name,
+        _ErrorInjectingEvents(getattr(stream, name), fail_after, error),
+    )
+
+
+def _assert_failed_stream_span(
+    otel_mocker: OTelMocker, error_type: str
+) -> None:
+    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["error.type"] == error_type
+    # The completion event never arrived.
+    for name in (
+        "gen_ai.response.id",
+        "gen_ai.response.finish_reasons",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.output.messages",
+    ):
+        assert name not in span.attributes, name
+
+
+# 0 fails before the first event; 7 fails after the first text delta.
+_FAIL_AFTER = [0, 7]
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_stream")
+@pytest.mark.parametrize("fail_after", _FAIL_AFTER)
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_stream_interrupted(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+    fail_after: int,
+) -> None:
+    request.getfixturevalue(content_mode)
+    stream = client.interactions.create(
+        model=_STREAM_MODEL,
+        input="Hello, how can you help me today?",
+        stream=True,
+    )
+    error = ConnectionError("connection reset during stream")
+    _inject_stream_error(stream, fail_after, error)
+
+    with pytest.raises(
+        ConnectionError, match="connection reset during stream"
+    ) as raised:
+        with stream:
+            for _ in stream:
+                pass
+
+    assert raised.value is error
+    _assert_failed_stream_span(otel_mocker, "ConnectionError")
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_stream")
+@pytest.mark.parametrize("fail_after", _FAIL_AFTER)
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_stream_interrupted(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+    fail_after: int,
+) -> None:
+    request.getfixturevalue(content_mode)
+    stream = await client.aio.interactions.create(
+        model=_STREAM_MODEL,
+        input="Hello, how can you help me today?",
+        stream=True,
+    )
+    error = ConnectionError("connection reset during stream")
+    _inject_stream_error(stream, fail_after, error)
+
+    with pytest.raises(
+        ConnectionError, match="connection reset during stream"
+    ) as raised:
+        async with stream:
+            async for _ in stream:
+                pass
+
+    assert raised.value is error
+    _assert_failed_stream_span(otel_mocker, "ConnectionError")
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_stream")
+def test_sync_interactions_create_stream_caller_error(
+    client: Client, otel_mocker: OTelMocker
+) -> None:
+    error = ValueError("caller error")
+    with pytest.raises(ValueError, match="caller error") as raised:
+        with client.interactions.create(
+            model=_STREAM_MODEL,
+            input="Hello, how can you help me today?",
+            stream=True,
+        ) as stream:
+            for _ in stream:
+                raise error
+
+    assert raised.value is error
+    _assert_failed_stream_span(otel_mocker, "ValueError")
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_stream")
+@pytest.mark.asyncio
+async def test_async_interactions_create_stream_caller_error(
+    client: Client, otel_mocker: OTelMocker
+) -> None:
+    error = ValueError("caller error")
+    with pytest.raises(ValueError, match="caller error") as raised:
+        async with await client.aio.interactions.create(
+            model=_STREAM_MODEL,
+            input="Hello, how can you help me today?",
+            stream=True,
+        ) as stream:
+            async for _ in stream:
+                raise error
+
+    assert raised.value is error
+    _assert_failed_stream_span(otel_mocker, "ValueError")
+
+
+def _is_text_delta(event: Any) -> bool:
+    return (
+        event.event_type == "step.delta"
+        and getattr(event.delta, "type", None) == "text"
+    )
+
+
+def _assert_closed_early_span(
+    otel_mocker: OTelMocker, content_mode: str, received_text: str
+) -> None:
+    span = otel_mocker.get_span_named(f"interactions.create {_STREAM_MODEL}")
+    assert span is not None
+    assert span.status.status_code == StatusCode.UNSET
+    assert "error.type" not in span.attributes
+    # Closing before the completion event leaves no status to report.
+    assert "gen_ai.response.finish_reasons" not in span.attributes
+    assert "gen_ai.response.id" not in span.attributes
+    if content_mode == "no_content_capture":
+        assert "gen_ai.output.messages" not in span.attributes
+        return
+    [message] = json.loads(span.attributes["gen_ai.output.messages"])
+    assert message["parts"] == [{"type": "text", "content": received_text}]
+    assert message["finish_reason"] is None
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_sync_interactions_create_stream")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+def test_sync_interactions_create_stream_closed_early(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    stream = client.interactions.create(
+        model=_STREAM_MODEL,
+        input="Hello, how can you help me today?",
+        stream=True,
+    )
+    for event in stream:
+        if _is_text_delta(event):
+            received_text = event.delta.text
+            break
+    stream.close()
+
+    _assert_closed_early_span(otel_mocker, content_mode, received_text)
+
+
+@pytest.mark.vcr
+@pytest.mark.cassette("test_async_interactions_create_stream")
+@pytest.mark.parametrize(
+    "content_mode", ["capture_content", "no_content_capture"]
+)
+@pytest.mark.asyncio
+async def test_async_interactions_create_stream_closed_early(
+    client: Client,
+    otel_mocker: OTelMocker,
+    request: pytest.FixtureRequest,
+    content_mode: str,
+) -> None:
+    request.getfixturevalue(content_mode)
+    stream = await client.aio.interactions.create(
+        model=_STREAM_MODEL,
+        input="Hello, how can you help me today?",
+        stream=True,
+    )
+    async for event in stream:
+        if _is_text_delta(event):
+            received_text = event.delta.text
+            break
+    await stream.close()
+
+    _assert_closed_early_span(otel_mocker, content_mode, received_text)
 
 
 # `interactions.get` — the query string differs between the two SDK module
