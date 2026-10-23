@@ -400,6 +400,52 @@ class TestCase(CommonTestCaseBase):
         ):
             self.assertNotIn(attribute, span.attributes)
 
+    @patch.dict(
+        "os.environ",
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+            # A configured completion hook turns content capture back on.
+            "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK": "",
+        },
+    )
+    def test_records_finish_reason_from_status(self) -> None:
+        self.configure_valid_interaction(status="requires_action")
+        self.run_interaction(model="gemini-2.5-flash", input="Use a tool")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_output_message_finish_reason_matches_status(self) -> None:
+        self.configure_valid_interaction(
+            output_text="Calling a tool.", status="requires_action"
+        )
+        self.run_interaction(model="gemini-2.5-flash", input="Use a tool")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertEqual(
+            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":"tool_calls","name":null}]',
+        )
+
+    def test_omits_finish_reason_while_in_progress(self) -> None:
+        # A background interaction returns before the generation finishes.
+        self.configure_valid_interaction(status="in_progress")
+        self.run_interaction(model="gemini-2.5-flash", input="Run later")
+        span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
+        self.assertNotIn("gen_ai.response.finish_reasons", span.attributes)
+
+    def test_agent_records_finish_reason_from_status(self) -> None:
+        self.configure_valid_interaction()
+        self.run_interaction(agent="my_agent", input="Does this work?")
+        span = self.otel.get_span_named("invoke_agent my_agent")
+        self.assertEqual(
+            span.attributes["gen_ai.response.finish_reasons"], ("stop",)
+        )
+
     def test_streaming_generates_span(self) -> None:
         self.configure_valid_interaction(
             interaction_id="stream-id-1",

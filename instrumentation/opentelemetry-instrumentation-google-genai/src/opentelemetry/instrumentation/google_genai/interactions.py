@@ -223,14 +223,11 @@ def _apply_interaction_response_attributes(
             _modality_tokens(usage, "cached_tokens_by_modality")
         )
 
+    finish_reason = _interaction_finish_reason(_get_field(response, "status"))
+    if finish_reason:
+        invocation.finish_reasons = [finish_reason]
+
     if telemetry_handler.should_capture_content():
-        # A streamed completion event carries no steps, so a stream's output
-        # comes from its step events and its finish reason from the status.
-        finish_reason = (
-            _interaction_finish_reason(_get_field(response, "status"))
-            if streamed_parts is not None
-            else "stop"
-        )
         messages = _interactions_response_to_messages(
             response, finish_reason=finish_reason
         )
@@ -624,12 +621,6 @@ class _CreateStreamMixin(_InteractionStreamMixin):
             self._self_telemetry_handler,
             streamed_parts=streamed_parts,
         )
-        # Inference spans otherwise derive finish reasons from captured
-        # messages; agent spans need them set explicitly.
-        if finish_reason := _interaction_finish_reason(
-            _get_field(interaction, "status")
-        ):
-            self._self_invocation.finish_reasons = [finish_reason]
 
     def _on_stream_end(self) -> None:
         self._record_response()
