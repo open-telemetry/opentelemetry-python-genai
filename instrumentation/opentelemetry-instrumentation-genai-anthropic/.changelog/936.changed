@@ -1,1 +1,0 @@
-Drop file-backed and iterator document content instead of recording it as a type-only `GenericPart`.

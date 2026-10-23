@@ -467,3 +467,38 @@ def test_stream_wrapper_with_reasoning(tracer_provider) -> None:
     assert out_msg.parts[1].type == "text"
     assert getattr(out_msg.parts[1], "content") == "Here is the result."
     assert invocation.finish_reasons == ["stop"]
+
+
+def test_stream_wrapper_skips_redacted_reasoning(tracer_provider) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(provider="aws.bedrock")
+    wrapper = BedrockConverseStreamWrapper(
+        stream=mock.MagicMock(),
+        invocation=invocation,
+        capture_content=True,
+    )
+    wrapper._process_chunk(
+        {
+            "contentBlockStart": {"contentBlockIndex": 0, "start": {}},
+            "contentBlockDelta": {
+                "contentBlockIndex": 0,
+                "delta": {
+                    "reasoningContent": {"redactedContent": b"redacted"}
+                },
+            },
+        }
+    )
+    wrapper._process_chunk(
+        {
+            "contentBlockStart": {"contentBlockIndex": 1, "start": {}},
+            "contentBlockDelta": {
+                "contentBlockIndex": 1,
+                "delta": {"text": "Here is the result."},
+            },
+            "messageStop": {"stopReason": "end_turn"},
+        }
+    )
+    wrapper._on_stream_end()
+    parts = invocation.output_messages[0].parts
+    assert [part.type for part in parts] == ["text"]
+    assert getattr(parts[0], "content") == "Here is the result."

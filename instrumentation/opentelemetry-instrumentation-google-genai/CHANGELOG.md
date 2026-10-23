@@ -15,6 +15,63 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Capture `previous_interaction_id` on `interactions.create` as
+  `gen_ai.request.previous_response.id`
+  ([#811](https://github.com/open-telemetry/opentelemetry-python-genai/pull/811))
+
+### Changed
+
+- Record tool-call arguments as bound parameter dictionaries serialized by the
+  shared GenAI utility instead of custom code.function.parameters entries,
+  preserving normalization of Pydantic models and other objects.
+  ([#791](https://github.com/open-telemetry/opentelemetry-python-genai/pull/791))
+- Record string tool call results as-is and drop only the arguments that cannot
+  be converted. Previously string results were JSON-quoted, e.g. `done` was
+  recorded as `"done"`, and one unconvertible argument dropped all arguments.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+- Drop unsupported interaction input items and non-text system instruction
+  parts instead of recording them as type-only `GenericPart`.
+  ([#936](https://github.com/open-telemetry/opentelemetry-python-genai/pull/936))
+
+### Fixed
+
+- Preserve tool parameter schemas supplied through ``parameters_json_schema``
+  in Google GenAI function declarations.
+  ([#834](https://github.com/open-telemetry/opentelemetry-python-genai/pull/834))
+- Preserve method snapshots on GoogleGenAiSdkInstrumentor re-instantiation.
+  ([#853](https://github.com/open-telemetry/opentelemetry-python-genai/pull/853))
+- Normalize tuple contents to lists during telemetry capture to prevent
+  instrumentation extraction errors before the SDK request.
+  ([#861](https://github.com/open-telemetry/opentelemetry-python-genai/pull/861))
+- Stop request extraction from raising on `generate_content` with missing or
+  empty `contents`, or an `interactions.create` input item whose `type` is not
+  a string.
+  ([#866](https://github.com/open-telemetry/opentelemetry-python-genai/pull/866))
+- Forward the caller's config unchanged when a ``GenerateContentConfig`` dict
+  cannot be parsed, instead of replacing it with an empty config; the fallback
+  is logged at debug level.
+  ([#898](https://github.com/open-telemetry/opentelemetry-python-genai/pull/898))
+- Restore caller context between Google GenAI stream reads while preserving
+  invocation context during iteration and cleanup.
+  ([#899](https://github.com/open-telemetry/opentelemetry-python-genai/pull/899))
+- Log a debug record when the raw embedding response body cannot be parsed for
+  ``usageMetadata``, instead of dropping input tokens silently.
+  ([#903](https://github.com/open-telemetry/opentelemetry-python-genai/pull/903))
+- Report a streamed `generate_content_stream` response as one output message
+  per candidate instead of one per chunk.
+  ([#908](https://github.com/open-telemetry/opentelemetry-python-genai/pull/908))
+- Report text parts with `thought=True` as `ReasoningPart` instead of
+  `TextPart` in `generate_content` and `generate_content_stream` messages.
+  ([#930](https://github.com/open-telemetry/opentelemetry-python-genai/pull/930))
+- Record the response id, model and token usage on streamed
+  `interactions.create` spans by matching the SDK's `interaction.completed`
+  event.
+  ([#947](https://github.com/open-telemetry/opentelemetry-python-genai/pull/947))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

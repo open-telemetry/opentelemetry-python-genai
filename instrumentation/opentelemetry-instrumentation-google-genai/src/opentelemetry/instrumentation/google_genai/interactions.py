@@ -555,7 +555,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
 
     def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
         event_type = _get_field(chunk, "event_type")
-        if event_type == "interaction_completed":
+        if event_type == "interaction.completed":
             interaction = _get_field(chunk, "interaction")
             if interaction:
                 self._self_last_interaction = interaction
@@ -587,7 +587,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
 
     def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
         event_type = _get_field(chunk, "event_type")
-        if event_type == "interaction_completed":
+        if event_type == "interaction.completed":
             interaction = _get_field(chunk, "interaction")
             if interaction:
                 self._self_last_interaction = interaction
@@ -1193,6 +1193,7 @@ def _create_instrumented_interactions_create(
         try:
             response = wrapped(*args, **kwargs)
             if _is_interaction_stream(response, request):
+                invocation.suspend()
                 return InteractionsStreamWrapper(
                     response,
                     invocation,
@@ -1235,6 +1236,7 @@ def _create_instrumented_async_interactions_create(
         try:
             response = await wrapped(*args, **kwargs)
             if _is_interaction_stream(response, request):
+                invocation.suspend()
                 return AsyncInteractionsStreamWrapper(
                     response,
                     invocation,
@@ -1380,6 +1382,7 @@ def _create_instrumented_interactions_get(
             elif not _is_unparsed_response(result) and hasattr(
                 result, "__iter__"
             ):
+                invocation.suspend()
                 return FetchInteractionStreamWrapper(
                     cast("Stream[InteractionSSEEvent]", result),
                     invocation,
@@ -1437,6 +1440,7 @@ def _create_instrumented_async_interactions_get(
             elif not _is_unparsed_response(result) and hasattr(
                 result, "__aiter__"
             ):
+                invocation.suspend()
                 return AsyncFetchInteractionStreamWrapper(
                     result, invocation, telemetry_handler
                 )
