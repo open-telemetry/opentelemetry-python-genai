@@ -14,7 +14,7 @@ handler consults when the root run starts.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Generator, Iterator, Mapping, AsyncGenerator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, cast
@@ -158,7 +158,6 @@ def _announce_at_stream_start(
     # A generator body runs in the consumer's context, so the announcement lands
     # where the callbacks fire - on the first ``next()``, not here.
     iterator = iter(stream)
-    delegating = False
     try:
         entry = _push(name)
         try:
@@ -168,14 +167,10 @@ def _announce_at_stream_start(
         finally:
             _pop(entry)
         yield first
-        # yield from forwards close itself once delegation has started.
-        delegating = True
         yield from iterator
     finally:
-        if not delegating:
-            close = getattr(iterator, "close", None)
-            if close is not None:
-                close()
+        if isinstance(iterator, Generator):
+            iterator.close()
 
 
 async def _announce_at_astream_start(
@@ -195,6 +190,5 @@ async def _announce_at_astream_start(
         async for chunk in iterator:
             yield chunk
     finally:
-        close = getattr(iterator, "aclose", None)
-        if close is not None:
-            await close()
+        if isinstance(iterator, AsyncGenerator):
+	        await iterator.aclose()
