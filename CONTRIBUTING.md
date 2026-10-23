@@ -130,6 +130,40 @@ uv run tox -e changelog-preview
 If your change doesn't need an entry (pure docs/tooling), add the
 `Skip Changelog` label to the PR.
 
+### Export pinned test requirements
+
+For work on [hermetic test requirements (#418)](https://github.com/open-telemetry/opentelemetry-python-genai/issues/418),
+`scripts/generate_requirements.py` compiles the complete dependency list of an
+oldest/latest tox environment, including its package metadata and test helpers:
+
+```sh
+uv run --with tox --with tox-uv python scripts/generate_requirements.py \
+  py310-test-instrumentation-genai-anthropic-oldest \
+  --output /tmp/anthropic-py310-oldest.txt
+```
+
+Use a tox version supporting `tox config --format json`. The output uses
+`lowest-direct` for oldest environments and `highest` for latest environments.
+It keeps explicitly selected local packages editable and disables implicit
+workspace source substitutions. Tox environment overrides, including CrewAI's
+compatibility override, are preserved.
+
+The generated file pins external runtime and test dependencies for the selected
+Python version and the platform running the command. Install it from the
+repository root with `uv pip sync /tmp/anthropic-py310-oldest.txt`. Use separate
+outputs for different Python versions and platforms, and a destination different
+from the handwritten input requirements.
+
+This helper is an initial step toward #418. Existing tox environments still use
+their current inputs; generating, reviewing and checking in locks, then switching
+the test matrix to consume them, remains separate work.
+
+The helper's regression tests need only the standard library:
+
+```sh
+python -m unittest discover -s scripts/tests -v
+```
+
 ## Skills
 
 This repo ships skills (under `.github/skills/`) that automate the heavy,
