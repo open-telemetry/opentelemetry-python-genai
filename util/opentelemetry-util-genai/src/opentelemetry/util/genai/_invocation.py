@@ -200,7 +200,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         instruments: _Instruments,
         logger: Logger,
         completion_hook: CompletionHook,
-        operation_name: str,
+        operation_name: str | None,
         span_name: str,
         span_kind: SpanKind = SpanKind.CLIENT,
         attributes: dict[str, AttributeValue] | None = None,
@@ -225,7 +225,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._logger = logger
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver
-        self._operation_name: str = operation_name
+        self._operation_name: str = (
+            "" if operation_name is None else operation_name
+        )
         self._content_capturing_mode: ContentCapturingMode = (
             get_content_capturing_mode()
             if content_capturing_mode is None
@@ -251,9 +253,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 self.conversation_id, context=context
             )
         self._start_attributes: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: operation_name,
             **(start_attributes or {}),
         }
+        if operation_name is not None:
+            self._start_attributes[GenAI.GEN_AI_OPERATION_NAME] = (
+                operation_name
+            )
+
         self._start_span: bool = start_span
         if start_span:
             self.span: Span = self._tracer.start_span(

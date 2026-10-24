@@ -17,9 +17,12 @@ into spans that mirror the structure of your agent run:
   agent name.
 * **Tool spans** for function tool calls, capturing the tool arguments and
   result.
+* **MCP discovery spans** for MCP client tool listing calls (``tools/list``),
+  capturing structured tool definitions and results when content capture is
+  enabled.
 
 The spans nest to reflect the run, so a single ``Runner.run`` produces a
-workflow span with the agent and tool calls it triggered as children.
+workflow span with the agent, tool, and MCP discovery calls it triggered as children.
 
 LLM-level spans (``chat`` / ``embeddings``) are **not** emitted by this package.
 They are produced by

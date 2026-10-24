@@ -22,6 +22,10 @@ from opentelemetry.util.genai._agent_invocation import (
     LocalAgentInvocation,
     RemoteAgentInvocation,
 )
+from opentelemetry.util.genai._discovery_invocation import (
+    DiscoveryInvocation,
+    MCPListToolsInvocation,
+)
 from opentelemetry.util.genai._embedding_invocation import (
     CLIENT_EMBEDDING_CONTEXT_KEY,
     EmbeddingData,
@@ -61,6 +65,7 @@ __all__ = [
     "CLIENT_RETRIEVAL_CONTEXT_KEY",
     "AgentInvocation",
     "ContextToken",
+    "DiscoveryInvocation",
     "EmbeddingData",
     "EmbeddingInvocation",
     "Error",
@@ -70,6 +75,7 @@ __all__ = [
     "InferenceData",
     "InferenceInvocation",
     "LocalAgentInvocation",
+    "MCPListToolsInvocation",
     "RemoteAgentInvocation",
     "RetrievalData",
     "RetrievalInvocation",

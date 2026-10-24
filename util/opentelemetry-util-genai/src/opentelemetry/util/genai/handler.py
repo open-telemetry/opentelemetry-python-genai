@@ -39,12 +39,17 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from opentelemetry._logs import (
     LoggerProvider,
     get_logger,
 )
 from opentelemetry.context import Context, get_value
 from opentelemetry.metrics import Meter, MeterProvider, get_meter
+from opentelemetry.semconv._incubating.attributes.mcp_attributes import (
+    McpMethodNameValues,
+)
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
     TracerProvider,
@@ -73,6 +78,7 @@ from opentelemetry.util.genai.invocation import (
     CLIENT_FETCH_RESPONSE_CONTEXT_KEY,
     CLIENT_INFERENCE_CONTEXT_KEY,
     CLIENT_RETRIEVAL_CONTEXT_KEY,
+    DiscoveryInvocation,
     EmbeddingData,
     EmbeddingInvocation,
     FetchResponseData,
@@ -80,6 +86,7 @@ from opentelemetry.util.genai.invocation import (
     InferenceData,
     InferenceInvocation,
     LocalAgentInvocation,
+    MCPListToolsInvocation,
     RemoteAgentInvocation,
     RetrievalData,
     RetrievalInvocation,
@@ -89,6 +96,7 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
+    ToolDefinition,
 )
 from opentelemetry.util.genai.utils import get_content_capturing_mode
 from opentelemetry.util.genai.version import __version__
@@ -532,6 +540,69 @@ class TelemetryHandler:
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
+        )
+
+    def discovery(
+        self,
+        *,
+        mcp_method: str = McpMethodNameValues.TOOLS_LIST.value,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        tool_definitions: (
+            Sequence[ToolDefinition | str | Mapping[str, object] | object]
+            | None
+        ) = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+    ) -> DiscoveryInvocation:
+        """Returns a discovery invocation (CLIENT span kind). Starts span when called.
+
+        Args:
+            mcp_method: The MCP method name, defaulting to "tools/list".
+            server_address: Optional actual network destination address.
+            server_port: Optional port number.
+            tool_definitions: Optional tool definitions.
+            context: An optional OpenTelemetry Context to parent the span.
+
+        Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
+        to finalize the span upon exiting. If not used as a ContextManager, the caller is
+        responsible for calling `stop` or `fail` to finalize the span.
+
+        Only set data attributes on the invocation object, do not modify the span or context.
+        """
+        return DiscoveryInvocation(
+            self._tracer,
+            self._instruments,
+            self._logger,
+            self._completion_hook,
+            mcp_method=mcp_method,
+            server_address=server_address,
+            server_port=server_port,
+            tool_definitions=tool_definitions,
+            content_capturing_mode=self._content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
+        )
+
+    def mcp_list_tools(
+        self,
+        *,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        tool_definitions: (
+            Sequence[ToolDefinition | str | Mapping[str, object] | object]
+            | None
+        ) = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+    ) -> MCPListToolsInvocation:
+        """Returns an MCP list_tools discovery invocation (CLIENT span kind). Starts span when called."""
+        return self.discovery(
+            server_address=server_address,
+            server_port=server_port,
+            tool_definitions=tool_definitions,
+            context=context,
+            _attach_to_context=_attach_to_context,
         )
 
 
