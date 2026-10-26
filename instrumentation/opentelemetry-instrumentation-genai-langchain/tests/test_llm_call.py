@@ -124,6 +124,67 @@ def test_chat_openai_prompt_template(
         chat_span.attributes["gen_ai.prompt.variable.question"]
         == "What's the weather like in Seattle?"
     )
+    assert "gen_ai.prompt.version" not in chat_span.attributes
+
+
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
+@pytest.mark.vcr()
+@pytest.mark.parametrize(
+    ("version_metadata", "expected"),
+    [
+        ({"prompt_version": 3}, "3"),
+        ({"lc_hub_commit_hash": "9f2c1ab"}, "9f2c1ab"),
+    ],
+    ids=["prompt_version", "hub_commit"],
+)
+def test_chat_openai_prompt_template_version(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    vcr,
+    version_metadata,
+    expected,
+):
+    model = ChatOpenAI(model="gpt-4.1", max_tokens=100)
+    prompt = PromptTemplate.from_template(
+        "Answer this weather question briefly: {question}"
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="NO_CONTENT",
+    ):
+        with vcr.use_cassette("test_chat_openai_prompt_template.yaml"):
+            (prompt | model).invoke(
+                {"question": "What's the weather like in Seattle?"},
+                config={
+                    "metadata": {
+                        "prompt_name": "weather_prompt",
+                        **version_metadata,
+                    }
+                },
+            )
+
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_prompt"
+    )
+    version = chat_span.attributes["gen_ai.prompt.version"]
+    assert isinstance(version, str)
+    assert version == expected
 
 
 @pytest.mark.asyncio
