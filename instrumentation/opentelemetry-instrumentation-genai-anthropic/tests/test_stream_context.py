@@ -8,9 +8,15 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+try:
+    import httpx2 as _http_lib
+except ImportError:
+    import httpx as _http_lib
 from anthropic.types import (
     Message,
     RawMessageStartEvent,
@@ -18,6 +24,9 @@ from anthropic.types import (
 )
 
 from opentelemetry import context, trace
+from opentelemetry.instrumentation.genai.anthropic._raw_response import (
+    wrap_raw_response,
+)
 from opentelemetry.instrumentation.genai.anthropic.wrappers import (
     AsyncMessagesStreamWrapper,
     MessagesStreamWrapper,
@@ -382,4 +391,195 @@ async def test_async_wrapper_close_before_read_keeps_context(
     assert context.get_current() is before
     await stream.aclose()
     assert context.get_current() is before
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+# --- raw response, body read directly ----------------------------------------
+
+_BODY = [b"one\n", b"two\n", b"three\n"]
+_REQUEST = _http_lib.Request("POST", "https://api.anthropic.com/v1/messages")
+
+
+class _ObservedStream(_http_lib.SyncByteStream):
+    """Records the current span each time the response body is touched."""
+
+    def __init__(self, seen: list[trace.SpanContext]) -> None:
+        self._seen = seen
+
+    def __iter__(self) -> Iterator[bytes]:
+        for chunk in _BODY:
+            self._seen.append(trace.get_current_span().get_span_context())
+            yield chunk
+
+    def close(self) -> None:
+        self._seen.append(trace.get_current_span().get_span_context())
+
+
+class _ObservedAsyncStream(_http_lib.AsyncByteStream):
+    def __init__(self, seen: list[trace.SpanContext]) -> None:
+        self._seen = seen
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in _BODY:
+            await asyncio.sleep(0)
+            self._seen.append(trace.get_current_span().get_span_context())
+            yield chunk
+
+    async def aclose(self) -> None:
+        self._seen.append(trace.get_current_span().get_span_context())
+
+
+def _body_proxy(invocation: Any, stream: Any) -> Any:
+    response = _http_lib.Response(200, stream=stream, request=_REQUEST)
+    return wrap_raw_response(
+        SimpleNamespace(http_response=response), invocation, False
+    )
+
+
+def _assert_all_in_invocation(
+    seen: list[trace.SpanContext], invocation: Any
+) -> None:
+    expected = trace.get_current_span(invocation.context).get_span_context()
+    assert seen
+    assert all(span_context == expected for span_context in seen)
+
+
+@pytest.mark.parametrize(
+    "method", ["iter_raw", "iter_bytes", "iter_text", "iter_lines"]
+)
+def test_sync_raw_body_iteration_activates_per_chunk(
+    tracer_provider, logger_provider, meter_provider, span_exporter, method
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedStream(seen))
+
+    chunks = getattr(proxy.http_response, method)()
+    assert context.get_current() is before
+    for _ in chunks:
+        assert context.get_current() is before
+        assert span_exporter.get_finished_spans() == ()
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.parametrize("method", ["iter_raw", "iter_bytes"])
+def test_sync_raw_body_iterator_closed_early(
+    tracer_provider, logger_provider, meter_provider, span_exporter, method
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedStream(seen))
+
+    chunks = getattr(proxy.http_response, method)()
+    next(chunks)
+    assert context.get_current() is before
+    chunks.close()
+    proxy.http_response.close()
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_sync_raw_body_read_activates(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedStream(seen))
+
+    assert proxy.http_response.read() == b"".join(_BODY)
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_sync_raw_body_close_without_read_activates(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedStream(seen))
+
+    proxy.http_response.close()
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method", ["aiter_raw", "aiter_bytes", "aiter_text", "aiter_lines"]
+)
+async def test_async_raw_body_iteration_activates_per_chunk(
+    tracer_provider, logger_provider, meter_provider, span_exporter, method
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedAsyncStream(seen))
+
+    async def drain() -> None:
+        async for _ in getattr(proxy.http_response, method)():
+            assert context.get_current() is before
+            assert span_exporter.get_finished_spans() == ()
+
+    await asyncio.create_task(drain())
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["aiter_raw", "aiter_bytes"])
+async def test_async_raw_body_iterator_closed_early(
+    tracer_provider, logger_provider, meter_provider, span_exporter, method
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedAsyncStream(seen))
+
+    chunks = getattr(proxy.http_response, method)()
+    await asyncio.create_task(anext(chunks))
+    assert context.get_current() is before
+    await chunks.aclose()
+    await proxy.http_response.aclose()
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_raw_body_read_activates(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedAsyncStream(seen))
+
+    assert await proxy.http_response.aread() == b"".join(_BODY)
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_raw_body_close_without_read_activates(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    proxy = _body_proxy(invocation, _ObservedAsyncStream(seen))
+
+    await proxy.http_response.aclose()
+    assert context.get_current() is before
+    _assert_all_in_invocation(seen, invocation)
     assert len(span_exporter.get_finished_spans()) == 1
