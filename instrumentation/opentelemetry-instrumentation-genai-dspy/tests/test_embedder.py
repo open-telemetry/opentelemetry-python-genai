@@ -543,3 +543,48 @@ def test_callable_without_model_name_has_no_request_model(
     assert span.name == "embeddings"
     assert GenAI.GEN_AI_REQUEST_MODEL not in (span.attributes or {})
     assert (span.attributes or {}).get(GenAI.GEN_AI_PROVIDER_NAME) == "unknown"
+
+
+def test_sync_embedder_preserves_requested_dimensions_when_result_unextractable(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        embedder = dspy.Embedder(
+            lambda texts, **kw: [], caching=False, dimensions=256
+        )
+        embedder(["hello"])
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes or {}
+    assert attrs.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 256
+
+
+@pytest.mark.anyio
+async def test_async_embedder_preserves_requested_dimensions_when_result_unextractable(
+    tracer_provider: TracerProvider,
+    logger_provider: LoggerProvider,
+    meter_provider: MeterProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        embedder = dspy.Embedder(
+            lambda texts, **kw: [], caching=False, dimensions=256
+        )
+        await embedder.acall(["hello"])
+
+    (span,) = span_exporter.get_finished_spans()
+    attrs = span.attributes or {}
+    assert attrs.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 256

@@ -1322,9 +1322,9 @@ def _embedder_compute_embeddings(
         try:
             with invocation:
                 result = wrapped(*args, **kwargs)
-                invocation.dimension_count = extract_embedding_dimension(
-                    result
-                )
+                dimension_count = extract_embedding_dimension(result)
+                if dimension_count is not None:
+                    invocation.dimension_count = dimension_count
                 return result
         finally:
             _active_embedding_invocation.reset(token)
@@ -1347,9 +1347,9 @@ def _embedder_acompute_embeddings(
         try:
             with invocation:
                 result = await wrapped(*args, **kwargs)
-                invocation.dimension_count = extract_embedding_dimension(
-                    result
-                )
+                dimension_count = extract_embedding_dimension(result)
+                if dimension_count is not None:
+                    invocation.dimension_count = dimension_count
                 return result
         finally:
             _active_embedding_invocation.reset(token)

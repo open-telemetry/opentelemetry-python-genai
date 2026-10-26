@@ -60,3 +60,65 @@ class EmbedderScenario(Scenario):
                 api_base="https://api.openai.com:443/v1",
             )
             embedder(["hello", "world"])
+
+
+class HostedEmbedderScenario(Scenario):
+    expected_spans = {"embeddings": 1}
+    expected_metrics = (
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.token.usage",
+    )
+
+    def run(
+        self,
+        *,
+        tracer_provider: TracerProvider,
+        meter_provider: MeterProvider,
+        logger_provider: LoggerProvider,
+        vcr: Any,
+    ) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        def _fake_embedding(
+            model: str, input: list[str], **kwargs: Any
+        ) -> SimpleNamespace:
+            return SimpleNamespace(
+                model="text-embedding-3-small-2024",
+                data=[{"embedding": [0.1, 0.2, 0.3, 0.4, 0.5]} for _ in input],
+                usage=SimpleNamespace(prompt_tokens=len(input) * 3),
+            )
+
+        fake_litellm = SimpleNamespace(
+            cache=None,
+            embedding=MagicMock(side_effect=_fake_embedding),
+        )
+
+        with (
+            patch.object(
+                dspy.clients.embedding,
+                "_get_litellm",
+                return_value=fake_litellm,
+                create=True,
+            ),
+            patch.object(
+                dspy.clients.embedding,
+                "litellm",
+                fake_litellm,
+                create=True,
+            ),
+            instrument(
+                DSPyInstrumentor(),
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+                content_capture="SPAN_ONLY",
+            ),
+        ):
+            embedder = dspy.Embedder(
+                "openai/text-embedding-3-small",
+                caching=False,
+                encoding_format="float",
+                api_base="https://api.openai.com:443/v1",
+            )
+            embedder(["hello", "world"])
