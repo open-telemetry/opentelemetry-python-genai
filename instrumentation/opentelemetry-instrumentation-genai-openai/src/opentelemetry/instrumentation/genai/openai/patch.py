@@ -231,8 +231,17 @@ def _set_embeddings_response_properties(
         if getattr(first_embedding, "embedding", None):
             embedding = first_embedding.embedding
             if isinstance(embedding, str):
-                embedding = array.array("f", base64.b64decode(embedding))
-            invocation.dimension_count = len(embedding)
+                try:
+                    embedding = array.array("f", base64.b64decode(embedding))
+                except ValueError:
+                    _logger.debug(
+                        "Failed to decode base64 embedding dimensions",
+                        exc_info=True,
+                    )
+                else:
+                    invocation.dimension_count = len(embedding)
+            else:
+                invocation.dimension_count = len(embedding)
 
     # Embeddings only have input tokens; output tokens are not applicable.
     if getattr(result, "usage", None):
