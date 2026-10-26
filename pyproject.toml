@@ -2,7 +2,7 @@
 [project]
 name = "opentelemetry-python-genai"
 version = "0.0.0" # This is not used.
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "opentelemetry-api",
   "opentelemetry-sdk",
@@ -120,7 +120,7 @@ docstring-code-format = true
 typeCheckingMode = "strict"
 reportUnnecessaryTypeIgnoreComment = true
 reportMissingTypeStubs = false
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 reportPrivateUsage = false  # Ignore private attributes added by instrumentation packages.
 reportDeprecated = false  # Ignore deprecation on GenAI enums in opentelemetry.semconv 0.64b0 until semconv-genai python package is published.
 # Add progressively instrumentation packages here.
