@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from importlib import import_module
-from typing import Any
+from typing import Any, Self
 from unittest import mock
 
 import langchain.agents
@@ -19,7 +19,6 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import tool
-from typing_extensions import Self
 
 import opentelemetry.instrumentation.genai.langchain as langchain_instrumentation
 from opentelemetry.instrumentation.genai.langchain import (
