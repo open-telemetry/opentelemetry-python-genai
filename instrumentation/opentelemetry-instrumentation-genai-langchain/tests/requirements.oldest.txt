@@ -37,5 +37,3 @@ opentelemetry-instrumentation-genai-openai[instruments]==1.2b0
 # The oldest OpenAI client still passes the removed httpx proxies argument.
 httpx==0.27.2
 
-# Drop this once opentelemetry-util-genai 1.3b0 is published.
--e util/opentelemetry-util-genai
