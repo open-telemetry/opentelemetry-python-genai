@@ -35,7 +35,9 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
-from opentelemetry.semconv._incubating.metrics import gen_ai_metrics as GenAIMetrics
+from opentelemetry.semconv._incubating.metrics import (
+    gen_ai_metrics as GenAIMetrics,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 
