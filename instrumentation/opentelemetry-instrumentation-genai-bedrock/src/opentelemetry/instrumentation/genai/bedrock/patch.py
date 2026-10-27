@@ -21,7 +21,6 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    EmbeddingInvocation,
     InferenceInvocation,
     RemoteAgentInvocation,
     RetrievalInvocation,
@@ -78,12 +77,7 @@ class _SdkCall:
 def _sdk_call(
     api_params: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> _SdkCall:
-    """Replace a file-like ``body`` with a proxy that records the SDK's reads.
-
-    The caller's ``api_params`` is left as it is: the body is replaced in the
-    call that reaches the SDK, so the instrumentation sees the same parameters
-    the caller passed and the SDK reads the same bytes it would have read.
-    """
+    """Replace a file-like ``body`` with a recording proxy."""
     body_capture = capture_body(api_params.get("body"))
     if body_capture is None:
         return _SdkCall(api_params, None, args, kwargs)
@@ -97,28 +91,6 @@ def _sdk_call(
     return _SdkCall(
         params, body_capture, args, {**kwargs, "api_params": params}
     )
-
-
-def _extract_safely(
-    extract: Callable[..., None],
-    params: dict[str, Any],
-    body_capture: BodyCapture | None,
-    invocation: InferenceInvocation | EmbeddingInvocation,
-    **kwargs: Any,
-) -> None:
-    """Populate request attributes from the captured body, ignoring failures.
-
-    Runs after the SDK call, on the content the capture recorded, and extracts
-    whatever the parameters and that content allow: a body the SDK did not read
-    whole leaves the body-derived attributes unset.
-    """
-    try:
-        if body_capture is not None:
-            snapshot = body_capture.snapshot()
-            params = {**params, "body": snapshot}
-        extract(params, invocation, **kwargs)
-    except Exception:
-        _logger.debug("Failed to read request attributes", exc_info=True)
 
 
 def _handle_converse(

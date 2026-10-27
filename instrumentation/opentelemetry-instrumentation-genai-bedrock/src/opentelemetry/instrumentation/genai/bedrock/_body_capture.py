@@ -1,14 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Record the first full read botocore makes of a file-like request body.
-
-botocore reads a file-like ``body`` itself: it seeks over the stream to measure
-it, reads it through to sign and checksum the request, and reads it again to
-send it, once per attempt. Those reads are the only chance to see the payload
-without adding I/O of our own, so the body handed to the SDK is a transparent
-proxy that keeps the bytes of the first read that ran to end of stream.
-"""
+"""Record the reads the SDK makes of a file-like request body."""
 
 from __future__ import annotations
 
@@ -25,9 +18,7 @@ if TYPE_CHECKING:
 else:
     from wrapt import ObjectProxy as _ObjectProxy
 
-#: Upper bound on the bytes a capture keeps. The recorded content exists to
-#: populate telemetry, which needs the request parameters the body holds, not
-#: a payload of arbitrary size: a larger body is left uncaptured.
+#: Bytes kept at most; a larger body yields no snapshot.
 _MAX_BYTES = 1024 * 1024
 
 #: Methods the proxy shadows, and therefore the ones a body must already
@@ -38,11 +29,10 @@ _STREAM_METHODS = ("read", "seek")
 def capture_body(
     body: Any, *, max_bytes: int = _MAX_BYTES
 ) -> BodyCapture | None:
-    """Capture *body* if the SDK streams it, else return ``None``.
+    """Wrap *body* in a capture if it is a seekable file-like object.
 
     A body without ``read`` and ``seek`` is passed to the SDK as it is:
-    wrapping it would give botocore methods the caller's object never had, and
-    turn a call that would have failed into one that succeeds.
+    wrapping it would give botocore methods the caller's object never had.
     """
     if not all(
         callable(getattr(body, name, None)) for name in _STREAM_METHODS
@@ -52,27 +42,17 @@ def capture_body(
 
 
 class BodyCapture(_ObjectProxy):
-    """A transparent proxy that records the first full pass over a body.
+    """A proxy that records the first complete pass over a file-like body.
 
-    Every call is forwarded to the wrapped object unchanged. ``read`` records
-    the bytes returned and ``seek`` records where the stream was moved to; the
-    first read that reaches end of stream ends the capture, so the retries and
-    rereads botocore performs afterwards cost nothing and cannot duplicate
-    what was already kept.
-
-    Only ``read`` is recorded, which is the only read botocore performs on a
-    body: ``readinto`` and the other read methods bypass the capture.
-
-    Recording is best effort and never raises into the SDK call. A body read
-    from an unknown position, a body larger than ``max_bytes`` and a body that
-    is moved somewhere other than the end of what was recorded all yield no
-    snapshot rather than a partial one.
+    Only ``read`` is recorded: ``readinto`` and the other read methods bypass
+    the capture. A pass that does not run from its first position through end
+    of stream, or one larger than ``max_bytes``, yields no snapshot rather
+    than a partial one.
     """
 
     def __init__(self, wrapped: Any, *, max_bytes: int = _MAX_BYTES) -> None:
         super().__init__(wrapped)
-        # Attributes prefixed with ``_self_`` are stored on the proxy, so the
-        # wrapped object never gains state it did not have.
+        # ``_self_`` attributes stay on the proxy, never on the wrapped object.
         self._self_max_bytes = max_bytes
         self._self_buffer = bytearray()
         self._self_start: int | None = None
@@ -90,13 +70,7 @@ class BodyCapture(_ObjectProxy):
         return position
 
     def snapshot(self) -> bytes | None:
-        """The bytes of the first pass over the body, if it was read whole.
-
-        Returns ``None`` when the SDK did not read the body from its first
-        position through end of stream, so a partial pass is never mistaken
-        for the payload. This performs no I/O: it never reads or repositions
-        the wrapped object.
-        """
+        """The recorded bytes, or ``None`` if the pass was not usable."""
         if self._self_complete and self._self_usable:
             return bytes(self._self_buffer)
         return None
