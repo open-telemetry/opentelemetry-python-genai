@@ -38,7 +38,9 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from .bedrock_endpoint import (
     ANTHROPIC_REQUEST,
     ANTHROPIC_RESPONSE,
+    ANTHROPIC_STREAM_RESPONSE,
     INVOKE_MODEL,
+    INVOKE_MODEL_STREAM,
     OPERATIONS,
     RecordingBody,
     call_bedrock_async,
@@ -1588,6 +1590,39 @@ async def test_file_like_body_attributes_are_recorded_async(
             )
 
     assert result.error is None
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
+
+
+@pytest.mark.asyncio
+async def test_file_like_body_attributes_are_recorded_stream_async(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The async streaming API records the request attributes too."""
+    with local_bedrock([(200, ANTHROPIC_STREAM_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = await call_bedrock_async(
+                endpoint,
+                INVOKE_MODEL_STREAM,
+                RecordingBody(ANTHROPIC_REQUEST),
+                drain=True,
+            )
+
+    assert result.error is None
+    assert result.received == [ANTHROPIC_REQUEST]
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]

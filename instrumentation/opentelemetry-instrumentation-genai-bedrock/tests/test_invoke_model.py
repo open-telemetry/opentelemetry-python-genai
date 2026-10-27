@@ -41,9 +41,12 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 from .bedrock_endpoint import (
     ANTHROPIC_REQUEST,
     ANTHROPIC_RESPONSE,
+    ANTHROPIC_STREAM_RESPONSE,
     EMBEDDING_MODEL_ID,
     ERROR_RESPONSE,
     INVOKE_MODEL,
+    INVOKE_MODEL_STREAM,
+    MODEL_ID,
     OPERATIONS,
     RecordingBody,
     call_bedrock,
@@ -638,28 +641,19 @@ def test_file_like_body_io_is_the_sdk_s_own(
     assert instrumented.received == [ANTHROPIC_REQUEST[position:]]
 
 
+@pytest.mark.vcr
 def test_file_like_body_attributes_are_recorded(
-    tracer_provider,
-    logger_provider,
-    meter_provider,
+    bedrock_client,
+    instrument_with_content,
     span_exporter,
 ) -> None:
     """Request attributes come from what the SDK read, after the call."""
-    with local_bedrock([(200, ANTHROPIC_RESPONSE)]) as endpoint:
-        with instrument(
-            BedrockInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            result = call_bedrock(
-                endpoint,
-                INVOKE_MODEL,
-                RecordingBody(ANTHROPIC_REQUEST),
-            )
+    response = bedrock_client.invoke_model(
+        modelId=MODEL_ID,
+        body=RecordingBody(ANTHROPIC_REQUEST),
+    )
+    response["body"].read()
 
-    assert result.error is None
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
@@ -672,6 +666,38 @@ def test_file_like_body_attributes_are_recorded(
         span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     )
     assert input_messages[0]["parts"][0]["content"] == "hello"
+
+
+def test_file_like_body_attributes_are_recorded_stream(
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+) -> None:
+    """The streaming API records the request attributes the body held."""
+    with local_bedrock([(200, ANTHROPIC_STREAM_RESPONSE)]) as endpoint:
+        with instrument(
+            BedrockInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            content_capture="SPAN_ONLY",
+        ):
+            result = call_bedrock(
+                endpoint,
+                INVOKE_MODEL_STREAM,
+                RecordingBody(ANTHROPIC_REQUEST),
+                drain=True,
+            )
+
+    assert result.error is None
+    assert result.received == [ANTHROPIC_REQUEST]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 50
+    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.3
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 12
 
 
 def test_attributes_come_from_the_bytes_that_were_sent(
@@ -801,10 +827,10 @@ def test_body_read_failure_is_reported_unchanged(
     assert instrumented.error == uninstrumented.error
 
 
+@pytest.mark.vcr
 def test_embedding_request_body_is_recorded(
-    tracer_provider,
-    logger_provider,
-    meter_provider,
+    bedrock_client,
+    instrument_with_content,
     span_exporter,
 ) -> None:
     """Embeddings read their request body the same way, and record it.
@@ -819,25 +845,13 @@ def test_embedding_request_body_is_recorded(
             "embedding_types": ["float"],
         }
     ).encode()
-    response_body = json.dumps({"inputTextTokenCount": 3}).encode()
 
-    with local_bedrock([(200, response_body)]) as endpoint:
-        with instrument(
-            BedrockInstrumentor(),
-            tracer_provider=tracer_provider,
-            logger_provider=logger_provider,
-            meter_provider=meter_provider,
-            content_capture="SPAN_ONLY",
-        ):
-            result = call_bedrock(
-                endpoint,
-                INVOKE_MODEL,
-                RecordingBody(request_body),
-                model_id=EMBEDDING_MODEL_ID,
-            )
+    response = bedrock_client.invoke_model(
+        modelId=EMBEDDING_MODEL_ID,
+        body=RecordingBody(request_body),
+    )
+    response["body"].read()
 
-    assert result.error is None
-    assert result.received == [request_body]
     span = span_exporter.get_finished_spans()[0]
     assert (
         span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]

@@ -12,6 +12,8 @@ and the endpoint records the bytes that arrive.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
 import os
@@ -60,6 +62,63 @@ ANTHROPIC_RESPONSE = json.dumps(
 ).encode()
 
 ERROR_RESPONSE = json.dumps({"message": "boom"}).encode()
+
+
+def encode_event_stream(events: Sequence[dict[str, Any]]) -> bytes:
+    """Encode *events* as the AWS event stream a streaming response uses."""
+    return b"".join(_event_stream_message(event) for event in events)
+
+
+def _event_stream_message(payload: dict[str, Any]) -> bytes:
+    headers = {
+        ":event-type": "chunk",
+        ":content-type": "application/json",
+        ":message-type": "event",
+    }
+    encoded_headers = b"".join(
+        bytes([len(name)])
+        + name.encode()
+        + b"\x07"
+        + len(value).to_bytes(2, "big")
+        + value.encode()
+        for name, value in headers.items()
+    )
+    data = json.dumps(payload).encode()
+    total_length = 16 + len(encoded_headers) + len(data)
+    prelude = total_length.to_bytes(4, "big") + len(encoded_headers).to_bytes(
+        4, "big"
+    )
+    prelude += (binascii.crc32(prelude) & 0xFFFFFFFF).to_bytes(4, "big")
+    message = prelude + encoded_headers + data
+    return message + (binascii.crc32(message) & 0xFFFFFFFF).to_bytes(4, "big")
+
+
+def _chunk(chunk: dict[str, Any]) -> dict[str, Any]:
+    """One Bedrock stream event, with its JSON payload base64-encoded."""
+    return {"bytes": base64.b64encode(json.dumps(chunk).encode()).decode()}
+
+
+ANTHROPIC_STREAM_RESPONSE = encode_event_stream(
+    [
+        _chunk(
+            {
+                "type": "message_start",
+                "message": {
+                    "role": "assistant",
+                    "usage": {"input_tokens": 12},
+                },
+            }
+        ),
+        _chunk(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hi there!"},
+            }
+        ),
+        _chunk({"type": "message_stop"}),
+    ]
+)
 
 
 class RecordingBody(io.BytesIO):
@@ -228,11 +287,14 @@ def call_bedrock(
     operation: str,
     body: RecordingBody,
     model_id: str = MODEL_ID,
+    *,
+    drain: bool = False,
 ) -> CallResult:
     """Call Bedrock and report the body's I/O, the sent bytes and any error.
 
-    A streaming response is left undrained: these tests are about the request
-    body, and the stream is only read once the caller iterates it.
+    A streaming response is left undrained unless *drain* is set: the request
+    body's I/O is over by then, and the stream is only read once the caller
+    iterates it.
     """
     client = endpoint.client()
     error: str | None = None
@@ -241,9 +303,12 @@ def call_bedrock(
             response = client.invoke_model(modelId=model_id, body=body)
             response["body"].read()
         else:
-            client.invoke_model_with_response_stream(
+            response = client.invoke_model_with_response_stream(
                 modelId=model_id, body=body
             )
+            if drain:
+                for _ in response["body"]:
+                    pass
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     return CallResult(body.calls, body.position, endpoint.received, error)
@@ -254,6 +319,8 @@ async def call_bedrock_async(
     operation: str,
     body: RecordingBody,
     model_id: str = MODEL_ID,
+    *,
+    drain: bool = False,
 ) -> CallResult:
     """Call Bedrock through aiobotocore, and report the same things."""
     error: str | None = None
@@ -265,9 +332,12 @@ async def call_bedrock_async(
                 )
                 await response["body"].read()
             else:
-                await client.invoke_model_with_response_stream(
+                response = await client.invoke_model_with_response_stream(
                     modelId=model_id, body=body
                 )
+                if drain:
+                    async for _ in response["body"]:
+                        pass
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
     return CallResult(body.calls, body.position, endpoint.received, error)
