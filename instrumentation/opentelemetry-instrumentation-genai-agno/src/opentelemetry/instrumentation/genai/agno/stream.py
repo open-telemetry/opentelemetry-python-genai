@@ -46,10 +46,7 @@ class _AgentStreamMixin:
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
-        if (
-            session_id is not None
-            and not self._self_agent_invocation.conversation_id
-        ):
+        if session_id and not self._self_agent_invocation.conversation_id:
             self._self_agent_invocation.conversation_id = str(session_id)
 
         metrics = getattr(chunk, "metrics", None)
@@ -193,10 +190,7 @@ class _WorkflowStreamMixin:
 
     def _process_chunk(self, chunk: Any) -> None:
         session_id = getattr(chunk, "session_id", None)
-        if (
-            session_id is not None
-            and not self._self_workflow_invocation.conversation_id
-        ):
+        if session_id and not self._self_workflow_invocation.conversation_id:
             self._self_workflow_invocation.conversation_id = str(session_id)
 
         event_name = str(getattr(chunk, "event", ""))

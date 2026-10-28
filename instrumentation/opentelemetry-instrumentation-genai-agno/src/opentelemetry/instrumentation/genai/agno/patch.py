@@ -88,6 +88,12 @@ _KNOWLEDGE_CLASS = "Knowledge"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
 
+
+def _release_run_id(run_id: str | None) -> None:
+    if run_id:
+        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+
+
 # wrapt has no unregister API for post-import hooks; monotonic generations
 # invalidate deferred hooks registered during prior instrumentation cycles.
 _instrumentation_generation: int = 0
@@ -1008,7 +1014,7 @@ def _workflow_arun(
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
-            _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
             invocation = _start_workflow_invocation(
                 handler,
                 instance,
@@ -1035,7 +1041,7 @@ def _workflow_arun(
                 result,
                 invocation,
                 capture_content,
-                on_close=lambda: _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id),
+                on_close=functools.partial(_release_run_id, run_id),
             )
 
         if isinstance(result, Awaitable):
@@ -1061,8 +1067,8 @@ def _workflow_arun(
                             response,
                             invocation,
                             capture_content,
-                            on_close=lambda: _ACTIVE_WORKFLOW_RUN_IDS.discard(
-                                run_id
+                            on_close=functools.partial(
+                                _release_run_id, run_id
                             ),
                         )
                     _set_invocation_output(
@@ -1075,7 +1081,7 @@ def _workflow_arun(
                     raise
                 finally:
                     if discard_on_exit:
-                        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+                        _release_run_id(run_id)
 
             return _await_result()
 
@@ -1093,7 +1099,7 @@ def _workflow_arun(
             invocation.stop()
             return result
         finally:
-            _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
 
     return traced_method
 
@@ -1172,8 +1178,7 @@ def _workflow_aexecute(
             invocation.fail(error)
             raise
         finally:
-            if run_id:
-                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
 
     return traced_method
 
@@ -1205,20 +1210,14 @@ def _workflow_aexecute_stream(
                     result,
                     invocation,
                     capture_content,
-                    on_close=lambda: (
-                        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
-                        if run_id
-                        else None
-                    ),
+                    on_close=functools.partial(_release_run_id, run_id),
                 )
-            if run_id:
-                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
             _set_invocation_output(invocation, result, capture_content)
             invocation.stop()
             return result
         except BaseException as error:
-            if run_id:
-                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
             invocation.fail(error)
             raise
 
@@ -1271,8 +1270,7 @@ def _workflow_aexecute_workflow_agent(
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
-            if run_id:
-                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
             invocation.fail(error)
             raise
 
@@ -1281,11 +1279,7 @@ def _workflow_aexecute_workflow_agent(
                 result,
                 invocation,
                 capture_content,
-                on_close=lambda: (
-                    _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
-                    if run_id
-                    else None
-                ),
+                on_close=functools.partial(_release_run_id, run_id),
             )
 
         if isinstance(result, Awaitable):
@@ -1302,10 +1296,8 @@ def _workflow_aexecute_workflow_agent(
                             response,
                             invocation,
                             capture_content,
-                            on_close=lambda: (
-                                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
-                                if run_id
-                                else None
+                            on_close=functools.partial(
+                                _release_run_id, run_id
                             ),
                         )
                     _set_invocation_output(
@@ -1317,8 +1309,8 @@ def _workflow_aexecute_workflow_agent(
                     invocation.fail(error)
                     raise
                 finally:
-                    if discard_on_exit and run_id:
-                        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+                    if discard_on_exit:
+                        _release_run_id(run_id)
 
             return _await_result()
 
@@ -1330,8 +1322,7 @@ def _workflow_aexecute_workflow_agent(
             invocation.fail(error)
             raise
         finally:
-            if run_id:
-                _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+            _release_run_id(run_id)
 
     return traced_method
 
