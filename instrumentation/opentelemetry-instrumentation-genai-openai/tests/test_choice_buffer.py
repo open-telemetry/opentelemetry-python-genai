@@ -176,3 +176,60 @@ def test_choicebuffer_append_refusal():
     buf.append_refusal("I can't ")
     buf.append_refusal("help with that.")
     assert "".join(buf.refusal) == "I can't help with that."
+
+
+def test_choicebuffer_append_tool_call_without_index():
+    """Some OpenAI-compatible servers omit ``index`` on tool-call deltas."""
+    buf = ChoiceBuffer(0)
+    # openai builds streamed chunks without validation, so ``index`` can be
+    # None or missing altogether.
+    buf.append_tool_call(
+        ChoiceDeltaToolCall.model_construct(
+            index=None,
+            id="call_1",
+            function=ChoiceDeltaToolCallFunction(
+                name="get_weather", arguments=""
+            ),
+        )
+    )
+    buf.append_tool_call(
+        ChoiceDeltaToolCall.model_construct(
+            function=ChoiceDeltaToolCallFunction(arguments='{"city": "NYC"}'),
+        )
+    )
+    buf.append_tool_call(
+        ChoiceDeltaToolCall.model_construct(
+            index=None,
+            id="call_2",
+            function=ChoiceDeltaToolCallFunction(
+                name="get_time", arguments="{}"
+            ),
+        )
+    )
+
+    first, second = buf.tool_calls_buffers
+    assert first.tool_call_id == "call_1"
+    assert first.function_name == "get_weather"
+    assert "".join(first.arguments) == '{"city": "NYC"}'
+    assert second.tool_call_id == "call_2"
+    assert second.function_name == "get_time"
+    assert "".join(second.arguments) == "{}"
+
+
+def test_choicebuffer_append_tool_call_without_index_repeated_id_continues():
+    """A server that repeats the id on every fragment keeps one call."""
+    buf = ChoiceBuffer(0)
+    for arguments in ('{"city":', ' "NYC"}'):
+        buf.append_tool_call(
+            ChoiceDeltaToolCall.model_construct(
+                index=None,
+                id="call_1",
+                function=ChoiceDeltaToolCallFunction(
+                    name="get_weather", arguments=arguments
+                ),
+            )
+        )
+
+    (only,) = buf.tool_calls_buffers
+    assert only.tool_call_id == "call_1"
+    assert "".join(only.arguments) == '{"city": "NYC"}'
