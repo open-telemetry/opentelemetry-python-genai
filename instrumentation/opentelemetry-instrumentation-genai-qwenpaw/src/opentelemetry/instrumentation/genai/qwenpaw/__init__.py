@@ -8,7 +8,8 @@ OpenTelemetry QwenPaw Instrumentation
 Instrumentation for `QwenPaw <https://github.com/agentscope-ai/QwenPaw>`_,
 a personal assistant application built on AgentScope.
 
-Each user turn handled by ``AgentRunner.query_handler`` is traced as one
+Each user turn handled by ``AgentRunner.query_handler`` (1.x) or
+``Runtime.run`` (2.x) is traced as one
 ``invoke_agent`` span following the OpenTelemetry GenAI semantic
 conventions.
 
@@ -51,6 +52,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 from importlib import import_module
+from importlib.metadata import version as distribution_version
 from typing import Any
 
 from wrapt import wrap_function_wrapper
@@ -62,6 +64,7 @@ from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
 from .patch import make_query_handler_wrapper
+from .runtime import make_runtime_wrapper, observe_context_build
 from .version import __version__
 
 logger = logging.getLogger(__name__)
@@ -69,12 +72,17 @@ logger = logging.getLogger(__name__)
 __all__ = ["QwenPawInstrumentor"]
 
 _RUNNER_MODULE = "qwenpaw.app.runner.runner"
+_RUNTIME_MODULE = "qwenpaw.runtime.runtime"
+
+
+def _runtime_v2() -> bool:
+    return int(distribution_version("qwenpaw").split(".")[0]) >= 2
 
 
 class QwenPawInstrumentor(BaseInstrumentor):
     """An instrumentor for the QwenPaw application runner.
 
-    Traces ``AgentRunner.query_handler`` as an ``invoke_agent`` span and
+    Traces the 1.x agent runner or 2.x runtime as an ``invoke_agent`` span and
     optionally captures the turn's input/output messages. Model and tool
     calls are delegated to AgentScope and are not instrumented here.
     """
@@ -83,7 +91,7 @@ class QwenPawInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        """Enable the ``AgentRunner.query_handler`` instrumentation.
+        """Enable instrumentation for the installed QwenPaw runtime.
 
         Args:
             **kwargs: Optional arguments
@@ -102,20 +110,28 @@ class QwenPawInstrumentor(BaseInstrumentor):
             completion_hook=kwargs.get("completion_hook")
             or load_completion_hook(),
         )
-        wrap_function_wrapper(
-            _RUNNER_MODULE,
-            "AgentRunner.query_handler",
-            make_query_handler_wrapper(handler),
-        )
-        logger.debug(
-            "Instrumented %s.AgentRunner.query_handler", _RUNNER_MODULE
-        )
+        if _runtime_v2():
+            wrap_function_wrapper(
+                _RUNTIME_MODULE,
+                "Runtime._build_context",
+                observe_context_build,
+            )
+            wrap_function_wrapper(
+                _RUNTIME_MODULE, "Runtime.run", make_runtime_wrapper(handler)
+            )
+        else:
+            wrap_function_wrapper(
+                _RUNNER_MODULE,
+                "AgentRunner.query_handler",
+                make_query_handler_wrapper(handler),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        """Disable the ``AgentRunner.query_handler`` instrumentation."""
+        """Disable instrumentation for the installed QwenPaw runtime."""
         del kwargs
-        runner_module = import_module(_RUNNER_MODULE)
-        unwrap(runner_module.AgentRunner, "query_handler")
-        logger.debug(
-            "Uninstrumented %s.AgentRunner.query_handler", _RUNNER_MODULE
-        )
+        if _runtime_v2():
+            runtime = import_module(_RUNTIME_MODULE).Runtime
+            unwrap(runtime, "run")
+            unwrap(runtime, "_build_context")
+        else:
+            unwrap(import_module(_RUNNER_MODULE).AgentRunner, "query_handler")

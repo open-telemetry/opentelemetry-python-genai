@@ -12,11 +12,15 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 
 def test_instrumentor_targets_qwenpaw_distribution():
     assert QwenPawInstrumentor().instrumentation_dependencies() == (
-        "qwenpaw >= 1.1.0, < 2.0.0; python_version < '3.14'",
+        "qwenpaw >= 1.1.0, < 3.0.0; python_version < '3.14'",
     )
 
 
 def test_uninstrument_unwraps_query_handler(monkeypatch):
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.genai.qwenpaw._runtime_v2",
+        lambda: False,
+    )
     runner_module = ModuleType("qwenpaw.app.runner.runner")
     runner_module.AgentRunner = type("AgentRunner", (), {})
     unwrap_calls = []
@@ -38,9 +42,8 @@ def test_uninstrument_unwraps_query_handler(monkeypatch):
 
 
 def test_instrument_uninstrument_roundtrip(
-    runner_module, tracer_provider, logger_provider, meter_provider
+    tracer_provider, logger_provider, meter_provider
 ):
-    del runner_module
     instrumentor = QwenPawInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,

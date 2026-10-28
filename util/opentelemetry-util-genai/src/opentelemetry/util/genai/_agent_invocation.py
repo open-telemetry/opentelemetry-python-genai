@@ -453,6 +453,9 @@ class LocalAgentInvocation(AgentInvocation):
         self.inference_calls: int | None = None
         self.tool_calls: int | None = None
 
+    def _on_stream_chunk(self, chunk_at: float) -> None:
+        """Local agent envelopes have no client chunk timing metrics."""
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
         if self._data.agent_name is not None:

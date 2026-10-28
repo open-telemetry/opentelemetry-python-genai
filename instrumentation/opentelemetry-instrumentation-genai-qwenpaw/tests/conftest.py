@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib
+from importlib.metadata import version
 
 import pytest
 
@@ -20,10 +21,16 @@ pytest_plugins = [
 
 @pytest.fixture(name="runner_module")
 def fixture_runner_module():
-    try:
-        return importlib.import_module("qwenpaw.app.runner.runner")
-    except ImportError:
-        pytest.skip("qwenpaw is not installed")
+    if int(version("qwenpaw").split(".")[0]) >= 2:
+        pytest.skip("AgentRunner is the QwenPaw 1.x entry point")
+    return importlib.import_module("qwenpaw.app.runner.runner")
+
+
+@pytest.fixture(name="runtime_module")
+def fixture_runtime_module():
+    if int(version("qwenpaw").split(".")[0]) < 2:
+        pytest.skip("Runtime is the QwenPaw 2.x entry point")
+    return importlib.import_module("qwenpaw.runtime.runtime")
 
 
 @pytest.fixture

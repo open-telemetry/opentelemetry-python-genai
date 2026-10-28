@@ -1,0 +1,1 @@
+Avoid client chunk timing metrics for streamed local agent invocations.

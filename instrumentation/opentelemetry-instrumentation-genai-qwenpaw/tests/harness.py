@@ -28,9 +28,15 @@ def assistant_reply(text: str) -> Any:
 
 
 def user_command_msgs(text: str = "/stop") -> list[Any]:
-    from agentscope.message import Msg
+    from agentscope.message import Msg, TextBlock
 
-    return [Msg(name="user", role="user", content=text)]
+    return [
+        Msg(
+            name="user",
+            role="user",
+            content=[TextBlock(type="text", text=text)],
+        )
+    ]
 
 
 def make_request(
@@ -96,3 +102,40 @@ def patched_command_path(runner_module: Any, fake: Any) -> Iterator[None]:
             mock.patch.object(runner_module, "run_command_path", fake)
         )
         yield
+
+
+def runtime_request(
+    text: str = "/test", session_id: str | None = "sess-2"
+) -> Any:
+    from qwenpaw.schemas import AgentRequest, Message, Role, TextContent
+
+    return AgentRequest(
+        input=[Message(role=Role.USER, content=[TextContent(text=text)])],
+        session_id=session_id,
+    )
+
+
+def make_runtime(response_text: str = "Runtime reply.") -> Any:
+    """Use the real 2.x command registry, hooks, runtime and envelope encoder."""
+    from qwenpaw.runtime.hooks import HookRegistry
+    from qwenpaw.runtime.runtime import Runtime
+    from qwenpaw.runtime.slash_command_registry import (
+        CommandSpec,
+        SlashCommandRegistry,
+    )
+
+    async def reply(ctx: Any, args: str) -> Any:
+        del ctx, args
+        return assistant_reply(response_text)
+
+    commands = SlashCommandRegistry()
+    commands.register(CommandSpec(name="test", handler=reply))
+    workspace = SimpleNamespace(
+        agent_id="test-agent",
+        workspace_dir=None,
+        _config=SimpleNamespace(name="Friday"),
+        plugins=SimpleNamespace(
+            hook_registry=HookRegistry(), slash_command_registry=commands
+        ),
+    )
+    return Runtime(workspace=workspace, app_services=None)

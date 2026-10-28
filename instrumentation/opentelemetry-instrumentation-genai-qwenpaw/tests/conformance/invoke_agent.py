@@ -4,24 +4,27 @@
 """Conformance scenario: one QwenPaw turn traced as ``invoke_agent``.
 
 This package emits exactly one semconv operation — ``invoke_agent`` for
-each ``AgentRunner.query_handler`` turn. QwenPaw delegates model (LLM) and
+each runner (1.x) or runtime (2.x) turn. QwenPaw delegates model (LLM) and
 tool execution to AgentScope, so no ``chat`` or ``execute_tool`` spans are
 produced by this package and no scenario covers them — those operations
-belong to the AgentScope instrumentation. The runner's command path is
-stubbed with a canned assistant reply (the package's unit tests mock the
-same seam; no HTTP is involved and no cassette is needed).
+belong to the AgentScope instrumentation. A registered slash command drives the real 2.x runtime;
+the 1.x command path uses a canned reply. Neither requires HTTP or a cassette.
 """
 
 from __future__ import annotations
 
 import asyncio
 import importlib
+import json
+from importlib.metadata import version
 from typing import Any
 
 from tests.harness import (
     fake_run_command_path,
     make_request,
+    make_runtime,
     patched_command_path,
+    runtime_request,
     user_command_msgs,
 )
 
@@ -29,14 +32,15 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class InvokeAgentScenario(Scenario):
-    # The specific attribute values (agent name, conversation id, message
-    # content) are covered by unit tests; conformance only validates the
-    # telemetry shape against the semconv registry.
     expected_spans = {"invoke_agent": 1}
     expected_metrics = ("gen_ai.invoke_agent.duration",)
 
@@ -48,8 +52,7 @@ class InvokeAgentScenario(Scenario):
         logger_provider: LoggerProvider,
         vcr: Any,
     ) -> None:
-        del vcr  # the command path is stubbed; no HTTP is involved
-        runner_module = importlib.import_module("qwenpaw.app.runner.runner")
+        del vcr
         with instrument(
             QwenPawInstrumentor(),
             tracer_provider=tracer_provider,
@@ -57,10 +60,34 @@ class InvokeAgentScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
+            if int(version("qwenpaw").split(".")[0]) >= 2:
+                asyncio.run(_drive_runtime())
+                return
+            runner_module = importlib.import_module(
+                "qwenpaw.app.runner.runner"
+            )
             with patched_command_path(
                 runner_module, fake_run_command_path("Conformance reply.")
             ):
                 asyncio.run(_drive_one_turn(runner_module))
+
+    def validate(self, report: LiveCheckReport) -> None:
+        super().validate(report)
+        spans = [
+            entry["span"] for entry in report["samples"] if "span" in entry
+        ]
+        (span,) = spans
+        attributes = {
+            attr["name"]: attr["value"] for attr in span["attributes"]
+        }
+        assert attributes[GenAI.GEN_AI_CONVERSATION_ID] == "sess-conformance"
+        messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert messages[0]["parts"] == [
+            {"type": "text", "content": "Conformance reply."}
+        ]
+        assert GenAI.GEN_AI_AGENT_ID not in attributes
 
 
 async def _drive_one_turn(runner_module: Any) -> None:
@@ -68,4 +95,10 @@ async def _drive_one_turn(runner_module: Any) -> None:
     async for _ in runner.query_handler(
         user_command_msgs(), make_request(session_id="sess-conformance")
     ):
+        pass
+
+
+async def _drive_runtime() -> None:
+    runtime = make_runtime("Conformance reply.")
+    async for _ in runtime.run(runtime_request(session_id="sess-conformance")):
         pass

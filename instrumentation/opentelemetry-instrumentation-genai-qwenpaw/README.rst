@@ -9,7 +9,7 @@ OpenTelemetry QwenPaw Instrumentation
 This library traces user turns handled by `QwenPaw
 <https://github.com/agentscope-ai/QwenPaw>`_, a personal assistant
 application built on AgentScope. Each turn that goes through
-``AgentRunner.query_handler`` produces one ``invoke_agent`` span following
+``AgentRunner.query_handler`` (1.x) or ``Runtime.run`` (2.x) produces one ``invoke_agent`` span following
 the OpenTelemetry GenAI semantic conventions, carrying the agent display
 name (``gen_ai.agent.name``, when already cached by the runner), the session id
 (``gen_ai.conversation.id``), and — when content capture is enabled — the
@@ -40,11 +40,15 @@ under the ``invoke_agent`` span.
 Supported versions
 ------------------
 
-QwenPaw 1.1.x only. The 2.x `runtime architecture upgrade
-<https://github.com/agentscope-ai/QwenPaw/blob/main/website/public/blog/runtime-architecture-upgrade.en.md>`_
-refactored away ``AgentRunner.query_handler``, the seam this package
-patches, so the dependency is capped at ``< 2.0.0`` and 2.x support will
-be added separately against the new runtime entry point.
+QwenPaw >= 1.1.0, < 3.0.0. Version 1.x uses the agent runner; version
+2.x uses the runtime request entry point and captures text, reasoning,
+tool calls/results, and image/video/file URIs from request messages and
+streamed SSE envelopes. Request normalization and span creation remain lazy;
+SDK-generated session IDs propagate to nested GenAI invocations.
+Version 2.x support requires ``opentelemetry-util-genai`` 1.4b0 or newer
+(``1.4b0.dev`` from this workspace during development). QwenPaw 2.x requires Python >= 3.11,
+< 3.14. Both entry points produce one internal ``invoke_agent`` span per
+turn; model and tool execution remain owned by the underlying libraries.
 
 Installation
 ------------

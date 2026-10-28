@@ -1106,3 +1106,46 @@ class TestAgentInvocationMetrics(TestBase):
             points = metric.data.data_points or []
             metrics_by_name.setdefault(metric.name, []).extend(points)
         return metrics_by_name
+
+
+def test_streamed_local_agent_has_no_client_chunk_metrics() -> None:
+    from collections.abc import Iterator
+
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.util.genai.stream import SyncStreamWrapper
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    handler = TelemetryHandler(meter_provider=provider)
+    invocation = handler.invoke_local_agent(agent_name="streamed-agent")
+    invocation.suspend()
+
+    class AgentStream(SyncStreamWrapper[str]):
+        def _process_chunk(self, chunk: str) -> None:
+            pass
+
+        def _on_stream_end(self) -> None:
+            invocation.stop()
+
+        def _on_stream_error(self, error: BaseException) -> None:
+            invocation.fail(error)
+
+    def chunks() -> Iterator[str]:
+        yield "first"
+        yield "second"
+
+    assert list(AgentStream(chunks(), invocation)) == ["first", "second"]
+    data = reader.get_metrics_data()
+    assert data is not None
+    metrics = [
+        metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    ]
+    assert [metric.name for metric in metrics] == [
+        "gen_ai.invoke_agent.duration"
+    ]
+    assert metrics[0].data.data_points[0].count == 1
+    provider.shutdown()

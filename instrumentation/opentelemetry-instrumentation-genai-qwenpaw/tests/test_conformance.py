@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version
 from typing import Any
 
 import pytest
@@ -21,12 +22,19 @@ from opentelemetry.test_util_genai.conformance import (
 )
 
 from .conformance.invoke_agent import InvokeAgentScenario
+from .conformance.runtime_error import RuntimeErrorScenario
+from .conformance.runtime_messages import RuntimeMessagesScenario
 
 
 @pytest.mark.parametrize(
     "scenario",
     [
         InvokeAgentScenario(),
+        *(
+            [RuntimeErrorScenario(), RuntimeMessagesScenario()]
+            if int(version("qwenpaw").split(".")[0]) >= 2
+            else []
+        ),
     ],
     ids=lambda s: type(s).__name__,
 )
