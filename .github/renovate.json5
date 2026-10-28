@@ -57,6 +57,14 @@
       "schedule": ["before 8am every weekday"]
     },
     {
+      // typecheck-py314 and docs stay on 3.14: crewai and weaviate-client
+      // deps have no Python 3.15 wheels yet (see tox.ini).
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "matchCurrentValue": "3.14",
+      "enabled": false
+    },
+    {
       // pydantic 2.13 bumps PyO3 to 0.28 (via pydantic-core), which drops
       // PyPy 3.10 support. Our openai-latest test matrix still includes
       // PyPy 3.10, so pin pydantic to the 2.12.x line until PyPy 3.10 is

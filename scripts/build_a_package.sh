@@ -34,7 +34,7 @@ fi
 
 
 # Validate version against PEP 440 conventions: https://packaging.pypa.io/en/latest/version.html
-uv run --with packaging python -c "from packaging.version import Version; Version('${pkg_version}')"
+uv run --no-project --with packaging python -c "from packaging.version import Version; Version('${pkg_version}')"
 
 basedir=$(git rev-parse --show-toplevel)
 cd $basedir
