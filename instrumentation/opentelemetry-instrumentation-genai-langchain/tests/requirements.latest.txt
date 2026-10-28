@@ -18,7 +18,7 @@ langchain==1.4.7
 langchain-openai==1.7.3
 langchain-aws==1.9.1
 langchain-google-genai==4.4.2
-langchain-anthropic==1.7.6
+langchain-anthropic==1.7.7
 boto3==1.43.120
 
 -e util/opentelemetry-util-genai
