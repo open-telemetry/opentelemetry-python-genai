@@ -381,39 +381,6 @@ def patch_agent(handler: TelemetryHandler) -> None:
         current_generation,
     )
 
-    embedder_wrappers = _embedder_method_wrappers(handler)
-    for mod_name, cls_name in _KNOWN_EMBEDDERS:
-        for method_name, wrapper_fn in embedder_wrappers:
-            _safe_wrap_function(
-                mod_name,
-                f"{cls_name}.{method_name}",
-                wrapper_fn,
-                current_generation,
-            )
-
-    try:
-        from agno.knowledge.embedder.base import Embedder
-
-        # Wrap all existing custom embedder classes
-        def _wrap_subclasses(base_cls: type[Any]) -> None:
-            for sub in base_cls.__subclasses__():
-                _wrap_embedder_class(sub, handler)
-                _wrap_subclasses(sub)
-
-        _wrap_subclasses(Embedder)
-
-        # Wrap new embedder classes created during runtime
-        def _traced_init_subclass(cls: type[Embedder], **kwargs: Any) -> None:
-            super(Embedder, cls).__init_subclass__(**kwargs)
-            if _is_instrumented:
-                _wrap_embedder_class(cls, handler)
-
-        setattr(
-            Embedder, "__init_subclass__", classmethod(_traced_init_subclass)
-        )
-    except Exception:
-        pass
-
     embedder_wrappers = [
         (method_name, factory(handler))
         for method_name, factory in _EMBEDDER_METHOD_FACTORIES
@@ -1908,29 +1875,37 @@ def _populate_model_response_telemetry(
                 cast(object, provider_dict["model"])
             )
 
-    source_metrics = None
-    if assistant_message is not None:
-        source_metrics = getattr(assistant_message, "metrics", None)
-    if source_metrics is None and model_response is not None:
-        source_metrics = getattr(
-            model_response, "response_usage", model_response
-        )
+    source_metrics = (
+        getattr(model_response, "response_usage", None)
+        if model_response is not None
+        else None
+    )
 
-    invocation.input_tokens = safe_int(
-        getattr(source_metrics, "input_tokens", None)
-    )
-    invocation.output_tokens = safe_int(
-        getattr(source_metrics, "output_tokens", None)
-    )
-    invocation.cache_read_input_tokens = safe_int(
-        getattr(source_metrics, "cache_read_tokens", None)
-    )
-    invocation.cache_write_input_tokens = safe_int(
-        getattr(source_metrics, "cache_write_tokens", None)
-    )
-    invocation.thinking_tokens = safe_int(
-        getattr(source_metrics, "reasoning_tokens", None)
-    )
+    if source_metrics is not None:
+        invocation.input_tokens = safe_int(
+            getattr(source_metrics, "input_tokens", None)
+        )
+        invocation.output_tokens = safe_int(
+            getattr(source_metrics, "output_tokens", None)
+        )
+        if (
+            cache_read := safe_int(
+                getattr(source_metrics, "cache_read_tokens", None)
+            )
+        ) is not None and cache_read > 0:
+            invocation.cache_read_input_tokens = cache_read
+        if (
+            cache_write := safe_int(
+                getattr(source_metrics, "cache_write_tokens", None)
+            )
+        ) is not None and cache_write > 0:
+            invocation.cache_write_input_tokens = cache_write
+        if (
+            reasoning := safe_int(
+                getattr(source_metrics, "reasoning_tokens", None)
+            )
+        ) is not None and reasoning > 0:
+            invocation.thinking_tokens = reasoning
 
     finish_reasons = extract_model_finish_reasons(
         assistant_message, model_response

@@ -337,6 +337,19 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_on_close = on_close
 
 
+def _has_usage(metrics: Any) -> bool:
+    if metrics is None:
+        return False
+    in_tok = safe_int(getattr(metrics, "input_tokens", None))
+    out_tok = safe_int(getattr(metrics, "output_tokens", None))
+    tot_tok = safe_int(getattr(metrics, "total_tokens", None))
+    return bool(
+        (in_tok is not None and in_tok > 0)
+        or (out_tok is not None and out_tok > 0)
+        or (tot_tok is not None and tot_tok > 0)
+    )
+
+
 class _ModelStreamMixin:
     _self_invocation: InferenceInvocation
     _self_assistant_message: Message | None
@@ -372,16 +385,17 @@ class _ModelStreamMixin:
         else:
             in_tok = safe_int(getattr(chunk, "input_tokens", None))
             out_tok = safe_int(getattr(chunk, "output_tokens", None))
-            if (
-                in_tok is not None
-                and self._self_invocation.input_tokens is None
-            ):
-                self._self_invocation.input_tokens = in_tok
-            if (
-                out_tok is not None
-                and self._self_invocation.output_tokens is None
-            ):
-                self._self_invocation.output_tokens = out_tok
+            if in_tok is not None and in_tok > 0:
+                if self._self_invocation.input_tokens is None:
+                    self._self_invocation.input_tokens = in_tok
+                if (
+                    out_tok is not None
+                    and self._self_invocation.output_tokens is None
+                ):
+                    self._self_invocation.output_tokens = out_tok
+            elif out_tok is not None and out_tok > 0:
+                if self._self_invocation.output_tokens is None:
+                    self._self_invocation.output_tokens = out_tok
 
     def _record_metrics(self, metrics: Any) -> None:
         if metrics is None:
@@ -396,26 +410,26 @@ class _ModelStreamMixin:
             self._self_invocation.output_tokens = tok
         if (
             tok := safe_int(getattr(metrics, "cache_read_tokens", None))
-        ) is not None:
+        ) is not None and tok > 0:
             self._self_invocation.cache_read_input_tokens = tok
         if (
             tok := safe_int(getattr(metrics, "cache_write_tokens", None))
-        ) is not None:
+        ) is not None and tok > 0:
             self._self_invocation.cache_write_input_tokens = tok
         if (
             tok := safe_int(getattr(metrics, "reasoning_tokens", None))
-        ) is not None:
+        ) is not None and tok > 0:
             self._self_invocation.thinking_tokens = tok
 
     def _finalize_telemetry(self, error: BaseException | None = None) -> None:
         metrics = getattr(self._self_assistant_message, "metrics", None)
-        if metrics is not None:
+        if _has_usage(metrics):
             self._record_metrics(metrics)
         elif self._self_stream_data is not None:
             sd_metrics = getattr(
                 self._self_stream_data, "response_metrics", None
             )
-            if sd_metrics is not None:
+            if _has_usage(sd_metrics):
                 self._record_metrics(sd_metrics)
 
         provider_data = getattr(
@@ -505,6 +519,7 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         stream_data: MessageData | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
+        invocation.suspend()
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
         self._self_accumulated_chunks = []
@@ -521,6 +536,7 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         stream_data: MessageData | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
+        invocation.suspend()
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
         self._self_accumulated_chunks = []

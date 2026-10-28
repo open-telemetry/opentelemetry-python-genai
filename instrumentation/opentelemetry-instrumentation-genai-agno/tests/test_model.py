@@ -1033,3 +1033,95 @@ def test_model_multimodal_inputs_and_outputs(
         "mime_type": "audio/mpeg",
         "content": b64encode(raw_audio).decode(),
     }
+
+
+class _NoUsageModel(MockModel):
+    """Model implementation returning responses without usage information."""
+
+    def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(content="hi from no-usage model")
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(content="async hi from no-usage model")
+
+    def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+        yield ModelResponse(content="chunk 1 ")
+        yield ModelResponse(content="chunk 2")
+
+    async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+        yield ModelResponse(content="async chunk 1 ")
+        yield ModelResponse(content="async chunk 2")
+
+
+def test_model_response_without_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that model response without reported usage emits no usage attributes."""
+    model = _NoUsageModel(id="gpt-4o")
+    model.response(messages=[Message(role="user", content="hi")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
+
+
+def test_model_aresponse_without_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that async model response without reported usage emits no usage attributes."""
+    model = _NoUsageModel(id="gpt-4o")
+    asyncio.run(model.aresponse(messages=[Message(role="user", content="hi")]))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
+
+
+def test_model_response_stream_without_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that streamed model response without reported usage emits no usage attributes."""
+    model = _NoUsageModel(id="gpt-4o")
+    for _ in model.response_stream(
+        messages=[Message(role="user", content="hi")]
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
+
+
+def test_model_aresponse_stream_without_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that async streamed model response without reported usage emits no usage attributes."""
+    model = _NoUsageModel(id="gpt-4o")
+
+    async def _run() -> None:
+        async for _ in model.aresponse_stream(
+            messages=[Message(role="user", content="hi")]
+        ):
+            pass
+
+    asyncio.run(_run())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in attrs
+    assert GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
