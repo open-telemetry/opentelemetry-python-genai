@@ -116,14 +116,6 @@ _KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
     ("agno.knowledge.embedder.openai_like", "OpenAILikeEmbedder"),
     ("agno.knowledge.embedder.vllm", "VLLMEmbedder"),
 )
-_EMBEDDER_METHODS: frozenset[str] = frozenset(
-    {
-        "get_embedding",
-        "get_embedding_and_usage",
-        "async_get_embedding",
-        "async_get_embedding_and_usage",
-    }
-)
 
 
 def _release_run_id(run_id: str | None) -> None:
@@ -292,7 +284,10 @@ def patch_agent(handler: TelemetryHandler) -> None:
         current_generation,
     )
 
-    embedder_wrappers = _embedder_method_wrappers(handler)
+    embedder_wrappers = [
+        (method_name, factory(handler))
+        for method_name, factory in _EMBEDDER_METHOD_FACTORIES
+    ]
     for mod_name, cls_name in _KNOWN_EMBEDDERS:
         for method_name, wrapper_fn in embedder_wrappers:
             _safe_wrap_function(
@@ -321,8 +316,8 @@ def unpatch_agent() -> None:
             mod = sys.modules[mod_name]
             cls = getattr(mod, cls_name, None)
             if cls is not None:
-                for attr in _EMBEDDER_METHODS:
-                    _safe_unwrap(cls, attr)
+                for method_name, _ in _EMBEDDER_METHOD_FACTORIES:
+                    _safe_unwrap(cls, method_name)
 
     if _AGNO_MODULE in sys.modules:
         try:
@@ -408,7 +403,7 @@ def _start_embedding(
     return invocation
 
 
-def _finish_embedding(
+def _set_embedding_attributes(
     invocation: EmbeddingInvocation,
     instance: Embedder,
     embedding: Sequence[float] | None,
@@ -424,8 +419,6 @@ def _finish_embedding(
         if model := usage.get("model"):
             invocation.response_model_name = str(model)
 
-    invocation.stop()
-
 
 def _embedder_get_embedding(
     handler: TelemetryHandler,
@@ -436,14 +429,10 @@ def _embedder_get_embedding(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Sequence[float]:
-        invocation = _start_embedding(handler, instance)
-        try:
+        with _start_embedding(handler, instance) as invocation:
             result = wrapped(*args, **kwargs)
-            _finish_embedding(invocation, instance, result)
+            _set_embedding_attributes(invocation, instance, result)
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return traced_method
 
@@ -457,15 +446,11 @@ def _embedder_get_embedding_and_usage(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> tuple[Sequence[float], dict[str, Any] | None]:
-        invocation = _start_embedding(handler, instance)
-        try:
+        with _start_embedding(handler, instance) as invocation:
             result = wrapped(*args, **kwargs)
             embedding, usage = result
-            _finish_embedding(invocation, instance, embedding, usage)
+            _set_embedding_attributes(invocation, instance, embedding, usage)
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return traced_method
 
@@ -479,14 +464,10 @@ def _embedder_async_get_embedding(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Sequence[float]:
-        invocation = _start_embedding(handler, instance)
-        try:
+        with _start_embedding(handler, instance) as invocation:
             result = await wrapped(*args, **kwargs)
-            _finish_embedding(invocation, instance, result)
+            _set_embedding_attributes(invocation, instance, result)
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(Callable[..., Any], traced_method)
 
@@ -502,34 +483,23 @@ def _embedder_async_get_embedding_and_usage(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> tuple[Sequence[float], dict[str, Any] | None]:
-        invocation = _start_embedding(handler, instance)
-        try:
+        with _start_embedding(handler, instance) as invocation:
             result = await wrapped(*args, **kwargs)
             embedding, usage = result
-            _finish_embedding(invocation, instance, embedding, usage)
+            _set_embedding_attributes(invocation, instance, embedding, usage)
             return result
-        except BaseException as error:
-            invocation.fail(error)
-            raise
 
     return cast(Callable[..., Any], traced_method)
 
 
-def _embedder_method_wrappers(
-    handler: TelemetryHandler,
-) -> tuple[tuple[str, Callable[..., Any]], ...]:
-    return (
-        ("get_embedding", _embedder_get_embedding(handler)),
-        (
-            "get_embedding_and_usage",
-            _embedder_get_embedding_and_usage(handler),
-        ),
-        ("async_get_embedding", _embedder_async_get_embedding(handler)),
-        (
-            "async_get_embedding_and_usage",
-            _embedder_async_get_embedding_and_usage(handler),
-        ),
-    )
+_EMBEDDER_METHOD_FACTORIES: tuple[
+    tuple[str, Callable[[TelemetryHandler], Callable[..., Any]]], ...
+] = (
+    ("get_embedding", _embedder_get_embedding),
+    ("get_embedding_and_usage", _embedder_get_embedding_and_usage),
+    ("async_get_embedding", _embedder_async_get_embedding),
+    ("async_get_embedding_and_usage", _embedder_async_get_embedding_and_usage),
+)
 
 
 def _extract_input_content(input_val: Any) -> str:

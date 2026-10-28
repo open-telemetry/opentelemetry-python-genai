@@ -10,7 +10,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agno.exceptions import EmbeddingError
+
+try:
+    from agno.exceptions import EmbeddingError
+except ImportError:
+    EmbeddingError = None
 from agno.knowledge.embedder.azure_openai import AzureOpenAIEmbedder
 from agno.knowledge.embedder.base import Embedder
 from agno.knowledge.embedder.openai import OpenAIEmbedder
@@ -296,20 +300,25 @@ def test_embedder_error_handling(
     mock_client.embeddings.create.side_effect = ValueError(
         "Invalid embedding request"
     )
-    embedder = OpenAIEmbedder(
+    embedder = AzureOpenAIEmbedder(
         api_key="fake",
-        id="text-embedding-3-small",
+        azure_endpoint="https://test.openai.azure.com",
         openai_client=mock_client,
     )
 
-    with pytest.raises(EmbeddingError, match="Invalid embedding request"):
+    expected_error = EmbeddingError or ValueError
+    expected_error_type = (
+        "agno.exceptions.EmbeddingError" if EmbeddingError else "ValueError"
+    )
+
+    with pytest.raises(expected_error, match="Invalid embedding request"):
         embedder.get_embedding("failing input")
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes.get(ERROR_TYPE) == "agno.exceptions.EmbeddingError"
+    assert span.attributes.get(ERROR_TYPE) == expected_error_type
 
 
 def test_embedder_provider_extraction_azure(
