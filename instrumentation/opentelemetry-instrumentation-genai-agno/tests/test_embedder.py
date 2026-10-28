@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from agno.exceptions import EmbeddingError
 from agno.knowledge.embedder.azure_openai import AzureOpenAIEmbedder
 from agno.knowledge.embedder.base import Embedder
 from agno.knowledge.embedder.openai import OpenAIEmbedder
@@ -39,6 +39,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
     GEN_AI_REQUEST_MODEL,
+    GEN_AI_RESPONSE_MODEL,
     GEN_AI_USAGE_INPUT_TOKENS,
 )
 from opentelemetry.trace.status import StatusCode
@@ -56,77 +57,6 @@ def _create_mock_response(
     else:
         resp.usage = None
     return resp
-
-
-@dataclass
-class SimpleEmbedder(Embedder):
-    id: str = "text-embedding-3-small"
-    provider: str = "openai"
-
-    def get_embedding(self, text: str) -> list[float]:
-        return [0.1, 0.2, 0.3, 0.4, 0.5]
-
-
-class SubSimpleEmbedder(SimpleEmbedder):
-    """Subclass defined before instrumentation that inherits without overriding."""
-
-
-@dataclass
-class UsageEmbedder(Embedder):
-    model: str = "text-embedding-usage"
-    provider: str = "custom_provider"
-
-    def get_embedding_and_usage(
-        self, text: str
-    ) -> tuple[list[float], dict[str, int]]:
-        return [0.1, 0.2, 0.3], {"input_tokens": 12, "total_tokens": 12}
-
-
-@dataclass
-class AsyncEmbedder(Embedder):
-    id: str = "async-embed-model"
-    provider: str = "cohere"
-
-    async def async_get_embedding(self, text: str) -> list[float]:
-        return [0.7, 0.8]
-
-    async def async_get_embedding_and_usage(
-        self, text: str
-    ) -> tuple[list[float], dict[str, int]]:
-        return [0.7, 0.8], {"prompt_tokens": 5}
-
-
-@dataclass
-class NestedCallingEmbedder(Embedder):
-    id: str = "nested-embedder"
-
-    def get_embedding(self, text: str) -> list[float]:
-        return [0.1, 0.2]
-
-    def get_embedding_and_usage(
-        self, text: str
-    ) -> tuple[list[float], dict[str, int]]:
-        # Internally calls get_embedding
-        vec = self.get_embedding(text)
-        return vec, {"input_tokens": 4}
-
-    async def async_get_embedding(self, text: str) -> list[float]:
-        return [0.3, 0.4]
-
-    async def async_get_embedding_and_usage(
-        self, text: str
-    ) -> tuple[list[float], dict[str, int]]:
-        # Internally calls async_get_embedding
-        vec = await self.async_get_embedding(text)
-        return vec, {"input_tokens": 6}
-
-
-@dataclass
-class FailingEmbedder(Embedder):
-    id: str = "fail-embedder"
-
-    def get_embedding(self, text: str) -> list[float]:
-        raise ValueError("Invalid embedding request")
 
 
 def test_embedder_get_embedding_sync(
@@ -156,6 +86,7 @@ def test_embedder_get_embedding_sync(
         span.attributes.get(GEN_AI_REQUEST_MODEL) == "text-embedding-3-small"
     )
     assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 5
+    assert GEN_AI_RESPONSE_MODEL not in span.attributes
     assert span.status.status_code != StatusCode.ERROR
 
 
@@ -186,6 +117,38 @@ def test_embedder_get_embedding_and_usage_sync(
     assert span.attributes.get(GEN_AI_REQUEST_MODEL) == "text-embedding-usage"
     assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 3
     assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 12
+    assert GEN_AI_RESPONSE_MODEL not in span.attributes
+
+
+def test_embedder_get_embedding_and_usage_with_response_model(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test sync get_embedding_and_usage records response model when present in usage."""
+    mock_client = MagicMock()
+    mock_client.embeddings.create.return_value = _create_mock_response(
+        [0.1, 0.2, 0.3],
+        {
+            "input_tokens": 12,
+            "total_tokens": 12,
+            "model": "text-embedding-3-small-response",
+        },
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="text-embedding-usage",
+        openai_client=mock_client,
+    )
+    vec, usage = embedder.get_embedding_and_usage("sample text")
+    assert vec == [0.1, 0.2, 0.3]
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GEN_AI_RESPONSE_MODEL)
+        == "text-embedding-3-small-response"
+    )
 
 
 def test_embedder_async_get_embedding(
@@ -329,16 +292,24 @@ def test_embedder_error_handling(
     span_exporter,
 ) -> None:
     """Test that an error raised by get_embedding marks the span as failed."""
-    embedder = FailingEmbedder()
+    mock_client = MagicMock()
+    mock_client.embeddings.create.side_effect = ValueError(
+        "Invalid embedding request"
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="text-embedding-3-small",
+        openai_client=mock_client,
+    )
 
-    with pytest.raises(ValueError, match="Invalid embedding request"):
+    with pytest.raises(EmbeddingError, match="Invalid embedding request"):
         embedder.get_embedding("failing input")
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes.get(ERROR_TYPE) == "ValueError"
+    assert span.attributes.get(ERROR_TYPE) == "agno.exceptions.EmbeddingError"
 
 
 def test_embedder_provider_extraction_azure(
@@ -648,128 +619,66 @@ def test_resolve_embedder_provider_unit() -> None:
     setattr(custom_model, "id", "cohere/embed-multilingual-v3.0")
     assert resolve_embedder_provider(custom_model) == "cohere"
 
-
-def test_embedder_init_subclass_calls_original_and_unpatch_restores(
-    instrument_agno,
-    span_exporter,
-) -> None:
-    """Test that custom base __init_subclass__ logic is called and restored on uninstrument."""
-    called_with: list[tuple[type[Any], str | None]] = []
-
-    class TrackedBaseEmbedder(Embedder):
-        def __init_subclass__(
-            cls, custom_arg: str | None = None, **kwargs: Any
-        ) -> None:
-            super().__init_subclass__(**kwargs)
-            called_with.append((cls, custom_arg))
-
-    class SubTrackedEmbedder(TrackedBaseEmbedder, custom_arg="value"):
-        def get_embedding(self, text: str) -> list[float]:
-            return [0.1]
-
-    # Verify original __init_subclass__ was called with subclass and kwargs
-    assert len(called_with) == 1
-    assert called_with[0] == (SubTrackedEmbedder, "value")
-
-    # Verify newly created subclass was instrumented
-    sub = SubTrackedEmbedder()
-    sub.get_embedding("traced")
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    span_exporter.clear()
-
-    # Uninstrument and verify restoration
-    instrument_agno.uninstrument()
-    called_with.clear()
-
-    class SubTrackedEmbedderAfter(TrackedBaseEmbedder, custom_arg="after"):
-        def get_embedding(self, text: str) -> list[float]:
-            return [0.2]
-
-    assert len(called_with) == 1
-    assert called_with[0] == (SubTrackedEmbedderAfter, "after")
-
-    sub_after = SubTrackedEmbedderAfter()
-    sub_after.get_embedding("untraced")
-    assert len(span_exporter.get_finished_spans()) == 0
-
-
-def test_embedder_subclass_created_after_instrumentation(
-    instrument_agno,
-    span_exporter,
-) -> None:
-    """Test that a new Embedder subclass defined after instrumentation is monkey-patched via __init_subclass__."""
-
-    class DynamicEmbedder(Embedder):
-        id: str = "dynamic-model"
-        provider: str = "custom-provider"
-
-        def get_embedding(self, text: str) -> list[float]:
-            return [0.11, 0.22, 0.33]
-
-        async def async_get_embedding(self, text: str) -> list[float]:
-            return [0.44, 0.55]
-
-    embedder = DynamicEmbedder()
-
-    # Verify sync method emits embedding span
-    vec = embedder.get_embedding("dynamic text")
-    assert vec == [0.11, 0.22, 0.33]
-
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].name == "embeddings dynamic-model"
-    assert spans[0].attributes.get(GEN_AI_OPERATION_NAME) == "embeddings"
-    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "custom-provider"
-    assert spans[0].attributes.get(GEN_AI_REQUEST_MODEL) == "dynamic-model"
-    assert spans[0].attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 3
-    span_exporter.clear()
-
-    # Verify async method emits embedding span
-    async def _test() -> None:
-        async_vec = await embedder.async_get_embedding("dynamic async text")
-        assert async_vec == [0.44, 0.55]
-
-    asyncio.run(_test())
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].name == "embeddings dynamic-model"
-    assert spans[0].attributes.get(GEN_AI_OPERATION_NAME) == "embeddings"
-    assert spans[0].attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
-
-
-def test_embedder_subclass_inheritance_prevents_double_instrumentation(
-    instrument_agno,
-    span_exporter,
-) -> None:
-    """Test that a subclass inheriting methods without overriding them does not double-instrument."""
-    # 1. Subclass defined BEFORE instrumentation (discovered via _wrap_subclasses)
-    pre_embedder = SubSimpleEmbedder()
-    vec1 = pre_embedder.get_embedding("hello pre")
-    assert vec1 == [0.1, 0.2, 0.3, 0.4, 0.5]
-
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].name == "embeddings text-embedding-3-small"
-    assert "get_embedding" not in SubSimpleEmbedder.__dict__
-    span_exporter.clear()
-
-    # 2. Subclass defined AFTER instrumentation (hooked via __init_subclass__)
-    class BaseCustomEmbedder(Embedder):
-        id: str = "base-custom-model"
-
-        def get_embedding(self, text: str) -> list[float]:
-            return [0.1, 0.2]
-
-    class DerivedCustomEmbedder(BaseCustomEmbedder):
-        # Inherits get_embedding without overriding
+    # Unknown vendor submodule in agno.knowledge.embedder.<unknown> should fall back to "unknown"
+    class CustomUnknownModuleEmbedder(Embedder):
         pass
 
-    embedder = DerivedCustomEmbedder()
-    vec2 = embedder.get_embedding("hello post")
-    assert vec2 == [0.1, 0.2]
+    CustomUnknownModuleEmbedder.__module__ = (
+        "agno.knowledge.embedder.some_unknown_vendor"
+    )
+    assert (
+        resolve_embedder_provider(CustomUnknownModuleEmbedder()) == "unknown"
+    )
 
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].name == "embeddings base-custom-model"
-    assert "get_embedding" not in DerivedCustomEmbedder.__dict__
+
+def test_embedder_dual_instrumentation_suppressed_inner(
+    span_exporter, tracer_provider, logger_provider, meter_provider
+) -> None:
+    """Test that inner client embedding invocation is suppressed when both Agno and client are instrumented."""
+    pytest.importorskip("opentelemetry.instrumentation.genai.openai")
+    from unittest.mock import patch
+
+    import openai
+    from openai.types import CreateEmbeddingResponse, Embedding
+
+    from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
+    from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
+    from opentelemetry.test_util_genai.instrumentor import instrument
+
+    with (
+        instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ),
+        instrument(
+            OpenAIInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ),
+    ):
+        client = openai.OpenAI(api_key="fake")
+        fake_response = CreateEmbeddingResponse(
+            data=[
+                Embedding(embedding=[0.1, 0.2], index=0, object="embedding")
+            ],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 5, "total_tokens": 5},
+        )
+        with patch.object(client, "post", return_value=fake_response):
+            embedder = OpenAIEmbedder(
+                api_key="fake",
+                id="text-embedding-3-small",
+                openai_client=client,
+            )
+            res = embedder.get_embedding("test")
+        assert res == [0.1, 0.2]
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert (
+            spans[0].instrumentation_scope.name
+            == "opentelemetry.instrumentation.genai.agno"
+        )

@@ -391,7 +391,6 @@ def _resolve_provider(
                 return google_provider
             if sub in _KNOWN_PROVIDERS:
                 return _KNOWN_PROVIDERS[sub]
-            return sub
 
     # 4. Check model/id prefix if it has provider/model format
     model_id = (
