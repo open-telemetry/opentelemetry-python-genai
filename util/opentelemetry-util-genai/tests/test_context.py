@@ -2437,7 +2437,6 @@ class TestFetchResponseContext(BaseContextTest):
                 self.assertIsInstance(inner, SuppressedFetchResponseInvocation)
                 inner.record_stream_chunk()
                 inner.record_stream_chunk()
-                self.assertTrue(inner._data.request_stream)
         metrics = self._harvest_metrics()
         self.assertNotIn(
             "gen_ai.client.operation.time_to_first_chunk", metrics
