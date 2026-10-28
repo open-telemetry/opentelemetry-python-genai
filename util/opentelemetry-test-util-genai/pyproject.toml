@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 name = "opentelemetry-test-util-genai"
 version = "0.0.0"
 description = "Internal-only test fixtures and helpers for the OpenTelemetry GenAI workspace. Not published."
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = ["Private :: Do Not Upload"]
 # Lower bounds are required: sibling packages install this editable in their oldest test env
 # under UV_RESOLUTION=lowest-direct, which floors every unbounded dep to its earliest release.

@@ -4,6 +4,9 @@
     "config:best-practices",
     "helpers:pinGitHubActionDigestsToSemver"
   ],
+  // Wait 3 days before proposing updates to allow PyPI / upstream registries
+  // to quarantine compromised releases (e.g. LiteLLM v1.107.0).
+  "minimumReleaseAge": "3 days",
   // requirements.oldest.txt pins exist to test against the oldest
   // supported versions and must not be auto-updated.
   "ignorePaths": ["**/requirements.oldest.txt"],
@@ -63,14 +66,6 @@
       "matchDepNames": ["python"],
       "matchCurrentValue": "3.14",
       "enabled": false
-    },
-    {
-      // pydantic 2.13 bumps PyO3 to 0.28 (via pydantic-core), which drops
-      // PyPy 3.10 support. Our openai-latest test matrix still includes
-      // PyPy 3.10, so pin pydantic to the 2.12.x line until PyPy 3.10 is
-      // removed from the matrix.
-      "matchPackageNames": ["pydantic"],
-      "allowedVersions": "<2.13"
     },
     {
       // requirements.<lib>-v<N>.txt or requirements.v<N>.txt tests the newest release of an older
