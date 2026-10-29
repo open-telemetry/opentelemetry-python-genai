@@ -373,7 +373,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
         log_record = logs[0].log_record
         assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -450,7 +457,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
         log_record = logs[0].log_record
         assert_log_record_when_error(log_record, spans[0])
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 def test_chat_openai_multimodal_image_llm_call(
