@@ -182,6 +182,20 @@ def _to_role(role: str | None) -> str:
     return ""
 
 
+# Gemini reasons that stop a candidate for safety or policy reasons. The
+# semantic conventions call that outcome `content_filter`.
+_CONTENT_FILTER_FINISH_REASONS = frozenset(
+    {
+        genai_types.FinishReason.SAFETY,
+        genai_types.FinishReason.BLOCKLIST,
+        genai_types.FinishReason.PROHIBITED_CONTENT,
+        genai_types.FinishReason.SPII,
+        genai_types.FinishReason.IMAGE_SAFETY,
+        genai_types.FinishReason.RECITATION,
+    }
+)
+
+
 def _to_finish_reason(
     finish_reason: genai_types.FinishReason | None,
 ) -> FinishReason | str:
@@ -196,6 +210,9 @@ def _to_finish_reason(
         return "stop"
     if finish_reason is genai_types.FinishReason.MAX_TOKENS:
         return "length"
+    if finish_reason in _CONTENT_FILTER_FINISH_REASONS:
+        return "content_filter"
 
-    # If there is no 1:1 mapping to an OTel preferred enum value, use the exact vertex reason
-    return finish_reason.name
+    # No 1:1 mapping to a semantic-conventions value: keep the Vertex reason,
+    # lowercased like the other values.
+    return finish_reason.name.lower()

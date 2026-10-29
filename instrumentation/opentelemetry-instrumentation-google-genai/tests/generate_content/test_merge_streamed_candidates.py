@@ -80,6 +80,20 @@ def test_contentless_candidate_produces_no_output_message():
     assert to_output_messages(candidates=merged) == []
 
 
+def test_unspecified_finish_reason_does_not_overwrite_a_real_one():
+    merged = _merge_streamed_candidates(
+        [
+            Candidate(index=0, finish_reason=FinishReason.STOP),
+            Candidate(
+                index=0,
+                finish_reason=FinishReason.FINISH_REASON_UNSPECIFIED,
+            ),
+        ]
+    )
+
+    assert merged == [Candidate(index=0, finish_reason=FinishReason.STOP)]
+
+
 def test_orders_candidates_by_index():
     merged = _merge_streamed_candidates(
         [

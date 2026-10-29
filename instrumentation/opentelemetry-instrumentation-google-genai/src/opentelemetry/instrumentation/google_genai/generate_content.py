@@ -14,6 +14,7 @@ from google.genai.types import (
     Content,
     ContentListUnion,
     ContentListUnionDict,
+    FinishReason,
     GenerateContentConfig,
     GenerateContentConfigOrDict,
     GenerateContentResponse,
@@ -50,6 +51,7 @@ from .client_info import get_client_info as _get_client_info
 from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
 from .dict_util import flatten_dict
 from .message import (
+    _to_finish_reason,
     to_input_messages,
     to_output_messages,
     to_system_instructions,
@@ -420,19 +422,23 @@ def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
     return dict(attrs or {})
 
 
+def _finish_reasons(candidates: Iterable[Candidate]) -> list[str]:
+    """Returns one finish reason per candidate, in candidate order.
+
+    A candidate that never reports why it stopped is reported as `error`
+    rather than dropped, so the list stays aligned with the candidates.
+    """
+    return [_to_finish_reason(c.finish_reason) or "error" for c in candidates]
+
+
 def _apply_response_attributes(
     response: GenerateContentResponse,
-    finish_reasons: list[str],
     invocation: InferenceInvocation,
 ):
     if response.response_id:
         invocation.response_id = response.response_id
     if response.model_version:
         invocation.response_model_name = response.model_version
-    for candidate in response.candidates or []:
-        if candidate.finish_reason:
-            finish_reasons.append(candidate.finish_reason.value.lower())
-    invocation.finish_reasons = finish_reasons
     input_tokens = _get_response_property(
         response, "usage_metadata.prompt_token_count"
     )
@@ -528,7 +534,6 @@ def _create_instrumented_generate_content(
                 telemetry_handler,
                 config,
             )
-            finish_reasons = []
             _, server_address = _get_client_info(instance)
             with telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
@@ -568,8 +573,9 @@ def _create_instrumented_generate_content(
                         *_args,
                         **_kwargs,
                     )
-                    _apply_response_attributes(
-                        response, finish_reasons, invocation
+                    _apply_response_attributes(response, invocation)
+                    invocation.finish_reasons = _finish_reasons(
+                        response.candidates or []
                     )
                     if response.candidates:
                         candidates.extend(response.candidates)
@@ -601,7 +607,12 @@ def _merge_streamed_candidates(candidates: list[Candidate]) -> list[Candidate]:
         target = merged.get(index)
         if target is None:
             target = merged[index] = Candidate(index=candidate.index)
-        if candidate.finish_reason is not None:
+        # A chunk that has not reached its end carries UNSPECIFIED, which must
+        # not overwrite a reason an earlier chunk gave.
+        if candidate.finish_reason not in (
+            None,
+            FinishReason.FINISH_REASON_UNSPECIFIED,
+        ):
             target.finish_reason = candidate.finish_reason
         if not candidate.content:
             continue
@@ -633,15 +644,10 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
-        self._self_finish_reasons: list[str] = []
         self._self_candidates = []
 
     def _process_chunk(self, chunk: GenerateContentResponse) -> None:
-        _apply_response_attributes(
-            chunk,
-            self._self_finish_reasons,
-            self._self_invocation,
-        )
+        _apply_response_attributes(chunk, self._self_invocation)
         if chunk.candidates:
             self._self_candidates.extend(chunk.candidates)
 
@@ -652,6 +658,10 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
         ):
             self._self_invocation.output_messages = to_output_messages(
                 candidates=_merge_streamed_candidates(self._self_candidates)
+            )
+        if self._self_candidates:
+            self._self_invocation.finish_reasons = _finish_reasons(
+                _merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -673,15 +683,10 @@ class AsyncGenerateContentStreamWrapper(
         # between attributes on the wrapped function and the original function.
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
-        self._self_finish_reasons: list[str] = []
         self._self_candidates = []
 
     def _process_chunk(self, chunk: GenerateContentResponse) -> None:
-        _apply_response_attributes(
-            chunk,
-            self._self_finish_reasons,
-            self._self_invocation,
-        )
+        _apply_response_attributes(chunk, self._self_invocation)
         if chunk.candidates:
             self._self_candidates.extend(chunk.candidates)
 
@@ -692,6 +697,10 @@ class AsyncGenerateContentStreamWrapper(
         ):
             self._self_invocation.output_messages = to_output_messages(
                 candidates=_merge_streamed_candidates(self._self_candidates)
+            )
+        if self._self_candidates:
+            self._self_invocation.finish_reasons = _finish_reasons(
+                _merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -796,7 +805,6 @@ def _create_instrumented_async_generate_content(
                 telemetry_handler,
                 config,
             )
-            finish_reasons = []
             _, server_address = _get_client_info(instance)
             with telemetry_handler.inference(
                 provider=_determine_genai_system(instance),
@@ -836,8 +844,9 @@ def _create_instrumented_async_generate_content(
                         *_args,
                         **_kwargs,
                     )
-                    _apply_response_attributes(
-                        response, finish_reasons, invocation
+                    _apply_response_attributes(response, invocation)
+                    invocation.finish_reasons = _finish_reasons(
+                        response.candidates or []
                     )
                     if response.candidates:
                         candidates.extend(response.candidates)
