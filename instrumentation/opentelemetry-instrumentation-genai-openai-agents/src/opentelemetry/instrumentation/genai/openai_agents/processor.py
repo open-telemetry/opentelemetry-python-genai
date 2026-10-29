@@ -194,9 +194,12 @@ class GenAIRunHooks(RunHooks[Any]):
         self,
         hooks: RunHooks[Any] | None,
         processor: GenAITracingProcessor,
+        *,
+        count_inference_calls: bool = True,
     ) -> None:
         self._hooks = hooks if hooks is not None else RunHooks()
         self._processor = processor
+        self._count_inference_calls = count_inference_calls
 
     def _get_invocation(self) -> LocalAgentInvocation | None:
         invocation = self._processor._get_current_agent()
@@ -216,7 +219,7 @@ class GenAIRunHooks(RunHooks[Any]):
 
     async def on_llm_start(self, *args: Any, **kwargs: Any) -> None:
         invocation = self._get_invocation()
-        if invocation is not None:
+        if self._count_inference_calls and invocation is not None:
             invocation.inference_calls = (invocation.inference_calls or 0) + 1
         await self._hooks.on_llm_start(*args, **kwargs)
 
