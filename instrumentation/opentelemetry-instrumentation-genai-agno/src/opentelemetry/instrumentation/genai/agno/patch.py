@@ -1880,6 +1880,20 @@ def _populate_model_response_telemetry(
         if model_response is not None
         else None
     )
+    if source_metrics is None and assistant_message is not None:
+        metrics = getattr(assistant_message, "metrics", None)
+        if metrics is not None and any(
+            (val := safe_int(getattr(metrics, attr, None))) is not None
+            and val > 0
+            for attr in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "reasoning_tokens",
+            )
+        ):
+            source_metrics = metrics
 
     if source_metrics is not None:
         invocation.input_tokens = safe_int(
