@@ -134,7 +134,7 @@ def test_record_agent_call_respects_ownership(
 
 
 @pytest.mark.parametrize("tool_call", [False, True])
-def test_record_agent_call_initializes_only_observed_count(
+def test_record_agent_call_leaves_untracked_counts_unset(
     invocation_manager: _InvocationManager,
     tool_call: bool,
 ) -> None:
@@ -149,8 +149,8 @@ def test_record_agent_call_initializes_only_observed_count(
     invocation_manager.add_invocation_state(custom_id, outer_id, custom)
     for parent_id in (custom_id, uuid.uuid4(), None):
         invocation_manager.record_agent_call(parent_id, tool_call=tool_call)
-    assert custom.inference_calls == (None if tool_call else 1)
-    assert custom.tool_calls == (1 if tool_call else None)
+    assert custom.inference_calls is None
+    assert custom.tool_calls is None
     assert outer.inference_calls == 0
     assert outer.tool_calls == 0
 
