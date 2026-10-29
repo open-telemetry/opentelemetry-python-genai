@@ -583,3 +583,54 @@ async def test_async_raw_body_close_without_read_activates(
     assert context.get_current() is before
     _assert_all_in_invocation(seen, invocation)
     assert len(span_exporter.get_finished_spans()) == 1
+
+
+# --- raw response, caller error ----------------------------------------------
+
+
+def _record_current_span_on_finish(
+    invocation: Any, seen: list[trace.SpanContext]
+) -> None:
+    apply_finish = invocation._apply_finish
+
+    def spy(error: Any = None) -> None:
+        seen.append(trace.get_current_span().get_span_context())
+        apply_finish(error)
+
+    invocation._apply_finish = spy
+
+
+def test_sync_raw_response_caller_error_fails_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    finish_seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, finish_seen)
+    proxy = _body_proxy(invocation, _ObservedStream([]))
+
+    proxy._fail(RuntimeError("caller failed"))
+
+    assert context.get_current() is before
+    _assert_all_in_invocation(finish_seen, invocation)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+async def test_async_raw_response_caller_error_fails_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    finish_seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, finish_seen)
+    proxy = _body_proxy(invocation, _ObservedAsyncStream([]))
+
+    proxy._fail(RuntimeError("caller failed"))
+    await proxy.http_response.aclose()
+
+    assert context.get_current() is before
+    _assert_all_in_invocation(finish_seen, invocation)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR

@@ -121,7 +121,8 @@ class RawResponseProxy(_ObjectProxy):
             return
         if self._self_span_open:
             self._self_span_open = False
-            self._self_invocation.fail(error)
+            with self._self_invocation.activate():
+                self._self_invocation.fail(error)
 
     def _install_hooks(self, raw_response: Any) -> None:
         http_response = getattr(raw_response, "http_response", None)
