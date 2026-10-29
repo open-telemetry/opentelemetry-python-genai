@@ -5,6 +5,15 @@ OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = (
     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 )
 
+OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT = "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT
+
+.. deprecated:: 1.4b0
+    Ignored. ``gen_ai.client.inference.operation.details`` events are emitted
+    whenever the logger is enabled; use logger configuration to disable them.
+"""
+
 OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK = (
     "OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK"
 )
