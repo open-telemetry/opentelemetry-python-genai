@@ -26,6 +26,7 @@ members = [
     "opentelemetry-instrumentation-genai-dspy",
     "opentelemetry-instrumentation-genai-langchain",
     "opentelemetry-instrumentation-genai-llama-index",
+    "opentelemetry-instrumentation-genai-ollama",
     "opentelemetry-instrumentation-genai-openai",
     "opentelemetry-instrumentation-genai-openai-agents",
     "opentelemetry-instrumentation-genai-portkey",
@@ -4479,6 +4480,19 @@ wheels = [
 ]
 
 [[package]]
+name = "ollama"
+version = "0.6.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/97/eeafe65594e4f4b25e443e068ef7d83aa3105b023e12e1c408c38669fc07/ollama-0.6.3.tar.gz", hash = "sha256:41fc49a8095c4a75939c4c1f8582e4d0671692fb6eac2a5a7ede8c9872b67096", size = 56868, upload-time = "2026-09-29T01:26:51.906Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/64/87505d9e006461233c21c8e66dc1ecee49c996090584b216abd0dd4a8322/ollama-0.6.3-py3-none-any.whl", hash = "sha256:6a20bc42c1a5f889295d7ec490d35e5132fc31f339561530f43a8abd4dbfe508", size = 16603, upload-time = "2026-09-29T01:26:50.451Z" },
+]
+
+[[package]]
 name = "onnxruntime"
 version = "1.23.2"
 source = { registry = "https://pypi.org/simple" }
@@ -5018,6 +5032,33 @@ requires-dist = [
 provides-extras = ["instruments"]
 
 [[package]]
+name = "opentelemetry-instrumentation-genai-ollama"
+source = { editable = "instrumentation/opentelemetry-instrumentation-genai-ollama" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-genai" },
+    { name = "wrapt" },
+]
+
+[package.optional-dependencies]
+instruments = [
+    { name = "ollama" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ollama", marker = "extra == 'instruments'", specifier = ">=0.4.0,<1" },
+    { name = "opentelemetry-api", specifier = "~=1.43" },
+    { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
+    { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
+    { name = "wrapt", specifier = ">=1.14.0,<3.0.0" },
+]
+provides-extras = ["instruments"]
+
+[[package]]
 name = "opentelemetry-instrumentation-genai-openai"
 source = { editable = "instrumentation/opentelemetry-instrumentation-genai-openai" }
 dependencies = [
@@ -5248,6 +5289,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-genai-dspy", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-langchain", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-llama-index", extra = ["instruments"] },
+    { name = "opentelemetry-instrumentation-genai-ollama", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-openai", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-openai-agents", extra = ["instruments"] },
     { name = "opentelemetry-instrumentation-genai-qwen-agent", extra = ["instruments"] },
@@ -5282,6 +5324,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-genai-dspy", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-dspy" },
     { name = "opentelemetry-instrumentation-genai-langchain", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-langchain" },
     { name = "opentelemetry-instrumentation-genai-llama-index", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-llama-index" },
+    { name = "opentelemetry-instrumentation-genai-ollama", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-ollama" },
     { name = "opentelemetry-instrumentation-genai-openai", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-openai" },
     { name = "opentelemetry-instrumentation-genai-openai-agents", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-openai-agents" },
     { name = "opentelemetry-instrumentation-genai-qwen-agent", extras = ["instruments"], editable = "instrumentation/opentelemetry-instrumentation-genai-qwen-agent" },

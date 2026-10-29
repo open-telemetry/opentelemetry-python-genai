@@ -21,6 +21,7 @@ dependencies = [
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
   "opentelemetry-instrumentation-genai-llama-index[instruments]",
+  "opentelemetry-instrumentation-genai-ollama[instruments]",
   "opentelemetry-instrumentation-genai-openai[instruments]",
   "opentelemetry-instrumentation-genai-openai-agents[instruments]",
   "opentelemetry-instrumentation-genai-qwen-agent[instruments]",
@@ -62,6 +63,7 @@ opentelemetry-instrumentation-genai-dspy = { workspace = true }
 opentelemetry-instrumentation-google-genai = { workspace = true }
 opentelemetry-instrumentation-genai-langchain = { workspace = true }
 opentelemetry-instrumentation-genai-llama-index = { workspace = true }
+opentelemetry-instrumentation-genai-ollama = { workspace = true }
 opentelemetry-instrumentation-genai-openai = { workspace = true }
 opentelemetry-instrumentation-genai-openai-agents = { workspace = true }
 opentelemetry-instrumentation-genai-qwen-agent = { workspace = true }
@@ -133,6 +135,7 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-dspy",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
+  "instrumentation/opentelemetry-instrumentation-genai-ollama",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents",
   "instrumentation/opentelemetry-instrumentation-genai-portkey",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent",
@@ -158,6 +161,8 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-langchain/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index/examples/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-ollama/tests/**/*.py",
+  "instrumentation/opentelemetry-instrumentation-genai-ollama/examples/**",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-openai-agents/examples/**",
   "instrumentation/opentelemetry-instrumentation-genai-portkey/tests/**/*.py",

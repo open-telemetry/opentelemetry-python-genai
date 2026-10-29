@@ -1,0 +1,97 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen2.5:0.5b",
+        "stream": false,
+        "options": {
+          "temperature": 0
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the weather in Paris? Use the tool."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "Get the current weather for a city.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "city"
+                ],
+                "properties": {
+                  "city": {
+                    "type": "string",
+                    "description": "The city name"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '389'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen2.5:0.5b",
+          "created_at": "2026-10-29T14:37:28.5224036Z",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_o0jx1tpj",
+                "function": {
+                  "index": 0,
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "Paris"
+                  }
+                }
+              }
+            ]
+          },
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 337318900,
+          "load_duration": 3241100,
+          "prompt_eval_count": 163,
+          "prompt_eval_cached_count": 91,
+          "prompt_eval_duration": 60990000,
+          "eval_count": 20,
+          "eval_duration": 269681000
+        }
+    headers:
+      content-length:
+      - '435'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 14:37:28 GMT
+    status:
+      code: 200
+      message: OK
+version: 1
