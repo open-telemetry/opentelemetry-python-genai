@@ -20,6 +20,7 @@ from opentelemetry.semconv.attributes import (
     server_attributes,
 )
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .conftest import CHAT_MODEL, HOST, REASONING_MODEL
 
@@ -335,3 +336,60 @@ def test_module_level_chat_is_instrumented(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "chat"
+
+
+def test_negative_num_predict_is_not_recorded_as_max_tokens(
+    instrument_no_content, span_exporter, vcr
+):
+    # -1 means no limit and -2 means fill the context.
+    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+        ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES, options={"num_predict": -1}
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert GenAI.GEN_AI_REQUEST_MAX_TOKENS not in span.attributes
+
+
+@pytest.mark.parametrize(
+    "messages, keep_alive, cassette",
+    [
+        ([], None, "test_chat_model_load_records_no_span.yaml"),
+        ([], 0, "test_chat_model_unload_records_no_span.yaml"),
+    ],
+    ids=["load", "unload"],
+)
+def test_chat_without_messages_records_no_span(
+    instrument_no_content, span_exporter, vcr, messages, keep_alive, cassette
+):
+    # Ollama only loads or unloads the model for a chat without messages.
+    with vcr.use_cassette(cassette):
+        response = ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL, messages=messages, keep_alive=keep_alive
+        )
+
+    assert response.done_reason in ("load", "unload")
+    assert span_exporter.get_finished_spans() == ()
+
+
+def test_chat_inside_another_inference_adds_no_span(
+    instrument_no_content,
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    vcr,
+):
+    # A framework instrumentation (LangChain's ChatOllama, for example) that
+    # already records the inference must not get a second chat span.
+    outer = TelemetryHandler(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+        with outer.inference("langchain", request_model=CHAT_MODEL):
+            ollama.Client(host=HOST).chat(model=CHAT_MODEL, messages=MESSAGES)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_PROVIDER_NAME] == "langchain"

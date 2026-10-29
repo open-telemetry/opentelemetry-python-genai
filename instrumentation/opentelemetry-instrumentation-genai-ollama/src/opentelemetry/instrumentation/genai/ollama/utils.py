@@ -33,8 +33,6 @@ from opentelemetry.util.genai.types import (
 # The GenAI registry has no value for Ollama, so the product name is used.
 PROVIDER = "ollama"
 
-_DEFAULT_PORT = 11434
-
 
 def get(obj: Any, name: str) -> Any:
     """Read ``name`` from a mapping or an object, as Ollama accepts both."""
@@ -75,13 +73,27 @@ def materialize_chat_inputs(
     return args, kwargs
 
 
+def is_model_load_request(
+    args: tuple[Any, ...], kwargs: Mapping[str, Any]
+) -> bool:
+    """Whether a ``chat`` call only loads or unloads the model.
+
+    Ollama treats a chat request without messages as a request to load the
+    model, or to unload it when ``keep_alive`` is 0; no inference runs.
+    """
+    return not _arg(args, kwargs, 1, "messages")
+
+
 def server_address_and_port(instance: Any) -> tuple[str | None, int | None]:
     base_url = getattr(getattr(instance, "_client", None), "base_url", None)
     host = getattr(base_url, "host", None)
     if not isinstance(host, str) or not host:
         return None, None
+    # httpx reports no port when the URL uses the scheme's default one.
     port = getattr(base_url, "port", None)
-    return host, port if isinstance(port, int) else _DEFAULT_PORT
+    if not isinstance(port, int) or port == 443:
+        return host, None
+    return host, port
 
 
 def _as_float(value: Any) -> float | None:
@@ -107,7 +119,10 @@ def _apply_options(invocation: InferenceInvocation, options: Any) -> None:
     invocation.top_p = _as_float(get(options, "top_p"))
     invocation.top_k = _as_int(get(options, "top_k"))
     invocation.seed = _as_int(get(options, "seed"))
-    invocation.max_tokens = _as_int(get(options, "num_predict"))
+    # A negative num_predict means no limit (-1) or fill the context (-2).
+    num_predict = _as_int(get(options, "num_predict"))
+    if num_predict is not None and num_predict > 0:
+        invocation.max_tokens = num_predict
     invocation.presence_penalty = _as_float(get(options, "presence_penalty"))
     invocation.frequency_penalty = _as_float(get(options, "frequency_penalty"))
     stop = get(options, "stop")

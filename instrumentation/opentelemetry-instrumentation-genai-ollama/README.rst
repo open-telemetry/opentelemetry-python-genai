@@ -41,6 +41,9 @@ Instrumented methods
   embedding dimension count and input token usage.
 * The module-level ``ollama.chat`` and ``ollama.embed`` functions.
 
+A ``chat`` call without messages only loads or unloads the model, so it is
+not recorded.
+
 ``gen_ai.provider.name`` is ``ollama``, and ``server.address`` and
 ``server.port`` come from the client's host.
 

@@ -17,6 +17,7 @@ from opentelemetry.instrumentation.genai.ollama.stream import (
 from opentelemetry.instrumentation.genai.ollama.utils import (
     create_chat_invocation,
     create_embed_invocation,
+    is_model_load_request,
     materialize_chat_inputs,
     set_chat_response,
     set_embed_response,
@@ -66,8 +67,10 @@ def _chat(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        capture_content = handler.should_capture_content()
         args, kwargs = materialize_chat_inputs(args, kwargs)
+        if is_model_load_request(args, kwargs):
+            return wrapped(*args, **kwargs)
+        capture_content = handler.should_capture_content()
         invocation = create_chat_invocation(
             handler, instance, args, kwargs, capture_content
         )
@@ -92,8 +95,10 @@ def _async_chat(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        capture_content = handler.should_capture_content()
         args, kwargs = materialize_chat_inputs(args, kwargs)
+        if is_model_load_request(args, kwargs):
+            return await wrapped(*args, **kwargs)
+        capture_content = handler.should_capture_content()
         invocation = create_chat_invocation(
             handler, instance, args, kwargs, capture_content
         )
