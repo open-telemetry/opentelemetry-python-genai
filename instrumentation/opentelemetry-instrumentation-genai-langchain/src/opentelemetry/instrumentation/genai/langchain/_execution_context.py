@@ -322,6 +322,7 @@ class _ExecutionContext:
         ):
             for method in (
                 "on_chat_model_start",
+                "on_llm_start",
                 "on_chain_start",
                 "on_tool_start",
                 "on_retriever_start",
