@@ -14,6 +14,11 @@ LLM-level spans (``chat`` / ``embeddings``) are produced
 by ``opentelemetry-instrumentation-genai-openai`` when both packages are
 installed; this instrumentation does not emit them.
 
+SDK lifecycle hooks populate each agent invocation's inference and client-side
+tool call counters. ``opentelemetry-util-genai`` records these as histogram
+metrics, not span attributes. Counters remain unset for SDK spans that end
+before any agent-start or call-start hook is observed.
+
 Usage
 -----
 
@@ -32,15 +37,18 @@ Usage
 
 from __future__ import annotations
 
+import inspect
 import logging
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
 
+from agents import Runner
 from agents.tracing import (
     add_trace_processor,
     get_trace_provider,
     set_trace_processors,
 )
+from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.openai_agents.version import (
     __version__,
@@ -53,7 +61,7 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
-from .processor import GenAITracingProcessor
+from .processor import GenAIRunHooks, GenAITracingProcessor
 
 __all__ = ["OpenAIAgentsInstrumentor"]
 
@@ -81,6 +89,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
     # instance, so state needed for uninstrumentation lives on the class.
     _processor: GenAITracingProcessor | None = None
     _previous_processors: tuple[Any, ...] | None = None
+    _original_runner_methods: dict[str, Any] = {}
 
     def __init__(self) -> None:
         super().__init__()
@@ -118,6 +127,29 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         else:
             add_trace_processor(self._processor)
 
+        self._original_runner_methods = {
+            name: Runner.__dict__[name]
+            for name in ("run", "run_sync", "run_streamed")
+        }
+        for name in self._original_runner_methods:
+            wrap_function_wrapper(
+                "agents", f"Runner.{name}", self._wrap_runner
+            )
+
+    def _wrap_runner(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        bound = inspect.signature(wrapped).bind(*args, **kwargs)
+        processor = self._processor
+        hooks = bound.arguments.get("hooks")
+        if processor is not None and not isinstance(hooks, GenAIRunHooks):
+            bound.arguments["hooks"] = GenAIRunHooks(hooks, processor)
+        return wrapped(*bound.args, **bound.kwargs)
+
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._processor is None:
             return
@@ -132,7 +164,10 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
             filtered = [p for p in current if p is not self._processor]
             set_trace_processors(filtered)
         try:
+            for name, method in self._original_runner_methods.items():
+                setattr(Runner, name, method)
             self._processor.shutdown()
         finally:
             self._processor = None
             self._previous_processors = None
+            self._original_runner_methods = {}
