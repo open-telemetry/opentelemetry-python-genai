@@ -14,7 +14,7 @@ Key Components
 - ``CompletionHook`` -- protocol for uploading content to external storage (built-in ``fsspec`` support)
 - Metrics -- ``gen_ai.client.operation.duration`` and ``gen_ai.client.token.usage`` histograms, plus
   the streaming timing histograms ``gen_ai.client.operation.time_to_first_chunk`` and
-  ``gen_ai.client.operation.time_per_output_chunk``
+  ``gen_ai.client.operation.time_per_output_chunk``, recorded for streamed inference calls
 
 
 Usage

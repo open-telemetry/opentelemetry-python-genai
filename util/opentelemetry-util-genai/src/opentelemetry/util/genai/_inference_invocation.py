@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import timeit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
@@ -144,6 +145,13 @@ class InferenceInvocation(GenAIInvocation):
 
     Use handler.inference(provider) rather than constructing this directly.
     """
+
+    _records_stream_telemetry = True
+
+    # Set once the invocation is handed to a stream wrapper.
+    _request_stream: bool | None = None
+    _ttfc_seconds: float | None = None
+    _stream_last_chunk_at: float | None = None
 
     def __init__(
         self,
@@ -681,10 +689,52 @@ class InferenceInvocation(GenAIInvocation):
             return reasons or None
         return None
 
+    def record_stream_chunk(self) -> None:
+        """Mark the request as streamed and record one output chunk arriving."""
+        if self._finished:
+            return
+        self._request_stream = True
+        self._on_stream_chunk(timeit.default_timer())
+
     def _on_stream_chunk(self, chunk_at: float) -> None:
-        super()._on_stream_chunk(chunk_at)
+        """Record streaming timing for one output chunk as it arrives.
+
+        The first chunk's delta from the invocation start is the
+        time-to-first-chunk; each later chunk's delta from the previous one is
+        the inter-chunk gap.
+
+        Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-metrics.md#metric-gen_aiclientoperationtime_to_first_chunk
+        """
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
+        )
+
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
+        is_first_chunk = self._ttfc_seconds is None
+        if is_first_chunk:
+            self._ttfc_seconds = delta
         self.data.request_stream = True
         self.data.response_time_to_first_chunk = self._ttfc_seconds
+
+        if not self._start_span:
+            return
+
+        attributes = self._get_metric_attributes()
+        if is_first_chunk:
+            self._instruments.time_to_first_chunk.record(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        else:
+            self._instruments.time_per_output_chunk.record(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}

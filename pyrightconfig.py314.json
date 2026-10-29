@@ -1,0 +1,7 @@
+{
+  "extends": "./pyproject.toml",
+  "include": [
+    "instrumentation/opentelemetry-instrumentation-genai-crewai/src",
+    "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/src"
+  ]
+}

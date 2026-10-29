@@ -7,7 +7,7 @@ import os
 import unittest
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import PurePosixPath
@@ -1999,7 +1999,7 @@ class TestObjectToAnyValue(unittest.TestCase):
         class Status(Enum):
             ACTIVE = "active"
 
-        dt = datetime(2026, 9, 30, 15, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 9, 30, 15, 0, 0, tzinfo=UTC)
         self.assertEqual(object_to_any_value(dt), "2026-09-30T15:00:00+00:00")
         u = UUID("12345678-1234-5678-1234-567812345678")
         self.assertEqual(

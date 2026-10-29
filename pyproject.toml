@@ -2,7 +2,7 @@
 [project]
 name = "opentelemetry-python-genai"
 version = "0.0.0" # This is not used.
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "opentelemetry-api",
   "opentelemetry-sdk",
@@ -15,7 +15,8 @@ dependencies = [
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
   "opentelemetry-instrumentation-genai-bedrock[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
-  "opentelemetry-instrumentation-genai-crewai[instruments]",
+  # crewai pulls in onnxruntime (via chromadb), which has no Python 3.15 wheels.
+  "opentelemetry-instrumentation-genai-crewai[instruments]; python_version < '3.15'",
   "opentelemetry-instrumentation-genai-dspy[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
@@ -120,7 +121,7 @@ docstring-code-format = true
 typeCheckingMode = "strict"
 reportUnnecessaryTypeIgnoreComment = true
 reportMissingTypeStubs = false
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 reportPrivateUsage = false  # Ignore private attributes added by instrumentation packages.
 reportDeprecated = false  # Ignore deprecation on GenAI enums in opentelemetry.semconv 0.64b0 until semconv-genai python package is published.
 # Add progressively instrumentation packages here.
@@ -129,7 +130,6 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-bedrock",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
-  "instrumentation/opentelemetry-instrumentation-genai-crewai",
   "instrumentation/opentelemetry-instrumentation-genai-dspy",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
@@ -137,7 +137,6 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-portkey",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent",
   "instrumentation/opentelemetry-instrumentation-genai-qwenpaw",
-  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
 ]
 # We should also add type hints to the test suite - It helps on finding bugs.
@@ -153,8 +152,6 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-bedrock/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-crewai/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-crewai/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-dspy/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-dspy/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
@@ -169,8 +166,6 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/examples/**/*.py",
   "util/opentelemetry-util-genai/tests/**/*.py",
 ]
 
