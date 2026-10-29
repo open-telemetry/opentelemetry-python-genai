@@ -3,6 +3,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import TypeAlias
 from uuid import UUID
 
@@ -50,6 +51,7 @@ class _InvocationManager:
         # Map from run_id -> _InvocationState, to keep track of invocations and parent/child relationships
         # TODO: TTL cache to avoid memory leaks in long-running processes.
         self._invocations: dict[UUID, _InvocationState] = {}
+        self._call_count_lock = Lock()
 
     def add_invocation_state(
         self,
@@ -90,6 +92,30 @@ class _InvocationManager:
                 return invocation.context
             current = self.get_parent_run_id(current)
         return None
+
+    def record_agent_call(
+        self, parent_run_id: UUID | None, *, tool_call: bool = False
+    ) -> None:
+        with self._call_count_lock:
+            current = parent_run_id
+            while current is not None:
+                invocation = self.get_invocation(current)
+                if isinstance(invocation, LocalAgentInvocation):
+                    if tool_call:
+                        invocation.tool_calls = (
+                            invocation.tool_calls or 0
+                        ) + 1
+                    else:
+                        invocation.inference_calls = (
+                            invocation.inference_calls or 0
+                        ) + 1
+                    return
+                if isinstance(
+                    invocation,
+                    (InferenceInvocation, ToolInvocation, RetrievalInvocation),
+                ):
+                    return
+                current = self.get_parent_run_id(current)
 
     def set_prompt_context(
         self, run_id: UUID, prompt_context: _PromptContext

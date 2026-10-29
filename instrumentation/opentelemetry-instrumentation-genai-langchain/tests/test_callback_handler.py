@@ -72,6 +72,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -118,6 +119,28 @@ def _make_handler():
 
 def _run_id():
     return uuid.uuid4()
+
+
+@pytest.mark.parametrize("callback", ["on_llm_start", "on_chat_model_start"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_model_start_counts_without_request_model(
+    callback: str, enabled: bool
+) -> None:
+    handler, telemetry, _, agent = _make_handler()
+    parent_run_id = _run_id()
+    handler.on_chain_start({"name": "math_agent"}, {}, run_id=parent_run_id)
+    assert agent.inference_calls is None
+    assert agent.tool_calls is None
+    handler._enabled = enabled
+
+    for _ in range(2):
+        getattr(handler, callback)(
+            {}, [], run_id=_run_id(), parent_run_id=parent_run_id
+        )
+
+    assert agent.inference_calls == (2 if enabled else None)
+    assert agent.tool_calls is None
+    telemetry.inference.assert_not_called()
 
 
 class TestExtractPromptContext:
@@ -293,6 +316,7 @@ async def test_chain_classification_and_completion(
     metadata: dict[str, object],
     expected_name: str,
     span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     content_capture: ContentCapturingMode,
     instrument_langchain: None,
 ) -> None:
@@ -322,6 +346,17 @@ async def test_chain_classification_and_completion(
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metric_names = {
+        metric.name
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    assert "gen_ai.invoke_agent.inference_calls" not in metric_names
+    assert "gen_ai.invoke_agent.tool_calls" not in metric_names
 
 
 @pytest.mark.asyncio
