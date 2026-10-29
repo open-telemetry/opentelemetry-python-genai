@@ -72,6 +72,9 @@ def _langchain_openai_version() -> tuple:
 # cannot hold on those versions.
 _supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
 _supports_responses_api = _langchain_openai_version() >= (1, 3, 0)
+# langchain-openai prefixes token detail keys with the service tier (e.g.
+# ``flex_reasoning``) from 1.0.0 onward.
+_supports_service_tier_token_details = _langchain_openai_version() >= (1, 0, 0)
 
 _REAL_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
@@ -1729,6 +1732,49 @@ def test_chat_openai_reasoning_token_details(
             gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
         )
         == 1088
+    )
+
+
+@pytest.mark.skipif(
+    not _supports_service_tier_token_details,
+    reason="langchain-openai does not prefix token details with the service tier",
+)
+@pytest.mark.vcr()
+def test_chat_openai_flex_tier_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning
+):
+    # OpenAI only caches prompts of at least 1024 tokens.
+    llm = chat_openai_reasoning.model_copy(update={"service_tier": "flex"})
+    messages = [
+        SystemMessage(
+            content="You are a careful mathematical reasoner. " * 200
+        ),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top?"
+            )
+        ),
+    ]
+
+    llm.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 1536
+    )
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 512
     )
 
 
