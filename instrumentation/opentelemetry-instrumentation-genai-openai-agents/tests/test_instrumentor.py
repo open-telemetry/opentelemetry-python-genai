@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from importlib import import_module
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock
 
@@ -155,12 +156,32 @@ def test_uninstrument_after_reinstantiation(
         name: agents.Runner.__dict__[name]
         for name in ("run", "run_sync", "run_streamed")
     }
+    retry_module = (
+        import_module("agents.run_internal.run_loop")
+        if hasattr(agents.ModelSettings, "retry")
+        else None
+    )
+    retry_functions = (
+        {
+            name: getattr(retry_module, name)
+            for name in (
+                "get_response_with_retry",
+                "stream_response_with_retry",
+            )
+        }
+        if retry_module is not None
+        else {}
+    )
     instrumentor = OpenAIAgentsInstrumentor()
     instrumentor.instrument(
         disable_openai_trace_export=disable_openai_trace_export,
     )
     try:
         assert len(_our_processors()) == 1
+        assert all(
+            getattr(retry_module, name) is not function
+            for name, function in retry_functions.items()
+        )
     finally:
         OpenAIAgentsInstrumentor().uninstrument()
     assert len(_our_processors()) == 0
@@ -168,6 +189,10 @@ def test_uninstrument_after_reinstantiation(
     assert all(
         agents.Runner.__dict__[name] is method
         for name, method in runner_methods.items()
+    )
+    assert all(
+        getattr(retry_module, name) is function
+        for name, function in retry_functions.items()
     )
 
 
@@ -496,6 +521,86 @@ async def test_unused_function_tools_preserve_call_counts(
         inference_calls=2 + used_tools,
         tool_calls=used_tools,
         invocations=2,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not hasattr(agents.ModelSettings, "retry"),
+    reason="This SDK does not support runner-managed model retries",
+)
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_model_retry_attempts_record_inference_calls(
+    streaming: bool,
+    exhausted: bool,
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+) -> None:
+    model = _mock_model([_FINAL_MESSAGE])
+    failures = 3 if exhausted else 2
+    model.get_retry_advice = MagicMock(return_value=None)
+    if streaming:
+        original_stream = model.stream_response.side_effect
+
+        async def stream_response(
+            *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ResponseCompletedEvent]:
+            if model.stream_response.call_count <= failures:
+                raise ValueError("model failed")
+            async for event in original_stream(*args, **kwargs):
+                yield event
+
+        model.stream_response.side_effect = stream_response
+    else:
+        model.get_response.side_effect = [
+            ValueError("model failed") for _ in range(failures)
+        ] + list(model.get_response.side_effect)
+    retry_policy = MagicMock(return_value=True)
+    agent = agents.Agent(
+        name="test_agent",
+        model=model,
+        model_settings=agents.ModelSettings(
+            retry=agents.ModelRetrySettings(
+                max_retries=2,
+                policy=retry_policy,
+                backoff={"initial_delay": 0, "max_delay": 0, "jitter": False},
+            )
+        ),
+    )
+    application_hooks = MagicMock(spec=type(agents.RunHooks()))
+
+    async def run() -> None:
+        if streaming:
+            result = agents.Runner.run_streamed(
+                agent, "hello", hooks=application_hooks
+            )
+            async for _ in result.stream_events():
+                pass
+        else:
+            await agents.Runner.run(agent, "hello", hooks=application_hooks)
+
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        if exhausted:
+            with pytest.raises(ValueError, match="model failed"):
+                await run()
+        else:
+            await run()
+    model_method = model.stream_response if streaming else model.get_response
+    assert model_method.call_count == 3
+    assert retry_policy.call_count == 2
+    application_hooks.on_llm_start.assert_awaited_once()
+    assert application_hooks.on_llm_end.await_count == (0 if exhausted else 1)
+    _assert_agent_call_metrics(
+        metric_reader, span_exporter, inference_calls=3, tool_calls=0
     )
 
 

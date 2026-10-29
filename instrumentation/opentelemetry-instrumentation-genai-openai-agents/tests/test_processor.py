@@ -140,8 +140,12 @@ def test_run_hooks_implement_sdk_callbacks() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event", ["on_llm_start", "on_tool_start"])
 @pytest.mark.parametrize("calls", [0, 1, 2])
+@pytest.mark.parametrize("count_inference_calls", [False, True])
 async def test_agent_call_counts(
-    event: str, calls: int, monkeypatch: pytest.MonkeyPatch
+    event: str,
+    calls: int,
+    count_inference_calls: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     handler = _build_handler()
     invocation = MagicMock(
@@ -161,13 +165,17 @@ async def test_agent_call_counts(
         lambda: tool_span,
     )
     application_hooks = AsyncMock()
-    hooks = GenAIRunHooks(application_hooks, processor)
+    hooks = GenAIRunHooks(
+        application_hooks,
+        processor,
+        count_inference_calls=count_inference_calls,
+    )
     await hooks.on_agent_start(None, None)
     for _ in range(calls):
         await getattr(hooks, event)(None, None, None)
 
     assert invocation.inference_calls == (
-        calls if event == "on_llm_start" else 0
+        calls if event == "on_llm_start" and count_inference_calls else 0
     )
     assert invocation.tool_calls == (calls if event == "on_tool_start" else 0)
     assert getattr(application_hooks, event).await_count == calls
