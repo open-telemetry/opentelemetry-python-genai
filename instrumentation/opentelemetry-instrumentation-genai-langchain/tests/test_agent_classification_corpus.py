@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from importlib import import_module
-from typing import Any
+from typing import Any, Self
 from unittest import mock
 
 import langchain.agents
@@ -19,7 +19,6 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import tool
-from typing_extensions import Self
 
 import opentelemetry.instrumentation.genai.langchain as langchain_instrumentation
 from opentelemetry.instrumentation.genai.langchain import (
@@ -782,10 +781,6 @@ async def test_concurrent_async_agents_have_distinct_roots(
     assert second_span.parent is None
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="LangGraph async context propagation requires Python 3.11+",
-)
 @pytest.mark.asyncio
 async def test_async_agent_with_tool_and_chat_parenting(
     span_exporter, start_instrumentation
@@ -821,10 +816,6 @@ async def test_async_agent_with_tool_and_chat_parenting(
     assert len({s.context.trace_id for s in spans}) == 1
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="LangGraph async context propagation requires Python 3.11+",
-)
 def test_sync_workflow_calls_async_agent(
     span_exporter, start_instrumentation
 ) -> None:
@@ -850,10 +841,6 @@ def test_sync_workflow_calls_async_agent(
     assert child_span.context.trace_id == parent_span.context.trace_id
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="LangGraph async context propagation requires Python 3.11+",
-)
 @pytest.mark.asyncio
 async def test_async_workflow_calls_sync_agent(
     span_exporter, start_instrumentation

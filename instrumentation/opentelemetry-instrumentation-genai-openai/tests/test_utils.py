@@ -859,6 +859,18 @@ def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
             assert type(emitted) is int
 
 
+def assert_inference_event_without_content(logs):
+    (log,) = logs
+    assert (
+        log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    )
+    attributes = log.log_record.attributes or {}
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in attributes
+
+
 def assert_message_in_logs(log, event_name, expected_content, parent_span):
     assert log.log_record.event_name == event_name
     assert (

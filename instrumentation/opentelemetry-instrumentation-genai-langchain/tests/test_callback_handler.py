@@ -792,6 +792,37 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
             },
         ),
         (
+            # Shape produced by langchain-openai for flex-tier requests.
+            {
+                "input_token_details": {
+                    "flex_cache_read": 4,
+                    "flex_cache_creation": 2,
+                    "flex": 6,
+                },
+                "output_token_details": {"flex_reasoning": 5, "flex": 15},
+            },
+            {
+                "gen_ai.usage.cache_write.input_tokens": 2,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 4,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 5,
+            },
+        ),
+        (
+            {
+                "input_token_details": {
+                    "audio": 1,
+                    "priority_cache_read": 3,
+                    "priority": 7,
+                },
+                "output_token_details": {"priority_reasoning": 8},
+            },
+            {
+                "gen_ai.usage.audio.input_tokens": 1,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 3,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 8,
+            },
+        ),
+        (
             {
                 "input_token_details": {"text": 7, "image": 2, "audio": 1},
                 "output_token_details": {"text": 14, "image": 4, "audio": 2},
@@ -807,7 +838,14 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         ),
         ({}, {}),
     ],
-    ids=["cache-creation", "cache-write", "modalities", "no-details"],
+    ids=[
+        "cache-creation",
+        "cache-write",
+        "flex-tier",
+        "priority-tier",
+        "modalities",
+        "no-details",
+    ],
 )
 async def test_chat_token_details(
     asynchronous: bool,
@@ -2096,6 +2134,28 @@ def test_extract_token_details_cache_write_key():
     details = extract_token_details(usage)
     assert details == {
         "cache_write_input_tokens": 4,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority"])
+def test_extract_token_details_service_tier_prefix(tier: str):
+    # Shape produced by langchain-openai for flex and priority requests.
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {
+            f"{tier}_cache_read": 2,
+            f"{tier}_cache_creation": 3,
+            tier: 8,
+        },
+        "output_token_details": {f"{tier}_reasoning": 5, tier: 15},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 3,
         "cache_read_input_tokens": 2,
         "reasoning_tokens": 5,
     }

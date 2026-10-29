@@ -146,8 +146,6 @@ def test_sync_stream_context(
         return source
 
     monkeypatch.setattr(resource_type, method_name, call)
-    # The instrumentor sets this independently of the shared content setting.
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT", "true")
     with (
         instrument(
             GoogleGenAiSdkInstrumentor(),
@@ -259,8 +257,6 @@ async def test_async_stream_context(
         return source
 
     monkeypatch.setattr(resource_type, method_name, call)
-    # The instrumentor sets this independently of the shared content setting.
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT", "true")
     with (
         instrument(
             GoogleGenAiSdkInstrumentor(),
