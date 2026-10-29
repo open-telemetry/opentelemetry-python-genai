@@ -41,8 +41,8 @@ Instrumented methods
   embedding dimension count and input token usage.
 * The module-level ``ollama.chat`` and ``ollama.embed`` functions.
 
-A ``chat`` call without messages only loads or unloads the model, so it is
-not recorded.
+A ``chat`` call without messages only loads or unloads the model, and an
+``embed`` call without input embeds nothing, so neither is recorded.
 
 ``gen_ai.provider.name`` is ``ollama``, and ``server.address`` and
 ``server.port`` come from the client's host.
@@ -55,6 +55,9 @@ Known limitations
   is called is bound to the uninstrumented client. Call ``instrument()``
   first, or use ``ollama.chat``.
 * For tools passed as Python functions, only the tool name is recorded.
+* Tool call ids are not recorded: the Ollama Python library does not expose
+  them on responses or send them in requests.
+* Images attached to messages are not captured.
 
 Configuration
 -------------

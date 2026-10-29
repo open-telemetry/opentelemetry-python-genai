@@ -73,6 +73,13 @@ def materialize_chat_inputs(
     return args, kwargs
 
 
+def is_empty_embed_request(
+    args: tuple[Any, ...], kwargs: Mapping[str, Any]
+) -> bool:
+    """Whether an ``embed`` call has no input, so nothing is embedded."""
+    return not _arg(args, kwargs, 1, "input")
+
+
 def is_model_load_request(
     args: tuple[Any, ...], kwargs: Mapping[str, Any]
 ) -> bool:
@@ -166,7 +173,8 @@ def _input_messages(messages: Iterable[Any]) -> list[InputMessage]:
             if content:
                 parts.append(Text(content=str(content)))
             parts.extend(tool_call_requests(get(message, "tool_calls")))
-        result.append(InputMessage(role=str(role), parts=parts))
+        if parts:
+            result.append(InputMessage(role=str(role), parts=parts))
     return result
 
 

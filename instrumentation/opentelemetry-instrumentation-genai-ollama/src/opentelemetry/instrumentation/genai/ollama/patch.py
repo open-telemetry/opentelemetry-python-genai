@@ -17,6 +17,7 @@ from opentelemetry.instrumentation.genai.ollama.stream import (
 from opentelemetry.instrumentation.genai.ollama.utils import (
     create_chat_invocation,
     create_embed_invocation,
+    is_empty_embed_request,
     is_model_load_request,
     materialize_chat_inputs,
     set_chat_response,
@@ -123,6 +124,8 @@ def _embed(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        if is_empty_embed_request(args, kwargs):
+            return wrapped(*args, **kwargs)
         invocation = create_embed_invocation(handler, instance, args, kwargs)
         try:
             result = wrapped(*args, **kwargs)
@@ -143,6 +146,8 @@ def _async_embed(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        if is_empty_embed_request(args, kwargs):
+            return await wrapped(*args, **kwargs)
         invocation = create_embed_invocation(handler, instance, args, kwargs)
         try:
             result = await wrapped(*args, **kwargs)

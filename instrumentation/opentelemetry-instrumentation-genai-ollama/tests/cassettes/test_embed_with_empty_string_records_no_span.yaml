@@ -1,0 +1,42 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "nomic-embed-text",
+        "input": ""
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '39'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/embed
+  response:
+    body:
+      string: |-
+        {
+          "model": "nomic-embed-text",
+          "embeddings": []
+        }
+    headers:
+      content-length:
+      - '44'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 15:37:08 GMT
+    status:
+      code: 200
+      message: OK
+version: 1

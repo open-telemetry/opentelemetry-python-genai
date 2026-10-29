@@ -65,3 +65,24 @@ def test_module_level_embed_is_instrumented(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_OPERATION_NAME] == "embeddings"
+
+
+@pytest.mark.parametrize(
+    "value, cassette",
+    [
+        ("", "test_embed_with_empty_string_records_no_span.yaml"),
+        ([], "test_embed_with_empty_list_records_no_span.yaml"),
+    ],
+    ids=["empty-string", "empty-list"],
+)
+def test_embed_without_input_records_no_span(
+    instrument_no_content, span_exporter, vcr, value, cassette
+):
+    # Ollama embeds nothing for an empty input.
+    with vcr.use_cassette(cassette):
+        response = ollama.Client(host=HOST).embed(
+            model=EMBEDDING_MODEL, input=value
+        )
+
+    assert response.embeddings == []
+    assert span_exporter.get_finished_spans() == ()

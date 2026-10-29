@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import gc
 import inspect
 import json
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 import ollama
 import pytest
 
+from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -393,3 +395,110 @@ def test_chat_inside_another_inference_adds_no_span(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_PROVIDER_NAME] == "langchain"
+
+
+def test_messages_without_content_are_not_recorded(
+    instrument_with_content, span_exporter, vcr
+):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "assistant", "content": ""},
+        *MESSAGES,
+    ]
+    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+        ollama.Client(host=HOST).chat(model=CHAT_MODEL, messages=messages)
+
+    (span,) = span_exporter.get_finished_spans()
+    roles = [m["role"] for m in _messages(span, GenAI.GEN_AI_INPUT_MESSAGES)]
+    assert roles == ["system", "user"]
+
+
+def test_client_created_before_instrument_is_traced(
+    tracer_provider, logger_provider, meter_provider, span_exporter, vcr
+):
+    client = ollama.Client(host=HOST)
+    instrumentor = OllamaInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    )
+    try:
+        with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+            client.chat(model=CHAT_MODEL, messages=MESSAGES)
+    finally:
+        instrumentor.uninstrument()
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_chat_with_message_objects(
+    instrument_with_content, span_exporter, vcr
+):
+    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
+        ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL,
+            messages=(ollama.Message(role="user", content="Hi"),),
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert _messages(span, GenAI.GEN_AI_INPUT_MESSAGES)[0]["parts"] == [
+        {"type": "text", "content": "Hi"}
+    ]
+
+
+def test_chat_with_a_tool_generator_sends_every_tool(
+    instrument_with_content, span_exporter, vcr
+):
+    with vcr.use_cassette("test_chat_records_tool_calls.yaml"):
+        response = ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the weather in Paris? Use the tool.",
+                }
+            ],
+            tools=(tool for tool in [WEATHER_TOOL]),
+            options={"temperature": 0},
+        )
+
+    assert response.message.tool_calls
+    (span,) = span_exporter.get_finished_spans()
+    assert len(json.loads(span.attributes[GenAI.GEN_AI_TOOL_DEFINITIONS])) == 1
+
+
+def test_chat_stream_error_is_recorded(
+    instrument_no_content, span_exporter, vcr
+):
+    # With stream=True, Ollama raises on the first read, not on the call.
+    with vcr.use_cassette("test_chat_stream_error_is_recorded.yaml"):
+        stream = ollama.Client(host=HOST).chat(
+            model="no-such-model:1b", messages=MESSAGES, stream=True
+        )
+        with pytest.raises(ollama.ResponseError):
+            list(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        span.attributes[error_attributes.ERROR_TYPE]
+        == "ollama._types.ResponseError"
+    )
+
+
+def test_abandoned_stream_still_ends_its_span(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES, stream=True
+        )
+        next(iter(stream))
+        del stream
+        gc.collect()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
