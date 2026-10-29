@@ -609,11 +609,15 @@ async def test_tool_error(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
-@pytest.mark.parametrize("failure", [None, "model", "tool"])
+@pytest.mark.parametrize(
+    ("failure", "use_tool"),
+    [(None, False), (None, True), ("model", True), ("tool", True)],
+)
 async def test_native_agent_call_counts(
     asynchronous: bool,
     streaming: bool,
     failure: str | None,
+    use_tool: bool,
     span_exporter: InMemorySpanExporter,
     metric_reader: InMemoryMetricReader,
     instrument_langchain: None,
@@ -634,7 +638,9 @@ async def test_native_agent_call_counts(
                 tool_calls=[{"name": "calculate", "args": {}, "id": "1"}],
             ),
             AIMessage(content="42"),
-        ],
+        ]
+        if use_tool
+        else [AIMessage(content="42")],
         error=error if failure == "model" else None,
     )
     agent = create_react_agent(
@@ -681,8 +687,14 @@ async def test_native_agent_call_counts(
         for metric in scope.metrics
     }
     for name, total in (
-        ("gen_ai.invoke_agent.inference_calls", 1 if failure else 2),
-        ("gen_ai.invoke_agent.tool_calls", 0 if failure == "model" else 1),
+        (
+            "gen_ai.invoke_agent.inference_calls",
+            1 if failure or not use_tool else 2,
+        ),
+        (
+            "gen_ai.invoke_agent.tool_calls",
+            int(use_tool and failure != "model"),
+        ),
     ):
         (point,) = metrics[name].data.data_points
         assert point.count == 1
@@ -820,14 +832,7 @@ async def test_tool_carries_nearest_agent_name(
         for metric in scope.metrics
     }
     assert "gen_ai.invoke_agent.inference_calls" not in metrics
-    (point,) = metrics["gen_ai.invoke_agent.tool_calls"].data.data_points
-    assert (
-        point.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME]
-        == "arithmetic_specialist"
-    )
-    assert point.count == 1
-    assert type(point.sum) is int
-    assert point.sum == 1
+    assert "gen_ai.invoke_agent.tool_calls" not in metrics
 
 
 def _model_response(

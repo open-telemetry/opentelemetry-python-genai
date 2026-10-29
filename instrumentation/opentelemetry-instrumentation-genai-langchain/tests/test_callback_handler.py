@@ -51,6 +51,9 @@ from tests._api import (
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+from opentelemetry.instrumentation.genai.langchain.agent_context import (
+    _PendingAgent,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
@@ -123,14 +126,22 @@ def _run_id():
 
 @pytest.mark.parametrize("callback", ["on_llm_start", "on_chat_model_start"])
 @pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("native_agent", [False, True])
 def test_model_start_counts_without_request_model(
-    callback: str, enabled: bool
+    callback: str, enabled: bool, native_agent: bool
 ) -> None:
     handler, telemetry, _, agent = _make_handler()
     parent_run_id = _run_id()
-    handler.on_chain_start({"name": "math_agent"}, {}, run_id=parent_run_id)
-    assert agent.inference_calls is None
-    assert agent.tool_calls is None
+    with mock.patch(
+        "opentelemetry.instrumentation.genai.langchain.callback_handler.claim_agent",
+        return_value=_PendingAgent("math_agent") if native_agent else None,
+    ):
+        handler.on_chain_start(
+            {"name": "math_agent"}, {}, run_id=parent_run_id
+        )
+    initial_count = 0 if native_agent else None
+    assert agent.inference_calls == initial_count
+    assert agent.tool_calls == initial_count
     handler._enabled = enabled
 
     for _ in range(2):
@@ -138,8 +149,10 @@ def test_model_start_counts_without_request_model(
             {}, [], run_id=_run_id(), parent_run_id=parent_run_id
         )
 
-    assert agent.inference_calls == (2 if enabled else None)
-    assert agent.tool_calls is None
+    assert agent.inference_calls == (
+        2 if native_agent and enabled else initial_count
+    )
+    assert agent.tool_calls == initial_count
     telemetry.inference.assert_not_called()
 
 

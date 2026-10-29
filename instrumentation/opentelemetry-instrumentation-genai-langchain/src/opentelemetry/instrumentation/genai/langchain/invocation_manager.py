@@ -102,13 +102,10 @@ class _InvocationManager:
                 invocation = self.get_invocation(current)
                 if isinstance(invocation, LocalAgentInvocation):
                     if tool_call:
-                        invocation.tool_calls = (
-                            invocation.tool_calls or 0
-                        ) + 1
-                    else:
-                        invocation.inference_calls = (
-                            invocation.inference_calls or 0
-                        ) + 1
+                        if invocation.tool_calls is not None:
+                            invocation.tool_calls += 1
+                    elif invocation.inference_calls is not None:
+                        invocation.inference_calls += 1
                     return
                 if isinstance(
                     invocation,
