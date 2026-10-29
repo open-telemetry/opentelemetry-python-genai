@@ -32,6 +32,10 @@ class EmbeddingScenario(Scenario):
             advice_id="genai_expected_attribute_missing",
             message_substring="server.address",
         ),
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.response.model",
+        ),
     )
 
     def run(
@@ -46,7 +50,7 @@ class EmbeddingScenario(Scenario):
         mock_usage = MagicMock()
         mock_usage.model_dump.return_value = {
             "input_tokens": 8,
-            "model": "text-embedding-3-small",
+            "total_tokens": 8,
         }
         mock_resp = MagicMock(data=[mock_entry], usage=mock_usage)
         mock_client = MagicMock()

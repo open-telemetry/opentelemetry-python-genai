@@ -416,8 +416,6 @@ def _set_embedding_attributes(
 
     if isinstance(usage, Mapping):
         invocation.input_tokens = _extract_embedder_input_tokens(usage)
-        if model := usage.get("model"):
-            invocation.response_model_name = str(model)
 
 
 def _embedder_get_embedding(

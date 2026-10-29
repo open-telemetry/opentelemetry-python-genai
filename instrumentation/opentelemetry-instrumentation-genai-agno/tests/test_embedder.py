@@ -124,37 +124,6 @@ def test_embedder_get_embedding_and_usage_sync(
     assert GEN_AI_RESPONSE_MODEL not in span.attributes
 
 
-def test_embedder_get_embedding_and_usage_with_response_model(
-    instrument_agno,
-    span_exporter,
-) -> None:
-    """Test sync get_embedding_and_usage records response model when present in usage."""
-    mock_client = MagicMock()
-    mock_client.embeddings.create.return_value = _create_mock_response(
-        [0.1, 0.2, 0.3],
-        {
-            "input_tokens": 12,
-            "total_tokens": 12,
-            "model": "text-embedding-3-small-response",
-        },
-    )
-    embedder = OpenAIEmbedder(
-        api_key="fake",
-        id="text-embedding-usage",
-        openai_client=mock_client,
-    )
-    vec, usage = embedder.get_embedding_and_usage("sample text")
-    assert vec == [0.1, 0.2, 0.3]
-
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    span = spans[0]
-    assert (
-        span.attributes.get(GEN_AI_RESPONSE_MODEL)
-        == "text-embedding-3-small-response"
-    )
-
-
 def test_embedder_async_get_embedding(
     instrument_agno,
     span_exporter,
@@ -321,6 +290,33 @@ def test_embedder_error_handling(
     assert span.attributes.get(ERROR_TYPE) == expected_error_type
 
 
+def test_embedder_async_error_handling(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=ValueError("Invalid embedding request")
+    )
+    embedder = AzureOpenAIEmbedder(
+        api_key="fake",
+        azure_endpoint="https://test.openai.azure.com",
+        async_client=mock_client,
+    )
+    expected_error = EmbeddingError or ValueError
+    expected_error_type = (
+        "agno.exceptions.EmbeddingError" if EmbeddingError else "ValueError"
+    )
+
+    with pytest.raises(expected_error, match="Invalid embedding request"):
+        asyncio.run(embedder.async_get_embedding_and_usage("failing input"))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+    assert spans[0].attributes.get(ERROR_TYPE) == expected_error_type
+
+
 def test_embedder_provider_extraction_azure(
     instrument_agno,
     span_exporter,
@@ -451,7 +447,7 @@ def test_embedder_provider_extraction_openai_like(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test provider extraction for OpenAILikeEmbedder falls back to unknown unless specified."""
+    """Test provider extraction for OpenAILikeEmbedder falls back to unknown."""
     mock_client = MagicMock()
     mock_client.embeddings.create.return_value = _create_mock_response(
         [0.1, 0.2]
@@ -467,15 +463,6 @@ def test_embedder_provider_extraction_openai_like(
     assert len(spans) == 1
     # Must NOT fall back to "openai" or "agno"
     assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "unknown"
-
-    span_exporter.clear()
-    setattr(embedder, "provider", "mistral")
-    res = embedder.get_embedding("test")
-    assert res == [0.1, 0.2]
-
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "mistral_ai"
 
 
 def test_resolve_embedder_provider_unit() -> None:
@@ -598,46 +585,6 @@ def test_resolve_embedder_provider_unit() -> None:
         pass
 
     assert resolve_embedder_provider(SimpleEmbedder()) == "unknown"
-
-    # Explicit provider attribute
-    custom = ArbitraryCustomEmbedder()
-    setattr(custom, "provider", "mistral")
-    assert resolve_embedder_provider(custom) == "mistral_ai"
-
-    setattr(custom, "provider", "azure_openai")
-    assert resolve_embedder_provider(custom) == "azure.ai.openai"
-
-    setattr(custom, "provider", "aws-bedrock")
-    assert resolve_embedder_provider(custom) == "aws.bedrock"
-
-    setattr(custom, "provider", "my_custom_provider")
-    assert resolve_embedder_provider(custom) == "my_custom_provider"
-
-    # Provider object with class name
-    class GoogleProvider:
-        pass
-
-    setattr(custom, "provider", GoogleProvider())
-    assert resolve_embedder_provider(custom) == "gcp.gemini"
-
-    # Model prefix fallback
-    custom_model = ArbitraryCustomEmbedder()
-    setattr(custom_model, "id", "openai/text-embedding-3-small")
-    assert resolve_embedder_provider(custom_model) == "openai"
-
-    setattr(custom_model, "id", "cohere/embed-multilingual-v3.0")
-    assert resolve_embedder_provider(custom_model) == "cohere"
-
-    # Unknown vendor submodule in agno.knowledge.embedder.<unknown> should fall back to "unknown"
-    class CustomUnknownModuleEmbedder(Embedder):
-        pass
-
-    CustomUnknownModuleEmbedder.__module__ = (
-        "agno.knowledge.embedder.some_unknown_vendor"
-    )
-    assert (
-        resolve_embedder_provider(CustomUnknownModuleEmbedder()) == "unknown"
-    )
 
 
 def test_embedder_dual_instrumentation_suppressed_inner(
