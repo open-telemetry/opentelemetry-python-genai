@@ -199,6 +199,27 @@ class StreamingTestCase(TestCase):
         self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 3)
         self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
 
+    def test_thinking_tokens_are_not_aggregated_without_candidates_count(self):
+        # A stream that ends while still thinking (e.g. MAX_TOKENS) reports
+        # cumulative thoughts_token_count with no candidates_token_count.
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=40
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=80
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=100
+        )
+
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 100)
+        self.assertEqual(
+            span.attributes["gen_ai.usage.reasoning.output_tokens"], 100
+        )
+
     def test_modality_token_counts_are_replaced_not_merged(self):
         # Cumulative counts are returned on each response, so the last
         # breakdown wins outright and a modality that drops out of it must not
