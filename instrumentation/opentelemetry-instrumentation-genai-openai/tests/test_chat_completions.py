@@ -24,6 +24,7 @@ try:
 except ImportError:
     not_given = NOT_GIVEN
 
+from opentelemetry import trace
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -2199,3 +2200,22 @@ def test_chat_completion_generator_no_content_transparency(
     assert len(spans) == 1
     assert "gen_ai.input.messages" not in spans[0].attributes
     assert "gen_ai.tool.definitions" not in spans[0].attributes
+
+
+def test_chat_completion_malformed_messages_reach_the_client(
+    span_exporter, instrument_with_content
+):
+    client = OpenAI(base_url="http://localhost:4242", max_retries=0)
+
+    # Content capture iterates `messages` before the client sees them.
+    with pytest.raises(APIConnectionError):
+        client.chat.completions.create(
+            model="gpt-4o-mini", messages=None, timeout=0.1
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == "openai.APIConnectionError"
+    )
+    assert not trace.get_current_span().get_span_context().is_valid

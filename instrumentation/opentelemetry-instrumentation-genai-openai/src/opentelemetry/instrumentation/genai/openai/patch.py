@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import array
+import base64
 import logging
 from collections.abc import Iterator
 from typing import Any, cast
 
 from openai.types import CreateEmbeddingResponse
+from openai.types.chat import ChatCompletion
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -25,10 +28,10 @@ from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
     _prepare_output_messages,
     create_chat_invocation,
-    get_property_value,
     get_server_address_and_port,
     get_value,
     is_streaming,
+    set_chat_usage,
 )
 
 _logger = logging.getLogger(__name__)
@@ -179,7 +182,9 @@ def async_embeddings_create(handler: TelemetryHandler):
 
 
 def _set_response_properties(
-    chat_invocation: InferenceInvocation, result, capture_content: bool
+    chat_invocation: InferenceInvocation,
+    result: ChatCompletion | ParsableResponse,
+    capture_content: bool,
 ) -> InferenceInvocation:
     if isinstance(result, ParsableResponse):
         # with_raw_response: safe to parse() here since this is the
@@ -217,22 +222,7 @@ def _set_response_properties(
         )
 
     if getattr(result, "usage", None):
-        chat_invocation.input_tokens = result.usage.prompt_tokens
-        chat_invocation.output_tokens = result.usage.completion_tokens
-        prompt_tokens_details = getattr(
-            result.usage, "prompt_tokens_details", None
-        )
-        if prompt_tokens_details is not None:
-            chat_invocation.cache_read_input_tokens = get_property_value(
-                prompt_tokens_details, "cached_tokens"
-            )
-        completion_tokens_details = getattr(
-            result.usage, "completion_tokens_details", None
-        )
-        if completion_tokens_details is not None:
-            chat_invocation.thinking_tokens = get_property_value(
-                completion_tokens_details, "reasoning_tokens"
-            )
+        set_chat_usage(invocation=chat_invocation, usage=result.usage)
 
     if getattr(result, "system_fingerprint", None):
         chat_invocation.attributes.update(
@@ -260,7 +250,19 @@ def _set_embeddings_response_properties(
     if getattr(result, "data", None) and len(result.data) > 0:
         first_embedding = result.data[0]
         if getattr(first_embedding, "embedding", None):
-            invocation.dimension_count = len(first_embedding.embedding)
+            embedding = first_embedding.embedding
+            if isinstance(embedding, str):
+                try:
+                    embedding = array.array("f", base64.b64decode(embedding))
+                except ValueError:
+                    _logger.debug(
+                        "Failed to decode base64 embedding dimensions",
+                        exc_info=True,
+                    )
+                else:
+                    invocation.dimension_count = len(embedding)
+            else:
+                invocation.dimension_count = len(embedding)
 
     # Embeddings only have input tokens; output tokens are not applicable.
     if getattr(result, "usage", None):

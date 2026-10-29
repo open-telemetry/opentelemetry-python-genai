@@ -49,7 +49,7 @@ runs:
         INPUTS_PACKAGE: ${{ inputs.package }}
 
     - name: Install uv
-      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
 
     - name: Run drop-dev
       if: inputs.operation == 'drop-dev'
@@ -78,7 +78,7 @@ runs:
       shell: bash
       run: .github/scripts/use-cla-approved-github-bot.sh
 
-    - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+    - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       id: otelbot-token
       with:
         client-id: ${{ inputs.otelbot-client-id }}
@@ -88,7 +88,8 @@ runs:
     - name: Create pull request
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+        GH_TOKEN: ${{ github.token }}
+        PR_TOKEN: ${{ steps.otelbot-token.outputs.token }}
         INPUTS_OPERATION: ${{ inputs.operation }}
       run: |
         case "${INPUTS_OPERATION}" in
@@ -103,8 +104,9 @@ runs:
         esac
 
         git commit -a -m "$title"
+        gh auth setup-git
         git push origin HEAD:"$branch"
-        gh pr create --title "$title" \
+        GH_TOKEN="${PR_TOKEN}" gh pr create --title "$title" \
                      --body "$title." \
                      --head "$branch" \
                      --base "$GITHUB_REF_NAME"

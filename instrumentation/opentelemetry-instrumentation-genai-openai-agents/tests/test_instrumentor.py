@@ -59,6 +59,23 @@ def test_instrument_adds_processor_alongside_default() -> None:
     assert len(_our_processors()) == 0
 
 
+@pytest.mark.parametrize("disable_openai_trace_export", [False, True])
+def test_uninstrument_after_reinstantiation(
+    disable_openai_trace_export: bool,
+) -> None:
+    baseline = _registered_processors()
+    instrumentor = OpenAIAgentsInstrumentor()
+    instrumentor.instrument(
+        disable_openai_trace_export=disable_openai_trace_export,
+    )
+    try:
+        assert len(_our_processors()) == 1
+    finally:
+        OpenAIAgentsInstrumentor().uninstrument()
+    assert len(_our_processors()) == 0
+    assert _registered_processors() == baseline
+
+
 def test_instrument_with_disable_openai_trace_export_replaces_processors() -> (
     None
 ):
@@ -178,18 +195,27 @@ async def test_runner_failing_tool_records_span_error(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
     ):
         agent = agents.Agent(
             name="test_agent",
             model="gpt-4o-mini",
             tools=[_failing_tool],
         )
-        await agents.Runner.run(agent, "run tool")
+        result = await agents.Runner.run(agent, "run tool")
+
+    tool_outputs = [
+        item.output
+        for item in result.new_items
+        if isinstance(item, agents.ToolCallOutputItem)
+    ]
+    assert len(tool_outputs) == 1
 
     spans = {s.name: s for s in span_exporter.get_finished_spans()}
     assert "execute_tool _failing_tool" in spans
     tool_span = spans["execute_tool _failing_tool"]
     assert tool_span.status.status_code is StatusCode.ERROR
-    assert "database connection failed" in (tool_span.status.description or "")
+    assert tool_span.status.description
     assert tool_span.attributes is not None
     assert tool_span.attributes["error.type"] == "_OTHER"
+    assert tool_span.attributes["gen_ai.tool.call.result"] == tool_outputs[0]

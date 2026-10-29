@@ -8,11 +8,9 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field, fields
 from types import TracebackType
-from typing import Any, TypeAlias, cast
-
-from typing_extensions import Self
+from typing import Any, ClassVar, Self, TypeAlias, cast
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import (
@@ -42,6 +40,7 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
     _NoOpCompletionHook,
+    _SafeCompletionHook,
 )
 from opentelemetry.util.genai.types import (
     Error,
@@ -56,6 +55,7 @@ from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
     gen_ai_json_dumps,
     get_content_capturing_mode,
+    object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -63,6 +63,122 @@ _GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 
 
 ContextToken: TypeAlias = Token[Context]
+
+__all__ = [
+    "ContextToken",
+    "GenAIInvocation",
+    "_ContextData",
+    "_resolve_suppressed_content_and_hook",
+    "get_content_attributes",
+]
+
+
+@dataclass
+class _ContextData:
+    """Base class for invocation context data containers."""
+
+    capture_content: bool = False
+    upload_completion: bool = False
+    attributes: dict[str, AttributeValue] = field(
+        default_factory=dict[str, AttributeValue]
+    )
+    metric_attributes: dict[str, AttributeValue] = field(
+        default_factory=dict[str, AttributeValue]
+    )
+
+    def merge(self: Self, other: Self, *, overwrite: bool = True) -> None:
+        """Merge another context data instance into this one.
+
+        Args:
+            other: The context data to merge from.
+            overwrite: If True, values from ``other`` overwrite existing values
+                (used when inner invocations publish to context). If False,
+                existing non-None values in ``self`` are preserved (used when
+                the root invocation enriches from context).
+        """
+        for f in fields(cast(Any, self)):
+            if f.name in (
+                "attributes",
+                "metric_attributes",
+                "capture_content",
+                "upload_completion",
+            ):
+                continue
+            val = getattr(other, f.name)
+            if val is not None and (
+                overwrite or getattr(self, f.name) is None
+            ):
+                setattr(self, f.name, val)
+
+        if overwrite:
+            self.attributes.update(other.attributes)
+            self.metric_attributes.update(other.metric_attributes)
+        else:
+            for k, v in other.attributes.items():
+                self.attributes.setdefault(k, v)
+            for k, v in other.metric_attributes.items():
+                self.metric_attributes.setdefault(k, v)
+
+
+def _is_active_completion_hook(hook: CompletionHook | None) -> bool:
+    if hook is None:
+        return False
+    if isinstance(hook, _NoOpCompletionHook):
+        return False
+    if isinstance(hook, _SafeCompletionHook) and isinstance(
+        hook._wrapped, _NoOpCompletionHook
+    ):
+        return False
+    return True
+
+
+def _resolve_suppressed_content_and_hook(
+    context_data: object | None,
+    content_capturing_mode: ContentCapturingMode | None,
+    completion_hook: CompletionHook | None,
+) -> tuple[bool, bool, ContentCapturingMode, CompletionHook]:
+    """Resolve content capturing and completion hook behavior for suppressed invocations.
+
+    Returns:
+        A tuple of:
+        - capture_content_to_context (bool): Whether inner content can be published to context.
+        - upload_completion (bool): Whether inner completion hook upload should be executed.
+        - effective_content_mode (ContentCapturingMode): Effective mode passed to super().__init__.
+        - effective_completion_hook (CompletionHook): Effective hook passed to super().__init__.
+    """
+    resolved_content_mode = (
+        get_content_capturing_mode()
+        if content_capturing_mode is None
+        else content_capturing_mode
+    )
+    is_context_data = isinstance(context_data, _ContextData)
+    allow_content_capture = is_context_data and context_data.capture_content
+    env_allows_content_capture = (
+        resolved_content_mode != ContentCapturingMode.NO_CONTENT
+    )
+    capture_content_to_context = (
+        allow_content_capture and env_allows_content_capture
+    )
+    allow_upload = is_context_data and context_data.upload_completion
+    env_allows_upload = _is_active_completion_hook(completion_hook)
+    upload_completion = allow_upload and env_allows_upload
+
+    effective_content_mode = (
+        resolved_content_mode
+        if capture_content_to_context
+        else ContentCapturingMode.NO_CONTENT
+    )
+    effective_completion_hook: CompletionHook = (
+        completion_hook
+        if upload_completion and completion_hook is not None
+        else _NoOpCompletionHook()
+    )
+    return (
+        capture_content_to_context,
+        upload_completion,
+        effective_content_mode,
+        effective_completion_hook,
+    )
 
 
 class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
@@ -74,11 +190,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     workflow, tool) rather than constructing invocations directly.
     """
 
-    _context_key: str | None = None
-    """Context key used to attach context data for nested deduplication."""
-
-    _dataclass_class_object: Callable[[], Any] | None = None
-    """Dataclass type instantiated to attach initial context data."""
+    _records_stream_telemetry: ClassVar[bool] = False
+    """Whether stream wrappers mark this invocation as streamed and record chunk timing."""
 
     def __init__(
         self,
@@ -101,7 +214,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         conversation_id: str | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
         start_span: bool = True,
+        context_key: str | None = None,
+        dataclass_class_object: Callable[[], _ContextData] | None = None,
     ) -> None:
+        self._context_key: str | None = context_key
+        self._dataclass_class_object: Callable[[], _ContextData] | None = (
+            dataclass_class_object
+        )
         self._tracer = tracer
         self._instruments: _Instruments = instruments
         self._logger = logger
@@ -136,6 +255,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             GenAI.GEN_AI_OPERATION_NAME: operation_name,
             **(start_attributes or {}),
         }
+        self._start_span: bool = start_span
         if start_span:
             self.span: Span = self._tracer.start_span(
                 name=span_name,
@@ -154,6 +274,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                     context=ctx,
                 )
             self._span_context: Context = ctx
+            self._attach_to_context = _attach_to_context
             self._context_token: ContextToken | None = (
                 attach(self._span_context) if _attach_to_context else None
             )
@@ -161,15 +282,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             ctx = get_current() if context is None else context
             self.span = get_current_span(context=ctx)
             self._span_context = ctx
+            # Never attached, so never treated as suspended by the stream wrappers.
+            self._attach_to_context = False
             self._context_token = None
         self._monotonic_start_s: float = timeit.default_timer()
-        # Streaming state, set when the invocation is handed to a stream
-        # wrapper. ``_request_stream`` marks the request as streamed
-        # (gen_ai.request.stream); the timing fields are populated by
-        # ``_on_stream_chunk`` as each chunk arrives.
-        self._request_stream: bool | None = None
-        self._ttfc_seconds: float | None = None
-        self._stream_last_chunk_at: float | None = None
         self._finished: bool = False
 
     @property
@@ -192,6 +308,19 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     def context(self) -> Context:
         """The OpenTelemetry Context containing this invocation's span."""
         return self._span_context
+
+    @property
+    def _suspended(self) -> bool:
+        """True when this invocation attached itself to the context and ``suspend`` has since run.
+
+        Describes the original attachment only: it stays true during a
+        temporary ``activate`` and after the invocation has finished. The
+        stream wrappers activate such an invocation around each read. An
+        invocation that is still attached is left alone: its original
+        attachment is outstanding, and activating it around the read that
+        finishes it would reinstate the ended span after ``stop`` detached it.
+        """
+        return self._attach_to_context and self._context_token is None
 
     def suspend(self) -> None:
         """Restore the context that was current before this invocation started.
@@ -229,45 +358,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         return {}
 
     def record_stream_chunk(self) -> None:
-        """Mark the request as streamed and record one output chunk arriving."""
-        if self._finished:
-            return
-        self._request_stream = True
-        self._on_stream_chunk(timeit.default_timer())
+        """Record one output chunk arriving.
 
-    def _on_stream_chunk(self, chunk_at: float) -> None:
-        """Record streaming timing for one output chunk as it arrives.
-
-        The first chunk's delta from the invocation start is the
-        time-to-first-chunk; each later chunk's delta from the previous one is
-        the inter-chunk gap. Called by the stream wrapper for any invocation
-        type handed to it.
+        .. deprecated:: 1.4b0
+            Only ``InferenceInvocation`` records stream chunks. On other
+            invocation types this is a no-op, since semconv defines chunk
+            timing for inference only.
         """
-        last_chunk_at = (
-            self._stream_last_chunk_at
-            if self._stream_last_chunk_at is not None
-            else self._monotonic_start_s
-        )
-
-        self._stream_last_chunk_at = chunk_at
-        delta = max(chunk_at - last_chunk_at, 0.0)
-        is_first_chunk = self._ttfc_seconds is None
-        if is_first_chunk:
-            self._ttfc_seconds = delta
-
-        attributes = self._get_metric_attributes()
-        if is_first_chunk:
-            self._instruments.time_to_first_chunk.record(
-                delta,
-                attributes=attributes,
-                context=self._span_context,
-            )
-        else:
-            self._instruments.time_per_output_chunk.record(
-                delta,
-                attributes=attributes,
-                context=self._span_context,
-            )
 
     def _record_client_metrics(self) -> None:
         """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
@@ -371,6 +468,20 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             self.stop()
 
 
+def _json_dumps_unless_str(value: object) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    try:
+        return gen_ai_json_dumps(value, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        pass
+    # Callers may set objects (e.g. models) that weren't converted to AnyValue.
+    converted = object_to_any_value(value)
+    if converted is None or isinstance(converted, str):
+        return converted
+    return gen_ai_json_dumps(converted)
+
+
 def get_content_attributes(
     *,
     input_messages: Sequence[InputMessage],
@@ -440,7 +551,7 @@ def get_content_attributes(
     result = {key: value for key, value in optional_attrs if value is not None}
     if prompt_variables:
         for k, v in prompt_variables.items():
-            result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = (
-                v if isinstance(v, str) else gen_ai_json_dumps(v)
-            )
+            serialized = _json_dumps_unless_str(v)
+            if serialized is not None:
+                result[f"{_GEN_AI_PROMPT_VARIABLE_PREFIX}{k}"] = serialized
     return result

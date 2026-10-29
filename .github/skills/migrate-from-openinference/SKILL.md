@@ -339,8 +339,8 @@ Drop every match. The mappings:
   `AgentInvocation`, `Error`, `GenAIInvocation`
 - `opentelemetry.util.genai.types` — `InputMessage`, `OutputMessage`,
   `TextPart`, `ToolCallRequestPart`, `ToolCallResponsePart`, `ReasoningPart`,
-  `ServerToolCallPart`, `ServerToolCallResponsePart`, `GenericPart`, `BlobPart`,
-  `FilePart`, `UriPart`, `Modality`
+  `ServerToolCallPart`, `ServerToolCallResponsePart`, `BlobPart`,
+  `FilePart`, `UriPart`, `CompactionPart`, `Modality`
 - `opentelemetry.util.genai.completion_hook`
 - `opentelemetry.util.genai.environment_variables`
 
@@ -410,7 +410,7 @@ right (all types from `opentelemetry.util.genai.types` unless noted):
 | Inline image / audio / video bytes | `BlobPart(mime_type=…, modality="image"\|"audio"\|"video", content=b"…")` |
 | External media URL | `UriPart(mime_type=…, modality=…, uri="…")` |
 | File reference (e.g. OpenAI `file_id`) | `FilePart(mime_type=…, modality=…, file_id="file-…")` |
-| Provider-specific item with no semconv mapping | `GenericPart(value=…)` — never silently drop. Flag those in the review report. |
+| Provider-specific item with no semconv mapping | Drop it - don't use the deprecated `GenericPart`. Flag those in the review report. |
 
 Output messages mirror the input mapping — `OutputMessage` serializes with
 a `parts` array (not `content`); each part has a `type` field. When

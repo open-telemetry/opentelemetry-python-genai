@@ -1,0 +1,9 @@
+qwenpaw>=1.1.12.post3,<2.0.0
+
+opentelemetry-sdk~=1.45.1
+opentelemetry-exporter-otlp-proto-grpc~=1.45.1
+opentelemetry-instrumentation-genai-qwenpaw~=1.0b0
+
+# Uncomment to enable the upload completion hook (pulls in fsspec).
+# Required when OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload.
+# opentelemetry-util-genai[upload]

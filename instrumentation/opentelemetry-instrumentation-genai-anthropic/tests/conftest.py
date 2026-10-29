@@ -24,6 +24,10 @@ pytest_plugins = [
     "opentelemetry.test_util_genai.vcr",
 ]
 
+# anthropic >= 2 has built-in tracing on the global tracer provider; keep it off so
+# tests only see spans from this instrumentation.
+os.environ["ANTHROPIC_OPEN_TELEMETRY"] = "false"
+
 
 def multimodal_input_message():
     return {
@@ -179,9 +183,15 @@ def vcr_config():
             ("x-api-key", "test_anthropic_api_key"),
             ("authorization", "Bearer test_anthropic_api_key"),
         ],
+        # Older SDKs send `?beta=true` on beta endpoints and newer ones don't.
+        "filter_query_parameters": ["beta"],
         "decode_compressed_response": True,
         "before_record_response": scrub_response_headers(
-            ["anthropic-organization-id", "set-cookie"]
+            [
+                "anthropic-organization-id",
+                "anthropic-workspace-id",
+                "set-cookie",
+            ]
         ),
     }
 

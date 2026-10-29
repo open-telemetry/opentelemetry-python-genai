@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 import os
 from collections.abc import AsyncIterable, Callable, Iterable
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from google.genai.models import AsyncModels, Models
 from google.genai.models import t as transformers
 from google.genai.types import (
+    Candidate,
+    Content,
     ContentListUnion,
     ContentListUnionDict,
     GenerateContentConfig,
@@ -35,6 +38,7 @@ from opentelemetry.util.genai.stream import (
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
+    InputMessage,
     ModalityTokens,
     ToolDefinition,
 )
@@ -51,6 +55,19 @@ from .message import (
     to_system_instructions,
 )
 from .tool_call_wrapper import wrapped_tool
+
+_logger = logging.getLogger(__name__)
+
+
+def _normalize_to_list_if_tuple(value: Any) -> Any:
+    # Match the Google GenAI SDK Pydantic model's sequence coercion.
+    # The SDK automatically coerces tuples to lists during model instantiation,
+    # but `transformers.t_contents` bypasses this and fails on tuples.
+    # Normalizing defensively prevents `ValueError` cascades for valid tuple inputs.
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
 
 _is_mcp_imported = False
 McpClientSession = McpTool = None
@@ -383,7 +400,11 @@ def _wrapped_config_with_tools(
         try:
             config = GenerateContentConfig.model_validate(config)
         except Exception:
-            return GenerateContentConfig(), True
+            _logger.debug(
+                "Unable to parse GenerateContentConfig, passing the config "
+                "through unchanged and skipping request config attributes."
+            )
+            return GenerateContentConfig(), False
     if not config.tools:
         return config, False
     config.tools = [
@@ -449,6 +470,16 @@ def _apply_response_attributes(
         invocation.set_cache_read_input_tokens(
             _modality_tokens(response, "usage_metadata.cache_tokens_details")
         )
+
+
+def _to_input_messages(
+    contents: ContentListUnion | ContentListUnionDict | None,
+) -> list[InputMessage]:
+    contents = _normalize_to_list_if_tuple(contents)
+    # t_contents rejects None and empty lists before the wrapped SDK call runs.
+    if contents is None or (isinstance(contents, list) and not contents):
+        return []
+    return to_input_messages(contents=transformers.t_contents(contents))
 
 
 def _maybe_get_tool_definitions(
@@ -519,13 +550,13 @@ def _create_instrumented_generate_content(
                 )
 
                 if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
-                    )
+                    invocation.input_messages = _to_input_messages(contents)
                     if wrapped_config.system_instruction:
                         invocation.system_instruction = to_system_instructions(
                             content=transformers.t_contents(
-                                wrapped_config.system_instruction
+                                _normalize_to_list_if_tuple(
+                                    wrapped_config.system_instruction
+                                )
                             )[0]
                         )
                 candidates = []
@@ -557,6 +588,41 @@ def _create_instrumented_generate_content(
     return instrumented_generate_content
 
 
+def _merge_streamed_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Merge the per-chunk candidates of a stream into one candidate per index.
+
+    Each streamed chunk carries a fragment of the response; adjacent text
+    fragments of the same kind are joined so a streamed response is reported
+    like the equivalent non-streamed one.
+    """
+    merged: dict[int, Candidate] = {}
+    for candidate in candidates:
+        index = candidate.index or 0
+        target = merged.get(index)
+        if target is None:
+            target = merged[index] = Candidate(index=candidate.index)
+        if candidate.finish_reason is not None:
+            target.finish_reason = candidate.finish_reason
+        if not candidate.content:
+            continue
+        if target.content is None:
+            target.content = Content(parts=[])
+        if candidate.content.role:
+            target.content.role = candidate.content.role
+        for part in candidate.content.parts or []:
+            last = target.content.parts[-1] if target.content.parts else None
+            if (
+                last is not None
+                and part.text is not None
+                and last.text is not None
+                and bool(part.thought) == bool(last.thought)
+            ):
+                last.text += part.text
+            else:
+                target.content.parts.append(part.model_copy())
+    return [merged[index] for index in sorted(merged)]
+
+
 class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
     def __init__(
         self,
@@ -585,7 +651,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
             and self._self_candidates
         ):
             self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
+                candidates=_merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -625,7 +691,7 @@ class AsyncGenerateContentStreamWrapper(
             and self._self_candidates
         ):
             self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
+                candidates=_merge_streamed_candidates(self._self_candidates)
             )
         self._self_invocation.stop()
 
@@ -678,16 +744,16 @@ def _create_instrumented_generate_content_stream(
             )
 
             if telemetry_handler.should_capture_content():
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
-                )
+                invocation.input_messages = _to_input_messages(contents)
                 if wrapped_config.system_instruction:
                     invocation.system_instruction = to_system_instructions(
                         content=transformers.t_contents(
-                            wrapped_config.system_instruction
+                            _normalize_to_list_if_tuple(
+                                wrapped_config.system_instruction
+                            )
                         )[0]
                     )
-            return GenerateContentStreamWrapper(
+            stream = GenerateContentStreamWrapper(
                 wrapped(
                     model=model,
                     contents=contents,
@@ -698,6 +764,8 @@ def _create_instrumented_generate_content_stream(
                 invocation,
                 telemetry_handler,
             )
+            invocation.suspend()
+            return stream
 
         return _execute(*args, **kwargs)
 
@@ -750,13 +818,13 @@ def _create_instrumented_async_generate_content(
                 )
 
                 if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
-                    )
+                    invocation.input_messages = _to_input_messages(contents)
                     if wrapped_config.system_instruction:
                         invocation.system_instruction = to_system_instructions(
                             content=transformers.t_contents(
-                                wrapped_config.system_instruction
+                                _normalize_to_list_if_tuple(
+                                    wrapped_config.system_instruction
+                                )
                             )[0]
                         )
                 candidates = []
@@ -833,16 +901,16 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
             )
 
             if telemetry_handler.should_capture_content():
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
-                )
+                invocation.input_messages = _to_input_messages(contents)
                 if wrapped_config.system_instruction:
                     invocation.system_instruction = to_system_instructions(
                         content=transformers.t_contents(
-                            wrapped_config.system_instruction
+                            _normalize_to_list_if_tuple(
+                                wrapped_config.system_instruction
+                            )
                         )[0]
                     )
-            return AsyncGenerateContentStreamWrapper(
+            stream = AsyncGenerateContentStreamWrapper(
                 await wrapped(
                     model=model,
                     contents=contents,
@@ -853,6 +921,8 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
                 invocation,
                 telemetry_handler,
             )
+            invocation.suspend()
+            return stream
 
         return await _execute(*args, **kwargs)
 

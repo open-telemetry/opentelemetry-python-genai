@@ -19,7 +19,6 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.genai.types import (
     BlobPart,
     FunctionToolDefinition,
-    GenericPart,
     GenericToolDefinition,
     InputMessage,
     MessagePart,
@@ -41,8 +40,8 @@ def _is_dict(val: object) -> TypeGuard[dict[str, Any]]:
     return isinstance(val, dict)
 
 
-def _is_list(val: object) -> TypeGuard[list[Any]]:
-    return isinstance(val, list)
+def _is_list(val: object) -> TypeGuard[Sequence[Any]]:
+    return isinstance(val, (list, tuple))
 
 
 def _first_not_none(*values: Any) -> Any:
@@ -138,8 +137,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         reasoning_text = reasoning.get("reasoningText")
         if _is_dict(reasoning_text) and "text" in reasoning_text:
             return ReasoningPart(content=reasoning_text["text"])
-        if "redactedContent" in reasoning:
-            return ReasoningPart(content="")
     if block_type in ("thinking", "redacted_thinking"):
         content = block.get("thinking") or block.get("data") or ""
         return ReasoningPart(content=str(content))
@@ -180,7 +177,11 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
         fmt = document.get("format", "pdf")
         source = document.get("source")
         content_bytes = source.get("bytes", b"") if _is_dict(source) else b""
-        mime_type = _DOC_MIME_TYPES.get(fmt, f"application/{fmt}")
+        mime_type = (
+            _DOC_MIME_TYPES.get(fmt, f"application/{fmt}")
+            if isinstance(fmt, str)
+            else None
+        )
         return BlobPart(
             content=content_bytes,
             mime_type=mime_type,
@@ -233,20 +234,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:
             response=block.get("content"),
         )
 
-    # 7. Other Generic block types
-    for key in (
-        "video",
-        "audio",
-        "guardContent",
-        "cachePoint",
-        "citationsContent",
-        "searchResult",
-        "toolAddition",
-        "toolRemoval",
-    ):
-        if key in block:
-            return GenericPart(type=key)
-
     return None
 
 
@@ -282,11 +269,6 @@ def _extract_system_parts(
             text = item.get("text")
             if isinstance(text, str) and text:
                 parts.append(TextPart(content=text))
-            else:
-                for key in item:
-                    if key != "text":
-                        parts.append(GenericPart(type=key))
-                        break
     return parts
 
 
@@ -956,12 +938,137 @@ def extract_invoke_agent_request(
             ]
 
 
+def _extract_functions(ag: dict[str, Any]) -> list[dict[str, Any]]:
+    schema = ag.get("functionSchema")
+    if not _is_dict(schema):
+        return []
+    functions = schema.get("functions")
+    if not _is_list(functions):
+        return []
+    return [f for f in functions if _is_dict(f)]
+
+
+def _convert_bedrock_parameters_to_json_schema(
+    params: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Convert Bedrock parameter detail map to a standard JSON Schema object."""
+    if not params:
+        return {"type": "object", "properties": {}}
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for prop_name, prop_def in params.items():
+        if not _is_dict(prop_def):
+            continue
+        prop_schema: dict[str, Any] = {}
+        for k, v in prop_def.items():
+            if k == "required":
+                if v is True:
+                    required.append(prop_name)
+            else:
+                prop_schema[k] = v
+        properties[prop_name] = prop_schema
+
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def extract_invoke_inline_agent_request(
+    api_params: dict[str, Any],
+    invocation: RemoteAgentInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    guardrail_cfg = api_params.get("guardrailConfiguration")
+    if _is_dict(guardrail_cfg):
+        guardrail_id = guardrail_cfg.get("guardrailIdentifier")
+        if guardrail_id:
+            invocation.attributes[aws_attributes.AWS_BEDROCK_GUARDRAIL_ID] = (
+                str(guardrail_id)
+            )
+
+    kbs = api_params.get("knowledgeBases")
+    if _is_list(kbs) and kbs and _is_dict(kbs[0]):
+        kb_id = kbs[0].get("knowledgeBaseId")
+        if kb_id:
+            invocation.attributes[
+                aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID
+            ] = str(kb_id)
+
+    action_groups = api_params.get("actionGroups")
+    if _is_list(action_groups):
+        tool_defs: list[ToolDefinition] = []
+        for ag in action_groups:
+            if not _is_dict(ag):
+                continue
+            for func in _extract_functions(ag):
+                name = str(func.get("name", ""))
+                desc = func.get("description")
+                params = func.get("parameters")
+                tool_defs.append(
+                    FunctionToolDefinition(
+                        name=name,
+                        description=str(desc) if desc is not None else None,
+                        parameters=_convert_bedrock_parameters_to_json_schema(
+                            params
+                        ),
+                    )
+                )
+            sig = ag.get("parentActionGroupSignature")
+            if sig:
+                tool_defs.append(
+                    GenericToolDefinition(
+                        name=ag.get("actionGroupName", str(sig)),
+                        type=str(sig),
+                    )
+                )
+        if tool_defs:
+            invocation.tool_definitions = tool_defs
+
+    if capture_content:
+        instruction = api_params.get("instruction")
+        if instruction is not None:
+            invocation.system_instruction = [
+                TextPart(content=str(instruction))
+            ]
+
+        input_text = api_params.get("inputText")
+        if input_text is not None:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=str(input_text))],
+                )
+            ]
+
+
+def extract_invoke_inline_agent_model(
+    api_params: dict[str, Any],
+) -> str | None:
+    raw_model = api_params.get("foundationModel")
+    if not raw_model:
+        return None
+    return _extract_model_from_arn(raw_model) or str(raw_model)
+
+
 def extract_retrieve_request(
     api_params: dict[str, Any],
     invocation: RetrievalInvocation,
     *,
     capture_content: bool = True,
 ) -> None:
+    raw_kb_id = api_params.get("knowledgeBaseId")
+    if raw_kb_id:
+        invocation.attributes[aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID] = (
+            str(raw_kb_id)
+        )
+
     retrieval_config = api_params.get("retrievalConfiguration")
     if _is_dict(retrieval_config):
         vector_search_config = retrieval_config.get(
@@ -978,6 +1085,150 @@ def extract_retrieve_request(
             query_text = retrieval_query.get("text")
             if query_text is not None:
                 invocation.query_text = str(query_text)
+
+
+def _extract_model_from_arn(model_arn: Any) -> str | None:
+    if not model_arn:
+        return None
+    arn_str = str(model_arn)
+    for prefix in ("foundation-model/", "inference-profile/"):
+        if prefix in arn_str:
+            return arn_str.split(prefix, 1)[1]
+    return arn_str
+
+
+def extract_retrieve_and_generate_model(
+    api_params: dict[str, Any],
+) -> str | None:
+    rag_config = api_params.get("retrieveAndGenerateConfiguration")
+    if not _is_dict(rag_config):
+        return None
+    for sub_key in (
+        "knowledgeBaseConfiguration",
+        "externalSourcesConfiguration",
+    ):
+        sub_cfg = rag_config.get(sub_key)
+        if _is_dict(sub_cfg) and sub_cfg.get("modelArn"):
+            return _extract_model_from_arn(sub_cfg.get("modelArn"))
+    return None
+
+
+def extract_retrieve_and_generate_request(
+    api_params: dict[str, Any],
+    invocation: InferenceInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = api_params.get("sessionId")
+    if session_id:
+        invocation.conversation_id = str(session_id)
+
+    if capture_content:
+        input_obj = api_params.get("input")
+        if _is_dict(input_obj):
+            input_text = input_obj.get("text")
+            if input_text is not None:
+                invocation.input_messages = [
+                    InputMessage(
+                        role=Role.USER.value,
+                        parts=[TextPart(content=str(input_text))],
+                    )
+                ]
+
+    rag_config = api_params.get("retrieveAndGenerateConfiguration")
+    if not _is_dict(rag_config):
+        return
+
+    gen_config: dict[str, Any] | None = None
+    kb_config = rag_config.get("knowledgeBaseConfiguration")
+    if _is_dict(kb_config):
+        kb_id = kb_config.get("knowledgeBaseId")
+        if kb_id:
+            invocation.attributes[
+                aws_attributes.AWS_BEDROCK_KNOWLEDGE_BASE_ID
+            ] = str(kb_id)
+
+        if _is_dict(kb_config.get("generationConfiguration")):
+            gen_config = kb_config["generationConfiguration"]
+
+    ext_config = rag_config.get("externalSourcesConfiguration")
+    if (
+        gen_config is None
+        and _is_dict(ext_config)
+        and _is_dict(ext_config.get("generationConfiguration"))
+    ):
+        gen_config = ext_config["generationConfiguration"]
+
+    if _is_dict(gen_config):
+        guardrail_cfg = gen_config.get("guardrailConfiguration")
+        if _is_dict(guardrail_cfg):
+            guardrail_id = guardrail_cfg.get("guardrailId")
+            if guardrail_id:
+                invocation.attributes[
+                    aws_attributes.AWS_BEDROCK_GUARDRAIL_ID
+                ] = str(guardrail_id)
+
+        inf_cfg = gen_config.get("inferenceConfig")
+        if _is_dict(inf_cfg):
+            text_inf = inf_cfg.get("textInferenceConfig")
+            if _is_dict(text_inf):
+                if "temperature" in text_inf:
+                    invocation.temperature = _safe_float(
+                        text_inf.get("temperature")
+                    )
+                if "topP" in text_inf:
+                    invocation.top_p = _safe_float(text_inf.get("topP"))
+                if "maxTokens" in text_inf:
+                    invocation.max_tokens = _safe_int(
+                        text_inf.get("maxTokens")
+                    )
+                stop_seq = text_inf.get("stopSequences")
+                if _is_list(stop_seq):
+                    invocation.stop_sequences = [
+                        str(s) for s in stop_seq if s is not None
+                    ]
+
+        add_fields = gen_config.get("additionalModelRequestFields")
+        if _is_dict(add_fields):
+            top_k = _first_not_none(
+                add_fields.get("topK"), add_fields.get("top_k")
+            )
+            if top_k is not None:
+                invocation.top_k = _safe_int(top_k)
+            if invocation.seed is None and "seed" in add_fields:
+                invocation.seed = _safe_int(add_fields.get("seed"))
+
+
+def extract_retrieve_and_generate_response(
+    response: dict[str, Any],
+    invocation: InferenceInvocation,
+    *,
+    capture_content: bool = True,
+) -> None:
+    session_id = response.get("sessionId")
+    if session_id and not invocation.conversation_id:
+        invocation.conversation_id = str(session_id)
+
+    guardrail_action = response.get("guardrailAction")
+    finish_reason = (
+        "content_filter" if guardrail_action == "INTERVENED" else "stop"
+    )
+    invocation.finish_reasons = [finish_reason]
+
+    if not capture_content:
+        return
+
+    output = response.get("output")
+    if _is_dict(output):
+        text = output.get("text")
+        if text is not None:
+            invocation.output_messages = [
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[TextPart(content=str(text))],
+                    finish_reason=finish_reason,
+                )
+            ]
 
 
 def extract_retrieve_response(

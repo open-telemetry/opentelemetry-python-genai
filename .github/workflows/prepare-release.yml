@@ -17,6 +17,7 @@ on:
         - opentelemetry-instrumentation-genai-openai
         - opentelemetry-instrumentation-genai-portkey
         - opentelemetry-instrumentation-genai-qwen-agent
+        - opentelemetry-instrumentation-genai-qwenpaw
         - opentelemetry-instrumentation-genai-smolagents
         - opentelemetry-util-genai
         description: >
@@ -41,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: true # zizmor: ignore[artipacked] a later step pushes the prepared release branch
+          persist-credentials: false
 
       - name: Verify branch
         run: |
@@ -85,7 +86,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
 
       - name: Prepare selected packages for release
         run: |
@@ -100,7 +101,7 @@ jobs:
       - name: Configure CLA-approved git bot
         run: .github/scripts/use-cla-approved-github-bot.sh
 
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: otelbot-token
         with:
           client-id: ${{ vars.OTELBOT_CLIENT_ID }}
@@ -109,7 +110,8 @@ jobs:
 
       - name: Create pull request
         env:
-          GITHUB_TOKEN: ${{ steps.otelbot-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TOKEN: ${{ steps.otelbot-token.outputs.token }}
           PACKAGES: ${{ steps.packages.outputs.packages }}
           COUNT: ${{ steps.packages.outputs.count }}
         run: |
@@ -126,9 +128,10 @@ jobs:
           fi
 
           git commit -a -m "$title"
+          gh auth setup-git
           git push origin HEAD:"$branch"
-          pr_url=$(gh pr create --title "$title" \
+          pr_url=$(GH_TOKEN="${PR_TOKEN}" gh pr create --title "$title" \
                                 --body "$body" \
                                 --head "$branch" \
                                 --base main)
-          gh pr edit "$pr_url" --add-label release
+          GH_TOKEN="${PR_TOKEN}" gh pr edit "$pr_url" --add-label release

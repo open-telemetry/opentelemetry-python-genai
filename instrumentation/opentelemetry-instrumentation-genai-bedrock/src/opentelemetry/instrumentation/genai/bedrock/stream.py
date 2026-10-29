@@ -807,3 +807,88 @@ class AsyncBedrockAgentEventStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._init_agent_stream(invocation, capture_content=capture_content)
+
+
+class _BedrockRetrieveAndGenerateStreamMixin:
+    _self_invocation: InferenceInvocation
+    _self_capture_content: bool
+    _self_accumulated_text: list[str]
+    _self_guardrail_intervened: bool
+
+    def _init_rag_stream(
+        self,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        self._self_invocation = invocation
+        self._self_capture_content = capture_content
+        self._self_accumulated_text = []
+        self._self_guardrail_intervened = False
+
+    def _process_chunk(self, chunk: dict[str, Any]) -> None:
+        if not _is_dict(chunk):
+            return
+        guardrail = chunk.get("guardrail")
+        if _is_dict(guardrail) and guardrail.get("action") == "INTERVENED":
+            self._self_guardrail_intervened = True
+
+        if self._self_capture_content:
+            output = chunk.get("output")
+            if _is_dict(output):
+                text = output.get("text")
+                if isinstance(text, str):
+                    self._self_accumulated_text.append(text)
+
+    def _on_stream_end(self) -> None:
+        finish_reason = (
+            "content_filter" if self._self_guardrail_intervened else "stop"
+        )
+        self._self_invocation.finish_reasons = [finish_reason]
+        if self._self_capture_content and self._self_accumulated_text:
+            content = "".join(self._self_accumulated_text)
+            self._self_invocation.output_messages = [
+                OutputMessage(
+                    role=Role.ASSISTANT.value,
+                    parts=[TextPart(content=content)],
+                    finish_reason=finish_reason,
+                )
+            ]
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
+
+
+class BedrockRetrieveAndGenerateStreamWrapper(
+    _BedrockRetrieveAndGenerateStreamMixin,
+    SyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for Bedrock retrieve_and_generate_stream EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_rag_stream(invocation, capture_content=capture_content)
+
+
+class AsyncBedrockRetrieveAndGenerateStreamWrapper(
+    _BedrockRetrieveAndGenerateStreamMixin,
+    AsyncStreamWrapper[dict[str, Any]],
+):
+    """Wrapper for async Bedrock retrieve_and_generate_stream EventStream."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        *,
+        capture_content: bool = True,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        self._init_rag_stream(invocation, capture_content=capture_content)

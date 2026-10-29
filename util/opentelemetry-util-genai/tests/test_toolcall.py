@@ -4,6 +4,7 @@
 """Tests for ToolCallRequestPart and ToolInvocation inheritance structure"""
 
 import os
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,12 +26,16 @@ from opentelemetry.trace import (
     set_span_in_context,
 )
 from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.util.genai._tool_invocation import ToolData
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import GenAIInvocation, ToolInvocation
+from opentelemetry.util.genai.invocation import (
+    GenAIInvocation,
+    ToolInvocation,
+)
 from opentelemetry.util.genai.types import (
     CompactionPart,
     InputMessage,
@@ -300,7 +305,7 @@ def test_arguments_dict_serialized_to_json():
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
 def test_arguments_str_passed_through():
-    """str arguments are stored as-is (no JSON wrapping)."""
+    """str arguments are recorded as-is, without JSON quoting."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("echo")
     invocation.arguments = "hello"
@@ -314,15 +319,51 @@ def test_arguments_str_passed_through():
     os.environ,
     {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
 )
-def test_arguments_int_passed_through():
-    """int arguments are stored as-is."""
+def test_arguments_int_serialized_to_json():
+    """int arguments are serialized to JSON string."""
     span_exporter, handler = _make_span_exporter_and_handler()
     invocation = handler.tool("counter")
     invocation.arguments = 42
     invocation.stop()
 
     attrs = span_exporter.get_finished_spans()[0].attributes
-    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == 42
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == "42"
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_unconverted_objects_serialized():
+    class Model:
+        def model_dump(self):
+            return {"k": "v"}
+
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("echo")
+    invocation.arguments = Model()
+    invocation.tool_result = Decimal("1.5")
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"k":"v"}'
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_RESULT] == "1.5"
+
+
+@patch.dict(
+    os.environ,
+    {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+)
+def test_non_finite_floats_not_recorded_as_invalid_json():
+    span_exporter, handler = _make_span_exporter_and_handler()
+    invocation = handler.tool("echo")
+    invocation.arguments = {"a": 1, "b": float("nan")}
+    invocation.tool_result = float("inf")
+    invocation.stop()
+
+    attrs = span_exporter.get_finished_spans()[0].attributes
+    assert attrs[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == '{"a":1}'
+    assert GenAI.GEN_AI_TOOL_CALL_RESULT not in attrs
 
 
 @patch.dict(
@@ -652,3 +693,79 @@ def test_tool_invocation_attach_to_context_false():
     )
     assert tool_span.parent is not None
     assert tool_span.parent.span_id == ambient_span.get_span_context().span_id
+
+
+def test_property_delegation_to_data():
+    handler = _make_handler()
+    inv = handler.tool(
+        "calculator",
+        tool_type="function",
+        agent_name="MathAgent",
+    )
+    assert isinstance(inv._data, ToolData)
+    assert inv.name == "calculator"
+    assert inv._data.tool_name == "calculator"
+    assert inv.tool_type == "function"
+    assert inv._data.tool_type == "function"
+    assert inv.agent_name == "MathAgent"
+    assert inv._data.agent_name == "MathAgent"
+
+    inv.tool_call_id = "call-abc"
+    assert inv._data.tool_call_id == "call-abc"
+    assert inv.tool_call_id == "call-abc"
+
+    inv.tool_description = "A math tool"
+    assert inv._data.tool_description == "A math tool"
+    assert inv.tool_description == "A math tool"
+
+    inv.arguments = {"expr": "1+1"}
+    assert inv._data.tool_call_arguments == {"expr": "1+1"}
+    assert inv.arguments == {"expr": "1+1"}
+
+    inv.tool_result = 2
+    assert inv._data.tool_call_result == 2
+    assert inv.tool_result == 2
+    inv.stop()
+
+
+def test_nested_tool_invocations_not_suppressed():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    with handler.tool("outer-tool") as outer:
+        assert isinstance(outer, ToolInvocation)
+        with handler.tool("outer-tool") as inner:
+            assert isinstance(inner, ToolInvocation)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    inner_span, outer_span = spans
+    assert inner_span.name == "execute_tool outer-tool"
+    assert outer_span.name == "execute_tool outer-tool"
+    assert inner_span.parent is not None
+    assert inner_span.parent.span_id == outer_span.context.span_id
+
+
+def test_nested_tool_inside_local_agent_not_suppressed():
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+
+    with handler.tool("search"):
+        with handler.invoke_local_agent(agent_name="search-agent"):
+            with handler.tool("search") as inner_tool:
+                assert isinstance(inner_tool, ToolInvocation)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 3
+    inner_tool_span, agent_span, outer_tool_span = spans
+    assert inner_tool_span.name == "execute_tool search"
+    assert agent_span.name == "invoke_agent search-agent"
+    assert outer_tool_span.name == "execute_tool search"
+    assert inner_tool_span.parent is not None
+    assert agent_span.parent is not None
+    assert inner_tool_span.parent.span_id == agent_span.context.span_id
+    assert agent_span.parent.span_id == outer_tool_span.context.span_id

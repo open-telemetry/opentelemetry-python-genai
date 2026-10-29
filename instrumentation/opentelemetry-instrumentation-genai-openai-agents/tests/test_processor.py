@@ -272,12 +272,12 @@ def test_tool_content_captured_from_span_end(
         # value as the compact JSON the OpenAI APIs forward.
         ('{"city": "Barcelona"}', '{"city":"Barcelona"}'),
         ('{"city":"Barcelona"}', '{"city":"Barcelona"}'),
-        # A provider may emit something that isn't valid JSON, or valid JSON
-        # that isn't an object; neither may change the attribute's type.
+        # Invalid JSON is kept as a string; any valid JSON round-trips.
         ("city=Barcelona", "city=Barcelona"),
         ("[1,2]", "[1,2]"),
+        ("[1, 2]", "[1,2]"),
         ("42", "42"),
-        ("null", "null"),
+        ("null", None),
         # No arguments to record: `trace_include_sensitive_data=False` leaves
         # `input` None, and tool types without arguments leave it empty.
         (None, None),

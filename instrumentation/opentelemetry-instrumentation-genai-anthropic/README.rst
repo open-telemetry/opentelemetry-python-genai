@@ -46,8 +46,41 @@ Check out the `manual example <examples/manual>`_ for more details.
     )
 
 
+Supported Operations
+--------------------
+
+The instrumentation supports synchronous and asynchronous calls for:
+
+- ``messages.create``, ``messages.stream``, and ``messages.parse``
+- ``beta.messages.create``, ``beta.messages.stream``, and ``beta.messages.parse``
+- Raw and streaming response helpers (``with_raw_response`` and ``with_streaming_response``)
+
+
 Configuration
 -------------
+
+Anthropic SDK built-in tracing
+******************************
+
+``anthropic`` 2.x and newer ships its own
+`OpenTelemetry tracing <https://github.com/anthropics/anthropic-sdk-python#opentelemetry>`_,
+enabled by default. Using it together with this instrumentation produces duplicate spans for
+each call.
+
+On ``anthropic`` 2.x, prefer the SDK's built-in tracing and uninstall this package::
+
+    pip uninstall opentelemetry-instrumentation-genai-anthropic
+
+If the package is installed as a dependency of something else, disable it with
+``OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=anthropic`` instead.
+
+The built-in tracing doesn't emit metrics, log events and doesn't support upload hooks.
+To keep this instrumentation instead, disable the Anthropic SDK tracing by setting
+``ANTHROPIC_OPEN_TELEMETRY=false`` or passing ``open_telemetry=False`` to the client:
+
+.. code-block:: python
+
+    client = Anthropic(open_telemetry=False)
 
 Capture Message Content
 ***********************
@@ -85,4 +118,3 @@ References
 * `OpenTelemetry GenAI semantic conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
 * `Anthropic SDK (Python) <https://github.com/anthropics/anthropic-sdk-python>`_
 * `Anthropic Documentation <https://docs.anthropic.com/>`_
-
