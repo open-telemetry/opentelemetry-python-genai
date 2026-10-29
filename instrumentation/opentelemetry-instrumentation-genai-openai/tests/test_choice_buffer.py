@@ -233,3 +233,51 @@ def test_choicebuffer_append_tool_call_without_index_repeated_id_continues():
     (only,) = buf.tool_calls_buffers
     assert only.tool_call_id == "call_1"
     assert "".join(only.arguments) == '{"city": "NYC"}'
+
+
+def test_choicebuffer_append_tool_call_without_index_name_starts_call():
+    """Without an index or id, a delta that names a function is a new call."""
+    buf = ChoiceBuffer(0)
+    for name, arguments in (
+        ("get_weather", '{"city": "NYC"}'),
+        ("get_time", "{}"),
+    ):
+        buf.append_tool_call(
+            ChoiceDeltaToolCall.model_construct(
+                index=None,
+                function=ChoiceDeltaToolCallFunction(
+                    name=name, arguments=arguments
+                ),
+            )
+        )
+
+    first, second = buf.tool_calls_buffers
+    assert first.function_name == "get_weather"
+    assert "".join(first.arguments) == '{"city": "NYC"}'
+    assert second.function_name == "get_time"
+    assert "".join(second.arguments) == "{}"
+
+
+def test_choicebuffer_append_tool_call_without_index_interleaved_ids():
+    """A fragment whose id reappears after another call joins its own call."""
+    buf = ChoiceBuffer(0)
+    for call_id, name, arguments in (
+        ("call_1", "get_weather", '{"city":'),
+        ("call_2", "get_time", "{}"),
+        ("call_1", None, ' "NYC"}'),
+    ):
+        buf.append_tool_call(
+            ChoiceDeltaToolCall.model_construct(
+                index=None,
+                id=call_id,
+                function=ChoiceDeltaToolCallFunction(
+                    name=name, arguments=arguments
+                ),
+            )
+        )
+
+    first, second = buf.tool_calls_buffers
+    assert first.tool_call_id == "call_1"
+    assert "".join(first.arguments) == '{"city": "NYC"}'
+    assert second.tool_call_id == "call_2"
+    assert "".join(second.arguments) == "{}"
