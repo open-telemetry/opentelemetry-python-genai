@@ -660,7 +660,8 @@ async def test_native_agent_call_counts(
     (agent_span,) = [
         span
         for span in span_exporter.get_finished_spans()
-        if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
+        if span.parent is None
+        and span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
         == "invoke_agent"
     ]
     assert agent_span.status.status_code == (
