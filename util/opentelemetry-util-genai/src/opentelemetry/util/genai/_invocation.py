@@ -366,6 +366,25 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             timing for inference only.
         """
 
+    def emit_event(
+        self,
+        event_name: str,
+        attributes: Mapping[str, AttributeValue],
+        *,
+        body: str | None = None,
+    ) -> None:
+        """Emit an event correlated with this active invocation."""
+        if self._finished:
+            return
+        self._logger.emit(
+            LogRecord(
+                event_name=event_name,
+                body=body,
+                attributes=dict(attributes),
+                context=self._span_context,
+            )
+        )
+
     def _record_client_metrics(self) -> None:
         """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
         attributes = self._get_metric_attributes()
