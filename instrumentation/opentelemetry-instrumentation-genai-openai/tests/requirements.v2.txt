@@ -39,10 +39,9 @@
 # It also includes opentelemetry-instrumentation-httpx to exercise the httpx interop tests.
 
 openai==2.54.0
-# older pydantic is required for PyPy < 3.11
-pydantic==2.12.5
+pydantic==2.14.1
 httpx==0.28.1
-opentelemetry-instrumentation-httpx==0.64b0
+opentelemetry-instrumentation-httpx==0.66b1
 importlib-metadata==9.0.1
 packaging==26.3
 wrapt==2.5.1

@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-import logging
-import os
+import timeit
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -28,9 +27,6 @@ from opentelemetry.util.genai._invocation import (
     get_content_attributes,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-)
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -43,8 +39,6 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
-
-_logger = logging.getLogger(__name__)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -85,30 +79,6 @@ _GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID: Final = (
 )
 _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
-
-
-def _should_emit_event(
-    content_capturing_mode: ContentCapturingMode,
-) -> bool:
-    """Check if event emission is enabled."""
-    if (
-        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
-        .lower()
-        .strip()
-    ):
-        if envvar == "true":
-            return True
-        if envvar == "false":
-            return False
-        _logger.warning(
-            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
-            envvar,
-            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-        )
-    return content_capturing_mode in (
-        ContentCapturingMode.EVENT_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
 
 
 CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
@@ -175,6 +145,13 @@ class InferenceInvocation(GenAIInvocation):
 
     Use handler.inference(provider) rather than constructing this directly.
     """
+
+    _records_stream_telemetry = True
+
+    # Set once the invocation is handed to a stream wrapper.
+    _request_stream: bool | None = None
+    _ttfc_seconds: float | None = None
+    _stream_last_chunk_at: float | None = None
 
     def __init__(
         self,
@@ -247,8 +224,10 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
-        self._emit_event: bool = _should_emit_event(
-            self._content_capturing_mode
+        self._emit_event: bool = self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
+            event_name="gen_ai.client.inference.operation.details",
         )
 
     @property
@@ -710,10 +689,52 @@ class InferenceInvocation(GenAIInvocation):
             return reasons or None
         return None
 
+    def record_stream_chunk(self) -> None:
+        """Mark the request as streamed and record one output chunk arriving."""
+        if self._finished:
+            return
+        self._request_stream = True
+        self._on_stream_chunk(timeit.default_timer())
+
     def _on_stream_chunk(self, chunk_at: float) -> None:
-        super()._on_stream_chunk(chunk_at)
+        """Record streaming timing for one output chunk as it arrives.
+
+        The first chunk's delta from the invocation start is the
+        time-to-first-chunk; each later chunk's delta from the previous one is
+        the inter-chunk gap.
+
+        Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-metrics.md#metric-gen_aiclientoperationtime_to_first_chunk
+        """
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
+        )
+
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
+        is_first_chunk = self._ttfc_seconds is None
+        if is_first_chunk:
+            self._ttfc_seconds = delta
         self.data.request_stream = True
         self.data.response_time_to_first_chunk = self._ttfc_seconds
+
+        if not self._start_span:
+            return
+
+        attributes = self._get_metric_attributes()
+        if is_first_chunk:
+            self._instruments.time_to_first_chunk.record(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        else:
+            self._instruments.time_per_output_chunk.record(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
@@ -947,6 +968,7 @@ class InferenceInvocation(GenAIInvocation):
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
             context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
         )
 
 
