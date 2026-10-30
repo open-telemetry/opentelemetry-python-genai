@@ -63,6 +63,11 @@ _GEN_AI_INVOKE_WORKFLOW_DURATION_BUCKETS: Final = [
 _GEN_AI_EXECUTE_TOOL_DURATION: Final = "gen_ai.execute_tool.duration"
 _GEN_AI_INVOKE_WORKFLOW_DURATION: Final = "gen_ai.invoke_workflow.duration"
 _GEN_AI_INVOKE_AGENT_DURATION: Final = "gen_ai.invoke_agent.duration"
+_GEN_AI_INVOKE_AGENT_INFERENCE_CALLS: Final = (
+    "gen_ai.invoke_agent.inference_calls"
+)
+_GEN_AI_INVOKE_AGENT_TOOL_CALLS: Final = "gen_ai.invoke_agent.tool_calls"
+_GEN_AI_INVOKE_AGENT_CALLS_BUCKETS: Final = [1, 2, 4, 8, 16, 32, 64, 128]
 _GEN_AI_INVOKE_AGENT_DURATION_BUCKETS: Final = [
     0.1,
     0.2,
@@ -125,6 +130,24 @@ class _Instruments:
             description="Measures the duration of an in-process agent invocation.",
             unit="s",
             explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_AGENT_DURATION_BUCKETS,
+        )
+        self.invoke_agent_inference_calls: Histogram = meter.create_histogram(
+            name=_GEN_AI_INVOKE_AGENT_INFERENCE_CALLS,
+            description=(
+                "The number of inference (model) calls a GenAI agent makes"
+                " during a single invocation."
+            ),
+            unit="{inference_call}",
+            explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_AGENT_CALLS_BUCKETS,
+        )
+        self.invoke_agent_tool_calls: Histogram = meter.create_histogram(
+            name=_GEN_AI_INVOKE_AGENT_TOOL_CALLS,
+            description=(
+                "The number of tool calls a GenAI agent makes during a single"
+                " invocation."
+            ),
+            unit="{tool_call}",
+            explicit_bucket_boundaries_advisory=_GEN_AI_INVOKE_AGENT_CALLS_BUCKETS,
         )
 
 

@@ -11,6 +11,7 @@ import math
 import uuid
 from unittest import mock
 
+import langchain.agents
 import pytest
 from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -57,13 +58,13 @@ from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     _extract_prompt_context,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
+    _ai_message_parts,
     _legacy_function_call_request,
     _media_part,
     _normalize_role,
     extract_token_details,
     make_input_message,
     make_last_output_message,
-    make_output_message,
     serialize,
     to_input_messages,
     to_output_messages,
@@ -92,7 +93,6 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     FilePart,
     InputMessage,
-    OutputMessage,
     RetrievalDocument,
     TextPart,
     ToolCallRequestPart,
@@ -384,6 +384,38 @@ async def test_chain_input_and_output_capture(
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
+@pytest.mark.skipif(
+    not hasattr(langchain.agents, "create_agent"),
+    reason="create_agent requires a newer langchain version",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_unnamed_agent_respects_content_capture(
+    asynchronous: bool,
+    content_capture: ContentCapturingMode,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    inputs = {"messages": [HumanMessage(content="hello")]}
+    agent = langchain.agents.create_agent(
+        FakeChatModel(responses=[AIMessage(content="done")]), tools=[]
+    )
+    if asynchronous:
+        await agent.ainvoke(inputs)
+    else:
+        agent.invoke(inputs)
+    span = finished_span(span_exporter, "invoke_agent")
+    attrs = span.attributes
+    assert attrs is not None
+    assert GenAI.GEN_AI_AGENT_NAME not in attrs
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert message["parts"] == [{"type": "text", "content": "hello"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("parent_name", ["MyLangGraph", "math_agent"])
@@ -599,6 +631,96 @@ async def test_chat_response_parts_and_finish_reason(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize(
+    ("generation_info", "response_metadata", "expected"),
+    [
+        pytest.param(
+            None,
+            {"finish_reason": "stop"},
+            "stop",
+            id="missing-generation-info",
+        ),
+        pytest.param(
+            {},
+            {"finish_reason": "length"},
+            "length",
+            id="empty-generation-info",
+        ),
+        pytest.param(
+            {"finish_reason": ""},
+            {"finish_reason": "tool_calls"},
+            "tool_calls",
+            id="empty-generation-finish-reason",
+        ),
+        pytest.param(
+            {"finish_reason": "length"},
+            {"finish_reason": "stop"},
+            "length",
+            id="generation-finish-reason-takes-precedence",
+        ),
+        pytest.param(
+            {"done_reason": "stop"},
+            {"finish_reason": "length"},
+            "stop",
+            id="generation-done-reason-takes-precedence",
+        ),
+        pytest.param(
+            None,
+            {"finish_reason": "stop", "stop_reason": "end_turn"},
+            "stop",
+            id="metadata-finish-reason-takes-precedence",
+        ),
+        pytest.param(
+            None,
+            {"finish_reason": "", "stop_reason": "end_turn"},
+            "end_turn",
+            id="empty-metadata-finish-reason-falls-back",
+        ),
+        pytest.param(None, {}, "error", id="missing-reason-keeps-default"),
+    ],
+)
+async def test_chat_finish_reason_metadata_fallback(
+    asynchronous: bool,
+    streaming: bool,
+    generation_info: dict[str, str] | None,
+    response_metadata: dict[str, str],
+    expected: str,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(
+        responses=[
+            AIMessage(content="answer", response_metadata=response_metadata)
+        ],
+        generation_info=generation_info,
+    )
+    if streaming:
+        if asynchronous:
+            chunks = [chunk async for chunk in model.astream("hello")]
+        else:
+            chunks = list(model.stream("hello"))
+        assert "".join(chunk.content for chunk in chunks) == "answer"
+    else:
+        result = await invoke(model, "hello", asynchronous)
+        assert result.content == "answer"
+
+    span = finished_chat(span_exporter)
+    assert span.status.status_code == StatusCode.UNSET
+    attrs = span.attributes
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (expected,)
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert output["finish_reason"] == expected
+        assert output["parts"] == [{"type": "text", "content": "answer"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_chat_multiple_generations_keep_finish_reason_alignment(
     asynchronous: bool,
     span_exporter: InMemorySpanExporter,
@@ -670,6 +792,37 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
             },
         ),
         (
+            # Shape produced by langchain-openai for flex-tier requests.
+            {
+                "input_token_details": {
+                    "flex_cache_read": 4,
+                    "flex_cache_creation": 2,
+                    "flex": 6,
+                },
+                "output_token_details": {"flex_reasoning": 5, "flex": 15},
+            },
+            {
+                "gen_ai.usage.cache_write.input_tokens": 2,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 4,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 5,
+            },
+        ),
+        (
+            {
+                "input_token_details": {
+                    "audio": 1,
+                    "priority_cache_read": 3,
+                    "priority": 7,
+                },
+                "output_token_details": {"priority_reasoning": 8},
+            },
+            {
+                "gen_ai.usage.audio.input_tokens": 1,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 3,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 8,
+            },
+        ),
+        (
             {
                 "input_token_details": {"text": 7, "image": 2, "audio": 1},
                 "output_token_details": {"text": 14, "image": 4, "audio": 2},
@@ -685,7 +838,14 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         ),
         ({}, {}),
     ],
-    ids=["cache-creation", "cache-write", "modalities", "no-details"],
+    ids=[
+        "cache-creation",
+        "cache-write",
+        "flex-tier",
+        "priority-tier",
+        "modalities",
+        "no-details",
+    ],
 )
 async def test_chat_token_details(
     asynchronous: bool,
@@ -1542,101 +1702,11 @@ class TestMakeInputMessage:
 
 
 # ---------------------------------------------------------------------------
-# utils.make_output_message / make_last_output_message
+# utils.to_output_messages / make_last_output_message
 # ---------------------------------------------------------------------------
 
 
-class TestMakeOutputMessage:
-    def test_returns_empty_list_for_non_dict(self):
-        assert make_output_message("not a dict") == []
-        assert make_output_message(None) == []
-
-    def test_returns_empty_list_when_no_messages_key(self):
-        assert make_output_message({"output": "hi"}) == []
-
-    def test_returns_empty_list_when_messages_is_none(self):
-        assert make_output_message({"messages": None}) == []
-
-    def test_ai_message_produces_assistant_output(self):
-        ai_msg = AIMessage(content="The answer is 42")
-        result = make_output_message({"messages": [ai_msg]})
-
-        assert len(result) == 1
-        assert isinstance(result[0], OutputMessage)
-        assert result[0].role == "assistant"
-        assert result[0].finish_reason == ""
-        assert result[0].parts[0].content == "The answer is 42"
-
-    @pytest.mark.parametrize(
-        "assistant_entry",
-        [
-            {"role": "assistant", "content": "Hello"},
-            ("ai", "Hello"),
-        ],
-    )
-    def test_message_like_assistant_entry_produces_assistant_output(
-        self, assistant_entry
-    ):
-        result = make_output_message({"messages": [assistant_entry]})
-
-        assert len(result) == 1
-        assert result[0].role == "assistant"
-        assert result[0].parts[0].content == "Hello"
-
-    def test_malformed_entry_keeps_convertible_assistant_entries(self):
-        result = make_output_message(
-            {
-                "messages": [
-                    {"role": "not_a_real_role", "content": "dropped"},
-                    None,
-                    {"role": "assistant", "content": "kept"},
-                ]
-            }
-        )
-
-        assert len(result) == 1
-        assert result[0].parts[0].content == "kept"
-
-    def test_non_ai_message_skipped(self):
-        human_msg = HumanMessage(content="Hello")
-        result = make_output_message({"messages": [human_msg]})
-        assert result == []
-
-    def test_ai_message_with_empty_content_skipped(self):
-        ai_msg = AIMessage(content="")
-        result = make_output_message({"messages": [ai_msg]})
-        assert result == []
-
-    def test_multiple_ai_messages_all_returned(self):
-        msgs = [
-            AIMessage(content="First response"),
-            AIMessage(content="Second response"),
-        ]
-        result = make_output_message({"messages": msgs})
-
-        assert len(result) == 2
-        assert result[0].parts[0].content == "First response"
-        assert result[1].parts[0].content == "Second response"
-
-    def test_mixed_messages_only_ai_returned(self):
-        msgs = [
-            HumanMessage(content="question"),
-            AIMessage(content="answer"),
-            HumanMessage(content="follow-up"),
-        ]
-        result = make_output_message({"messages": msgs})
-
-        assert len(result) == 1
-        assert result[0].parts[0].content == "answer"
-
-    def test_finish_reason_default_is_empty_string(self):
-        # Workflow/agent output spans must not fabricate a finish reason:
-        # util-genai filters empty strings out of
-        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
-        # while the per-call inference spans report the real values.
-        result = make_output_message({"messages": [AIMessage(content="hi")]})
-        assert result[0].finish_reason == ""
-
+class TestToOutputMessages:
     def test_to_output_messages_propagates_explicit_finish_reason(self):
         # The inference path passes the provider's finish_reason through
         # ``to_output_messages``; the converter must forward it onto every
@@ -1694,12 +1764,94 @@ class TestMakeLastOutputMessage:
     def test_returns_empty_for_empty_outputs(self):
         assert make_last_output_message({}) == []
 
+    @pytest.mark.parametrize(
+        "data",
+        ["not a dict", None, {"output": "hi"}, {"messages": None}],
+    )
+    def test_returns_empty_without_messages_list(self, data):
+        assert make_last_output_message(data) == []
+
+    def test_tuple_assistant_entry_produces_assistant_output(self):
+        result = make_last_output_message({"messages": [("ai", "Hello")]})
+
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].parts[0].content == "Hello"
+
+    def test_finish_reason_default_is_empty_string(self):
+        # Workflow/agent output spans must not fabricate a finish reason:
+        # util-genai filters empty strings out of
+        # ``gen_ai.response.finish_reasons`` so the rollup span stays silent
+        # while the per-call inference spans report the real values.
+        result = make_last_output_message(
+            {"messages": [AIMessage(content="hi")]}
+        )
+        assert result[0].finish_reason == ""
+
     def test_single_ai_message_returned(self):
         ai_msg = AIMessage(content="only response")
         result = make_last_output_message({"messages": [ai_msg]})
 
         assert len(result) == 1
         assert result[0].parts[0].content == "only response"
+
+    def test_skips_trailing_empty_ai_message(self):
+        msgs = [
+            AIMessage(content="final answer"),
+            AIMessage(content=""),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    @pytest.mark.parametrize(
+        "trailing_entry",
+        [
+            HumanMessage(content="next question"),
+            ToolMessage(content="tool result", tool_call_id="call_1"),
+            {"role": "not_a_real_role", "content": "dropped"},
+            {"content": "no role key"},
+            ("human",),
+            None,
+        ],
+    )
+    def test_skips_trailing_non_output_entry(self, trailing_entry):
+        msgs = [AIMessage(content="final answer"), trailing_entry]
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final answer"
+
+    def test_accepts_generator_messages(self):
+        msgs = (AIMessage(content=text) for text in ("intermediate", "final"))
+        result = make_last_output_message({"messages": msgs})
+
+        assert len(result) == 1
+        assert result[0].parts[0].content == "final"
+
+    def test_does_not_convert_earlier_ai_messages(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        converted: list[str] = []
+
+        def recording_parts(message: AIMessage):
+            converted.append(str(message.content))
+            return _ai_message_parts(message)
+
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.langchain.utils._ai_message_parts",
+            recording_parts,
+        )
+        msgs = [
+            AIMessage(content="first"),
+            HumanMessage(content="next question"),
+            AIMessage(content="final answer"),
+        ]
+        result = make_last_output_message({"messages": msgs})
+
+        assert result[0].parts[0].content == "final answer"
+        assert converted == ["final answer"]
 
 
 # ---------------------------------------------------------------------------
@@ -1982,6 +2134,28 @@ def test_extract_token_details_cache_write_key():
     details = extract_token_details(usage)
     assert details == {
         "cache_write_input_tokens": 4,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority"])
+def test_extract_token_details_service_tier_prefix(tier: str):
+    # Shape produced by langchain-openai for flex and priority requests.
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {
+            f"{tier}_cache_read": 2,
+            f"{tier}_cache_creation": 3,
+            tier: 8,
+        },
+        "output_token_details": {f"{tier}_reasoning": 5, tier: 15},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 3,
         "cache_read_input_tokens": 2,
         "reasoning_tokens": 5,
     }

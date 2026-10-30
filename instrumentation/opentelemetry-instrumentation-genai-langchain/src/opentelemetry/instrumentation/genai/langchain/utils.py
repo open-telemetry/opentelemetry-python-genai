@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
 from langchain_core.messages import (
@@ -510,46 +510,45 @@ def make_input_message(data: Any) -> list[InputMessage]:
     return []
 
 
-def make_output_message(data: Any) -> list[OutputMessage]:
-    """Build ``OutputMessage`` s from a workflow/agent output mapping.
-
-    Only assistant messages become outputs. ``finish_reason`` is left
-    empty: the underlying per-LLM-call finish reasons are recorded on child
-    inference spans, and util-genai filters empty values out of
-    ``gen_ai.response.finish_reasons``.
-
-    Called only when content capture is enabled
-    (``TelemetryHandler.should_capture_content()``).
-    """
-    if not isinstance(data, dict):
-        return []
-    data_dict = cast(dict[str, Any], data)
-    messages: Any = data_dict.get("messages")
-    if (
-        messages is None
-        or isinstance(messages, (str, bytes))
-        or not isinstance(messages, Iterable)
-    ):
-        return []
-    return to_output_messages(
-        cast(Iterable[MessageLikeRepresentation], messages)
-    )
-
-
 def make_last_output_message(data: Any) -> list[OutputMessage]:
     """Extract only the last AI message as the output.
 
     For Workflow and AgentInvocation spans, the final AI message best represents
     the actual output. Intermediate AI messages (e.g., tool-call decisions) are
-    already captured in child LLM invocation spans.
+    already captured in child LLM invocation spans. ``finish_reason`` is
+    left empty: the per-call finish reasons are recorded on those child
+    spans, and util-genai filters empty values out of
+    ``gen_ai.response.finish_reasons``.
 
     Called only when content capture is enabled
     (``TelemetryHandler.should_capture_content()``).
     """
-    all_messages = make_output_message(data)
-    if all_messages:
-        return [all_messages[-1]]
+    messages = _output_messages_field(data)
+    if messages is None:
+        return []
+    if not isinstance(messages, Sequence):
+        messages = list(messages)
+    for message in reversed(messages):
+        output = to_output_messages([message])
+        if output:
+            return output
     return []
+
+
+def _output_messages_field(
+    data: Any,
+) -> Iterable[MessageLikeRepresentation] | None:
+    """Return ``data['messages']`` when it is a non-string iterable."""
+    if not isinstance(data, dict):
+        return None
+    messages: Any = cast(dict[str, Any], data).get("messages")
+    if (
+        messages is None
+        or isinstance(messages, (str, bytes))
+        or not isinstance(messages, Iterable)
+    ):
+        return None
+    return cast(Iterable[MessageLikeRepresentation], messages)
 
 
 def serialize(obj: Any) -> str | None:
@@ -656,20 +655,37 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
             return val
         return None
 
-    cache_write = _get_positive_int(input_details, "cache_write")
+    def _get_detail(d: dict[str, Any], key: str) -> int | None:
+        # langchain-openai prefixes these keys with the service tier
+        # (e.g. ``flex_cache_read``) for flex and priority requests.
+        for prefix in ("", "flex_", "priority_"):
+            if (val := _get_positive_int(d, prefix + key)) is not None:
+                return val
+        return None
+
+    cache_write = _get_detail(input_details, "cache_write")
     if cache_write is None:
-        cache_write = _get_positive_int(input_details, "cache_creation")
+        cache_write = _get_detail(input_details, "cache_creation")
+    if cache_write is None:
+        # langchain-anthropic zeroes ``cache_creation`` when Anthropic reports
+        # the per-TTL breakdown, moving the count into these keys.
+        cache_write = (
+            sum(
+                _get_positive_int(input_details, key) or 0
+                for key in (
+                    "ephemeral_5m_input_tokens",
+                    "ephemeral_1h_input_tokens",
+                )
+            )
+            or None
+        )
     if cache_write is not None:
         token_details["cache_write_input_tokens"] = cache_write
 
-    if (
-        cache_read := _get_positive_int(input_details, "cache_read")
-    ) is not None:
+    if (cache_read := _get_detail(input_details, "cache_read")) is not None:
         token_details["cache_read_input_tokens"] = cache_read
 
-    if (
-        reasoning := _get_positive_int(output_details, "reasoning")
-    ) is not None:
+    if (reasoning := _get_detail(output_details, "reasoning")) is not None:
         token_details["reasoning_tokens"] = reasoning
 
     return token_details

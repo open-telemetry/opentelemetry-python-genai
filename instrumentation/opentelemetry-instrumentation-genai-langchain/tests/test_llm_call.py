@@ -72,6 +72,9 @@ def _langchain_openai_version() -> tuple:
 # cannot hold on those versions.
 _supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
 _supports_responses_api = _langchain_openai_version() >= (1, 3, 0)
+# langchain-openai prefixes token detail keys with the service tier (e.g.
+# ``flex_reasoning``) from 1.0.0 onward.
+_supports_service_tier_token_details = _langchain_openai_version() >= (1, 0, 0)
 
 _REAL_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
@@ -373,7 +376,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
         log_record = logs[0].log_record
         assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -450,7 +460,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
         log_record = logs[0].log_record
         assert_log_record_when_error(log_record, spans[0])
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 def test_chat_openai_multimodal_image_llm_call(
@@ -1732,33 +1749,99 @@ def test_chat_openai_reasoning_token_details(
     )
 
 
+@pytest.mark.skipif(
+    not _supports_service_tier_token_details,
+    reason="langchain-openai does not prefix token details with the service tier",
+)
 @pytest.mark.vcr()
-def test_chat_anthropic_claude_sonnet_cache_token_details(
-    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+def test_chat_openai_flex_tier_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning
 ):
+    # OpenAI only caches prompts of at least 1024 tokens.
+    llm = chat_openai_reasoning.model_copy(update={"service_tier": "flex"})
     messages = [
-        SystemMessage(content="You are a helpful assistant!"),
-        HumanMessage(content="What is the capital of France?"),
+        SystemMessage(
+            content="You are a careful mathematical reasoner. " * 200
+        ),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top?"
+            )
+        ),
     ]
 
-    chat_anthropic_claude_sonnet.invoke(messages)
+    llm.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
 
-    assert span.attributes.get("gen_ai.usage.cache_write.input_tokens") == 5
-
     assert (
         span.attributes.get(
             gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
         )
-        == 4
+        == 1536
+    )
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 512
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_cache_token_details(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    # Anthropic only caches prompts above a minimum length.
+    llm = chat_anthropic_claude_sonnet.model_copy(
+        update={"model": "claude-sonnet-5-5", "temperature": None}
+    )
+    messages = [
+        SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant! " * 500,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        ),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    llm.invoke(messages)
+    llm.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    write_span, read_span = spans
+
+    assert (
+        write_span.attributes.get("gen_ai.usage.cache_write.input_tokens")
+        == 5003
+    )
+    assert (
+        gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        not in write_span.attributes
     )
 
     assert (
-        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+        read_span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 5003
     )
+    assert "gen_ai.usage.cache_write.input_tokens" not in read_span.attributes
+
+    for span in spans:
+        assert (
+            span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 5017
+        )
 
 
 def test_chat_openai_streamed_response_model(

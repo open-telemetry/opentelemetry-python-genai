@@ -13,6 +13,7 @@ from google.genai.types import (
     GoogleMaps,
     MediaModality,
     ModalityTokenCount,
+    Part,
     ToolDict,
 )
 from pydantic import BaseModel, Field
@@ -504,7 +505,6 @@ class NonStreamingTestCase(TestCase):
     @patch.dict(
         "os.environ",
         {
-            "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "gcp.gen_ai.operation.config.response_schema",
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
         },
     )
@@ -529,43 +529,21 @@ class NonStreamingTestCase(TestCase):
         event = self.otel.get_event_named(
             "gen_ai.client.inference.operation.details"
         )
-        self.assertEqual(
-            event.attributes["gen_ai.usage.cache_read.input_tokens"],
-            50,
+        self.assertNotIn(
+            gen_ai_attributes.GEN_AI_INPUT_MESSAGES, event.attributes
         )
         self.assertNotIn(
-            gen_ai_attributes.GEN_AI_RESPONSE_ID, event.attributes
-        )
-        self.assertEqual(
-            event.attributes["gen_ai.usage.reasoning.output_tokens"],
-            17,
-        )
-        self.assertEqual(
-            event.attributes["gen_ai.usage.output_tokens"],
-            17,
-        )
-        assert (
-            event.attributes["gcp.gen_ai.operation.config.response_schema"]
-            == "<class 'tests.generate_content.nonstreaming_base.ExampleResponseSchema'>"
-        )
-
-        self.assertNotIn(
-            gen_ai_attributes.GEN_AI_INPUT_MESSAGES,
-            event.attributes,
+            gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES, event.attributes
         )
         self.assertNotIn(
-            gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES,
-            event.attributes,
-        )
-        self.assertNotIn(
-            gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
-            event.attributes,
+            gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS, event.attributes
         )
         self.assertNotIn(GEN_AI_TOOL_DEFINITIONS, event.attributes)
 
     @patch.dict(
         "os.environ",
         {
+            "OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES": "gcp.gen_ai.operation.config.response_schema",
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
         },
     )
@@ -605,6 +583,10 @@ class NonStreamingTestCase(TestCase):
         self.assertEqual(
             event.attributes["gen_ai.usage.output_tokens"],
             17,
+        )
+        assert (
+            event.attributes["gcp.gen_ai.operation.config.response_schema"]
+            == "<class 'tests.generate_content.nonstreaming_base.ExampleResponseSchema'>"
         )
         self.assertEqual(
             event.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
@@ -750,6 +732,24 @@ class NonStreamingTestCase(TestCase):
                 span.attributes[GEN_AI_TOOL_DEFINITIONS],
                 '[{"name":"_mock_callable_tool","description":"Description of some tool.","parameters":null,"type":"function"},{"name":"mock_tool","description":"Description of mock tool.","parameters":null,"type":"function"},{"name":"google_maps","type":"google_maps"}]',
             )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_reports_thought_parts_as_reasoning(self):
+        self.configure_valid_response(
+            parts=[
+                Part(text="Let me think.", thought=True),
+                Part(text="It is sunny."),
+            ]
+        )
+        self.generate_content(model="gemini-2.0-flash", contents="Hi")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":"","name":null}]',
+        )
 
     def test_log_has_extra_genai_attributes(self):
         self.configure_valid_response(text="Yep, it works!")

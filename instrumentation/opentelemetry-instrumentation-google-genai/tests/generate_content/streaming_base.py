@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
+from unittest.mock import patch
 
 from google.genai.types import (
     GenerateContentConfig,
     GenerateContentResponseUsageMetadata,
     MediaModality,
     ModalityTokenCount,
+    Part,
 )
 
 from opentelemetry import context as context_api
@@ -146,6 +148,35 @@ class StreamingTestCase(TestCase):
         self.assertEqual(responses[1].text, "Second response")
         self.otel.assert_has_event_named(
             "gen_ai.client.inference.operation.details"
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_merges_streamed_chunks_into_one_output_message(self):
+        self.configure_valid_response(text="Hello")
+        self.configure_valid_response(text=", world")
+        self.generate_content(model="gemini-2.0-flash", contents="Hi")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"content":"Hello, world","type":"text"}],"finish_reason":"","name":null}]',
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_reports_streamed_thought_parts_as_reasoning(self):
+        self.configure_valid_response(part=Part(text="Let me ", thought=True))
+        self.configure_valid_response(part=Part(text="think.", thought=True))
+        self.configure_valid_response(text="It is sunny.")
+        self.generate_content(model="gemini-2.0-flash", contents="Hi")
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(
+            span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":"","name":null}]',
         )
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):
