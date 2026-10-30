@@ -38,7 +38,7 @@ Check out the `manual example <examples/manual>`_ for more details.
     # Use Anthropic client as normal
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-5-5",
         max_tokens=1024,
         messages=[
             {"role": "user", "content": "Hello, Claude!"}
