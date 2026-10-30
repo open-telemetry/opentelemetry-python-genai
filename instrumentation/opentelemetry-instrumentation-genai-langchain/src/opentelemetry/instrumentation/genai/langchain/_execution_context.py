@@ -18,6 +18,9 @@ from langchain_core.callbacks import BaseCallbackManager
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.context import attach, detach, get_current
+from opentelemetry.instrumentation.genai.langchain._prompt_input import (
+    _wrap_prompt_input,
+)
 from opentelemetry.instrumentation.genai.langchain._run_context import (
     _astart_run,
     _RunScope,
@@ -230,6 +233,26 @@ class _ExecutionContext:
             )
 
     def instrument(self) -> None:
+        # Innermost on the streams, so the stream boundary below chooses the
+        # run id first and the prompt input reuses it.
+        for method, stream, asynchronous in (
+            ("invoke", False, False),
+            ("ainvoke", False, True),
+            ("stream", True, False),
+            ("astream", True, True),
+        ):
+            self._patch(
+                "langchain_core.language_models.chat_models",
+                "BaseChatModel",
+                method,
+                partial(
+                    _wrap_prompt_input,
+                    invocations=self._invocations,
+                    stream=stream,
+                    asynchronous=asynchronous,
+                ),
+            )
+
         for module_name, class_name, method in _METHODS:
             self._patch(module_name, class_name, method, self._wrap)
 
