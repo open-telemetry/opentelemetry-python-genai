@@ -262,6 +262,53 @@ class TestExtractPromptContext:
             is None
         )
 
+    @pytest.mark.parametrize(
+        ("metadata", "expected"),
+        [
+            ({"prompt_version": "3"}, "3"),
+            ({"prompt_version": 3}, "3"),
+            ({"lc_hub_commit_hash": "9f2c1ab"}, "9f2c1ab"),
+            (
+                {"prompt_version": "3", "lc_hub_commit_hash": "9f2c1ab"},
+                "3",
+            ),
+            ({"prompt_version": True}, None),
+            ({"prompt_version": ["3"]}, None),
+            ({}, None),
+        ],
+    )
+    @pytest.mark.parametrize("capture_variables", [True, False])
+    def test_version_from_metadata(
+        self,
+        metadata: dict[str, object],
+        expected: str | None,
+        capture_variables: bool,
+    ):
+        context = _extract_prompt_context(
+            {"id": ["langchain", "prompts", "PromptTemplate"], "kwargs": {}},
+            {},
+            {"prompt_name": "weather", **metadata},
+            capture_variables=capture_variables,
+        )
+
+        assert context is not None
+        assert context.version == expected
+
+    def test_version_requires_a_name(self):
+        context = _extract_prompt_context(
+            {
+                "id": ["langchain", "prompts", "PromptTemplate"],
+                "name": "PromptTemplate",
+                "kwargs": {},
+            },
+            {},
+            {"prompt_version": "3", "lc_hub_commit_hash": "9f2c1ab"},
+        )
+
+        assert context is not None
+        assert context.name is None
+        assert context.version is None
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
@@ -1206,6 +1253,27 @@ class TestPromptContextLifecycle:
         invocation = telemetry.inference.return_value
         assert invocation.prompt_name == "greeting"
         assert invocation.prompt_variables == {"name": "Ada"}
+        assert invocation.prompt_version is None
+
+    def test_real_lcel_prompt_version_reaches_model(self) -> None:
+        handler, telemetry, _, _ = _make_handler()
+        telemetry.should_capture_content.return_value = True
+        prompt = ChatPromptTemplate.from_messages(
+            [("human", "Hello {name}")]
+        ).with_config(
+            metadata={"prompt_name": "greeting", "prompt_version": "3"}
+        )
+        model = FakeListChatModel(responses=["Hello Ada"]).with_config(
+            metadata={"ls_model_name": "fake-model"}
+        )
+
+        (prompt | model).invoke(
+            {"name": "Ada"}, config={"callbacks": [handler]}
+        )
+
+        invocation = telemetry.inference.return_value
+        assert invocation.prompt_name == "greeting"
+        assert invocation.prompt_version == "3"
 
     def test_real_parallel_lcel_keeps_prompt_contexts_isolated(self) -> None:
         handler, telemetry, _, _ = _make_handler()
