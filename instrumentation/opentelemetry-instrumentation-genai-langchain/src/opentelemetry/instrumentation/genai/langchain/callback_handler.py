@@ -683,6 +683,20 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         served_model: str | None = None
         generation_model: str | None = None
         generation_response_id: str | None = None
+        raw_llm_output: object = getattr(response, "llm_output", None)
+        llm_output: Mapping[str, Any] | None = (
+            cast(Mapping[str, Any], raw_llm_output)
+            if isinstance(raw_llm_output, Mapping)
+            else None
+        )
+        raw_token_usage: object = (
+            llm_output.get("token_usage") if llm_output is not None else None
+        )
+        token_usage: Mapping[str, Any] | None = (
+            cast(Mapping[str, Any], raw_token_usage)
+            if isinstance(raw_token_usage, Mapping)
+            else None
+        )
         for generation in getattr(response, "generations", []):
             for output_generation in generation:
                 message = getattr(output_generation, "message", None)
@@ -828,12 +842,26 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     if finish_reason:
                         finish_reasons.append(finish_reason)
 
+        if token_usage is not None:
+            if llm_invocation.input_tokens is None:
+                input_tokens = token_usage.get("prompt_tokens")
+                if isinstance(input_tokens, int) and not isinstance(
+                    input_tokens, bool
+                ):
+                    llm_invocation.input_tokens = input_tokens
+            if llm_invocation.output_tokens is None:
+                output_tokens = token_usage.get("completion_tokens")
+                if isinstance(output_tokens, int) and not isinstance(
+                    output_tokens, bool
+                ):
+                    llm_invocation.output_tokens = output_tokens
+
         llm_invocation.output_messages = output_messages
         if finish_reasons:
             llm_invocation.finish_reasons = finish_reasons
 
         response_model, response_id = resolve_response_model_and_id(
-            llm_output=getattr(response, "llm_output", None),
+            llm_output=llm_output,
             served_model=served_model,
             generation_model=generation_model,
             generation_response_id=generation_response_id,

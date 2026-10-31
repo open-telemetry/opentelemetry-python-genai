@@ -161,6 +161,41 @@ async def test_text_completion_emits_inference_span(
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_text_completion_records_llm_output_token_usage(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    class UsageLLM(FakeListLLM):
+        @staticmethod
+        def _with_usage(result: LLMResult) -> LLMResult:
+            result.llm_output = {
+                "token_usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                }
+            }
+            return result
+
+        def _generate(self, *args: object, **kwargs: object) -> LLMResult:
+            return self._with_usage(super()._generate(*args, **kwargs))
+
+        async def _agenerate(
+            self, *args: object, **kwargs: object
+        ) -> LLMResult:
+            return self._with_usage(await super()._agenerate(*args, **kwargs))
+
+    model = UsageLLM(responses=["completed text"])
+    assert (
+        await invoke(model, "complete this", asynchronous) == "completed text"
+    )
+    attrs = finished_span(span_exporter, "text_completion").attributes
+    assert attrs[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 11
+    assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
+
+
 def test_chat_without_model_name_still_starts_inference() -> None:
     handler, telemetry, _, _ = _make_handler()
     telemetry.should_capture_content.return_value = False
