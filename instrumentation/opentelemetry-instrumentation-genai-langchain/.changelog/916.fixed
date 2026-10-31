@@ -1,0 +1,1 @@
+Update instrumentation_dependencies to check for langchain-core instead of langchain, allowing apps with only langchain-core (such as LangGraph) to be instrumented.
