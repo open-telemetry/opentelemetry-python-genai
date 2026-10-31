@@ -20,11 +20,14 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     InferenceInvocation,
 )
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 from ._raw_response import ParsableResponse, wrap_stream_result
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
+    _prepare_input_messages,
     _prepare_output_messages,
+    _prepare_tool_definitions,
     create_chat_invocation,
     get_server_address_and_port,
     get_value,
@@ -59,6 +62,32 @@ def _create_embedding_invocation(
     return invocation
 
 
+def _capture_chat_request(kwargs, capture_content):
+    """Watch messages and tools as the SDK reads them.
+
+    Replacing a generator with a list first can change the request: a
+    generator that mutates and re-yields one dict would be snapshotted as
+    the final value twice.
+    """
+    return (
+        IteratorCapture.from_property(
+            kwargs, "messages", enabled=capture_content
+        ),
+        IteratorCapture.from_property(
+            kwargs, "tools", enabled=capture_content
+        ),
+    )
+
+
+def _apply_captured_request(invocation, messages_capture, tools_capture):
+    invocation.input_messages = (
+        messages_capture.extract(_prepare_input_messages) or []
+    )
+    invocation.tool_definitions = tools_capture.extract(
+        _prepare_tool_definitions
+    )
+
+
 def chat_completions_create_v_new(
     handler: TelemetryHandler,
 ):
@@ -66,12 +95,22 @@ def chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     def traced_method(wrapped, instance, args, kwargs):
+        messages_capture, tools_capture = _capture_chat_request(
+            kwargs, capture_content
+        )
+        # Do not read messages here. IteratorCapture records them as the
+        # SDK consumes the request, including when create() raises.
         chat_invocation = create_chat_invocation(
-            handler, kwargs, instance, capture_content=capture_content
+            handler, kwargs, instance, capture_content=False
         )
 
         try:
-            result = wrapped(*args, **kwargs)
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                _apply_captured_request(
+                    chat_invocation, messages_capture, tools_capture
+                )
             if is_streaming(kwargs):
                 return wrap_stream_result(
                     ChatStreamWrapper,
@@ -97,12 +136,20 @@ def async_chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     async def traced_method(wrapped, instance, args, kwargs):
+        messages_capture, tools_capture = _capture_chat_request(
+            kwargs, capture_content
+        )
         chat_invocation = create_chat_invocation(
-            handler, kwargs, instance, capture_content=capture_content
+            handler, kwargs, instance, capture_content=False
         )
 
         try:
-            result = await wrapped(*args, **kwargs)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _apply_captured_request(
+                    chat_invocation, messages_capture, tools_capture
+                )
             if is_streaming(kwargs):
                 return wrap_stream_result(
                     AsyncChatStreamWrapper,
