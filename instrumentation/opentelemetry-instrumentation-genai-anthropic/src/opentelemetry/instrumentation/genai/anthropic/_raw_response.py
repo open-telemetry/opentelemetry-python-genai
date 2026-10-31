@@ -8,7 +8,7 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from typing import TYPE_CHECKING, Any, cast
 
 try:
@@ -117,11 +117,13 @@ class RawResponseProxy(_ObjectProxy):
     def _fail(self, error: BaseException) -> None:
         """Finalize this response with a caller-side failure, once."""
         if self._self_stream_wrapper is not None:
-            self._self_stream_wrapper._finalize_failure(error)
+            with self._self_stream_wrapper._execution_context():
+                self._self_stream_wrapper._finalize_failure(error)
             return
         if self._self_span_open:
             self._self_span_open = False
-            self._self_invocation.fail(error)
+            with self._self_invocation.activate():
+                self._self_invocation.fail(error)
 
     def _install_hooks(self, raw_response: Any) -> None:
         http_response = getattr(raw_response, "http_response", None)
@@ -129,28 +131,78 @@ class RawResponseProxy(_ObjectProxy):
             return
         # Stacking is safe: each hook calls the one it replaced, so two proxies
         # over one response finalize their own invocation in turn.
+        # ``iter_raw`` is the only iterator that reads the stream and closes
+        # the response; ``iter_bytes``/``iter_text``/``iter_lines`` and
+        # ``read`` are layered on top of it.
         for name, wrap in (
             ("read", self._wrap_sync_read),
             ("aread", self._wrap_async_read),
             ("close", self._wrap_sync_close),
             ("aclose", self._wrap_async_close),
+            ("iter_raw", self._wrap_sync_iter),
+            ("aiter_raw", self._wrap_async_iter),
         ):
             original = getattr(http_response, name, None)
             if original is not None:
                 setattr(http_response, name, wrap(original))
+
+    def _wrap_sync_iter(
+        self, original: Callable[..., Generator[bytes, None, None]]
+    ) -> Callable[..., Generator[bytes, None, None]]:
+        @functools.wraps(original)
+        def _iter(
+            *args: object, **kwargs: object
+        ) -> Generator[bytes, None, None]:
+            iterator = original(*args, **kwargs)
+            try:
+                while True:
+                    with self._self_invocation.activate():
+                        try:
+                            chunk = next(iterator)
+                        except StopIteration:
+                            return
+                    yield chunk
+            finally:
+                with self._self_invocation.activate():
+                    iterator.close()
+
+        return _iter
+
+    def _wrap_async_iter(
+        self, original: Callable[..., AsyncGenerator[bytes, None]]
+    ) -> Callable[..., AsyncGenerator[bytes, None]]:
+        @functools.wraps(original)
+        async def _aiter(
+            *args: object, **kwargs: object
+        ) -> AsyncGenerator[bytes, None]:
+            iterator = original(*args, **kwargs)
+            try:
+                while True:
+                    with self._self_invocation.activate():
+                        try:
+                            chunk = await anext(iterator)
+                        except StopAsyncIteration:
+                            return
+                    yield chunk
+            finally:
+                with self._self_invocation.activate():
+                    await iterator.aclose()
+
+        return _aiter
 
     def _wrap_sync_read(
         self, original: Callable[..., Any]
     ) -> Callable[..., Any]:
         @functools.wraps(original)
         def _read(*args: object, **kwargs: object) -> Any:
-            self._self_reading = True
-            try:
-                content = original(*args, **kwargs)
-            finally:
-                self._self_reading = False
-            self._finalize_read_fallback()
-            return content
+            with self._self_invocation.activate():
+                self._self_reading = True
+                try:
+                    content = original(*args, **kwargs)
+                finally:
+                    self._self_reading = False
+                self._finalize_read_fallback()
+                return content
 
         return _read
 
@@ -159,13 +211,14 @@ class RawResponseProxy(_ObjectProxy):
     ) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(original)
         async def _aread(*args: object, **kwargs: object) -> Any:
-            self._self_reading = True
-            try:
-                content = await original(*args, **kwargs)
-            finally:
-                self._self_reading = False
-            self._finalize_read_fallback()
-            return content
+            with self._self_invocation.activate():
+                self._self_reading = True
+                try:
+                    content = await original(*args, **kwargs)
+                finally:
+                    self._self_reading = False
+                self._finalize_read_fallback()
+                return content
 
         return _aread
 
@@ -197,10 +250,11 @@ class RawResponseProxy(_ObjectProxy):
     ) -> Callable[..., object]:
         @functools.wraps(original)
         def _close(*args: object, **kwargs: object) -> object:
-            try:
-                return original(*args, **kwargs)
-            finally:
-                self._finalize_close_fallback()
+            with self._self_invocation.activate():
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    self._finalize_close_fallback()
 
         return _close
 
@@ -209,10 +263,11 @@ class RawResponseProxy(_ObjectProxy):
     ) -> Callable[..., Awaitable[object]]:
         @functools.wraps(original)
         async def _aclose(*args: object, **kwargs: object) -> object:
-            try:
-                return await original(*args, **kwargs)
-            finally:
-                await self._afinalize_close_fallback()
+            with self._self_invocation.activate():
+                try:
+                    return await original(*args, **kwargs)
+                finally:
+                    await self._afinalize_close_fallback()
 
         return _aclose
 
@@ -540,6 +595,9 @@ def wrap_raw_response(
         invocation.stop()
         return result
 
+    # The stream wrapper is built only on ``parse()``, possibly in another
+    # context, so the span must not stay current until then.
+    invocation.suspend()
     return RawResponseProxy(
         result, invocation, capture_content, is_beta=is_beta
     )

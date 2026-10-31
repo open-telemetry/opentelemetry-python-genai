@@ -4,6 +4,7 @@
 """Tests for async Messages.create instrumentation."""
 
 import asyncio
+import contextlib
 import inspect
 import json
 from dataclasses import asdict
@@ -2330,6 +2331,9 @@ async def test_async_raw_response_proxy_hooks_stack_over_one_response():
 
         def stop(self):
             self._stops.append(True)
+
+        def activate(self):
+            return contextlib.nullcontext()
 
     http_response = _FakeAsyncHTTPResponse()
 
