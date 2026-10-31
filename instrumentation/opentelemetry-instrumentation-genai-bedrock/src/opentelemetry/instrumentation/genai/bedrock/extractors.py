@@ -439,13 +439,15 @@ def extract_converse_response(
 
     usage = response.get("usage")
     if _is_dict(usage):
-        invocation.output_tokens = usage.get("outputTokens")
-        invocation.cache_read_input_tokens = usage.get("cacheReadInputTokens")
-        invocation.cache_creation_input_tokens = usage.get(
-            "cacheWriteInputTokens"
+        invocation.output_tokens = _safe_int(usage.get("outputTokens"))
+        invocation.cache_read_input_tokens = _safe_int(
+            usage.get("cacheReadInputTokens")
+        )
+        invocation.cache_creation_input_tokens = _safe_int(
+            usage.get("cacheWriteInputTokens")
         )
         invocation.input_tokens = _total_input_tokens(
-            usage.get("inputTokens"),
+            _safe_int(usage.get("inputTokens")),
             invocation.cache_read_input_tokens,
             invocation.cache_creation_input_tokens,
         )
