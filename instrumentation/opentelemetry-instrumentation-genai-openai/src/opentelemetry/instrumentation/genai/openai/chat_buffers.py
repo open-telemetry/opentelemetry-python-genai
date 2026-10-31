@@ -38,11 +38,33 @@ class ChoiceBuffer:
         self.refusal.append(refusal)
 
     def append_tool_call(self, tool_call: ChoiceDeltaToolCall) -> None:
-        idx = tool_call.index
+        function = tool_call.function
+        idx = getattr(tool_call, "index", None)
+        if idx is None:
+            # Some OpenAI-compatible servers omit the index: a delta whose id
+            # was seen continues that call, any other delta that carries an id
+            # or a function name starts a new call, and one with neither
+            # continues the last call.
+            idx = next(
+                (
+                    i
+                    for i, buffer in enumerate(self.tool_calls_buffers)
+                    if tool_call.id
+                    and buffer is not None
+                    and buffer.tool_call_id == tool_call.id
+                ),
+                None,
+            )
+            if idx is None:
+                starts_call = tool_call.id or (function and function.name)
+                if starts_call or not self.tool_calls_buffers:
+                    idx = len(self.tool_calls_buffers)
+                else:
+                    idx = len(self.tool_calls_buffers) - 1
+
         for _ in range(len(self.tool_calls_buffers), idx + 1):
             self.tool_calls_buffers.append(None)
 
-        function = tool_call.function
         buffer = self.tool_calls_buffers[idx]
         if buffer is None:
             buffer = ToolCallBuffer(
