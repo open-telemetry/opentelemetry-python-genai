@@ -117,7 +117,8 @@ class RawResponseProxy(_ObjectProxy):
     def _fail(self, error: BaseException) -> None:
         """Finalize this response with a caller-side failure, once."""
         if self._self_stream_wrapper is not None:
-            self._self_stream_wrapper._finalize_failure(error)
+            with self._self_stream_wrapper._execution_context():
+                self._self_stream_wrapper._finalize_failure(error)
             return
         if self._self_span_open:
             self._self_span_open = False

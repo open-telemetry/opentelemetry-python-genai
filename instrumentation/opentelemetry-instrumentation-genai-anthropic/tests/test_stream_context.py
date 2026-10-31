@@ -634,3 +634,46 @@ async def test_async_raw_response_caller_error_fails_inside_invocation(
     _assert_all_in_invocation(finish_seen, invocation)
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code is trace.StatusCode.ERROR
+
+
+def test_sync_raw_response_caller_error_after_parse_fails_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    finish_seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, finish_seen)
+    proxy = _body_proxy(invocation, _ObservedStream([]))
+    proxy._self_span_open = False
+    proxy._self_stream_wrapper = MessagesStreamWrapper(
+        iter(()), invocation, False
+    )
+
+    proxy._fail(RuntimeError("caller failed"))
+
+    assert context.get_current() is before
+    _assert_all_in_invocation(finish_seen, invocation)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+async def test_async_raw_response_caller_error_after_parse_fails_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    finish_seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, finish_seen)
+    proxy = _body_proxy(invocation, _ObservedAsyncStream([]))
+    proxy._self_span_open = False
+    proxy._self_stream_wrapper = AsyncMessagesStreamWrapper(
+        _aevents(invocation, _start_event(), None), invocation, False
+    )
+
+    proxy._fail(RuntimeError("caller failed"))
+
+    assert context.get_current() is before
+    _assert_all_in_invocation(finish_seen, invocation)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
