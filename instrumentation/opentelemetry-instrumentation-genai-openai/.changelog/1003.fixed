@@ -1,0 +1,1 @@
+Record Responses API reasoning output items that have no `status`, so reasoning summaries reach `gen_ai.output.messages`.

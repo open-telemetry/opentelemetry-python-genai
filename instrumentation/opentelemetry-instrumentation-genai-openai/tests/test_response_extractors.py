@@ -982,6 +982,39 @@ def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
     assert messages[3].parts[0].content == "Thought step"
 
 
+@pytest.mark.parametrize(
+    ("response_status", "expected_finish_reason"),
+    [
+        ("completed", "stop"),
+        ("incomplete", "incomplete"),
+        ("in_progress", None),
+    ],
+)
+def test_extract_output_messages_maps_reasoning_without_status(
+    loaded_module, response_status, expected_finish_reason
+):
+    """The API returns reasoning items without `status`."""
+    response = _make_response(
+        output=[
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Thought step"}],
+            }
+        ],
+        status=response_status,
+    )
+
+    messages = loaded_module.get_output_messages_from_response(response)
+
+    if expected_finish_reason is None:
+        assert messages == []
+    else:
+        (message,) = messages
+        assert message.finish_reason == expected_finish_reason
+        assert [part.content for part in message.parts] == ["Thought step"]
+
+
 @pytest.mark.skipif(
     not _has_tool_search_types,
     reason="openai SDK too old to support tool_search server tool items",
