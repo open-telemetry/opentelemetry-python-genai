@@ -42,6 +42,8 @@ required-version = ">=0.6.0"
 override-dependencies = [
   "opentelemetry-api ~= 1.45",
   "opentelemetry-sdk ~= 1.45",
+  # qwenpaw caps anyio<4.13, which is affected by GHSA-82r6-8w77-94w6.
+  "anyio >= 4.14.2, < 5",
   # qwenpaw caps onnxruntime<1.24, which has no cp314 wheels. As a constraint this
   # breaks fresh resolves (`uv lock --upgrade`), so override it per Python version.
   "onnxruntime >= 1.24; python_version >= '3.14'",
