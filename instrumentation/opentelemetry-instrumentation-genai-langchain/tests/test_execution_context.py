@@ -23,8 +23,10 @@ from langchain_core.callbacks import AsyncCallbackManager, BaseCallbackHandler
 from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.language_models.fake import FakeListLLM
+from langchain_core.language_models.llms import BaseLLM
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.outputs import ChatGeneration, GenerationChunk, LLMResult
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
 from langchain_core.runnables import base as runnables_base
@@ -720,6 +722,10 @@ def test_uninstrument_restores_execution_methods(
     logger_provider,
 ) -> None:
     targets = [
+        (BaseLLM, "_generate_helper"),
+        (BaseLLM, "_agenerate_helper"),
+        (BaseLLM, "stream"),
+        (BaseLLM, "astream"),
         (BaseTool, "run"),
         (BaseTool, "arun"),
         (BaseRetriever, "invoke"),
@@ -743,6 +749,7 @@ def test_uninstrument_restores_execution_methods(
         for manager_type in (CallbackManager, AsyncCallbackManager)
         for method in (
             "on_chain_start",
+            "on_llm_start",
             "on_chat_model_start",
             "on_tool_start",
             "on_retriever_start",
@@ -1362,3 +1369,60 @@ def test_legacy_chain_child_context(
     assert child.name == "child"
     assert workflow.name == "invoke_workflow CustomChain"
     assert child.parent == workflow.context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+async def test_text_completion_child_context(
+    asynchronous,
+    streaming,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
+):
+    tracer = tracer_provider.get_tracer("test")
+
+    class TracedLLM(FakeListLLM):
+        def _call(self, *args: Any, **kwargs: Any) -> str:
+            with tracer.start_as_current_span("provider"):
+                return super()._call(*args, **kwargs)
+
+        async def _acall(self, *args: Any, **kwargs: Any) -> str:
+            with tracer.start_as_current_span("provider"):
+                return await super()._acall(*args, **kwargs)
+
+        def _stream(
+            self, *args: Any, **kwargs: Any
+        ) -> Iterator[GenerationChunk]:
+            with tracer.start_as_current_span("provider"):
+                pass
+            yield GenerationChunk(text="answer")
+
+    model = TracedLLM(responses=["answer"])
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    ):
+        if streaming:
+            if asynchronous:
+                result = "".join(
+                    [chunk async for chunk in model.astream("prompt")]
+                )
+            else:
+                result = "".join(model.stream("prompt"))
+        else:
+            result = (
+                await model.ainvoke("prompt")
+                if asynchronous
+                else model.invoke("prompt")
+            )
+    assert result == "answer"
+
+    provider, completion = span_exporter.get_finished_spans()
+    assert provider.name == "provider"
+    assert completion.name == "text_completion"
+    assert provider.parent == completion.context
