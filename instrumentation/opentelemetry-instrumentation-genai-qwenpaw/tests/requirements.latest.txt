@@ -14,7 +14,7 @@
 
 # Latest release of the 1.x line; 2.0 removed `AgentRunner.query_handler`
 # and is outside this package's supported range.
-qwenpaw==1.1.12.post3
+qwenpaw==2.2.2.post1
 # AgentScope 1.0.x imports streamablehttp_client, removed in MCP 2.
 mcp<2
 wrapt>=2.5.1
