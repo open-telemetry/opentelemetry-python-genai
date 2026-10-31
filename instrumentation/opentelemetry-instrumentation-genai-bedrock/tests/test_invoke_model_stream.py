@@ -317,9 +317,13 @@ def test_stream_wrapper_caller_side_error(
 
 def test_stream_wrapper_stream_side_error(
     tracer_provider,
+    logger_provider,
     span_exporter,
+    log_exporter,
 ) -> None:
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, logger_provider=logger_provider
+    )
     invocation = handler.inference(
         provider="aws.bedrock",
         request_model="amazon.titan-text-lite-v1",
@@ -343,6 +347,14 @@ def test_stream_wrapper_stream_side_error(
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
+
+    (event,) = [
+        log.log_record
+        for log in log_exporter.get_finished_logs()
+        if log.log_record.event_name == "gen_ai.client.operation.exception"
+    ]
+    assert event.attributes["exception.type"] == "ConnectionError"
+    assert event.span_id == span.context.span_id
 
 
 def test_handle_invoke_model_streaming_integration(

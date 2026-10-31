@@ -453,18 +453,25 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     assert metrics[0].name == gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION
     assert_duration_metric_when_error(metrics[0], spans[0])
 
-    # verify logs
+    # verify logs: the operation details event and the exception event
     logs = log_exporter.get_finished_logs()
+    assert len(logs) == 2
+    (log,) = [
+        log
+        for log in logs
+        if log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    ]
+    (exception_event,) = [
+        log.log_record
+        for log in logs
+        if log.log_record.event_name == "gen_ai.client.operation.exception"
+    ]
+    assert exception_event.attributes["exception.type"] == error_type
+    assert exception_event.span_id == spans[0].context.span_id
     if capture_content in ("SPAN_AND_EVENT", "EVENT_ONLY"):
-        assert len(logs) == 1
-        log_record = logs[0].log_record
-        assert_log_record_when_error(log_record, spans[0])
+        assert_log_record_when_error(log.log_record, spans[0])
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        (log,) = logs
-        assert (
-            log.log_record.event_name
-            == "gen_ai.client.inference.operation.details"
-        )
         attributes = log.log_record.attributes or {}
         assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes

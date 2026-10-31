@@ -432,7 +432,11 @@ async def test_async_streaming_caller_error_in_context_manager(
 )
 @pytest.mark.asyncio
 async def test_async_streaming_midstream_sdk_error(
-    tracer_provider, logger_provider, meter_provider, span_exporter
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+    log_exporter,
 ):
     with instrument(
         PortkeyInstrumentor(),
@@ -476,6 +480,14 @@ async def test_async_streaming_midstream_sdk_error(
             span.attributes.get(ErrorAttributes.ERROR_TYPE)
             == "ConnectionResetError"
         )
+
+        (event,) = [
+            log.log_record
+            for log in log_exporter.get_finished_logs()
+            if log.log_record.event_name == "gen_ai.client.operation.exception"
+        ]
+        assert event.attributes["exception.type"] == "ConnectionResetError"
+        assert event.span_id == span.context.span_id
 
 
 def test_sync_prompt_streaming(

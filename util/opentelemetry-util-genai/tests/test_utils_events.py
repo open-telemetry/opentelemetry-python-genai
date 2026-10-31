@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import os
 import unittest
@@ -20,11 +21,15 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.semconv.attributes import (
+    error_attributes,
+    exception_attributes,
+)
 from opentelemetry.util.genai._inference_invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.stream import AbandonedStreamError
 from opentelemetry.util.genai.types import ContentCapturingMode, Error
 
 from .test_utils import (
@@ -36,6 +41,16 @@ from .test_utils import (
     _normalize_to_dict,
     _normalize_to_list,
 )
+
+EXCEPTION_EVENT = "gen_ai.client.operation.exception"
+
+
+class RateLimitError(Exception):
+    pass
+
+
+def _raise_rate_limit():
+    raise RateLimitError("rate limit reached")
 
 
 class TestTelemetryHandlerEvents(unittest.TestCase):
@@ -543,3 +558,160 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             kwargs.get("severity_number"),
             SeverityNumber.DEBUG,
         )
+
+    def _exception_events(self):
+        return [
+            log.log_record
+            for log in self.log_exporter.get_finished_logs()
+            if log.log_record.event_name == EXCEPTION_EVENT
+        ]
+
+    def test_failed_client_operation_emits_exception_event(self):
+        handler = self.telemetry_handler
+        operations = {
+            "inference": lambda: handler.inference("provider"),
+            "embedding": lambda: handler.embedding("provider"),
+            "retrieval": lambda: handler.retrieval(provider="provider"),
+            "fetch_response": lambda: handler.fetch_response(
+                "provider", response_id="resp_1"
+            ),
+            "invoke_remote_agent": lambda: handler.invoke_remote_agent(
+                "provider"
+            ),
+        }
+        for name, start in operations.items():
+            with self.subTest(operation=name):
+                self.span_exporter.clear()
+                self.log_exporter.clear()
+                with self.assertRaises(RateLimitError):
+                    with start():
+                        _raise_rate_limit()
+
+                (event,) = self._exception_events()
+                span = _get_single_span(self.span_exporter)
+                self.assertEqual(event.severity_number, SeverityNumber.WARN)
+                self.assertEqual(event.trace_id, span.context.trace_id)
+                self.assertEqual(event.span_id, span.context.span_id)
+                self.assertEqual(
+                    event.attributes[exception_attributes.EXCEPTION_TYPE],
+                    f"{__name__}.RateLimitError",
+                )
+                self.assertEqual(
+                    event.attributes[exception_attributes.EXCEPTION_MESSAGE],
+                    "rate limit reached",
+                )
+                stacktrace = event.attributes[
+                    exception_attributes.EXCEPTION_STACKTRACE
+                ]
+                self.assertIn("in _raise_rate_limit", stacktrace)
+                self.assertTrue(
+                    stacktrace.endswith("RateLimitError: rate limit reached\n")
+                )
+
+    def test_failed_internal_operation_emits_no_exception_event(self):
+        handler = self.telemetry_handler
+        operations = {
+            "tool": lambda: handler.tool("get_weather"),
+            "workflow": lambda: handler.workflow("workflow"),
+            "invoke_local_agent": lambda: handler.invoke_local_agent(),
+        }
+        for name, start in operations.items():
+            with self.subTest(operation=name):
+                self.log_exporter.clear()
+                with self.assertRaises(RateLimitError):
+                    with start():
+                        _raise_rate_limit()
+
+                self.assertEqual(self._exception_events(), [])
+
+    def test_no_exception_event_without_a_raised_exception(self):
+        failures = {
+            "success": None,
+            "error_without_exception": Error(
+                type="response.failed", message="server error"
+            ),
+            "abandoned_stream": AbandonedStreamError(),
+            "cancelled": asyncio.CancelledError(),
+            "keyboard_interrupt": KeyboardInterrupt(),
+            "generator_exit": GeneratorExit(),
+        }
+        for name, error in failures.items():
+            with self.subTest(failure=name):
+                self.log_exporter.clear()
+                invocation = self.telemetry_handler.inference("provider")
+                if error is None:
+                    invocation.stop()
+                else:
+                    invocation.fail(error)
+
+                self.assertEqual(self._exception_events(), [])
+
+    def test_exception_event_type_is_not_the_resolved_error_type(self):
+        invocation = self.telemetry_handler.inference(
+            "provider", error_type_resolver=lambda _: "rate_limited"
+        )
+        invocation.fail(RateLimitError("rate limit reached"))
+
+        span = _get_single_span(self.span_exporter)
+        self.assertEqual(
+            span.attributes[error_attributes.ERROR_TYPE], "rate_limited"
+        )
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_TYPE],
+            f"{__name__}.RateLimitError",
+        )
+
+    def test_exception_event_for_builtin_exception_not_raised(self):
+        invocation = self.telemetry_handler.inference("provider")
+        invocation.fail(ValueError("bad request"))
+
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_TYPE],
+            "ValueError",
+        )
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_STACKTRACE],
+            "ValueError: bad request\n",
+        )
+
+    def test_suppressed_inference_emits_no_exception_event(self):
+        with self.telemetry_handler.inference("framework"):
+            nested = self.telemetry_handler.inference("provider")
+            nested.fail(RateLimitError("rate limit reached"))
+
+        self.assertEqual(self._exception_events(), [])
+
+    def test_failing_twice_emits_one_exception_event(self):
+        invocation = self.telemetry_handler.inference("provider")
+        invocation.fail(RateLimitError("first"))
+        invocation.fail(RateLimitError("second"))
+
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_MESSAGE], "first"
+        )
+
+    def test_exception_event_not_emitted_when_logger_disabled(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=False)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger,
+            handler._completion_hook,
+            provider="test-provider",
+        )
+        inv.fail(RateLimitError("rate limit reached"))
+
+        self.assertEqual(len(self.log_exporter.get_finished_logs()), 0)
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(kwargs.get("event_name"), EXCEPTION_EVENT)
+        self.assertEqual(kwargs.get("severity_number"), SeverityNumber.WARN)
