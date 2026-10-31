@@ -1,0 +1,1 @@
+Do not consume generator message content or tools prior to the request, accept tuple inputs, and record image, audio, file, and refusal parts.

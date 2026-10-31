@@ -12,6 +12,8 @@ from typing import Any, cast
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.genai.portkey.utils import (
+    _prepare_input_messages,
+    _prepare_tool_definitions,
     create_inference_invocation,
     is_streaming,
     set_response_properties,
@@ -22,6 +24,8 @@ from opentelemetry.instrumentation.genai.portkey.wrappers import (
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +89,34 @@ def unpatch_portkey() -> None:
         pass
 
 
+def _capture_chat_request(
+    kwargs: dict[str, Any], capture_content: bool
+) -> tuple[IteratorCapture, IteratorCapture]:
+    """Watch messages and tools as the SDK reads them."""
+    return (
+        IteratorCapture.from_property(
+            kwargs, "messages", enabled=capture_content
+        ),
+        IteratorCapture.from_property(
+            kwargs, "tools", enabled=True
+        ),
+    )
+
+
+def _apply_captured_request(
+    invocation: InferenceInvocation,
+    messages_capture: IteratorCapture,
+    tools_capture: IteratorCapture,
+) -> None:
+    if messages_capture.snapshot() is not None:
+        invocation.input_messages = (
+            messages_capture.extract(_prepare_input_messages) or []
+        )
+    tools_defs = tools_capture.extract(_prepare_tool_definitions)
+    if tools_defs is not None:
+        invocation.tool_definitions = tools_defs
+
+
 def _sync_completions_create(
     handler: TelemetryHandler,
     *,
@@ -98,11 +130,26 @@ def _sync_completions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        messages_capture, tools_capture = (
+            _capture_chat_request(kwargs, capture_content)
+            if not is_prompt
+            else (None, None)
+        )
         invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content, is_prompt=is_prompt
+            handler,
+            instance,
+            kwargs,
+            capture_content=False if not is_prompt else capture_content,
+            is_prompt=is_prompt,
         )
         try:
-            result = wrapped(*args, **kwargs)
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                if not is_prompt and messages_capture and tools_capture:
+                    _apply_captured_request(
+                        invocation, messages_capture, tools_capture
+                    )
             if is_streaming(kwargs):
                 return PortkeyStreamWrapper(
                     result, invocation, capture_content
@@ -131,11 +178,26 @@ def _async_completions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        messages_capture, tools_capture = (
+            _capture_chat_request(kwargs, capture_content)
+            if not is_prompt
+            else (None, None)
+        )
         invocation = create_inference_invocation(
-            handler, instance, kwargs, capture_content, is_prompt=is_prompt
+            handler,
+            instance,
+            kwargs,
+            capture_content=False if not is_prompt else capture_content,
+            is_prompt=is_prompt,
         )
         try:
-            result = await wrapped(*args, **kwargs)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                if not is_prompt and messages_capture and tools_capture:
+                    _apply_captured_request(
+                        invocation, messages_capture, tools_capture
+                    )
             if is_streaming(kwargs):
                 return AsyncPortkeyStreamWrapper(
                     result, invocation, capture_content

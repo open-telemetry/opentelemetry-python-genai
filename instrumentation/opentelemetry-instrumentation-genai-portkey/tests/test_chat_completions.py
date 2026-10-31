@@ -750,3 +750,376 @@ def test_chat_completions_provider_mapping(
             span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
             == expected_provider
         )
+
+
+def test_sync_chat_completions_generator_content_not_consumed(
+    tracer_provider, logger_provider, meter_provider
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        items = [{"type": "text", "text": "streaming piece"}]
+        gen = (item for item in items)
+
+        p.chat.completions.create(
+            messages=[{"role": "user", "content": gen}],
+            model="gpt-4o",
+        )
+
+        assert list(gen) == items
+
+
+def test_sync_chat_completions_tuple_inputs(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=(
+                {
+                    "role": "user",
+                    "content": ({"type": "text", "text": "tuple content"},),
+                },
+            ),
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        input_messages = json.loads(
+            spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        assert input_messages[0]["role"] == "user"
+        assert input_messages[0]["parts"][0]["content"] == "tuple content"
+
+
+def test_sync_chat_completions_image_parts(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        base64_img = (
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf"
+            "FcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Look at these images"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/test.png"
+                            },
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": base64_img},
+                        },
+                    ],
+                }
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        input_messages = json.loads(
+            spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        parts = input_messages[0]["parts"]
+        assert len(parts) == 3
+        assert parts[0]["type"] == "text"
+        assert parts[0]["content"] == "Look at these images"
+        assert parts[1]["type"] == "uri"
+        assert parts[1]["uri"] == "https://example.com/test.png"
+        assert parts[1]["modality"] == "image"
+        assert parts[2]["type"] == "blob"
+        assert parts[2]["modality"] == "image"
+        assert parts[2]["mime_type"] == "image/png"
+
+
+def test_sync_chat_completions_nested_tool_calls_generator(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        tool_calls_list = [
+            {
+                "id": "call_123",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "San Francisco"}',
+                },
+            }
+        ]
+        tool_calls_gen = (tc for tc in tool_calls_list)
+        seen_tool_calls: list[object] = []
+
+        def mock_create(*args, **kwargs):
+            messages = kwargs.get("messages", [])
+            for msg in messages:
+                if msg.get("role") == "assistant" and "tool_calls" in msg:
+                    seen_tool_calls.extend(list(msg["tool_calls"]))
+            mock_raw = MagicMock()
+            mock_raw.text = json.dumps(
+                {
+                    "id": mock_resp.id,
+                    "model": mock_resp.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Done",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                }
+            )
+            mock_raw.headers = {}
+            return mock_raw
+
+        openai_chat = (
+            p.chat.completions.openai_client.with_raw_response.chat.completions
+        )
+        mock_raw_fn = openai_chat.create
+        mock_raw_fn.side_effect = mock_create
+
+        p.chat.completions.create(
+            messages=[
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls_gen,
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        assert seen_tool_calls == tool_calls_list
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        input_messages = json.loads(
+            spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 2
+        assistant_parts = input_messages[1]["parts"]
+        assert len(assistant_parts) == 1
+        assert assistant_parts[0]["type"] == "tool_call"
+        assert assistant_parts[0]["id"] == "call_123"
+        assert assistant_parts[0]["name"] == "get_weather"
+        assert assistant_parts[0]["arguments"] == {
+            "location": "San Francisco"
+        }
+
+
+def test_sync_chat_completions_audio_and_file_parts(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        wav_b64 = "ZmFrZSB3YXYgYnl0ZXM="
+        mp3_b64 = "ZmFrZSBtcDMgYnl0ZXM="
+        pdf_b64 = "JVBERi0xLjQK"
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Clip and doc"},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": wav_b64,
+                                "format": "wav",
+                            },
+                        },
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": mp3_b64,
+                                "format": "mp3",
+                            },
+                        },
+                        {
+                            "type": "file",
+                            "file": {"file_id": "file-123"},
+                        },
+                        {
+                            "type": "file",
+                            "file": {
+                                "filename": "spec.pdf",
+                                "file_data": (
+                                    f"data:application/pdf;base64,{pdf_b64}"
+                                ),
+                            },
+                        },
+                        {
+                            "type": "input_file",
+                            "file_id": "file-456",
+                        },
+                    ],
+                }
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        input_messages = json.loads(
+            spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        parts = input_messages[0]["parts"]
+        assert len(parts) == 6
+
+        assert parts[0]["type"] == "text"
+        assert parts[0]["content"] == "Clip and doc"
+
+        assert parts[1]["type"] == "blob"
+        assert parts[1]["modality"] == "audio"
+        assert parts[1]["mime_type"] == "audio/wav"
+        assert parts[1]["content"] == wav_b64
+
+        assert parts[2]["type"] == "blob"
+        assert parts[2]["modality"] == "audio"
+        assert parts[2]["mime_type"] == "audio/mpeg"
+        assert parts[2]["content"] == mp3_b64
+
+        assert parts[3]["type"] == "file"
+        assert parts[3]["modality"] == "document"
+        assert parts[3]["file_id"] == "file-123"
+
+        assert parts[4]["type"] == "blob"
+        assert parts[4]["modality"] == "document"
+        assert parts[4]["mime_type"] == "application/pdf"
+        assert parts[4]["content"] == pdf_b64
+
+        assert parts[5]["type"] == "file"
+        assert parts[5]["modality"] == "document"
+        assert parts[5]["file_id"] == "file-456"
+
+
+def test_sync_chat_completions_refusal_and_tool_response(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "refusal", "refusal": "Cannot proceed"}
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "refusal": "I refuse this request",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_456",
+                    "content": {"result": "success"},
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        input_messages = json.loads(
+            spans[0].attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 3
+
+        # User refusal part
+        assert input_messages[0]["role"] == "user"
+        assert input_messages[0]["parts"] == [
+            {"type": "text", "content": "Cannot proceed"}
+        ]
+
+        # Assistant refusal field
+        assert input_messages[1]["role"] == "assistant"
+        assert input_messages[1]["parts"] == [
+            {"type": "text", "content": "I refuse this request"}
+        ]
+
+        # Tool response message
+        assert input_messages[2]["role"] == "tool"
+        assert input_messages[2]["parts"] == [
+            {
+                "type": "tool_call_response",
+                "id": "call_456",
+                "response": {"result": "success"},
+            }
+        ]
