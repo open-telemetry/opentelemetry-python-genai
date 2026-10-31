@@ -1,0 +1,1 @@
+Keep parallel streamed tool calls apart when the provider omits `index`, instead of merging their arguments into one call.

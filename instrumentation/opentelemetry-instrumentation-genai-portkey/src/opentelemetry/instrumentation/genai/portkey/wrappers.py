@@ -54,8 +54,26 @@ class ChoiceBuffer:
     def append_text_content(self, content: str) -> None:
         self.text_content.append(content)
 
+    def _tool_call_index(self, tool_call: Any) -> int:
+        index = get_property_value(tool_call, "index")
+        if index is not None:
+            return index
+
+        # OpenAI-compatible servers such as Gemini send no index: a new id
+        # starts the next call, anything else continues the last one.
+        last = len(self.tool_calls_buffers) - 1
+        if last < 0:
+            return 0
+        last_buffer = self.tool_calls_buffers[last]
+        call_id = get_property_value(tool_call, "id")
+        if call_id and (
+            last_buffer is None or str(call_id) != last_buffer.tool_call_id
+        ):
+            return last + 1
+        return last
+
     def append_tool_call(self, tool_call: Any) -> None:
-        idx = get_property_value(tool_call, "index") or 0
+        idx = self._tool_call_index(tool_call)
         for _ in range(len(self.tool_calls_buffers), idx + 1):
             self.tool_calls_buffers.append(None)
 
