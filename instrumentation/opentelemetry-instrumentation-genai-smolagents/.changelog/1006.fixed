@@ -1,0 +1,1 @@
+Restore the caller's context while a model or agent run stream is unconsumed, so caller work is not parented under the `chat` or `invoke_agent` span.
