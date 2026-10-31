@@ -118,9 +118,11 @@ class GenAITracingProcessor(TracingProcessor):
             self._invocations[span] = invocation
             return
         # Other span_data types (GenerationSpanData, ResponseSpanData,
-        # HandoffSpanData, GuardrailSpanData, Speech/TranscriptionSpanData)
-        # are intentionally ignored. LLM-level spans come from the openai
-        # instrumentation; the rest have no semconv yet.
+        # HandoffSpanData, GuardrailSpanData, Speech/TranscriptionSpanData,
+        # MCPListToolsSpanData) are intentionally ignored. LLM-level spans
+        # come from the openai instrumentation; MCP client spans belong to
+        # the MCP layer (e.g. native tracing in mcp>=2.2 or dedicated MCP
+        # instrumentation); the rest have no semconv yet.
 
     def on_span_end(self, span: Span[Any]) -> None:
         invocation = self._invocations.pop(span, None)

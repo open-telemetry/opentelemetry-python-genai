@@ -16,6 +16,11 @@ from agents.tracing.span_data import (
     ResponseSpanData,
 )
 
+try:
+    from agents.tracing.span_data import MCPListToolsSpanData
+except ImportError:
+    MCPListToolsSpanData = None
+
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
@@ -390,3 +395,33 @@ def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
     gc.collect()
 
     assert len(processor._invocations) == 0
+
+
+def test_mcp_list_tools_spans_are_ignored(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    processor = GenAITracingProcessor(handler, provider="openai")
+
+    class DuckMCPListTools:
+        type = "mcp_tools"
+        server = "filesystem_server"
+        result = ["read_file", "write_file"]
+
+    span_items: list[Any] = [DuckMCPListTools()]
+    if MCPListToolsSpanData is not None:
+        span_items.append(
+            MCPListToolsSpanData(
+                server="filesystem_server",
+                result=["read_file", "write_file"],
+            )
+        )
+
+    for item in span_items:
+        span = _Span(item)
+        processor.on_span_start(span)
+        processor.on_span_end(span)
+
+    assert len(processor._invocations) == 0
+    assert len(span_exporter.get_finished_spans()) == 0
