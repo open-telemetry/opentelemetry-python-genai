@@ -94,6 +94,47 @@ def test_instrument_with_disable_openai_trace_export_replaces_processors() -> (
         instrumentor.uninstrument()
 
 
+@pytest.mark.parametrize(
+    ("env_value", "argument", "replaces_default"),
+    [
+        ("true", None, True),
+        (" 1 ", None, True),
+        ("FALSE", None, False),
+        ("invalid", None, False),
+        ("true", False, False),
+        ("false", True, True),
+    ],
+)
+def test_disable_openai_trace_export_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str,
+    argument: bool | None,
+    replaces_default: bool,
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_OPENAI_AGENTS_DISABLE_TRACE_EXPORT",
+        env_value,
+    )
+    baseline = _registered_processors()
+    kwargs = (
+        {} if argument is None else {"disable_openai_trace_export": argument}
+    )
+    instrumentor = OpenAIAgentsInstrumentor()
+    try:
+        instrumentor.instrument(**kwargs)
+        processors = _registered_processors()
+        if replaces_default:
+            assert len(processors) == 1
+            assert isinstance(processors[0], GenAITracingProcessor)
+        else:
+            assert len(processors) == len(baseline) + 1
+            assert processors[:-1] == baseline
+            assert isinstance(processors[-1], GenAITracingProcessor)
+    finally:
+        instrumentor.uninstrument()
+    assert _registered_processors() == baseline
+
+
 def test_uninstrument_restores_processors_in_replace_mode() -> None:
     baseline = [
         agents.tracing.processors.default_processor(),

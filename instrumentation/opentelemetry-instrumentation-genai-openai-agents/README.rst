@@ -90,6 +90,12 @@ is set) active alongside OpenTelemetry emission. Pass
 
     OpenAIAgentsInstrumentor().instrument(disable_openai_trace_export=True)
 
+For auto-instrumentation, set
+``OTEL_INSTRUMENTATION_GENAI_OPENAI_AGENTS_DISABLE_TRACE_EXPORT=true`` before
+starting the process. ``1`` is also accepted; the default is ``false``. An
+explicit ``disable_openai_trace_export`` argument takes precedence over the
+environment variable.
+
 The workflow span name comes from the Agents SDK's own
 ``Runner.run(..., run_config=RunConfig(workflow_name=...))`` knob. Content
 capture is controlled through
