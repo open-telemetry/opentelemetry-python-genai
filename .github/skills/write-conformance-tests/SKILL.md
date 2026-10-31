@@ -220,7 +220,6 @@ checks still run:
 # tests/conformance/tool_calling.py
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from opentelemetry.test.weaver_live_check import LiveCheckReport
@@ -275,20 +274,24 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _part_types(messages_json: str | None) -> list[str]:
-    # gen_ai.{input,output}.messages is a JSON string of
+def _part_types(messages: list[dict[str, Any]] | None) -> list[str]:
+    # gen_ai.{input,output}.messages is a structured array of
     # [{"role": ..., "parts": [{"type": ..., ...}]}].
-    messages = json.loads(messages_json) if messages_json else []
-    return [part["type"] for message in messages for part in message["parts"]]
+    return [
+        part["type"]
+        for message in (messages or [])
+        for part in message["parts"]
+    ]
 
 
-def _part_fields(messages_json: str | None) -> list[tuple[str, str | None]]:
+def _part_fields(
+    messages: list[dict[str, Any]] | None,
+) -> list[tuple[str, str | None]]:
     # Like _part_types, but keeps modality so image/audio/video are
     # distinguishable on blob/uri/file parts (None for parts without one).
-    messages = json.loads(messages_json) if messages_json else []
     return [
         (part["type"], part.get("modality"))
-        for message in messages
+        for message in (messages or [])
         for part in message["parts"]
     ]
 ```

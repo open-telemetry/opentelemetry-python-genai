@@ -87,7 +87,7 @@ def test_agent_run_captures_keyword_input(
     span = spans[0]
     input_messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
     assert input_messages is not None
-    assert "hello keyword" in input_messages
+    assert input_messages[0]["parts"][0]["content"] == "hello keyword"
 
 
 def test_agent_arun_spans(
@@ -688,7 +688,6 @@ def test_workflow_session_id_sets_conversation_id(
 
 
 def test_format_content_structured_types() -> None:
-    import json
     from dataclasses import dataclass
 
     from pydantic import BaseModel
@@ -738,7 +737,6 @@ def test_format_content_structured_types() -> None:
 def test_set_invocation_output_pydantic_structured_content(
     tracer_provider,
 ) -> None:
-    import json
 
     from pydantic import BaseModel
 
@@ -1153,12 +1151,14 @@ def test_team_continue_run_dict_requirement(
         team.continue_run(run_id="r", session_id="s", requirements=[req])
 
     span = span_exporter.get_finished_spans()[-1]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert messages[0]["parts"] == (
+        {
+            "type": "tool_call_response",
+            "id": "call_1",
+            "response": "Delivered",
+        },
     )
-    assert messages[0]["parts"] == [
-        {"type": "tool_call_response", "id": "call_1", "response": "Delivered"}
-    ]
 
 
 def test_team_acontinue_run_spans(
@@ -1643,9 +1643,9 @@ def test_agent_continue_run_with_additional_instructions(
     spans = span_exporter.get_finished_spans()
     cont_span = spans[-1]
     assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS in cont_span.attributes
-    system_instructions = json.loads(
-        cont_span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    )
+    system_instructions = cont_span.attributes[
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    ]
     assert len(system_instructions) == 1
     assert system_instructions[0]["type"] == "text"
     assert system_instructions[0]["content"] == "be more concise"
@@ -1703,17 +1703,17 @@ def test_agent_continue_run_with_input_and_additional_instructions(
     spans = span_exporter.get_finished_spans()
     cont_span = spans[-1]
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES in cont_span.attributes
-    input_messages = json.loads(
-        cont_span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_messages = cont_span.attributes[
+        GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    ]
     assert len(input_messages) == 1
     assert input_messages[0]["role"] == "user"
     assert input_messages[0]["parts"][0]["content"] == "user follow-up"
 
     assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS in cont_span.attributes
-    system_instructions = json.loads(
-        cont_span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    )
+    system_instructions = cont_span.attributes[
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    ]
     assert len(system_instructions) == 1
     assert system_instructions[0]["type"] == "text"
     assert system_instructions[0]["content"] == "be very concise"
@@ -1823,22 +1823,20 @@ def test_continue_run_captures_external_tool_result(
         span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
         == "order-session"
     )
-    messages = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES, "[]")
-    )
-    assert messages == [
+    messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES, ())
+    assert messages == (
         {
             "role": "tool",
             "name": None,
-            "parts": [
+            "parts": (
                 {
                     "type": "tool_call_response",
                     "id": "call_123",
                     "response": "Delivered yesterday",
-                }
-            ],
-        }
-    ]
+                },
+            ),
+        },
+    )
 
 
 def test_acontinue_run_captures_external_tool_result(
@@ -1912,22 +1910,20 @@ def test_acontinue_run_captures_external_tool_result(
         span.attributes[GenAIAttributes.GEN_AI_CONVERSATION_ID]
         == "order-session"
     )
-    messages = json.loads(
-        span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES, "[]")
-    )
-    assert messages == [
+    messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES, ())
+    assert messages == (
         {
             "role": "tool",
             "name": None,
-            "parts": [
+            "parts": (
                 {
                     "type": "tool_call_response",
                     "id": "call_123",
                     "response": "Delivered yesterday",
-                }
-            ],
-        }
-    ]
+                },
+            ),
+        },
+    )
 
 
 def test_second_continue_run_captures_only_new_tool_result(
@@ -1992,9 +1988,7 @@ def test_second_continue_run_captures_only_new_tool_result(
         agent.continue_run(run_response=response)
 
     span = span_exporter.get_finished_spans()[-1]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert [m["parts"][0]["id"] for m in messages] == ["call_2"]
 
 
@@ -2350,9 +2344,7 @@ def test_agent_continue_run_with_user_input_schema(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(messages) == 1
     assert messages[0]["parts"][0]["response"] == {"email": "test@example.com"}
 
@@ -2405,11 +2397,9 @@ def test_agent_continue_run_with_user_feedback_schema(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(messages) == 1
-    assert messages[0]["parts"][0]["response"] == {"Satisfied?": ["Yes"]}
+    assert messages[0]["parts"][0]["response"] == {"Satisfied?": ("Yes",)}
 
 
 def test_agent_continue_run_with_confirmation_note(
@@ -2450,9 +2440,7 @@ def test_agent_continue_run_with_confirmation_note(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(messages) == 1
     assert messages[0]["parts"][0]["response"] == {
         "confirmed": False,
@@ -2494,8 +2482,6 @@ def test_agent_continue_run_unresolved_tool_has_none_response(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    messages = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    messages = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(messages) == 1
     assert messages[0]["parts"][0]["response"] is None

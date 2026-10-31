@@ -17,3 +17,4 @@ opentelemetry-proto @ git+https://github.com/open-telemetry/opentelemetry-python
 # dependency); pin it from the same commit so the stack stays resolvable.
 opentelemetry-exporter-otlp @ git+https://github.com/open-telemetry/opentelemetry-python@14971cef9c84c2354cbaf6871090896fad0f9a1a#subdirectory=exporter/opentelemetry-exporter-otlp
 opentelemetry-exporter-otlp-proto-http @ git+https://github.com/open-telemetry/opentelemetry-python@14971cef9c84c2354cbaf6871090896fad0f9a1a#subdirectory=exporter/opentelemetry-exporter-otlp-proto-http
+jsonschema >= 4.20.0

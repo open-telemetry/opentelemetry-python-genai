@@ -1,4 +1,4 @@
-# Validates the JSON payload of GenAI content attributes against the semconv
+# Validates the structured value of GenAI content attributes against the semconv
 # JSON schemas. The schemas ship with the semconv-genai registry
 # (model/gen-ai/*.json) and are loaded into rego data by weaver's `--advice-data`
 # flag, keyed by the schema file's stem (e.g. gen-ai-input-messages.json ->
@@ -22,7 +22,6 @@ deny contains result if {
 	input.sample.attribute
 	attr_name := input.sample.attribute.name
 	attr_value := input.sample.attribute.value
-	is_string(attr_value)
 
 	key := _genai_content_schema_keys[attr_name]
 	# Undefined (so the rule skips this attribute) when the schema isn't loaded
@@ -30,9 +29,7 @@ deny contains result if {
 	# `gen_ai.tool.definitions` before upstream ships the schema.
 	schema := data[key]
 
-	parsed := json.unmarshal(attr_value)
-
-	[matched, errors] := json.match_schema(parsed, schema)
+	[matched, errors] := json.match_schema(attr_value, schema)
 	not matched
 
 	# PolicyFinding format per

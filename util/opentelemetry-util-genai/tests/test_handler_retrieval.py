@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from unittest import TestCase
 from unittest.mock import patch
@@ -250,8 +249,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
         spans = self._get_finished_spans()
         raw = spans[0].attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
-        self.assertIsInstance(raw, str)
-        self.assertEqual(json.loads(raw), docs)
+        self.assertEqual(raw, tuple(docs))
 
     @patch.dict(
         os.environ,
@@ -280,18 +278,16 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
                     invocation.stop()
 
                 span = self._get_finished_spans()[0]
-                raw = span.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
-                self.assertIsInstance(raw, str)
-                documents = json.loads(raw)
+                documents = span.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
                 self.assertEqual(
                     documents,
-                    [
+                    (
                         {"id": "doc-1", "score": 0.95},
                         {"id": "doc-2", "score": 0.0},
                         {"id": "doc-3", "score": None},
                         {"id": None, "score": 0.5},
                         {"id": None, "score": None},
-                    ],
+                    ),
                 )
                 self.assertIsInstance(documents[0]["id"], str)
                 self.assertIsInstance(documents[0]["score"], float)
@@ -323,9 +319,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
         raw = self._get_finished_spans()[0].attributes[
             GenAI.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        self.assertEqual(
-            json.loads(raw), [legacy, {"id": "typed", "score": None}]
-        )
+        self.assertEqual(raw, (legacy, {"id": "typed", "score": None}))
 
     @patch.dict(
         os.environ,
@@ -342,7 +336,7 @@ class TelemetryHandlerRetrievalTest(_RetrievalTestBase):  # pylint: disable=too-
 
         empty, absent = self._get_finished_spans()
         self.assertEqual(
-            empty.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS], "[]"
+            empty.attributes[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS], ()
         )
         self.assertNotIn(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS, absent.attributes)
 

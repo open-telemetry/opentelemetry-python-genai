@@ -13,7 +13,6 @@ Agent fakes emit no ``chat`` spans.
 
 from __future__ import annotations
 
-import json
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -303,9 +302,17 @@ def attr(span: ReadableSpan, name: str) -> Any:
     return (span.attributes or {}).get(name)
 
 
+def _normalize_span_value(value: Any) -> Any:
+    if isinstance(value, (tuple, list)):
+        return [_normalize_span_value(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _normalize_span_value(v) for k, v in value.items()}
+    return value
+
+
 def parse_messages(span: ReadableSpan, name: str) -> list[dict[str, Any]]:
     raw = attr(span, name)
-    return json.loads(raw) if isinstance(raw, str) else []
+    return _normalize_span_value(raw) if raw is not None else []
 
 
 def part_types(messages: list[dict[str, Any]]) -> list[str]:

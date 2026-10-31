@@ -25,7 +25,7 @@ from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    gen_ai_json_dumps,
+    object_to_any_value,
 )
 from opentelemetry.util.types import AttributeValue
 
@@ -244,7 +244,7 @@ class RetrievalInvocation(GenAIInvocation):
             ),
             (
                 GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                gen_ai_json_dumps(self._data.retrieval_documents)
+                object_to_any_value(list(self._data.retrieval_documents))
                 if self._data.retrieval_documents is not None
                 else None,
             ),

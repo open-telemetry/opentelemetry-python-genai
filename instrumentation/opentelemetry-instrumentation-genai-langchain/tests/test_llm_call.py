@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import json
+import base64
 from importlib.metadata import version as _pkg_version
 from typing import Optional
 
@@ -81,6 +81,7 @@ _REAL_PNG_B64 = (
     "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
     "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
 )
+_REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
 _ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
@@ -525,13 +526,17 @@ def test_chat_openai_multimodal_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"role":"user"' in input_message
-    assert '"type":"text"' in input_message
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["role"] == "user"
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 def test_chat_openai_standard_image_block_llm_call(
@@ -592,10 +597,12 @@ def test_chat_openai_standard_image_block_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 # span_exporter, start_instrumentation, us_amazon_nova_lite_v1_0 are coming from fixtures defined in conftest.py
@@ -762,20 +769,21 @@ def test_chat_openai_legacy_function_call(
         gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert output_messages is not None
-    assert '"type":"tool_call"' in output_messages
-    assert '"name":"get_current_weather"' in output_messages
-    assert '"location":"Paris"' in output_messages
+    tool_call_part = output_messages[0]["parts"][0]
+    assert tool_call_part["type"] == "tool_call"
+    assert tool_call_part["name"] == "get_current_weather"
+    assert tool_call_part["arguments"] == {"location": "Paris"}
 
     tool_definitions = span.attributes.get(
         gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS
     )
     assert tool_definitions is not None
-    assert '"name":"get_current_weather"' in tool_definitions
+    assert tool_definitions[0]["name"] == "get_current_weather"
     assert (
-        '"description":"Get the current weather in a given location."'
-        in tool_definitions
+        tool_definitions[0]["description"]
+        == "Get the current weather in a given location."
     )
-    assert '"location"' in tool_definitions
+    assert "location" in tool_definitions[0]["parameters"]["properties"]
 
 
 @pytest.mark.vcr()
@@ -825,13 +833,17 @@ def test_chat_anthropic_multimodal_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"role":"user"' in input_message
-    assert '"type":"text"' in input_message
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["role"] == "user"
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 @pytest.mark.vcr()
@@ -875,10 +887,16 @@ def test_chat_anthropic_file_ref_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"file"' in input_message
-    assert '"modality":"image"' in input_message
-    assert f'"file_id":"{_ANTHROPIC_FILE_ID}"' in input_message
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "file",
+        "mime_type": None,
+        "modality": "image",
+        "file_id": _ANTHROPIC_FILE_ID,
+    }
 
 
 @pytest.mark.skipif(
@@ -926,11 +944,16 @@ def test_chat_openai_responses_api_input_image_llm_call(
         gen_ai_attributes.GEN_AI_INPUT_MESSAGES
     )
     assert input_message is not None
-    assert '"content":"What is in this image?"' in input_message
-    assert '"type":"blob"' in input_message
-    assert '"modality":"image"' in input_message
-    assert '"mime_type":"image/png"' in input_message
-    assert _REAL_PNG_B64 in input_message
+    assert input_message[0]["parts"][0] == {
+        "type": "text",
+        "content": "What is in this image?",
+    }
+    assert input_message[0]["parts"][1] == {
+        "type": "blob",
+        "modality": "image",
+        "mime_type": "image/png",
+        "content": _REAL_PNG_BYTES,
+    }
 
 
 def test_chat_openai_legacy_function_call_no_content_omits_tool_definitions(
@@ -1072,12 +1095,8 @@ def test_chat_model_preserves_input_and_output_message_names(
         model.invoke([HumanMessage(content="Hi!", name="user_alice")])
 
     (span,) = span_exporter.get_finished_spans()
-    input_messages = json.loads(
-        span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
-    )
-    output_messages = json.loads(
-        span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    input_messages = span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
+    output_messages = span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
 
     assert len(input_messages) == 1
     assert input_messages[0]["name"] == "user_alice"
@@ -1254,17 +1273,26 @@ def assert_openai_completion_attributes(
     if verify_content:
         input_message = attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
         assert input_message is not None
-        assert '"role":"system"' in input_message
-        assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"user"' in input_message
-        assert '"content":"What is the capital of France?"' in input_message
+        assert input_message[0]["role"] == "system"
+        assert input_message[0]["parts"][0] == {
+            "type": "text",
+            "content": "You are a helpful assistant!",
+        }
+        assert input_message[1]["role"] == "user"
+        assert input_message[1]["parts"][0] == {
+            "type": "text",
+            "content": "What is the capital of France?",
+        }
 
         # Assert output message
         output_message = attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
         assert output_message is not None
-        assert '"role":"assistant"' in output_message
-        assert '"content":"The capital of France is Paris."' in output_message
-        assert '"finish_reason":"stop"' in output_message
+        assert output_message[0]["role"] == "assistant"
+        assert output_message[0]["parts"][0] == {
+            "type": "text",
+            "content": "The capital of France is Paris.",
+        }
+        assert output_message[0]["finish_reason"] == "stop"
     else:
         assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
@@ -1305,10 +1333,16 @@ def assert_openai_completion_attributes_with_error(
     if verify_content:
         input_message = attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES]
         assert input_message is not None
-        assert '"role":"system"' in input_message
-        assert '"content":"You are a helpful assistant!"' in input_message
-        assert '"role":"user"' in input_message
-        assert '"content":"What is the capital of France?"' in input_message
+        assert input_message[0]["role"] == "system"
+        assert input_message[0]["parts"][0] == {
+            "type": "text",
+            "content": "You are a helpful assistant!",
+        }
+        assert input_message[1]["role"] == "user"
+        assert input_message[1]["parts"][0] == {
+            "type": "text",
+            "content": "What is the capital of France?",
+        }
 
         # Assert output message
         assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes

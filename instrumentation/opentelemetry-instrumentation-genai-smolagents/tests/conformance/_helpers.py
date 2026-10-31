@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 
@@ -25,10 +24,11 @@ def chat_spans(report: Any) -> list[dict[str, Any]]:
     ]
 
 
-def part_fields(messages_json: str | None) -> list[tuple[str, str | None]]:
-    messages = json.loads(messages_json) if messages_json else []
+def part_fields(
+    messages: list[dict[str, Any]] | None,
+) -> list[tuple[str, str | None]]:
     return [
         (part["type"], part.get("modality"))
-        for message in messages
+        for message in (messages or [])
         for part in message["parts"]
     ]

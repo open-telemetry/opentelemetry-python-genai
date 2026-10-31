@@ -328,8 +328,8 @@ def test_sync_chat_completions_content_capture(
             span.attributes.get(GenAIAttributes.GEN_AI_PROVIDER_NAME)
             == "portkey"
         )
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 2
         assert input_messages[0]["role"] == "system"
@@ -340,8 +340,8 @@ def test_sync_chat_completions_content_capture(
         assert input_messages[1]["role"] == "user"
         assert input_messages[1]["parts"][0]["content"] == "Hello there!"
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         assert output_messages[0]["role"] == "assistant"
@@ -402,15 +402,15 @@ def test_sync_chat_completions_tools(
         assert len(spans) == 1
         span = spans[0]
 
-        tool_defs = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+        tool_defs = span.attributes.get(
+            GenAIAttributes.GEN_AI_TOOL_DEFINITIONS
         )
         assert len(tool_defs) == 1
         assert tool_defs[0]["name"] == "get_weather"
         assert tool_defs[0]["description"] == "Get current weather"
 
-        output_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+        output_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         )
         assert len(output_messages) == 1
         parts = output_messages[0]["parts"]
@@ -626,17 +626,17 @@ def test_chat_completions_dict_and_multipart_content(
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        input_messages = span.attributes.get(
+            GenAIAttributes.GEN_AI_INPUT_MESSAGES
         )
         assert len(input_messages) == 2
-        assert input_messages[0]["parts"] == [
-            {"content": "single dict content", "type": "text"}
-        ]
-        assert input_messages[1]["parts"] == [
+        assert input_messages[0]["parts"] == (
+            {"content": "single dict content", "type": "text"},
+        )
+        assert input_messages[1]["parts"] == (
             {"content": "text part", "type": "text"},
             {"content": "nested dict part", "type": "text"},
-        ]
+        )
 
 
 def test_chat_completions_top_p_zero_and_max_tokens_zero(

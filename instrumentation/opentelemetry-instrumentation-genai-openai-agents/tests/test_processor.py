@@ -258,10 +258,9 @@ def test_tool_content_captured_from_span_end(
 
     (tool_span,) = span_exporter.get_finished_spans()
     assert tool_span.attributes is not None
-    assert (
-        tool_span.attributes["gen_ai.tool.call.arguments"]
-        == '{"city":"Barcelona"}'
-    )
+    assert tool_span.attributes["gen_ai.tool.call.arguments"] == {
+        "city": "Barcelona"
+    }
     assert tool_span.attributes["gen_ai.tool.call.result"] == "sunny"
 
 
@@ -270,13 +269,13 @@ def test_tool_content_captured_from_span_end(
     [
         # The spacing LiteLLM produces for Anthropic normalizes to the same
         # value as the compact JSON the OpenAI APIs forward.
-        ('{"city": "Barcelona"}', '{"city":"Barcelona"}'),
-        ('{"city":"Barcelona"}', '{"city":"Barcelona"}'),
+        ('{"city": "Barcelona"}', {"city": "Barcelona"}),
+        ('{"city":"Barcelona"}', {"city": "Barcelona"}),
         # Invalid JSON is kept as a string; any valid JSON round-trips.
         ("city=Barcelona", "city=Barcelona"),
-        ("[1,2]", "[1,2]"),
-        ("[1, 2]", "[1,2]"),
-        ("42", "42"),
+        ("[1,2]", (1, 2)),
+        ("[1, 2]", (1, 2)),
+        ("42", 42),
         ("null", None),
         # No arguments to record: `trace_include_sensitive_data=False` leaves
         # `input` None, and tool types without arguments leave it empty.

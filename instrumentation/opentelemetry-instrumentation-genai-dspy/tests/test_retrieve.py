@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import copy
-import json
 from typing import Any
 from unittest.mock import Mock
 
@@ -94,10 +93,9 @@ def test_sync_retrieve_execution(
         == "What is OpenTelemetry?"
     )
 
-    docs_attr = attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
-    assert isinstance(docs_attr, str)
-    docs = json.loads(docs_attr)
-    assert docs == [{"id": None, "score": None}] * k
+    docs = attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
+    assert isinstance(docs, tuple)
+    assert list(docs) == [{"id": None, "score": None}] * k
     assert res.passages == [
         f"Passage {i} for What is OpenTelemetry?" for i in range(k)
     ]
@@ -406,8 +404,8 @@ def test_colbertv2_direct_and_via_retrieve(
         direct_attrs.get(server_attributes.SERVER_ADDRESS) == "colbert.local"
     )
     assert direct_attrs.get(server_attributes.SERVER_PORT) == 8893
-    docs = json.loads(str(direct_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)))
-    assert docs == [
+    docs = direct_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
+    assert list(docs) == [
         {"id": "100", "score": 0.9},
         {"id": "101", "score": 0.8},
     ]
@@ -548,7 +546,7 @@ def test_embeddings_and_embeddings_with_scores_retrieval(
     assert emb_attrs.get(GenAI.GEN_AI_OPERATION_NAME) == "retrieval"
     assert emb_attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "Find passages"
     assert emb_attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
-    emb_docs = json.loads(str(emb_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)))
+    emb_docs = emb_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert len(emb_docs) == 2
     assert emb_docs[0]["id"] is not None
     assert emb_docs[0]["score"] is None
@@ -559,9 +557,7 @@ def test_embeddings_and_embeddings_with_scores_retrieval(
         == "Find scored passages"
     )
     assert scores_attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
-    scores_docs = json.loads(
-        str(scores_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS))
-    )
+    scores_docs = scores_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert len(scores_docs) == 2
     assert scores_docs[0]["id"] is not None
     assert isinstance(scores_docs[0]["score"], float)
@@ -621,8 +617,8 @@ def test_retrieve_subclass_overriding_forward(
     assert attrs.get(GenAI.GEN_AI_DATA_SOURCE_ID) == "articles_v1"
     assert attrs.get(GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT) == "What is Weaviate?"
     assert attrs.get(_GEN_AI_RETRIEVAL_TOP_K) == 2
-    docs = json.loads(str(attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)))
-    assert docs == [
+    docs = attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
+    assert list(docs) == [
         {"id": "weav-0", "score": None},
         {"id": "weav-1", "score": None},
     ]

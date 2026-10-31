@@ -167,13 +167,19 @@ def assert_span_attributes(  # pylint: disable=too-many-arguments
         )
 
 
+def _to_lists(obj):
+    if isinstance(obj, tuple):
+        return [_to_lists(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _to_lists(v) for k, v in obj.items()}
+    return obj
+
+
 def _load_span_messages(span, attribute):
     value = span.attributes.get(attribute)
     assert value is not None
-    assert isinstance(value, str)
-    parsed = json.loads(value)
-    assert isinstance(parsed, list)
-    return parsed
+    assert isinstance(value, tuple)
+    return _to_lists(value)
 
 
 _WEATHER_TOOL = {
@@ -590,8 +596,8 @@ def test_sync_messages_create_preserves_generator_document_content(
     ]
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    messages = json.loads(
-        spans[0].attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    messages = _load_span_messages(
+        spans[0], GenAIAttributes.GEN_AI_INPUT_MESSAGES
     )
     assert messages[0]["parts"] == [
         {"type": "text", "content": "First"},

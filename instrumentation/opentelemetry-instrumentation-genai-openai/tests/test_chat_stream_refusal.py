@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -66,16 +65,16 @@ async def test_streamed_refusal_is_captured_in_output_messages(
         assert len(list(stream)) == len(_REFUSAL_CHUNKS)
 
     (span,) = span_exporter.get_finished_spans()
-    assert json.loads(span.attributes["gen_ai.output.messages"]) == [
+    assert span.attributes["gen_ai.output.messages"] == (
         {
             "role": "assistant",
-            "parts": [
+            "parts": (
                 {
                     "type": "text",
                     "content": "I'm sorry, I can't help with that.",
-                }
-            ],
+                },
+            ),
             "finish_reason": "stop",
             "name": None,
-        }
-    ]
+        },
+    )

@@ -11,7 +11,6 @@ spans, attributes, and metrics against the semconv spec.
 
 from __future__ import annotations
 
-import json
 import math
 from typing import Any
 
@@ -140,8 +139,8 @@ def test_retrieval_span_attributes(
             == "What is the capital of France?"
         )
         docs_attr = attrs[gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS]
-        assert type(docs_attr) is str
-        assert json.loads(docs_attr) == [
+        assert isinstance(docs_attr, tuple)
+        assert list(docs_attr) == [
             {"id": "doc-1", "score": None},
             {"id": None, "score": None},
         ]
@@ -339,7 +338,7 @@ def test_document_id_in_span_content(
     docs_attr = spans[0].attributes[
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     ]
-    assert "abc-123" in docs_attr
+    assert docs_attr[0]["id"] == "abc-123"
     instrumentor.uninstrument()
 
 
@@ -370,7 +369,7 @@ def test_document_without_id_in_span_content(
     docs_attr = spans[0].attributes[
         gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
     ]
-    assert json.loads(docs_attr) == [{"id": None, "score": None}]
+    assert list(docs_attr) == [{"id": None, "score": None}]
     instrumentor.uninstrument()
 
 
@@ -407,9 +406,9 @@ def test_document_metadata_not_in_span_content(
         docs_attr = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        assert "content" not in docs_attr
-        assert "wiki" not in docs_attr
-        assert "alice" not in docs_attr
+        assert "content" not in docs_attr[0]
+        assert "source" not in docs_attr[0]
+        assert "author" not in docs_attr[0]
     finally:
         instrumentor.uninstrument()
 
@@ -442,7 +441,7 @@ def test_empty_documents_in_span_content(
         docs_attr = spans[0].attributes.get(
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         )
-        assert docs_attr == "[]"
+        assert docs_attr == ()
     finally:
         instrumentor.uninstrument()
 
@@ -472,10 +471,9 @@ def test_retriever_documents_with_attribute_score(
         retriever.invoke("q")
 
         spans = span_exporter.get_finished_spans()
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert set(parsed[0]) == {"id", "score"}
         assert parsed[0]["id"] == "doc-1"
@@ -511,10 +509,9 @@ def test_retriever_documents_with_metadata_score(
         retriever.invoke("q")
 
         spans = span_exporter.get_finished_spans()
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert set(parsed[0]) == {"id", "score"}
         assert parsed[0]["id"] == "doc-2"
@@ -555,10 +552,9 @@ def test_retriever_documents_with_precedence(
         retriever.invoke("q")
 
         spans = span_exporter.get_finished_spans()
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert parsed[0]["score"] == 0.9
     finally:
@@ -590,10 +586,9 @@ def test_retriever_documents_with_zero_score(
         retriever.invoke("q")
 
         spans = span_exporter.get_finished_spans()
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert "score" in parsed[0]
         assert parsed[0]["score"] == 0.0
@@ -626,10 +621,9 @@ def test_retriever_documents_without_score(
         retriever.invoke("q")
 
         spans = span_exporter.get_finished_spans()
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert parsed[0]["score"] is None
     finally:
@@ -701,15 +695,10 @@ def test_retriever_documents_with_non_finite_scores(
 
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        assert isinstance(docs_attr, str)
-        # RFC 8259 JSON compliance: unquoted NaN and Infinity must be strictly absent
-        assert "NaN" not in docs_attr
-        assert "Infinity" not in docs_attr
-
-        parsed = json.loads(docs_attr)
+        assert isinstance(parsed, tuple)
         assert len(parsed) == 4
         for item in parsed:
             assert item["score"] is None
@@ -748,10 +737,9 @@ def test_retriever_documents_with_metadata_relevance_score(
         retriever.invoke("query")
 
         spans = span_exporter.get_finished_spans()
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert set(parsed[0]) == {"id", "score"}
         assert parsed[0]["id"] == "doc-rerank-1"
@@ -803,10 +791,9 @@ async def test_async_retriever_documents_with_scores(
 
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 3
         assert all(set(doc) == {"id", "score"} for doc in parsed)
 
@@ -865,10 +852,9 @@ async def test_retriever_grounded_knowledge_base_sync_and_async(
 
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert set(parsed[0]) == {"id", "score"}
         assert type(parsed[0]["id"]) is str
@@ -922,10 +908,9 @@ async def test_retriever_grounded_contextual_compression_sync_and_async(
 
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
-        docs_attr = spans[0].attributes[
+        parsed = spans[0].attributes[
             gen_ai_attributes.GEN_AI_RETRIEVAL_DOCUMENTS
         ]
-        parsed = json.loads(docs_attr)
         assert len(parsed) == 1
         assert set(parsed[0]) == {"id", "score"}
         assert type(parsed[0]["id"]) is str

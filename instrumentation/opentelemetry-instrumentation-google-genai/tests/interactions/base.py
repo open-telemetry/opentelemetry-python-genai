@@ -176,7 +176,13 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hi","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": ({"content": "Hi", "type": "text"},),
+                    "name": None,
+                },
+            ),
         )
         self.assertFalse(trace.get_current_span().get_span_context().is_valid)
 
@@ -372,11 +378,31 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello interactions!","type":"text"}],"name":null}]',
+            (
+                {
+                    "role": "user",
+                    "parts": (
+                        {"content": "Hello interactions!", "type": "text"},
+                    ),
+                    "name": None,
+                },
+            ),
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":"stop","name":null}]',
+            (
+                {
+                    "role": "assistant",
+                    "parts": (
+                        {
+                            "content": "Response from interactions!",
+                            "type": "text",
+                        },
+                    ),
+                    "finish_reason": "stop",
+                    "name": None,
+                },
+            ),
         )
 
     @patch.dict(
@@ -494,7 +520,7 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"weather_server","type":"mcp_server"}]',
+            ({"name": "weather_server", "type": "mcp_server"},),
         )
 
     def test_interaction_with_dict_tools_records_tool_definitions(
@@ -515,7 +541,14 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
+            (
+                {
+                    "name": "dict_tool",
+                    "description": "Dict tool desc",
+                    "parameters": None,
+                    "type": "function",
+                },
+            ),
         )
 
     @patch.dict(
@@ -552,5 +585,8 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
-            '[{"name":"google_search","type":"google_search"},{"name":"code_execution","type":"code_execution"}]',
+            (
+                {"name": "google_search", "type": "google_search"},
+                {"name": "code_execution", "type": "code_execution"},
+            ),
         )

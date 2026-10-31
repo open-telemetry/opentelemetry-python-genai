@@ -172,10 +172,9 @@ async def test_runner_records_tool_call_arguments(
     assert "execute_tool _get_weather" in spans
     tool_span = spans["execute_tool _get_weather"]
     assert tool_span.attributes is not None
-    assert (
-        tool_span.attributes["gen_ai.tool.call.arguments"]
-        == '{"city":"Barcelona"}'
-    )
+    assert tool_span.attributes["gen_ai.tool.call.arguments"] == {
+        "city": "Barcelona"
+    }
     assert (
         tool_span.attributes["gen_ai.tool.call.result"]
         == "The forecast for Barcelona is sunny."

@@ -399,7 +399,7 @@ def test_sync_interactions_get(
         if part.type == "text"
     )
     assert expected_output
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    messages = span.attributes["gen_ai.output.messages"]
     texts = [
         part["content"]
         for part in messages[0]["parts"]
@@ -580,7 +580,7 @@ def test_sync_interactions_get_streaming(
         and getattr(event.delta, "text", None)
     )
     assert streamed
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    messages = span.attributes["gen_ai.output.messages"]
     assert [
         part["content"]
         for part in messages[0]["parts"]

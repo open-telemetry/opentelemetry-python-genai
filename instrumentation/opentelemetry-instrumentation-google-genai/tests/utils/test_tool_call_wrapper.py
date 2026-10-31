@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import json
 import unittest
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -166,15 +165,15 @@ class TestCase(unittest.TestCase):
         wrapped_somefunction(12345, {"key": "value"}, [1, 2, 3], [123, "abc"])
         self.otel.assert_has_span_named("execute_tool somefunction")
         span = self.otel.get_span_named("execute_tool somefunction")
-        arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
+        arguments = span.attributes["gen_ai.tool.call.arguments"]
         self.assertEqual(span.attributes["gen_ai.tool.name"], "somefunction")
         self.assertEqual(
             arguments,
             {
                 "primitive_int": 12345,
                 "dict_arg": {"key": "value"},
-                "list_arg": [1, 2, 3],
-                "heterogenous_list_arg": [123, "abc"],
+                "list_arg": (1, 2, 3),
+                "heterogenous_list_arg": (123, "abc"),
             },
         )
 
@@ -225,7 +224,7 @@ class TestCase(unittest.TestCase):
         wrapped = self.wrap(weather)
         wrapped(city="Boston", units="celsius")
         span = self.otel.get_span_named("execute_tool weather")
-        arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
+        arguments = span.attributes["gen_ai.tool.call.arguments"]
         self.assertEqual(
             arguments, {"kwargs": {"city": "Boston", "units": "celsius"}}
         )
@@ -243,8 +242,8 @@ class TestCase(unittest.TestCase):
         wrapped = self.wrap(calculate)
         wrapped(10, 20)
         span = self.otel.get_span_named("execute_tool calculate")
-        arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
-        self.assertEqual(arguments, {"args": [10, 20]})
+        arguments = span.attributes["gen_ai.tool.call.arguments"]
+        self.assertEqual(arguments, {"args": (10, 20)})
 
 
 @pytest.fixture(params=["sync", "async"])
@@ -289,8 +288,8 @@ async def test_arguments_are_plain_json_without_type_value_metadata(
     assert await invoke_tool(weather, "Boston", days=2, rain=False) == "sunny"
     (span,) = span_exporter.get_finished_spans()
     raw = span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]
-    assert type(raw) is str
-    assert raw == '{"city":"Boston","days":2,"rain":false}'
+    assert type(raw) is dict
+    assert raw == {"city": "Boston", "days": 2, "rain": False}
 
 
 @pytest.mark.parametrize(
@@ -306,7 +305,7 @@ async def test_arguments_are_plain_json_without_type_value_metadata(
             {"units": "celsius", "options": {"rain": True}, "limit": None},
             {
                 "city": "Boston",
-                "extra": [1, "extra"],
+                "extra": (1, "extra"),
                 "units": "celsius",
                 "kwargs": {"options": {"rain": True}, "limit": None},
             },
@@ -331,9 +330,9 @@ async def test_bound_arguments(
     assert await invoke_tool(weather, *args, **kwargs) is result
     (span,) = span_exporter.get_finished_spans()
     raw = span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]
-    assert type(raw) is str
-    assert json.loads(raw) == expected
-    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT]) == result
+    assert type(raw) is dict
+    assert raw == expected
+    assert span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT] == result
     assert span.status.status_code == StatusCode.UNSET
 
 
@@ -344,7 +343,7 @@ async def test_empty_arguments(invoke_tool, span_exporter) -> None:
 
     assert await invoke_tool(tool) == "not explicitly passed"
     (span,) = span_exporter.get_finished_spans()
-    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {}
+    assert span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {}
 
 
 @pytest.mark.asyncio
@@ -366,8 +365,8 @@ async def test_arguments_use_shared_serializer(
     assert await invoke_tool(tool, request) == "sunny"
     assert request.city == "Seattle"
     (span,) = span_exporter.get_finished_spans()
-    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
-        "request_arg": {"city": "Boston", "data": "YWJj"}
+    assert span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {
+        "request_arg": {"city": "Boston", "data": b"abc"}
     }
 
 
@@ -427,13 +426,13 @@ async def test_object_arguments_are_normalized(
     assert request.city == "Seattle"
     (span,) = span_exporter.get_finished_spans()
     raw = span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]
-    assert type(raw) is str
-    expected_request = {"city": "Boston", "data": "YWJj"}
-    assert json.loads(raw) == {
+    assert type(raw) is dict
+    expected_request = {"city": "Boston", "data": b"abc"}
+    assert raw == {
         "request_arg": expected_request,
-        "extra": [expected_request],
+        "extra": (expected_request,),
         "kwargs": {
-            "nested": {"items": [expected_request, [expected_request]]},
+            "nested": {"items": (expected_request, (expected_request,))},
             "envelope": {"request": expected_request},
         },
     }
@@ -469,7 +468,7 @@ async def test_arguments_captured_when_tool_fails(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[Error.ERROR_TYPE] == expected_error_type
-    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
+    assert span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {
         "city": "Boston"
     }
     assert GenAI.GEN_AI_TOOL_CALL_RESULT not in span.attributes
@@ -499,8 +498,8 @@ async def test_arguments_preserve_call_time_values(
         assert await invoke_tool(tool, argument) == "done"
     assert argument == {"items": [], "new": ["added by tool"]}
     (span,) = span_exporter.get_finished_spans()
-    assert json.loads(span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
-        "payload": {"items": ["original input"]}
+    assert span.attributes[GenAI.GEN_AI_TOOL_CALL_ARGUMENTS] == {
+        "payload": {"items": ("original input",)}
     }
 
 
@@ -522,7 +521,7 @@ async def test_unconvertible_argument_dropped(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.UNSET
     # Values that fail to convert are dropped, not the whole snapshot.
-    assert span.attributes.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS) == "{}"
+    assert span.attributes.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS) == {}
     assert span.attributes[GenAI.GEN_AI_TOOL_CALL_RESULT] == "done"
 
 

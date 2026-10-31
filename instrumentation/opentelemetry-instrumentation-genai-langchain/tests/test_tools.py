@@ -410,11 +410,10 @@ async def test_tool_invocation(
         assert gen_ai_attributes.GEN_AI_TOOL_CALL_ID not in attrs
     if content_capture == ContentCapturingMode.SPAN_ONLY:
         arguments = attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS]
-        assert isinstance(arguments, str)
-        assert json.loads(arguments) == {"a": 3, "b": 4}
+        assert arguments == {"a": 3, "b": 4}
         captured_result = attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT]
-        assert captured_result == "12"
-        assert type(captured_result) is str
+        assert captured_result == ("12" if with_call_id else 12)
+        assert type(captured_result) is (str if with_call_id else int)
     else:
         assert gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
         assert gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT not in attrs
@@ -447,9 +446,8 @@ async def test_tool_string_input(
     assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ID] == "call_lookup"
     if content_capture == ContentCapturingMode.SPAN_ONLY:
         arguments = attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS]
-        assert isinstance(arguments, str)
         assert arguments == (
-            '{"city":"Berlin"}' if value.startswith("{") else value
+            {"city": "Berlin"} if value.startswith("{") else value
         )
         assert attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT] == "Sunny"
     else:
@@ -520,14 +518,17 @@ async def test_tool_structured_arguments_and_result(
             gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS
         ]
         captured_result = attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT]
-        assert isinstance(captured_arguments, str)
-        assert isinstance(captured_result, str)
-        assert json.loads(captured_arguments) == arguments
-        assert json.loads(captured_result) == output
+        assert captured_arguments == arguments
         if with_call_id and isinstance(result.content, str):
             assert captured_result == result.content
+        elif isinstance(output, dict):
+            assert captured_result == {
+                "status": "ok",
+                "items": (1, 2, 3),
+                "meta": {"count": 3},
+            }
         else:
-            assert captured_result == json.dumps(output, separators=(",", ":"))
+            assert list(captured_result) == output
     else:
         assert gen_ai_attributes.GEN_AI_TOOL_CALL_ARGUMENTS not in attrs
         assert gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT not in attrs
@@ -536,20 +537,12 @@ async def test_tool_structured_arguments_and_result(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    ("output", "expected_result"),
-    [
-        ("answer", "answer"),
-        ("", ""),
-        (0, "0"),
-        (1.5, "1.5"),
-        (False, "false"),
-        (None, None),
-    ],
+    "output",
+    ["answer", "", 0, 1.5, False, None],
 )
 async def test_tool_raw_scalar_result(
     asynchronous: bool,
     output: str | float | bool | None,
-    expected_result: str | None,
     span_exporter: InMemorySpanExporter,
     content_capture: ContentCapturingMode,
     instrument_langchain: None,
@@ -571,8 +564,8 @@ async def test_tool_raw_scalar_result(
         and output is not None
     ):
         captured_result = attrs[gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT]
-        assert captured_result == expected_result
-        assert type(captured_result) is str
+        assert captured_result == output
+        assert type(captured_result) is type(output)
     else:
         assert gen_ai_attributes.GEN_AI_TOOL_CALL_RESULT not in attrs
 
@@ -767,6 +760,14 @@ def _chat_span(
     return span
 
 
+def _normalize_tuples_to_lists(value: Any) -> Any:
+    if isinstance(value, (tuple, list)):
+        return [_normalize_tuples_to_lists(x) for x in value]
+    if isinstance(value, dict):
+        return {k: _normalize_tuples_to_lists(v) for k, v in value.items()}
+    return value
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("definitions_key", ["tools", "functions", None])
@@ -796,8 +797,9 @@ async def test_chat_tool_definitions(
     assert attrs is not None
     if definitions_key and content_capture == ContentCapturingMode.SPAN_ONLY:
         definitions = attrs[gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS]
-        assert isinstance(definitions, str)
-        assert json.loads(definitions) == [{"type": "function", **function}]
+        assert _normalize_tuples_to_lists(definitions) == [
+            {"type": "function", **function}
+        ]
     else:
         assert gen_ai_attributes.GEN_AI_TOOL_DEFINITIONS not in attrs
 
@@ -842,11 +844,11 @@ async def test_chat_tool_call_requests(
     assert attrs is not None
     if content_capture == ContentCapturingMode.SPAN_ONLY:
         messages = attrs[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES]
-        assert isinstance(messages, str)
-        (message,) = json.loads(messages)
+        assert isinstance(messages, tuple)
+        (message,) = messages
         assert message["role"] == "assistant"
         assert message["finish_reason"] == finish_reason
-        assert message["parts"] == [
+        assert list(message["parts"]) == [
             {
                 "type": "tool_call",
                 "id": call["id"],

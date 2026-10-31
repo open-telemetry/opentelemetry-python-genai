@@ -39,13 +39,19 @@ class Greeting(BaseModel):
     greeting: str
 
 
+def _to_lists(obj):
+    if isinstance(obj, tuple):
+        return [_to_lists(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _to_lists(v) for k, v in obj.items()}
+    return obj
+
+
 def _load_span_messages(span, attribute):
     value = span.attributes.get(attribute)
     assert value is not None
-    assert isinstance(value, str)
-    parsed = json.loads(value)
-    assert isinstance(parsed, list)
-    return parsed
+    assert isinstance(value, tuple)
+    return _to_lists(value)
 
 
 def _assert_parsed_response(response) -> None:

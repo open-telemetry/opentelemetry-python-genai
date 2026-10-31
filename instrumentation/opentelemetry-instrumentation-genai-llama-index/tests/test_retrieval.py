@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 import pytest
@@ -130,9 +129,9 @@ async def test_broken_document_does_not_change_retrieval_result(
     span = _span(span_exporter)
     assert span.status.status_code == StatusCode.UNSET
     assert ErrorAttributes.ERROR_TYPE not in span.attributes
-    assert json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
-    ) == [{"id": "valid", "score": 0.9}]
+    assert span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS] == (
+        {"id": "valid", "score": 0.9},
+    )
 
 
 @pytest.mark.parametrize("is_async", [False, True])
@@ -165,15 +164,9 @@ async def test_retrieval_scores_serialize_as_valid_json(
     )
     assert result[0] is node
     span = _span(span_exporter)
-    raw = span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
-    assert type(raw) is str
-    documents = json.loads(
-        raw,
-        parse_constant=lambda value: pytest.fail(
-            f"Non-standard JSON constant: {value}"
-        ),
-    )
-    assert documents == [{"id": "doc-1", "score": expected}]
+    documents = span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
+    assert type(documents) is tuple
+    assert documents == ({"id": "doc-1", "score": expected},)
     if expected is not None:
         assert type(documents[0]["score"]) is float
     assert span.status.status_code == StatusCode.UNSET
@@ -193,12 +186,12 @@ def test_retrieval_captures_documents_and_query(
     documents = span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
     assert type(top_k) is int
     assert type(query_text) is str
-    assert type(documents) is str
+    assert type(documents) is tuple
     assert top_k == 2
     assert query_text == "Where is Paris?"
-    assert json.loads(documents) == [{"id": "doc-1", "score": 0.9}]
-    assert type(json.loads(documents)[0]["id"]) is str
-    assert type(json.loads(documents)[0]["score"]) is float
+    assert documents == ({"id": "doc-1", "score": 0.9},)
+    assert type(documents[0]["id"]) is str
+    assert type(documents[0]["score"]) is float
 
 
 def test_retrieval_query_bundle_captures_query(
@@ -246,9 +239,9 @@ async def test_async_retrieval_captures_query_and_documents(
     query_text = span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_QUERY_TEXT]
     documents = span.attributes[GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS]
     assert type(query_text) is str
-    assert type(documents) is str
+    assert type(documents) is tuple
     assert query_text == "Where is Paris?"
-    assert json.loads(documents) == [{"id": "doc-1", "score": 0.9}]
+    assert documents == ({"id": "doc-1", "score": 0.9},)
 
 
 def test_sync_retrieval_error_is_unchanged(

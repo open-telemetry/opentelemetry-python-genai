@@ -113,7 +113,9 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
 # Canonical base64, so the payloads round-trip unchanged through the span
 # attribute (the GenAI JSON encoder re-encodes blob bytes).
 _WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
+_WAV_BYTES = base64.b64decode(_WAV_B64)
 _PDF_B64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
+_PDF_BYTES = base64.b64decode(_PDF_B64)
 AUDIO_AND_FILE_PROMPT = [
     {
         "role": "user",
@@ -146,7 +148,7 @@ AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
                 "type": "blob",
                 "mime_type": "audio/wav",
                 "modality": "audio",
-                "content": _WAV_B64,
+                "content": _WAV_BYTES,
             },
             {
                 "type": "file",
@@ -158,7 +160,7 @@ AUDIO_AND_FILE_EXPECTED_INPUT_MESSAGES = [
                 "type": "blob",
                 "mime_type": "application/pdf",
                 "modality": "document",
-                "content": _PDF_B64,
+                "content": _PDF_BYTES,
             },
         ],
         "name": None,
@@ -190,7 +192,7 @@ MULTIMODAL_EXPECTED_INPUT_MESSAGES = [
             {
                 "mime_type": "image/png",
                 "modality": "image",
-                "content": _REAL_PNG_B64,
+                "content": _REAL_PNG_BYTES,
                 "type": "blob",
             },
         ],
@@ -780,8 +782,16 @@ def assert_completion_attributes(
     )
 
 
+def normalize_span_value(value: Any) -> Any:
+    if isinstance(value, (tuple, list)):
+        return [normalize_span_value(item) for item in value]
+    if isinstance(value, dict):
+        return {k: normalize_span_value(v) for k, v in value.items()}
+    return value
+
+
 def assert_messages_attribute(actual, expected):
-    assert json.loads(actual) == expected
+    assert normalize_span_value(actual) == expected
 
 
 def format_simple_expected_output_message(

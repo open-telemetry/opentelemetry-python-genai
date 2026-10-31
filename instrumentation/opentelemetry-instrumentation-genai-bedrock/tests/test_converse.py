@@ -3,8 +3,6 @@
 
 """Tests for Amazon Bedrock Converse API instrumentation."""
 
-import json
-
 import pytest
 from botocore.exceptions import ClientError
 
@@ -87,16 +85,12 @@ def test_converse_with_content(
     assert span.status.status_code == StatusCode.UNSET
 
     # Check captured message content
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Say this is a test"
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert len(output_msgs[0]["parts"]) > 0
@@ -199,9 +193,7 @@ def test_converse_tool_call_with_content(
         "tool_call",
     )
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     parts = output_msgs[0]["parts"]
     tool_calls = [p for p in parts if p.get("type") == "tool_call"]

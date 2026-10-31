@@ -3,7 +3,6 @@
 
 # pylint: disable=too-many-locals,too-many-lines
 
-import json
 import logging
 import os
 
@@ -284,7 +283,7 @@ def test_chat_completion_with_named_input_message(
         )
 
     (span,) = span_exporter.get_finished_spans()
-    input_messages = json.loads(span.attributes["gen_ai.input.messages"])
+    input_messages = span.attributes["gen_ai.input.messages"]
     assert len(input_messages) == 1
     assert input_messages[0]["name"] == "Alice"
     assert input_messages[0]["role"] == "user"

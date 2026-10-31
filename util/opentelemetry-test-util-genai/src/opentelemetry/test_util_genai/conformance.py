@@ -38,18 +38,29 @@ Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
 
 from __future__ import annotations
 
+import functools
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from jsonschema import Draft202012Validator
 
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.test.weaver_live_check import (
     LiveCheckError,
     LiveCheckReport,
@@ -122,7 +133,13 @@ class Scenario(ABC):
 
 def _build_providers(
     endpoint: str,
-) -> tuple[TracerProvider, MeterProvider, LoggerProvider]:
+) -> tuple[
+    TracerProvider,
+    MeterProvider,
+    LoggerProvider,
+    InMemorySpanExporter,
+    InMemoryLogRecordExporter,
+]:
     # OTLP/gRPC exporters are only installed in the *-conformance tox envs
     # (see dev-requirements-conformance.txt). Import lazily so this module
     # stays importable in regular test envs that exclude conformance tests.
@@ -140,6 +157,8 @@ def _build_providers(
     tracer_provider.add_span_processor(
         SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
     )
+    span_exporter = InMemorySpanExporter()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
 
     # Disable periodic export — metrics flush via the explicit force_flush()
     # at the end of the scenario, so the report is deterministic.
@@ -155,8 +174,18 @@ def _build_providers(
             OTLPLogExporter(endpoint=endpoint, insecure=True)
         )
     )
+    log_exporter = InMemoryLogRecordExporter()
+    logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
+    )
 
-    return tracer_provider, meter_provider, logger_provider
+    return (
+        tracer_provider,
+        meter_provider,
+        logger_provider,
+        span_exporter,
+        log_exporter,
+    )
 
 
 def _seen_metric_names(report: LiveCheckReport) -> set[str]:
@@ -178,10 +207,146 @@ def _seen_span_operations(report: LiveCheckReport) -> dict[str, int]:
     return counts
 
 
+def _normalize_sample_value(val: Any) -> Any:
+    if isinstance(val, (tuple, list)):
+        return [_normalize_sample_value(x) for x in val]
+    if isinstance(val, dict):
+        return {k: _normalize_sample_value(v) for k, v in val.items()}
+    return val
+
+
+_CONTENT_SCHEMA_FILES: dict[str, str] = {
+    "gen_ai.input.messages": "gen-ai-input-messages.json",
+    "gen_ai.output.messages": "gen-ai-output-messages.json",
+    "gen_ai.system_instructions": "gen-ai-system-instructions.json",
+    "gen_ai.tool.definitions": "gen-ai-tool-definitions.json",
+    "gen_ai.retrieval.documents": "gen-ai-retrieval-documents.json",
+}
+
+
+@functools.cache
+def _get_content_validators() -> dict[str, Draft202012Validator]:
+    import jsonschema
+
+    from opentelemetry.test_util_genai._setup_weaver import (
+        _provision_genai_root,
+    )
+
+    schema_dir = _provision_genai_root() / "model" / "gen-ai"
+    validators: dict[str, Draft202012Validator] = {}
+    for attr_name, filename in _CONTENT_SCHEMA_FILES.items():
+        schema_path = schema_dir / filename
+        if schema_path.is_file():
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            validators[attr_name] = jsonschema.Draft202012Validator(schema)
+    return validators
+
+
+def _validate_content_attribute(
+    attr_entry: dict[str, Any],
+    name: str,
+    val: Any,
+) -> None:
+    validators = _get_content_validators()
+    validator = validators.get(name)
+    if validator is None or val is None:
+        return
+
+    errors = sorted(validator.iter_errors(val), key=lambda e: str(e.path))
+    live_check = attr_entry.setdefault("live_check_result", {})
+    all_advice: list[dict[str, Any]] = [
+        a
+        for a in live_check.get("all_advice", [])
+        if a.get("id") != "genai_content_schema"
+    ]
+    if errors:
+        error_messages = [err.message for err in errors]
+        signal_name = next(
+            (a.get("signal_name") for a in all_advice if a.get("signal_name")),
+            None,
+        )
+        signal_type = next(
+            (a.get("signal_type") for a in all_advice if a.get("signal_type")),
+            None,
+        )
+        finding: dict[str, Any] = {
+            "id": "genai_content_schema",
+            "level": "violation",
+            "context": {
+                "attribute": name,
+                "errors": error_messages,
+            },
+            "message": (
+                f"Attribute '{name}' value does not conform to the GenAI schema: "
+                f"{error_messages}"
+            ),
+            "signal_name": signal_name,
+            "signal_type": signal_type,
+            "type": "PolicyFinding",
+        }
+        all_advice.append(finding)
+        live_check["highest_advice_level"] = "violation"
+    live_check["all_advice"] = all_advice
+
+
+def _enrich_report_samples(
+    report: LiveCheckReport,
+    finished_spans: Sequence[ReadableSpan],
+    finished_logs: Sequence[Any],
+) -> None:
+    # Weaver drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
+    # empty lists [] or None for structured content attributes (messages, tool definitions).
+    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed,
+    # and validate the restored content against the semconv GenAI JSON schemas.
+    report.__dict__.pop("violations", None)
+    span_idx = 0
+    log_idx = 0
+    for entry in report.get("samples", []):
+        if "span" in entry and span_idx < len(finished_spans):
+            span = finished_spans[span_idx]
+            span_idx += 1
+            if span.attributes:
+                for attr_entry in entry["span"].get("attributes", []):
+                    name = attr_entry.get("name")
+                    if name in span.attributes:
+                        orig = span.attributes[name]
+                        if isinstance(orig, (dict, list, tuple)):
+                            val = _normalize_sample_value(orig)
+                            attr_entry["value"] = val
+                            if name in _CONTENT_SCHEMA_FILES:
+                                _validate_content_attribute(
+                                    attr_entry, name, val
+                                )
+        elif "log" in entry and log_idx < len(finished_logs):
+            log = finished_logs[log_idx]
+            log_idx += 1
+            log_record = getattr(log, "log_record", log)
+            attrs = getattr(log_record, "attributes", None)
+            if attrs:
+                for attr_entry in entry["log"].get("attributes", []):
+                    name = attr_entry.get("name")
+                    if name in attrs:
+                        orig = attrs[name]
+                        if isinstance(orig, (dict, list, tuple)):
+                            val = _normalize_sample_value(orig)
+                            attr_entry["value"] = val
+                            if name in _CONTENT_SCHEMA_FILES:
+                                _validate_content_attribute(
+                                    attr_entry, name, val
+                                )
+
+
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:
     out = Path("weaver_reports") / f"{type(scenario).__name__}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report._report, indent=2, sort_keys=True))
+    out.write_text(
+        json.dumps(
+            report._report,
+            indent=2,
+            sort_keys=True,
+            default=lambda o: repr(o) if isinstance(o, bytes) else str(o),
+        )
+    )
 
 
 def run_conformance(
@@ -196,9 +361,13 @@ def run_conformance(
     :class:`AssertionError` on declared violations weaver no longer
     reports.
     """
-    tracer_provider, meter_provider, logger_provider = _build_providers(
-        weaver.otlp_endpoint
-    )
+    (
+        tracer_provider,
+        meter_provider,
+        logger_provider,
+        span_exporter,
+        log_exporter,
+    ) = _build_providers(weaver.otlp_endpoint)
 
     try:
         scenario.run(
@@ -212,6 +381,11 @@ def run_conformance(
         logger_provider.force_flush()
 
         report = weaver.end(timeout=120)
+        _enrich_report_samples(
+            report,
+            span_exporter.get_finished_spans(),
+            log_exporter.get_finished_logs(),
+        )
         _dump_report(scenario, report)
 
         _check_violations(scenario, report)

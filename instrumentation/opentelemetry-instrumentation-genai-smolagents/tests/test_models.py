@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import gc
 import inspect
-import json
 from collections.abc import Generator
 from typing import Any
 
@@ -288,7 +287,7 @@ def test_tool_definitions_recorded(
     )
 
     (span,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
-    assert json.loads(attr(span, GenAI.GEN_AI_TOOL_DEFINITIONS)) == [
+    assert parse_messages(span, GenAI.GEN_AI_TOOL_DEFINITIONS) == [
         {
             "type": "function",
             "name": "get_weather",
