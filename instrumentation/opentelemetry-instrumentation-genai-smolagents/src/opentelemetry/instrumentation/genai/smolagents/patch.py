@@ -135,7 +135,7 @@ def _stop_sequences(merged: dict[str, Any]) -> list[str] | None:
     stop = merged.get("stop", merged.get("stop_sequences"))
     if isinstance(stop, str):
         return [stop]
-    if isinstance(stop, list):
+    if isinstance(stop, (list, tuple)):
         return [str(item) for item in stop]
     return None
 
