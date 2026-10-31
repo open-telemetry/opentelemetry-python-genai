@@ -15,6 +15,7 @@ import pytest_asyncio
 from aiobotocore.response import StreamingBody as AioStreamingBody
 from botocore.stub import Stubber
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.patch import (
     patch_bedrock,
     unpatch_bedrock,
@@ -305,12 +306,15 @@ async def test_async_converse_stream_success(
         response = await async_bedrock_client.converse_stream(
             modelId=NOVA_MODEL_ID, messages=[]
         )
+        # The caller's context must survive the call and the drain.
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(
             response["stream"], AsyncBedrockConverseStreamWrapper
         )
         chunks = [chunk async for chunk in response["stream"]]
         assert len(chunks) == len(CONVERSE_STREAM_EVENTS)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
@@ -936,12 +940,15 @@ async def test_async_invoke_model_stream_success(
                 modelId=MODEL_ID, body="{}"
             )
         )
+        # The caller's context must survive the call and the drain.
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
         assert isinstance(
             response["body"], AsyncBedrockInvokeModelStreamWrapper
         )
         chunks = [chunk async for chunk in response["body"]]
         assert len(chunks) == len(INVOKE_MODEL_STREAM_EVENTS)
+        assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
