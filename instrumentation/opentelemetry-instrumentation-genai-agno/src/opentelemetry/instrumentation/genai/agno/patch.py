@@ -24,6 +24,7 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
+    from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
@@ -42,6 +43,8 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     format_content,
     format_retrieval_document,
     prepare_tool_definitions,
+    resolve_embedder_provider,
+    safe_int,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
@@ -49,6 +52,7 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    EmbeddingInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -87,6 +91,31 @@ _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
 
 _ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
+_KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
+    ("agno.knowledge.embedder.base", "Embedder"),
+    ("agno.knowledge.embedder.openai", "OpenAIEmbedder"),
+    ("agno.knowledge.embedder.azure_openai", "AzureOpenAIEmbedder"),
+    ("agno.knowledge.embedder.aws_bedrock", "AwsBedrockEmbedder"),
+    ("agno.knowledge.embedder.google", "GoogleEmbedder"),
+    ("agno.knowledge.embedder.google", "GeminiEmbedder"),
+    ("agno.knowledge.embedder.ollama", "OllamaEmbedder"),
+    ("agno.knowledge.embedder.mistral", "MistralEmbedder"),
+    ("agno.knowledge.embedder.cohere", "CohereEmbedder"),
+    ("agno.knowledge.embedder.fireworks", "FireworksEmbedder"),
+    ("agno.knowledge.embedder.jina", "JinaEmbedder"),
+    ("agno.knowledge.embedder.together", "TogetherEmbedder"),
+    ("agno.knowledge.embedder.voyageai", "VoyageAIEmbedder"),
+    ("agno.knowledge.embedder.fastembed", "FastEmbedEmbedder"),
+    (
+        "agno.knowledge.embedder.sentence_transformer",
+        "SentenceTransformerEmbedder",
+    ),
+    ("agno.knowledge.embedder.huggingface", "HuggingfaceCustomEmbedder"),
+    ("agno.knowledge.embedder.langdb", "LangDBEmbedder"),
+    ("agno.knowledge.embedder.nebius", "NebiusEmbedder"),
+    ("agno.knowledge.embedder.openai_like", "OpenAILikeEmbedder"),
+    ("agno.knowledge.embedder.vllm", "VLLMEmbedder"),
+)
 
 
 def _release_run_id(run_id: str | None) -> None:
@@ -255,6 +284,19 @@ def patch_agent(handler: TelemetryHandler) -> None:
         current_generation,
     )
 
+    embedder_wrappers = [
+        (method_name, factory(handler))
+        for method_name, factory in _EMBEDDER_METHOD_FACTORIES
+    ]
+    for mod_name, cls_name in _KNOWN_EMBEDDERS:
+        for method_name, wrapper_fn in embedder_wrappers:
+            _safe_wrap_function(
+                mod_name,
+                f"{cls_name}.{method_name}",
+                wrapper_fn,
+                current_generation,
+            )
+
 
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
@@ -268,6 +310,14 @@ def unpatch_agent() -> None:
             unwrap(target, attr)
         except (AttributeError, ValueError):
             pass
+
+    for mod_name, cls_name in _KNOWN_EMBEDDERS:
+        if mod_name in sys.modules:
+            mod = sys.modules[mod_name]
+            cls = getattr(mod, cls_name, None)
+            if cls is not None:
+                for method_name, _ in _EMBEDDER_METHOD_FACTORIES:
+                    _safe_unwrap(cls, method_name)
 
     if _AGNO_MODULE in sys.modules:
         try:
@@ -317,6 +367,137 @@ def unpatch_agent() -> None:
                 _safe_unwrap(agno.knowledge.knowledge.Knowledge, attr)
         except ImportError:
             pass
+
+
+_extract_embedder_provider = resolve_embedder_provider
+
+
+def _extract_embedder_model(embedder: Embedder) -> str | None:
+    model = (
+        getattr(embedder, "id", None)
+        or getattr(embedder, "model", None)
+        or getattr(embedder, "name", None)
+    )
+    return str(model) if model is not None else None
+
+
+def _extract_embedder_input_tokens(usage: Mapping[str, Any]) -> int | None:
+    for key in ("prompt_tokens", "input_tokens", "total_tokens"):
+        if (tok := safe_int(usage.get(key))) is not None:
+            return tok
+    return None
+
+
+def _start_embedding(
+    handler: TelemetryHandler,
+    instance: Embedder,
+) -> EmbeddingInvocation:
+    provider = _extract_embedder_provider(instance)
+    request_model = _extract_embedder_model(instance)
+    invocation = handler.embedding(
+        provider=provider,
+        request_model=request_model,
+    )
+    if encoding_format := getattr(instance, "encoding_format", None):
+        invocation.encoding_formats = [str(encoding_format)]
+    return invocation
+
+
+def _set_embedding_attributes(
+    invocation: EmbeddingInvocation,
+    instance: Embedder,
+    embedding: Sequence[float] | None,
+    usage: Mapping[str, Any] | None = None,
+) -> None:
+    if embedding:
+        invocation.dimension_count = len(embedding)
+    else:
+        invocation.dimension_count = safe_int(instance.dimensions)
+
+    if isinstance(usage, Mapping):
+        invocation.input_tokens = _extract_embedder_input_tokens(usage)
+
+
+def _embedder_get_embedding(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Sequence[float]],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Sequence[float]:
+        with _start_embedding(handler, instance) as invocation:
+            result = wrapped(*args, **kwargs)
+            _set_embedding_attributes(invocation, instance, result)
+            return result
+
+    return traced_method
+
+
+def _embedder_get_embedding_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., tuple[Sequence[float], dict[str, Any] | None]],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Sequence[float], dict[str, Any] | None]:
+        with _start_embedding(handler, instance) as invocation:
+            result = wrapped(*args, **kwargs)
+            embedding, usage = result
+            _set_embedding_attributes(invocation, instance, embedding, usage)
+            return result
+
+    return traced_method
+
+
+def _embedder_async_get_embedding(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Sequence[float]]],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Sequence[float]:
+        with _start_embedding(handler, instance) as invocation:
+            result = await wrapped(*args, **kwargs)
+            _set_embedding_attributes(invocation, instance, result)
+            return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
+def _embedder_async_get_embedding_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[
+            ..., Awaitable[tuple[Sequence[float], dict[str, Any] | None]]
+        ],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Sequence[float], dict[str, Any] | None]:
+        with _start_embedding(handler, instance) as invocation:
+            result = await wrapped(*args, **kwargs)
+            embedding, usage = result
+            _set_embedding_attributes(invocation, instance, embedding, usage)
+            return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
+_EMBEDDER_METHOD_FACTORIES: tuple[
+    tuple[str, Callable[[TelemetryHandler], Callable[..., Any]]], ...
+] = (
+    ("get_embedding", _embedder_get_embedding),
+    ("get_embedding_and_usage", _embedder_get_embedding_and_usage),
+    ("async_get_embedding", _embedder_async_get_embedding),
+    ("async_get_embedding_and_usage", _embedder_async_get_embedding_and_usage),
+)
 
 
 def _extract_input_content(input_val: Any) -> str:

@@ -40,6 +40,8 @@
 agno~=3.1.11
 wrapt>=2.5.1
 fastapi
+openai
+-e instrumentation/opentelemetry-instrumentation-genai-openai
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e util/opentelemetry-util-genai
