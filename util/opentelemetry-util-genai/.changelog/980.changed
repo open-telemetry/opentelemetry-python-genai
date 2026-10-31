@@ -1,0 +1,1 @@
+Do not invoke completion hook for retrieval and embedding invocations.

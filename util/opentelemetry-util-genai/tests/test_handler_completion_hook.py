@@ -275,6 +275,33 @@ class TestHandlerCompletionHook(TestCase):  # pylint: disable=too-many-public-me
         kwargs = hook.on_completion.call_args.kwargs
         self.assertIsNotNone(kwargs["span"])
 
+    def test_retrieval_hook_not_called(self):
+        hook = MagicMock()
+        handler = self._make_handler(hook)
+
+        invocation = handler.retrieval(data_source_id="ds-1")
+        self.assertFalse(invocation.should_capture_content)
+        invocation.query_text = "search query"
+        invocation.stop()
+
+        failed_inv = handler.retrieval(data_source_id="ds-1")
+        failed_inv.fail(RuntimeError("retrieval failed"))
+
+        hook.on_completion.assert_not_called()
+
+    def test_embedding_and_tool_hook_not_called(self):
+        hook = MagicMock()
+        handler = self._make_handler(hook)
+
+        emb_inv = handler.embedding("openai", request_model="text-embedding-3")
+        self.assertFalse(emb_inv.should_capture_content)
+        emb_inv.stop()
+
+        tool_inv = handler.tool("get_weather")
+        tool_inv.stop()
+
+        hook.on_completion.assert_not_called()
+
     def test_remote_agent_hook_called_on_stop_with_messages(self):
         hook = MagicMock()
         handler = self._make_handler(hook)
