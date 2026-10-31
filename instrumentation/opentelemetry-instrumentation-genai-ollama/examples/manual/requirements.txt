@@ -1,0 +1,9 @@
+ollama~=0.6.3
+
+opentelemetry-sdk~=1.45.1
+opentelemetry-exporter-otlp-proto-grpc~=1.45.1
+opentelemetry-instrumentation-genai-ollama~=1.0b0
+
+# Uncomment to enable the upload completion hook (pulls in fsspec).
+# Required when OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK=upload.
+# opentelemetry-util-genai[upload]

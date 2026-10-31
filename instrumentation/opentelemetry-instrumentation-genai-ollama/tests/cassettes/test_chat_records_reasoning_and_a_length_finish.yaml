@@ -1,0 +1,67 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "deepseek-r1:1.5b",
+        "stream": false,
+        "options": {
+          "num_predict": 40
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is 17 * 23?"
+          }
+        ],
+        "tools": [],
+        "think": true
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '154'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |-
+        {
+          "model": "deepseek-r1:1.5b",
+          "created_at": "2026-10-29T14:37:35.7680405Z",
+          "message": {
+            "role": "assistant",
+            "content": "",
+            "thinking": "\nFirst, I need to calculate the product of 17 and 23.\n\nI'll start by multiplying 17 by 20, which gives me 340.\n\n"
+          },
+          "done": true,
+          "done_reason": "length",
+          "total_duration": 2775960600,
+          "load_duration": 2188171200,
+          "prompt_eval_count": 13,
+          "prompt_eval_cached_count": 0,
+          "prompt_eval_duration": 71744000,
+          "eval_count": 40,
+          "eval_duration": 514902000
+        }
+    headers:
+      content-length:
+      - '463'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 14:37:35 GMT
+    status:
+      code: 200
+      message: OK
+version: 1
