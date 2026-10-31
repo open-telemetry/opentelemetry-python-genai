@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import gc
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from agents import RunHooks
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
@@ -17,6 +18,7 @@ from agents.tracing.span_data import (
 )
 
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
+    GenAIRunHooks,
     GenAITracingProcessor,
 )
 from opentelemetry.sdk.trace import TracerProvider
@@ -28,18 +30,19 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import ToolInvocation
+from opentelemetry.util.genai.invocation import (
+    LocalAgentInvocation,
+    ToolInvocation,
+)
 
 
 class _Span:
     """Minimal stand-in for agents-library Span (must be weakref-able)."""
 
-    def __init__(self, span_data: Any) -> None:
+    def __init__(self, span_data: Any, parent_id: str | None = None) -> None:
         self.span_data = span_data
-        # Span objects in tests don't need a span_id since the processor
-        # keys its WeakKeyDictionary by the Span instance itself, but
-        # keep one around for parity with the real class.
         self.span_id = f"span-{id(self)}"
+        self.parent_id = parent_id
 
 
 class _Trace:
@@ -103,6 +106,159 @@ def test_agent_span_creates_invoke_local_agent() -> None:
 
     processor.on_span_end(span)
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "args", "kwargs"),
+    [
+        ("on_agent_end", (None, None), {"output": "done"}),
+        ("on_llm_end", (None, None), {"response": None}),
+        ("on_tool_end", (None, None, None), {"result": "done"}),
+        ("on_handoff", (None, None), {"to_agent": None}),
+    ],
+)
+async def test_run_hooks_forward_callbacks(
+    event: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> None:
+    application_hooks = AsyncMock()
+    processor = GenAITracingProcessor(_build_handler(), provider="openai")
+    hooks = GenAIRunHooks(application_hooks, processor)
+
+    await getattr(hooks, event)(*args, **kwargs)
+
+    getattr(application_hooks, event).assert_awaited_once_with(*args, **kwargs)
+
+
+def test_run_hooks_implement_sdk_callbacks() -> None:
+    processor = GenAITracingProcessor(_build_handler(), provider="openai")
+    assert isinstance(GenAIRunHooks(None, processor), type(RunHooks()))
+    callbacks = {name for name in dir(RunHooks()) if name.startswith("on_")}
+    assert callbacks <= GenAIRunHooks.__dict__.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["on_llm_start", "on_tool_start"])
+@pytest.mark.parametrize("calls", [0, 1, 2])
+@pytest.mark.parametrize("count_inference_calls", [False, True])
+async def test_agent_call_counts(
+    event: str,
+    calls: int,
+    count_inference_calls: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = _build_handler()
+    invocation = MagicMock(
+        spec=LocalAgentInvocation, inference_calls=None, tool_calls=None
+    )
+    handler.invoke_local_agent.return_value = invocation
+    processor = GenAITracingProcessor(handler, provider="openai")
+    agent_span = _Span(AgentSpanData(name="agent"))
+    tool_span = _Span(
+        FunctionSpanData(name="lookup", input=None, output=None),
+        parent_id=agent_span.span_id,
+    )
+    processor.on_span_start(agent_span)
+    processor.on_span_start(tool_span)
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.genai.openai_agents.processor.get_current_span",
+        lambda: tool_span,
+    )
+    application_hooks = AsyncMock()
+    hooks = GenAIRunHooks(
+        application_hooks,
+        processor,
+        count_inference_calls=count_inference_calls,
+    )
+    await hooks.on_agent_start(None, None)
+    for _ in range(calls):
+        await getattr(hooks, event)(None, None, None)
+
+    assert invocation.inference_calls == (
+        calls if event == "on_llm_start" and count_inference_calls else 0
+    )
+    assert invocation.tool_calls == (calls if event == "on_tool_start" else 0)
+    assert getattr(application_hooks, event).await_count == calls
+    application_hooks.on_agent_start.assert_awaited_once_with(None, None)
+    processor.on_span_end(tool_span)
+    processor.on_span_end(agent_span)
+    invocation.stop.assert_called_once_with()
+    assert not processor._agent_spans
+
+
+@pytest.mark.asyncio
+async def test_call_counts_follow_agent_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = _build_handler()
+    invocations = [
+        MagicMock(
+            spec=LocalAgentInvocation, inference_calls=None, tool_calls=None
+        )
+        for _ in range(3)
+    ]
+    handler.invoke_local_agent.side_effect = invocations
+    processor = GenAITracingProcessor(handler, provider="openai")
+    parent = _Span(AgentSpanData(name="parent"))
+    child = _Span(AgentSpanData(name="child"), parent_id=parent.span_id)
+    sibling = _Span(AgentSpanData(name="sibling"))
+    intermediate = _Span(
+        HandoffSpanData(from_agent="parent", to_agent="child"),
+        parent_id=child.span_id,
+    )
+    hooks = GenAIRunHooks(AsyncMock(), processor)
+    for span in (parent, child, sibling):
+        processor.on_span_start(span)
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.openai_agents.processor.get_current_span",
+            lambda: span,
+        )
+        await hooks.on_agent_start(None, None)
+    processor.on_span_start(intermediate)
+    for span, event in (
+        (parent, hooks.on_llm_start),
+        (intermediate, hooks.on_tool_start),
+    ):
+        monkeypatch.setattr(
+            "opentelemetry.instrumentation.genai.openai_agents.processor.get_current_span",
+            lambda: span,
+        )
+        await event(None, None, None)
+
+    assert [(i.inference_calls, i.tool_calls) for i in invocations] == [
+        (1, 0),
+        (0, 1),
+        (0, 0),
+    ]
+    for span in (intermediate, sibling, child, parent):
+        processor.on_span_end(span)
+    assert not processor._agent_spans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["on_llm_start", "on_tool_start"])
+async def test_failed_call_hooks_preserve_counts(
+    event: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handler = _build_handler()
+    invocation = MagicMock(
+        spec=LocalAgentInvocation, inference_calls=None, tool_calls=None
+    )
+    handler.invoke_local_agent.return_value = invocation
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(AgentSpanData(name="agent"))
+    processor.on_span_start(span)
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.genai.openai_agents.processor.get_current_span",
+        lambda: span,
+    )
+    application_hooks = AsyncMock()
+    getattr(application_hooks, event).side_effect = ValueError("hook failed")
+    hooks = GenAIRunHooks(application_hooks, processor)
+    with pytest.raises(ValueError, match="hook failed"):
+        await getattr(hooks, event)(None, None, None)
+    assert invocation.inference_calls == (1 if event == "on_llm_start" else 0)
+    assert invocation.tool_calls == (1 if event == "on_tool_start" else 0)
 
 
 def test_function_span_creates_tool_invocation() -> None:
@@ -236,6 +392,7 @@ def test_shutdown_stops_open_invocations() -> None:
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
     handler.tool.return_value.stop.assert_called_once_with()
     assert len(processor._invocations) == 0
+    assert not processor._agent_spans
 
 
 def test_tool_content_captured_from_span_end(
@@ -385,8 +542,10 @@ def test_state_uses_weakref_so_dropped_spans_are_collected() -> None:
     span: _Span | None = _Span(AgentSpanData(name="triage"))
     processor.on_span_start(span)
     assert len(processor._invocations) == 1
+    assert len(processor._agent_spans) == 1
 
     span = None  # drop the only strong reference
     gc.collect()
 
     assert len(processor._invocations) == 0
+    assert not processor._agent_spans
