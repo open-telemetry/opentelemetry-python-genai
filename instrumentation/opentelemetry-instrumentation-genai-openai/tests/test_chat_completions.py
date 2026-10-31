@@ -7,6 +7,10 @@ import json
 import logging
 import os
 
+try:
+    import httpx2 as httpx
+except ImportError:
+    import httpx
 import pytest
 from openai import (
     NOT_GIVEN,
@@ -2022,6 +2026,207 @@ def assert_no_invalid_type_warning(caplog):
     assert "Invalid type" not in caplog.text
 
 
+_REQUEST_TEST_COMPLETION = {
+    "id": "chatcmpl-generator-test",
+    "object": "chat.completion",
+    "created": 1234567890,
+    "model": "gpt-4o-mini",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hi!"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+    },
+}
+_GENERATOR_TEST_COMPLETION = _REQUEST_TEST_COMPLETION
+
+
+def test_chat_completion_messages_generator_reaches_sdk(
+    span_exporter, instrument_with_content
+):
+    """A one-shot ``messages`` iterator must still reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+    test_messages = [
+        {"role": "user", "content": "Hello from generator"},
+    ]
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-generator-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=(msg for msg in test_messages),
+    )
+
+    assert seen["body"]["messages"] == test_messages
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.input.messages" in spans[0].attributes
+    assert json.loads(spans[0].attributes["gen_ai.input.messages"]) == [
+        {
+            "role": "user",
+            "parts": [{"type": "text", "content": "Hello from generator"}],
+            "name": None,
+        }
+    ]
+
+
+def test_chat_completion_tools_generator_reaches_sdk(
+    span_exporter, instrument_with_content
+):
+    """A one-shot ``tools`` iterator must still reach the SDK.
+
+    Served by a mock transport rather than a cassette, because the assertion is
+    about the request body the SDK sends.
+    """
+    seen = {}
+    test_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-generator-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Weather?"}],
+        tools=(tool for tool in [test_tool]),
+    )
+
+    assert seen["body"]["tools"] == [test_tool]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.tool.definitions" in spans[0].attributes
+
+
+def test_chat_completion_generator_no_content_transparency(
+    span_exporter, instrument_no_content
+):
+    """When content capture is disabled, generator inputs must reach the SDK
+    unmaterialized by instrumentation and recorded spans must not contain content attributes."""
+    seen = {}
+    test_messages = [
+        {"role": "user", "content": "Hello without capture"},
+    ]
+    test_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-generator-no-content-test",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=(msg for msg in test_messages),
+        tools=(tool for tool in [test_tool]),
+    )
+
+    assert seen["body"]["messages"] == test_messages
+    assert seen["body"]["tools"] == [test_tool]
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert "gen_ai.input.messages" not in spans[0].attributes
+    assert "gen_ai.tool.definitions" not in spans[0].attributes
+
+
 def test_chat_completion_malformed_messages_reach_the_client(
     span_exporter, instrument_with_content
 ):
@@ -2039,3 +2244,179 @@ def test_chat_completion_malformed_messages_reach_the_client(
         == "openai.APIConnectionError"
     )
     assert not trace.get_current_span().get_span_context().is_valid
+
+
+def test_chat_completion_messages_generator_reusing_mutable_dict(
+    span_exporter, instrument_with_content
+):
+    """A generator that yields the same mutated dict must record each yielded value.
+
+    Capturing as the SDK consumes preserves what was actually sent; eager
+    list() materialization would record only the last mutation for every
+    message.
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_GENERATOR_TEST_COMPLETION,
+        )
+
+    def messages():
+        message = {"role": "user", "content": ""}
+        for text in ("first", "second"):
+            message["content"] = text
+            yield message
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(model="gpt-4o-mini", messages=messages())
+
+    spans = span_exporter.get_finished_spans()
+    (span,) = spans
+    recorded = json.loads(span.attributes["gen_ai.input.messages"])
+    assert len(recorded) == 2
+    assert [part["content"] for part in recorded[0]["parts"]] == ["first"]
+    assert [part["content"] for part in recorded[1]["parts"]] == ["second"]
+
+
+def test_chat_completion_nested_content_iterator_captured(
+    span_exporter, instrument_with_content
+):
+    """An iterator nested inside a message dict is captured per yielded value."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_GENERATOR_TEST_COMPLETION,
+        )
+
+    def content():
+        yield "a"
+        yield "b"
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": list(content())},
+        ],
+    )
+
+    assert seen["body"]["messages"][0]["content"] == ["a", "b"]
+    spans = span_exporter.get_finished_spans()
+    (span,) = spans
+    recorded = json.loads(span.attributes["gen_ai.input.messages"])
+    assert [part["content"] for part in recorded[0]["parts"]] == ["a", "b"]
+
+
+def test_chat_completion_empty_messages_generator(
+    span_exporter, instrument_with_content
+):
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_GENERATOR_TEST_COMPLETION,
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=iter([]),
+    )
+
+    spans = span_exporter.get_finished_spans()
+    (span,) = spans
+    assert "gen_ai.input.messages" not in span.attributes
+
+
+def test_chat_completion_generator_sdk_error_records_captured_values(
+    span_exporter, instrument_with_content
+):
+    """Values the SDK consumed before failing are still recorded."""
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_GENERATOR_TEST_COMPLETION,
+        )
+
+    def messages():
+        yield {"role": "user", "content": "before the failure"}
+        raise RuntimeError("generator exploded")
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    with pytest.raises(RuntimeError, match="generator exploded"):
+        client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages(),
+        )
+
+    spans = span_exporter.get_finished_spans()
+    (span,) = spans
+    recorded = json.loads(span.attributes["gen_ai.input.messages"])
+    assert [part["content"] for part in recorded[0]["parts"]] == [
+        "before the failure"
+    ]
+
+
+def test_chat_completion_generator_no_capture_content_not_wrapped(
+    span_exporter, instrument_no_content
+):
+    """With capture off, the SDK's own consumption drives the request.
+
+    The request body already fails for an empty iterable; an instrumentation
+    that eagerly wrapped or consumed it could not be distinguished by the
+    body, so the check is that the caller's iterator is left to be iterated by
+    the OpenAI SDK itself (which rejects iterables it expects as lists the
+    same as without instrumentation).
+    """
+    seen = {}
+
+    def respond(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_GENERATOR_TEST_COMPLETION,
+        )
+
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+
+    def messages():
+        seen["iterated"] = True
+        yield {"role": "user", "content": "pass through"}
+
+    client.chat.completions.create(model="gpt-4o-mini", messages=messages())
+
+    assert seen["iterated"] is True
+    spans = span_exporter.get_finished_spans()
+    (span,) = spans
+    assert "gen_ai.input.messages" not in span.attributes
