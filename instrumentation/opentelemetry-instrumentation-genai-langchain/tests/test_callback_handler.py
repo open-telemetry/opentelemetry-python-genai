@@ -51,6 +51,9 @@ from tests._api import (
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.genai.langchain import LangChainInstrumentor
+from opentelemetry.instrumentation.genai.langchain.agent_context import (
+    _PendingAgent,
+)
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
     _document_to_retrieval_document,
@@ -72,6 +75,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -118,6 +122,38 @@ def _make_handler():
 
 def _run_id():
     return uuid.uuid4()
+
+
+@pytest.mark.parametrize("callback", ["on_llm_start", "on_chat_model_start"])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("native_agent", [False, True])
+def test_model_start_counts_without_request_model(
+    callback: str, enabled: bool, native_agent: bool
+) -> None:
+    handler, telemetry, _, agent = _make_handler()
+    parent_run_id = _run_id()
+    with mock.patch(
+        "opentelemetry.instrumentation.genai.langchain.callback_handler.claim_agent",
+        return_value=_PendingAgent("math_agent") if native_agent else None,
+    ):
+        handler.on_chain_start(
+            {"name": "math_agent"}, {}, run_id=parent_run_id
+        )
+    initial_count = 0 if native_agent else None
+    assert agent.inference_calls == initial_count
+    assert agent.tool_calls == initial_count
+    handler._enabled = enabled
+
+    for _ in range(2):
+        getattr(handler, callback)(
+            {}, [], run_id=_run_id(), parent_run_id=parent_run_id
+        )
+
+    assert agent.inference_calls == (
+        2 if native_agent and enabled else initial_count
+    )
+    assert agent.tool_calls == initial_count
+    telemetry.inference.assert_not_called()
 
 
 class TestExtractPromptContext:
@@ -293,6 +329,7 @@ async def test_chain_classification_and_completion(
     metadata: dict[str, object],
     expected_name: str,
     span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     content_capture: ContentCapturingMode,
     instrument_langchain: None,
 ) -> None:
@@ -322,6 +359,17 @@ async def test_chain_classification_and_completion(
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metric_names = {
+        metric.name
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    assert "gen_ai.invoke_agent.inference_calls" not in metric_names
+    assert "gen_ai.invoke_agent.tool_calls" not in metric_names
 
 
 @pytest.mark.asyncio

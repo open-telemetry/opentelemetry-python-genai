@@ -744,6 +744,7 @@ def test_uninstrument_restores_execution_methods(
         for method in (
             "on_chain_start",
             "on_chat_model_start",
+            "on_llm_start",
             "on_tool_start",
             "on_retriever_start",
         )
@@ -803,6 +804,7 @@ class _Recorder(BaseCallbackHandler):
         self.starts += 1
 
     on_chat_model_start = on_chain_start
+    on_llm_start = on_chain_start
     on_tool_start = on_chain_start
     on_retriever_start = on_chain_start
 
@@ -962,7 +964,7 @@ async def test_reinstrument_replaces_stale_callbacks(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    "operation", ["chain", "chat_model", "tool", "retriever"]
+    "operation", ["chain", "chat_model", "llm", "tool", "retriever"]
 )
 @pytest.mark.parametrize(
     "recorder_type",
@@ -1002,6 +1004,11 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
                 ),
             ),
         ),
+        "llm": (
+            ({"name": "LLM"}, ["hello"]),
+            "on_llm_end",
+            (LLMResult(generations=[]),),
+        ),
         "tool": (({"name": "echo"}, "hello"), "on_tool_end", ("answer",)),
         "retriever": (
             ({"name": "lookup"}, "hello"),
@@ -1016,7 +1023,7 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
         )
         if asynchronous:
             result = await result
-        return result[0] if operation == "chat_model" else result
+        return result[0] if operation in ("chat_model", "llm") else result
 
     async def finish(run, error=False):
         method = end_method.replace("_end", "_error") if error else end_method
@@ -1059,7 +1066,9 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
         ):
             for _ in range(2):
                 await finish(await start())
-            assert len(new_exporter.get_finished_spans()) == 2
+            assert len(new_exporter.get_finished_spans()) == (
+                0 if operation == "llm" else 2
+            )
             assert not span_exporter.get_finished_spans()
             assert recorder.starts == 4
             assert new_hook.on_completion.call_count == 2 * hook_calls_per_run
@@ -1075,10 +1084,13 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
         await finish(inflight, error=fail)
         new_provider.shutdown()
 
-    (span,) = span_exporter.get_finished_spans()
-    assert span.status.status_code == (
-        StatusCode.ERROR if fail else StatusCode.UNSET
-    )
+    if operation == "llm":
+        assert not span_exporter.get_finished_spans()
+    else:
+        (span,) = span_exporter.get_finished_spans()
+        assert span.status.status_code == (
+            StatusCode.ERROR if fail else StatusCode.UNSET
+        )
     assert old_hook.on_completion.call_count == hook_calls_per_run
     assert not old_handler._invocation_manager._invocations
 

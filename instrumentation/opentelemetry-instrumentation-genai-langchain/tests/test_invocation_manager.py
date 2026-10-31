@@ -11,7 +11,12 @@ from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _InvocationManager,
     _PromptContext,
 )
-from opentelemetry.util.genai.invocation import InferenceInvocation
+from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
+    LocalAgentInvocation,
+    RetrievalInvocation,
+    ToolInvocation,
+)
 
 
 @pytest.fixture
@@ -88,6 +93,66 @@ def test_add_invocation_state_with_nonexistent_parent(
 def test_get_nonexistent_invocation(invocation_manager):
     nonexistent_id = uuid.uuid4()
     assert invocation_manager.get_invocation(nonexistent_id) is None
+
+
+@pytest.mark.parametrize(
+    "boundary_type",
+    [None, InferenceInvocation, ToolInvocation, RetrievalInvocation],
+)
+@pytest.mark.parametrize("inner_agent", [False, True])
+@pytest.mark.parametrize("tool_call", [False, True])
+def test_record_agent_call_respects_ownership(
+    invocation_manager: _InvocationManager,
+    boundary_type: type | None,
+    inner_agent: bool,
+    tool_call: bool,
+) -> None:
+    outer_id, boundary_id, inner_id, child_id = (
+        uuid.uuid4() for _ in range(4)
+    )
+    outer = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    inner = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    invocation_manager.add_invocation_state(outer_id, None, outer)
+    boundary = mock.Mock(spec=boundary_type) if boundary_type else None
+    invocation_manager.add_invocation_state(boundary_id, outer_id, boundary)
+    invocation_manager.add_invocation_state(
+        inner_id, boundary_id, inner if inner_agent else None
+    )
+    invocation_manager.add_invocation_state(child_id, inner_id, None)
+
+    invocation_manager.record_agent_call(child_id, tool_call=tool_call)
+
+    outer_count = int(not inner_agent and boundary_type is None)
+    assert outer.inference_calls == (0 if tool_call else outer_count)
+    assert outer.tool_calls == (outer_count if tool_call else 0)
+    assert inner.inference_calls == (int(inner_agent) if not tool_call else 0)
+    assert inner.tool_calls == (int(inner_agent) if tool_call else 0)
+
+
+@pytest.mark.parametrize("tool_call", [False, True])
+def test_record_agent_call_leaves_untracked_counts_unset(
+    invocation_manager: _InvocationManager,
+    tool_call: bool,
+) -> None:
+    outer_id, custom_id = uuid.uuid4(), uuid.uuid4()
+    outer = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    custom = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=None, tool_calls=None
+    )
+    invocation_manager.add_invocation_state(outer_id, None, outer)
+    invocation_manager.add_invocation_state(custom_id, outer_id, custom)
+    for parent_id in (custom_id, uuid.uuid4(), None):
+        invocation_manager.record_agent_call(parent_id, tool_call=tool_call)
+    assert custom.inference_calls is None
+    assert custom.tool_calls is None
+    assert outer.inference_calls == 0
+    assert outer.tool_calls == 0
 
 
 def test_delete_invocation_state(invocation_manager, mock_invocation):

@@ -406,6 +406,13 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 run_id, parent_run_id, None
             )
 
+        invocation = self._invocation_manager.get_invocation(run_id)
+        if isinstance(invocation, LocalAgentInvocation):
+            # Without a native graph boundary, missing callbacks do not prove zero.
+            initial_count = 0 if agent_announcement is not None else None
+            invocation.inference_calls = initial_count
+            invocation.tool_calls = initial_count
+
         if prompt_context := _extract_prompt_context(
             serialized,
             inputs,
@@ -456,6 +463,18 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         invocation.fail(error)
         self._invocation_manager.delete_invocation_state(run_id=run_id)
 
+    def on_llm_start(
+        self,
+        serialized: dict[str, Any],
+        prompts: list[str],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if self._enabled:
+            self._invocation_manager.record_agent_call(parent_run_id)
+
     def on_chat_model_start(
         self,
         serialized: dict[str, Any],
@@ -469,6 +488,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> None:
         if not self._enabled:
             return
+        self._invocation_manager.record_agent_call(parent_run_id)
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -833,6 +853,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> None:
         if not self._enabled:
             return
+        self._invocation_manager.record_agent_call(
+            parent_run_id, tool_call=True
+        )
         name = "unknown"
         description = None
         if serialized is not None:

@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import Tool, tool
 from langchain_core.utils.function_calling import convert_to_openai_function
+from langgraph.prebuilt import ToolNode, create_react_agent
 from tests._api import FakeChatModel as _ToolChatModel
 from tests._api import invoke as _invoke
 
@@ -29,6 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -606,6 +608,102 @@ async def test_tool_error(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize(
+    ("failure", "use_tool"),
+    [(None, False), (None, True), ("model", True), ("tool", True)],
+)
+async def test_native_agent_call_counts(
+    asynchronous: bool,
+    streaming: bool,
+    failure: str | None,
+    use_tool: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    error = RuntimeError("agent call failed")
+
+    @tool
+    def calculate() -> str:
+        """Return the calculation result."""
+        if failure == "tool":
+            raise error
+        return "42"
+
+    model = _ToolChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "calculate", "args": {}, "id": "1"}],
+            ),
+            AIMessage(content="42"),
+        ]
+        if use_tool
+        else [AIMessage(content="42")],
+        error=error if failure == "model" else None,
+    )
+    agent = create_react_agent(
+        model, ToolNode([calculate], handle_tool_errors=False)
+    )
+    inputs = {"messages": [("user", "calculate")]}
+
+    async def run() -> None:
+        if not streaming:
+            await _invoke(agent, inputs, asynchronous)
+        elif asynchronous:
+            async for _ in agent.astream(inputs):
+                pass
+        else:
+            list(agent.stream(inputs))
+
+    if failure:
+        with pytest.raises(RuntimeError) as raised:
+            await run()
+        assert raised.value is error
+    else:
+        await run()
+    (agent_span,) = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.parent is None
+        and span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
+        == "invoke_agent"
+    ]
+    assert agent_span.status.status_code == (
+        StatusCode.ERROR if failure else StatusCode.UNSET
+    )
+    if failure:
+        assert (
+            agent_span.attributes[error_attributes.ERROR_TYPE]
+            == "RuntimeError"
+        )
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    for name, total in (
+        (
+            "gen_ai.invoke_agent.inference_calls",
+            1 if failure or not use_tool else 2,
+        ),
+        (
+            "gen_ai.invoke_agent.tool_calls",
+            int(use_tool and failure != "model"),
+        ),
+    ):
+        (point,) = metrics[name].data.data_points
+        assert point.count == 1
+        assert type(point.sum) is int
+        assert point.sum == total
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_tool_parents_to_workflow_instead_of_ambient_span(
     asynchronous: bool,
     tracer_provider: TracerProvider,
@@ -660,6 +758,7 @@ async def test_tool_carries_nearest_agent_name(
     asynchronous: bool,
     nested: bool,
     span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     instrument_langchain: None,
 ) -> None:
     def calculate(
@@ -723,6 +822,17 @@ async def test_tool_carries_nearest_agent_name(
         assert (
             specialist_span.parent.span_id == coordinator_span.context.span_id
         )
+
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    assert "gen_ai.invoke_agent.inference_calls" not in metrics
+    assert "gen_ai.invoke_agent.tool_calls" not in metrics
 
 
 def _model_response(
