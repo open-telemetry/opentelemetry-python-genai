@@ -1,0 +1,1 @@
+Do not consume generator message ``content`` before the SDK call, and capture ``image_url`` parts as image parts.
