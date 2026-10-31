@@ -133,8 +133,10 @@ def test_create_agent_root(
     expected_span_name = (
         f"invoke_agent {expected_name}" if expected_name else "invoke_agent"
     )
-    assert [span.name for span in spans] == [expected_span_name]
-    agent_span = spans[0]
+    assert [span.name for span in spans] == ["chat", expected_span_name]
+    chat_span, agent_span = spans
+    assert chat_span.parent is not None
+    assert chat_span.parent.span_id == agent_span.context.span_id
     assert agent_span.parent is None
     if expected_name:
         assert agent_span.attributes["gen_ai.agent.name"] == expected_name
@@ -155,9 +157,15 @@ def test_create_agent_stream_root(
         pass
 
     spans = span_exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["invoke_agent stream_agent"]
-    assert spans[0].parent is None
-    assert spans[0].attributes["gen_ai.agent.name"] == "stream_agent"
+    assert [span.name for span in spans] == [
+        "chat",
+        "invoke_agent stream_agent",
+    ]
+    chat_span, agent_span = spans
+    assert chat_span.parent is not None
+    assert chat_span.parent.span_id == agent_span.context.span_id
+    assert agent_span.parent is None
+    assert agent_span.attributes["gen_ai.agent.name"] == "stream_agent"
     assert agent_context._pending.get() == ()
 
 
@@ -175,9 +183,15 @@ async def test_create_agent_astream_root(
         pass
 
     spans = span_exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["invoke_agent astream_agent"]
-    assert spans[0].parent is None
-    assert spans[0].attributes["gen_ai.agent.name"] == "astream_agent"
+    assert [span.name for span in spans] == [
+        "chat",
+        "invoke_agent astream_agent",
+    ]
+    chat_span, agent_span = spans
+    assert chat_span.parent is not None
+    assert chat_span.parent.span_id == agent_span.context.span_id
+    assert agent_span.parent is None
+    assert agent_span.attributes["gen_ai.agent.name"] == "astream_agent"
     assert agent_context._pending.get() == ()
 
 
@@ -282,8 +296,8 @@ def test_unnamed_create_agent_has_no_placeholder_name(
     ).invoke({"messages": [("user", "hi")]})
 
     spans = span_exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["invoke_agent"]
-    assert "gen_ai.agent.name" not in spans[0].attributes
+    assert [span.name for span in spans] == ["chat", "invoke_agent"]
+    assert "gen_ai.agent.name" not in spans[-1].attributes
 
 
 def test_preimported_create_react_agent_is_classified_at_runtime(
@@ -296,8 +310,11 @@ def test_preimported_create_react_agent_is_classified_at_runtime(
     ).invoke({"messages": [("user", "hi")]})
 
     spans = span_exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["invoke_agent react_agent"]
-    assert spans[0].attributes["gen_ai.agent.name"] == "react_agent"
+    assert [span.name for span in spans] == [
+        "chat",
+        "invoke_agent react_agent",
+    ]
+    assert spans[-1].attributes["gen_ai.agent.name"] == "react_agent"
 
 
 def test_create_agent_name_wins_over_run_name_override(
@@ -316,10 +333,12 @@ def test_create_agent_name_wins_over_run_name_override(
 
     spans = span_exporter.get_finished_spans()
     assert [span.name for span in spans] == [
+        "chat",
         "invoke_agent planner_agent",
         "invoke_workflow planner",
     ]
-    agent_span, workflow_span = spans
+    chat_span, agent_span, workflow_span = spans
+    assert chat_span.parent.span_id == agent_span.context.span_id
     assert agent_span.parent.span_id == workflow_span.context.span_id
     assert workflow_span.parent is None
     assert agent_span.attributes["gen_ai.agent.name"] == "planner_agent"
@@ -345,13 +364,15 @@ def test_create_agent_internal_nodes_are_not_agents(
 
     spans = span_exporter.get_finished_spans()
     assert [span.name for span in spans] == [
+        "chat",
         "execute_tool noop",
+        "chat",
         "invoke_agent agent",
     ]
     agent_span = spans[-1]
     assert agent_span.parent is None
     assert agent_span.attributes["gen_ai.agent.name"] == "agent"
-    tool_span = spans[0]
+    tool_span = spans[1]
     assert tool_span.parent.span_id == agent_span.context.span_id
     assert tool_span.attributes["gen_ai.agent.name"] == "agent"
 
@@ -499,6 +520,9 @@ def test_nested_agent_emits_no_extra_agent_spans(
 
     spans = span_exporter.get_finished_spans()
     assert sorted(span.name for span in spans) == [
+        "chat",
+        "chat",
+        "chat",
         "execute_tool delegate",
         "invoke_agent inner",
         "invoke_agent math_agent",

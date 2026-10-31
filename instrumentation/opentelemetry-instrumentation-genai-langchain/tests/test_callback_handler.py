@@ -14,6 +14,7 @@ from unittest import mock
 import langchain.agents
 import pytest
 from langchain_core.documents import Document
+from langchain_core.language_models.fake import FakeListLLM
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -118,6 +119,66 @@ def _make_handler():
 
 def _run_id():
     return uuid.uuid4()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_text_completion_emits_inference_span(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    model = FakeListLLM(responses=["completed text"]).with_config(
+        metadata={
+            "ls_model_name": "completion-model",
+            "ls_provider": "test-provider",
+        }
+    )
+
+    assert (
+        await invoke(model, "complete this", asynchronous) == "completed text"
+    )
+
+    span = finished_span(span_exporter, "text_completion completion-model")
+    attrs = span.attributes
+    assert attrs[GenAI.GEN_AI_OPERATION_NAME] == "text_completion"
+    assert attrs[GenAI.GEN_AI_PROVIDER_NAME] == "fakelist"
+    assert attrs[GenAI.GEN_AI_REQUEST_MODEL] == "completion-model"
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (input_message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert input_message["role"] == "user"
+        assert input_message["parts"] == [
+            {"type": "text", "content": "complete this"}
+        ]
+        (output_message,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert output_message["role"] == "assistant"
+        assert output_message["parts"] == [
+            {"type": "text", "content": "completed text"}
+        ]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+def test_chat_without_model_name_still_starts_inference() -> None:
+    handler, telemetry, _, _ = _make_handler()
+    telemetry.should_capture_content.return_value = False
+    run_id = _run_id()
+
+    handler.on_chat_model_start(
+        serialized={"name": "CustomChatModel"},
+        messages=[[HumanMessage(content="hello")]],
+        run_id=run_id,
+    )
+
+    telemetry.inference.assert_called_once()
+    assert telemetry.inference.call_args.kwargs["request_model"] is None
+    assert telemetry.inference.call_args.kwargs["operation_name"] is None
+    assert (
+        handler._invocation_manager.get_invocation(run_id)
+        is telemetry.inference.return_value
+    )
 
 
 class TestExtractPromptContext:
@@ -1278,7 +1339,7 @@ class TestPromptContextLifecycle:
             is None
         )
 
-    def test_unsupported_model_does_not_consume_prompt_context(self):
+    def test_model_without_name_consumes_prompt_context(self):
         handler, telemetry, _, _ = _make_handler()
         telemetry.should_capture_content.return_value = True
         sequence_id = _run_id()
@@ -1299,21 +1360,10 @@ class TestPromptContextLifecycle:
         handler.on_chain_end(outputs={"text": "Hello Ada"}, run_id=prompt_id)
 
         handler.on_chat_model_start(
-            serialized={"name": "UnsupportedModel"},
+            serialized={"name": "CustomChatModel"},
             messages=[[HumanMessage(content="Hello Ada")]],
             run_id=_run_id(),
             parent_run_id=sequence_id,
-        )
-
-        telemetry.inference.assert_not_called()
-
-        handler.on_chat_model_start(
-            serialized={"name": "ChatOpenAI"},
-            messages=[[HumanMessage(content="Hello Ada")]],
-            run_id=_run_id(),
-            parent_run_id=sequence_id,
-            metadata={"ls_provider": "openai"},
-            invocation_params={"model_name": "gpt-4"},
         )
 
         invocation = telemetry.inference.return_value

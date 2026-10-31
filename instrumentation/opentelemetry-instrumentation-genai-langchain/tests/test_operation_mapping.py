@@ -300,8 +300,13 @@ class TestClassifyChainRun:
         ).invoke({"messages": [("user", "hi")]})
 
         spans = span_exporter.get_finished_spans()
-        assert [span.name for span in spans] == ["invoke_agent my_agent"]
-        agent_span = spans[0]
+        assert [span.name for span in spans] == [
+            "chat",
+            "invoke_agent my_agent",
+        ]
+        chat_span, agent_span = spans
+        assert chat_span.parent is not None
+        assert chat_span.parent.span_id == agent_span.context.span_id
         assert agent_span.parent is None
         assert agent_span.attributes["gen_ai.agent.name"] == "my_agent"
 
@@ -339,11 +344,16 @@ class TestClassifyChainRun:
 
         spans = span_exporter.get_finished_spans()
         assert [span.name for span in spans] == [
+            "chat",
+            "chat",
             "invoke_agent inner_agent",
             "execute_tool delegate",
+            "chat",
             "invoke_agent outer_agent",
         ]
-        inner_agent, tool_span, outer_agent = spans
+        inner_agent = spans[2]
+        tool_span = spans[3]
+        outer_agent = spans[5]
         assert outer_agent.parent is None
         assert tool_span.parent.span_id == outer_agent.context.span_id
         assert inner_agent.parent.span_id == tool_span.context.span_id
@@ -384,11 +394,16 @@ class TestClassifyChainRun:
 
         spans = span_exporter.get_finished_spans()
         assert [span.name for span in spans] == [
+            "chat",
+            "chat",
             "invoke_agent",
             "execute_tool delegate",
+            "chat",
             "invoke_agent outer_agent",
         ]
-        inner_agent, tool_span, outer_agent = spans
+        inner_agent = spans[2]
+        tool_span = spans[3]
+        outer_agent = spans[5]
         assert outer_agent.parent is None
         assert tool_span.parent.span_id == outer_agent.context.span_id
         assert inner_agent.parent.span_id == tool_span.context.span_id
