@@ -220,6 +220,27 @@ class StreamingTestCase(TestCase):
             span.attributes["gen_ai.usage.reasoning.output_tokens"], 100
         )
 
+    def test_thinking_tokens_added_to_last_candidates_count(self):
+        # The common shape: thought-only chunks, then chunks that carry both
+        # counts. output_tokens is candidates + thoughts from the last chunk.
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=None, thinking_tokens=40
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=5, thinking_tokens=100
+        )
+        self.configure_valid_response(
+            input_tokens=3, output_tokens=12, thinking_tokens=100
+        )
+
+        self.generate_content(model="gemini-2.0-flash", contents="Some input")
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 112)
+        self.assertEqual(
+            span.attributes["gen_ai.usage.reasoning.output_tokens"], 100
+        )
+
     def test_modality_token_counts_are_replaced_not_merged(self):
         # Cumulative counts are returned on each response, so the last
         # breakdown wins outright and a modality that drops out of it must not
