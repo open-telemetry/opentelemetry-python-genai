@@ -1,0 +1,1 @@
+Forward agent stream closure through the announcement wrappers so early close releases the underlying stream and finalizes its telemetry.
