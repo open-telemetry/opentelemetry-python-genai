@@ -984,7 +984,9 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
     old_hook = mock.Mock()
     new_hook = mock.Mock()
     manager_type = AsyncCallbackManager if asynchronous else CallbackManager
-    hook_calls_per_run = 1 if operation in ("chain", "chat_model") else 0
+    hook_calls_per_run = (
+        1 if operation in ("chain", "chat_model", "tool") else 0
+    )
     start_args, end_method, end_args = {
         "chain": (
             ({"name": "LangGraph", "id": ["langgraph"]}, {}),
