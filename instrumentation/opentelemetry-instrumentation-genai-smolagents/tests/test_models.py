@@ -44,7 +44,7 @@ from opentelemetry.semconv.attributes import (
     error_attributes,
     server_attributes,
 )
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import INVALID_SPAN, StatusCode, get_current_span
 from opentelemetry.util.genai.types import BlobPart, TextPart, UriPart
 
 from .test_utils import (
@@ -650,6 +650,45 @@ def test_generate_stream_is_lazy_and_records_the_drained_response(
     assert outputs[0]["parts"] == [{"type": "text", "content": "In Paris"}]
     # Deltas carry no finish reason, and "stop" would hide a truncation.
     assert attr(span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) is None
+
+
+def test_generate_stream_is_current_only_while_read(
+    instrument_with_content, span_exporter, tracer_provider
+) -> None:
+    model = transformers_model(stream_chunks=["In ", "Paris"])
+    stream = model.generate_stream(messages=MESSAGES)
+    assert get_current_span() is INVALID_SPAN
+
+    next(stream)
+    assert get_current_span() is INVALID_SPAN
+    with tracer_provider.get_tracer("test").start_as_current_span("caller"):
+        pass
+    list(stream)
+
+    (caller,) = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name == "caller"
+    ]
+    assert caller.parent is None
+
+
+def test_generate_stream_reads_under_the_chat_span(
+    instrument_with_content, span_exporter
+) -> None:
+    model = transformers_model()
+    seen = []
+
+    def chunks():
+        for text in ["In ", "Paris"]:
+            seen.append(get_current_span().get_span_context().span_id)
+            yield text
+
+    model.streamer = chunks()
+    list(model.generate_stream(messages=MESSAGES))
+
+    (chat,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
+    assert seen == [chat.context.span_id] * 2
 
 
 def test_generate_stream_stays_a_generator(
