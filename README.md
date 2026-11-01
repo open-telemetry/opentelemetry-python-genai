@@ -23,7 +23,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 | [opentelemetry-instrumentation-genai-openai-agents](./instrumentation/opentelemetry-instrumentation-genai-openai-agents) | openai-agents >= 0.3.3, < 1 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-openai-agents/) |
 | [opentelemetry-instrumentation-genai-portkey](./instrumentation/opentelemetry-instrumentation-genai-portkey) | portkey-ai >= 1.0.0, < 3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-portkey/) |
 | [opentelemetry-instrumentation-genai-qwen-agent](./instrumentation/opentelemetry-instrumentation-genai-qwen-agent) | qwen-agent >= 0.0.20, < 1 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwen-agent/) |
-| [opentelemetry-instrumentation-genai-qwenpaw](./instrumentation/opentelemetry-instrumentation-genai-qwenpaw) | qwenpaw >= 1.1.0, < 2.0.0; python_version < '3.14' | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwenpaw/) |
+| [opentelemetry-instrumentation-genai-qwenpaw](./instrumentation/opentelemetry-instrumentation-genai-qwenpaw) | qwenpaw >= 1.1.0, < 3.0.0; python_version < '3.14' | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-qwenpaw/) |
 | [opentelemetry-instrumentation-genai-smolagents](./instrumentation/opentelemetry-instrumentation-genai-smolagents) | smolagents >= 1.24.0, < 2 | [1.2b0](https://pypi.org/project/opentelemetry-instrumentation-genai-smolagents/) |
 | [opentelemetry-instrumentation-google-genai](./instrumentation/opentelemetry-instrumentation-google-genai) | google-genai >= 1.32.0, <3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-google-genai/) |
 
