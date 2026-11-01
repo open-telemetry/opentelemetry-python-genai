@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+from collections.abc import Iterable, Iterator
+from types import GeneratorType, SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,6 +32,58 @@ from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode
 
 _has_async_portkey = AsyncPortkey is not None
+
+
+_sent: list[Any] = []
+_sent_tools: list[Any] = []
+
+
+def _consume_chat_request(*args: Any, **kwargs: Any) -> None:
+    body = kwargs.get("body") or kwargs.get("json")
+    if not isinstance(body, dict):
+        if len(args) > 1 and isinstance(args[1], dict):
+            body = args[1]
+        else:
+            body = kwargs
+    messages = body.get("messages")
+    if (
+        messages is not None
+        and isinstance(messages, Iterable)
+        and not isinstance(messages, (str, bytes))
+    ):
+        consumed_messages: list[Any] = []
+        for msg in list(messages):
+            if isinstance(msg, dict):
+                m = dict(msg)
+                content = m.get("content")
+                if (
+                    content is not None
+                    and isinstance(content, Iterable)
+                    and not isinstance(content, (str, bytes))
+                ):
+                    m["content"] = list(content)
+                tool_calls = m.get("tool_calls")
+                if (
+                    tool_calls is not None
+                    and isinstance(tool_calls, Iterable)
+                    and not isinstance(tool_calls, (str, bytes))
+                ):
+                    m["tool_calls"] = list(tool_calls)
+                consumed_messages.append(m)
+            else:
+                consumed_messages.append(msg)
+        _sent.append(consumed_messages)
+    tools = body.get("tools")
+    if tools is None:
+        extra_body = body.get("extra_body")
+        if isinstance(extra_body, dict):
+            tools = extra_body.get("tools")
+    if (
+        tools is not None
+        and isinstance(tools, Iterable)
+        and not isinstance(tools, (str, bytes))
+    ):
+        _sent_tools.append(list(tools))
 
 
 def _create_mock_chat_completion(
@@ -112,13 +166,23 @@ def _setup_mock_chat(client: Portkey, mock_resp: SimpleNamespace) -> None:
             "total_tokens": mock_resp.usage.total_tokens,
         },
     }
+
+    def mock_create(*args: Any, **kwargs: Any) -> MagicMock:
+        _consume_chat_request(*args, **kwargs)
+        return mock_raw
+
     if hasattr(client.chat.completions, "openai_client"):
         client.chat.completions.openai_client = MagicMock()
         mock_raw = MagicMock()
         mock_raw.text = json.dumps(raw_dict)
         mock_raw.headers = {}
-        client.chat.completions.openai_client.with_raw_response.chat.completions.create.return_value = mock_raw
-    client.chat.completions._post = MagicMock(return_value=mock_resp)
+        client.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = mock_create
+
+    def mock_post(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        _consume_chat_request(*args, **kwargs)
+        return mock_resp
+
+    client.chat.completions._post = MagicMock(side_effect=mock_post)
 
 
 def _setup_async_mock_chat(
@@ -144,15 +208,37 @@ def _setup_async_mock_chat(
             "total_tokens": mock_resp.usage.total_tokens,
         },
     }
+
+    async def async_mock_create(*args: Any, **kwargs: Any) -> MagicMock:
+        _consume_chat_request(*args, **kwargs)
+        return mock_raw
+
     if hasattr(client.chat.completions, "openai_client"):
         client.chat.completions.openai_client = MagicMock()
         mock_raw = MagicMock()
         mock_raw.text = json.dumps(raw_dict)
         mock_raw.headers = {}
         client.chat.completions.openai_client.with_raw_response.chat.completions.create = AsyncMock(
-            return_value=mock_raw
+            side_effect=async_mock_create
         )
-    client.chat.completions._post = AsyncMock(return_value=mock_resp)
+
+    async def async_mock_post(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        _consume_chat_request(*args, **kwargs)
+        return mock_resp
+
+    client.chat.completions._post = AsyncMock(side_effect=async_mock_post)
+
+
+def _sent_messages(client: Any) -> Any:
+    completions = client.chat.completions
+    if hasattr(completions, "openai_client"):
+        create = (
+            completions.openai_client.with_raw_response.chat.completions.create
+        )
+        return create.call_args.kwargs["messages"]
+    call_args = completions._post.call_args
+    body = call_args.kwargs.get("body")
+    return (body if isinstance(body, dict) else call_args.kwargs)["messages"]
 
 
 def test_sync_chat_completions_basic(
@@ -637,6 +723,826 @@ def test_chat_completions_dict_and_multipart_content(
             {"content": "text part", "type": "text"},
             {"content": "nested dict part", "type": "text"},
         ]
+
+
+def test_chat_completions_generator_content_captured(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        generator_content = (
+            {"type": "text", "text": f"item {i}"} for i in range(2)
+        )
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": generator_content,
+                }
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        assert input_messages[0]["parts"] == [
+            {"content": "item 0", "type": "text"},
+            {"content": "item 1", "type": "text"},
+        ]
+
+        received_messages = _sent_messages(p)
+        received_content = received_messages[0]["content"]
+        assert not isinstance(received_content, list)
+        assert isinstance(received_content, Iterator)
+        assert _sent[-1][0]["content"] == [
+            {"type": "text", "text": "item 0"},
+            {"type": "text", "text": "item 1"},
+        ]
+
+
+def test_chat_completions_generator_messages_and_tools_captured(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        raw_msgs = [{"role": "user", "content": "Hello"}]
+        raw_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        p.chat.completions.create(
+            messages=(m for m in raw_msgs),
+            tools=(t for t in raw_tools),
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        assert input_messages[0]["parts"] == [
+            {"content": "Hello", "type": "text"}
+        ]
+
+        tool_defs = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+        )
+        assert len(tool_defs) == 1
+        assert tool_defs[0]["name"] == "get_weather"
+
+        # Check what the mocked SDK received: messages and tools should NOT be lists,
+        # but iterators wrapped by IteratorCapture.
+        received_messages = _sent_messages(p)
+        assert not isinstance(received_messages, list)
+        assert isinstance(received_messages, Iterator)
+        assert _sent[-1] == raw_msgs
+
+        if hasattr(p.chat.completions, "openai_client"):
+            call_args = p.chat.completions.openai_client.with_raw_response.chat.completions.create.call_args
+            extra_body = call_args.kwargs.get("extra_body", {})
+            received_tools = extra_body.get("tools")
+        else:
+            call_args = p.chat.completions._post.call_args
+            body = (
+                call_args.kwargs.get("body")
+                if isinstance(call_args.kwargs.get("body"), dict)
+                else call_args.kwargs
+            )
+            received_tools = body.get("tools")
+        assert not isinstance(received_tools, list)
+        assert isinstance(received_tools, Iterator)
+        assert _sent_tools[-1] == raw_tools
+
+
+def test_chat_completions_generator_tools_not_consumed_without_content_capture(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        raw_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        tools_consumed_before_sdk = False
+
+        def tracking_tools_gen():
+            nonlocal tools_consumed_before_sdk
+            for t in raw_tools:
+                tools_consumed_before_sdk = True
+                yield t
+
+        sdk_received_tools_generator = False
+
+        def check_sdk_tools(*args: Any, **kwargs: Any) -> None:
+            nonlocal sdk_received_tools_generator
+            body = (
+                kwargs.get("body")
+                if isinstance(kwargs.get("body"), dict)
+                else kwargs
+            )
+            tools = body.get("tools")
+            if tools is None and isinstance(body.get("extra_body"), dict):
+                tools = body["extra_body"].get("tools")
+            if (
+                isinstance(tools, GeneratorType)
+                and not tools_consumed_before_sdk
+            ):
+                sdk_received_tools_generator = True
+
+        if hasattr(p.chat.completions, "openai_client"):
+            original_side_effect = p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect
+
+            def check_sdk_entry(*args: Any, **kwargs: Any) -> Any:
+                check_sdk_tools(*args, **kwargs)
+                return original_side_effect(*args, **kwargs)
+
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = check_sdk_entry
+        else:
+            original_post_side_effect = p.chat.completions._post.side_effect
+
+            def check_post_entry(*args: Any, **kwargs: Any) -> Any:
+                check_sdk_tools(*args, **kwargs)
+                return original_post_side_effect(*args, **kwargs)
+
+            p.chat.completions._post.side_effect = check_post_entry
+
+        p.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=tracking_tools_gen(),
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert (
+            GenAIAttributes.GEN_AI_TOOL_DEFINITIONS not in spans[0].attributes
+        )
+        assert sdk_received_tools_generator
+
+
+def test_chat_completions_nested_generators_captured(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        raw_parts = [
+            {"type": "text", "text": "Hello, "},
+            {"type": "text", "text": "world!"},
+        ]
+        raw_tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "arguments": '{"query": "test"}',
+                },
+            }
+        ]
+
+        p.chat.completions.create(
+            messages=[
+                {"role": "user", "content": (part for part in raw_parts)},
+                {
+                    "role": "assistant",
+                    "content": "Running tool",
+                    "tool_calls": (tc for tc in raw_tool_calls),
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 2
+        assert input_messages[0]["parts"] == [
+            {"content": "Hello, ", "type": "text"},
+            {"content": "world!", "type": "text"},
+        ]
+        assert input_messages[1]["parts"] == [
+            {
+                "arguments": {"query": "test"},
+                "id": "call_1",
+                "name": "lookup",
+                "type": "tool_call",
+            },
+            {"content": "Running tool", "type": "text"},
+        ]
+
+        received_messages = _sent_messages(p)
+        received_content = received_messages[0]["content"]
+        assert not isinstance(received_content, list)
+        assert isinstance(received_content, Iterator)
+        assert _sent[-1][0]["content"] == raw_parts
+        received_tool_calls = received_messages[1]["tool_calls"]
+        assert not isinstance(received_tool_calls, list)
+        assert isinstance(received_tool_calls, Iterator)
+        assert _sent[-1][1]["tool_calls"] == raw_tool_calls
+
+
+def test_chat_completions_generator_tool_calls_reaches_the_sdk(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        raw_calls = [
+            {
+                "id": "call_weather_1",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "San Francisco"}',
+                },
+            }
+        ]
+
+        tool_calls_drained_before_sdk = False
+
+        def tracking_tool_calls():
+            nonlocal tool_calls_drained_before_sdk
+            for c in raw_calls:
+                tool_calls_drained_before_sdk = True
+                yield c
+
+        sdk_received_tool_calls_iterator = False
+
+        def check_sdk_tool_calls(*args: Any, **kwargs: Any) -> None:
+            nonlocal sdk_received_tool_calls_iterator
+            body = (
+                kwargs.get("body")
+                if isinstance(kwargs.get("body"), dict)
+                else kwargs
+            )
+            msgs = body.get("messages", [])
+            for m in msgs:
+                tc = m.get("tool_calls") if isinstance(m, dict) else None
+                if tc is not None:
+                    if (
+                        isinstance(tc, Iterator)
+                        and not isinstance(tc, list)
+                        and not tool_calls_drained_before_sdk
+                    ):
+                        sdk_received_tool_calls_iterator = True
+
+        if hasattr(p.chat.completions, "openai_client"):
+            original_side_effect = p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect
+
+            def check_sdk_entry(*args: Any, **kwargs: Any) -> Any:
+                check_sdk_tool_calls(*args, **kwargs)
+                return original_side_effect(*args, **kwargs)
+
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = check_sdk_entry
+        else:
+            original_post_side_effect = p.chat.completions._post.side_effect
+
+            def check_post_entry(*args: Any, **kwargs: Any) -> Any:
+                check_sdk_tool_calls(*args, **kwargs)
+                return original_post_side_effect(*args, **kwargs)
+
+            p.chat.completions._post.side_effect = check_post_entry
+
+        p.chat.completions.create(
+            messages=[
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tracking_tool_calls(),
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 2
+        assert input_messages[1]["parts"] == [
+            {
+                "arguments": {"location": "San Francisco"},
+                "id": "call_weather_1",
+                "name": "get_weather",
+                "type": "tool_call",
+            }
+        ]
+        assert sdk_received_tool_calls_iterator
+
+
+def test_chat_completions_generator_tool_calls_not_consumed_without_content_capture(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        raw_calls = [
+            {
+                "id": "call_weather_1",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "San Francisco"}',
+                },
+            }
+        ]
+
+        tool_calls_drained_before_sdk = False
+
+        def tracking_tool_calls():
+            nonlocal tool_calls_drained_before_sdk
+            for c in raw_calls:
+                tool_calls_drained_before_sdk = True
+                yield c
+
+        sdk_received_raw_generator = False
+
+        def check_sdk_tool_calls(*args: Any, **kwargs: Any) -> None:
+            nonlocal sdk_received_raw_generator
+            body = (
+                kwargs.get("body")
+                if isinstance(kwargs.get("body"), dict)
+                else kwargs
+            )
+            msgs = body.get("messages", [])
+            for m in msgs:
+                tc = m.get("tool_calls") if isinstance(m, dict) else None
+                if tc is not None:
+                    if (
+                        isinstance(tc, GeneratorType)
+                        and not tool_calls_drained_before_sdk
+                    ):
+                        sdk_received_raw_generator = True
+
+        if hasattr(p.chat.completions, "openai_client"):
+            original_side_effect = p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect
+
+            def check_sdk_entry(*args: Any, **kwargs: Any) -> Any:
+                check_sdk_tool_calls(*args, **kwargs)
+                return original_side_effect(*args, **kwargs)
+
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = check_sdk_entry
+        else:
+            original_post_side_effect = p.chat.completions._post.side_effect
+
+            def check_post_entry(*args: Any, **kwargs: Any) -> Any:
+                check_sdk_tool_calls(*args, **kwargs)
+                return original_post_side_effect(*args, **kwargs)
+
+            p.chat.completions._post.side_effect = check_post_entry
+
+        p.chat.completions.create(
+            messages=[
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tracking_tool_calls(),
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in spans[0].attributes
+        assert sdk_received_raw_generator
+
+
+@pytest.mark.skipif(
+    not _has_async_portkey, reason="AsyncPortkey not available"
+)
+@pytest.mark.asyncio
+async def test_async_chat_completions_generator_messages_and_tools_captured(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        ap = AsyncPortkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_async_mock_chat(ap, mock_resp)
+
+        raw_msgs = [{"role": "user", "content": "Async Hello"}]
+        raw_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "async_weather",
+                    "description": "Get async weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        await ap.chat.completions.create(
+            messages=(m for m in raw_msgs),
+            tools=(t for t in raw_tools),
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 1
+        assert input_messages[0]["parts"] == [
+            {"content": "Async Hello", "type": "text"}
+        ]
+
+        tool_defs = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_TOOL_DEFINITIONS)
+        )
+        assert len(tool_defs) == 1
+        assert tool_defs[0]["name"] == "async_weather"
+
+        received_messages = _sent_messages(ap)
+        assert not isinstance(received_messages, list)
+        assert isinstance(received_messages, Iterator)
+        assert _sent[-1] == raw_msgs
+
+        if hasattr(ap.chat.completions, "openai_client"):
+            call_args = ap.chat.completions.openai_client.with_raw_response.chat.completions.create.call_args
+            extra_body = call_args.kwargs.get("extra_body", {})
+            assert not isinstance(extra_body.get("tools"), list)
+            assert isinstance(extra_body.get("tools"), Iterator)
+        assert _sent_tools[-1] == raw_tools
+
+
+def test_chat_completions_generator_messages_captured_on_error(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    def consume_then_fail(*args: Any, **kwargs: Any) -> Any:
+        _consume_chat_request(*args, **kwargs)
+        raise RuntimeError("boom")
+
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        if hasattr(p.chat.completions, "openai_client"):
+            p.chat.completions.openai_client = MagicMock()
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = consume_then_fail
+        p.chat.completions._post = MagicMock(side_effect=consume_then_fail)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            p.chat.completions.create(
+                messages=(m for m in [{"role": "user", "content": "Hello"}]),
+                model="gpt-4o",
+            )
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+    input_messages = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    )
+    assert input_messages[0]["parts"] == [{"type": "text", "content": "Hello"}]
+
+
+def test_chat_completions_generator_messages_captured_on_streaming_error(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    def consume_then_fail(*args: Any, **kwargs: Any) -> Any:
+        _consume_chat_request(*args, **kwargs)
+        raise RuntimeError("boom")
+
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        if hasattr(p.chat.completions, "openai_client"):
+            p.chat.completions.openai_client = MagicMock()
+            p.chat.completions.openai_client.chat.completions.create.side_effect = consume_then_fail
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = consume_then_fail
+        p.chat.completions._post = MagicMock(side_effect=consume_then_fail)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            p.chat.completions.create(
+                messages=(m for m in [{"role": "user", "content": "Hello"}]),
+                model="gpt-4o",
+                stream=True,
+            )
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+    input_messages = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    )
+    assert input_messages[0]["parts"] == [{"type": "text", "content": "Hello"}]
+
+
+@pytest.mark.skipif(
+    not _has_async_portkey, reason="AsyncPortkey not available"
+)
+@pytest.mark.asyncio
+async def test_async_chat_completions_generator_messages_captured_on_streaming_error(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    def consume_then_fail(*args: Any, **kwargs: Any) -> Any:
+        _consume_chat_request(*args, **kwargs)
+        raise RuntimeError("async boom")
+
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        ap = AsyncPortkey(api_key="test_pk", provider="openai")
+        if hasattr(ap.chat.completions, "openai_client"):
+            ap.chat.completions.openai_client = MagicMock()
+            ap.chat.completions.openai_client.chat.completions.create = (
+                AsyncMock(side_effect=consume_then_fail)
+            )
+            ap.chat.completions.openai_client.with_raw_response.chat.completions.create = AsyncMock(
+                side_effect=consume_then_fail
+            )
+        ap.chat.completions._post = AsyncMock(side_effect=consume_then_fail)
+
+        with pytest.raises(RuntimeError, match="async boom"):
+            await ap.chat.completions.create(
+                messages=(m for m in [{"role": "user", "content": "Hello"}]),
+                model="gpt-4o",
+                stream=True,
+            )
+
+    span = span_exporter.get_finished_spans()[0]
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+    input_messages = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    )
+    assert input_messages[0]["parts"] == [{"type": "text", "content": "Hello"}]
+
+
+def test_chat_completions_image_parts(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        mock_resp = _create_mock_chat_completion()
+        _setup_mock_chat(p, mock_resp)
+
+        p.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        "Describe these images:",
+                        {
+                            "type": "image_url",
+                            "image_url": "https://example.com/remote.png",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/nested.png"
+                            },
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,QUJD"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": {
+                        "type": "image_url",
+                        "image_url": "https://example.com/single.png",
+                    },
+                },
+            ],
+            model="gpt-4o",
+        )
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        input_messages = json.loads(
+            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
+        )
+        assert len(input_messages) == 2
+        assert input_messages[0]["parts"] == [
+            {"content": "Describe these images:", "type": "text"},
+            {
+                "mime_type": None,
+                "modality": "image",
+                "type": "uri",
+                "uri": "https://example.com/remote.png",
+            },
+            {
+                "mime_type": None,
+                "modality": "image",
+                "type": "uri",
+                "uri": "https://example.com/nested.png",
+            },
+            {
+                "content": "QUJD",
+                "mime_type": "image/png",
+                "modality": "image",
+                "type": "blob",
+            },
+        ]
+        assert input_messages[1]["parts"] == [
+            {
+                "mime_type": None,
+                "modality": "image",
+                "type": "uri",
+                "uri": "https://example.com/single.png",
+            }
+        ]
+
+
+@pytest.mark.parametrize(
+    ("content_part", "expected"),
+    [
+        (
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "UklGRg==", "format": "wav"},
+            },
+            [
+                {
+                    "type": "blob",
+                    "modality": "audio",
+                    "mime_type": "audio/wav",
+                    "content": "UklGRg==",
+                }
+            ],
+        ),
+        (
+            {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": "!!!notbase64!!!",
+                    "format": "wav",
+                },
+            },
+            [],
+        ),
+        (
+            {
+                "type": "file",
+                "file": {"file_id": "file-abc123", "filename": "doc.pdf"},
+            },
+            [
+                {
+                    "type": "file",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "file_id": "file-abc123",
+                }
+            ],
+        ),
+        (
+            {"type": "refusal", "refusal": "I cannot help with that."},
+            [{"type": "text", "content": "I cannot help with that."}],
+        ),
+        (
+            {
+                "type": "image_url",
+                "image_url": SimpleNamespace(
+                    url="https://example.com/obj.png"
+                ),
+            },
+            [
+                {
+                    "type": "uri",
+                    "modality": "image",
+                    "mime_type": None,
+                    "uri": "https://example.com/obj.png",
+                }
+            ],
+        ),
+    ],
+)
+def test_chat_completions_content_parts(
+    content_part,
+    expected,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    span_exporter,
+):
+    with instrument(
+        PortkeyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        p = Portkey(api_key="test_pk", provider="openai")
+        _setup_mock_chat(p, _create_mock_chat_completion())
+        p.chat.completions.create(
+            messages=[{"role": "assistant", "content": [content_part]}],
+            model="gpt-4o",
+        )
+
+    span = span_exporter.get_finished_spans()[0]
+    messages = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    )
+    assert messages[0]["parts"] == expected
 
 
 def test_chat_completions_top_p_zero_and_max_tokens_zero(
