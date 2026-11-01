@@ -217,6 +217,9 @@ jobs:
       - name: Run dependency check
         run: uv run --no-project --with packaging scripts/check_deps.py
 
+      - name: Test requirements generator
+        run: python -m unittest discover -s scripts/tests -v
+
   check-util-api:
     name: check-util-api
     runs-on: ubuntu-slim
