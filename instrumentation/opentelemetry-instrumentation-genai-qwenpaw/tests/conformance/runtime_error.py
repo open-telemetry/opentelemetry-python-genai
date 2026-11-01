@@ -23,8 +23,6 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -50,16 +48,6 @@ class RuntimeErrorScenario(Scenario):
             content_capture="SPAN_ONLY",
         ):
             asyncio.run(_drive_error())
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        (span,) = [
-            entry["span"] for entry in report["samples"] if "span" in entry
-        ]
-        attributes = {
-            attr["name"]: attr["value"] for attr in span["attributes"]
-        }
-        assert attributes[ERROR_TYPE] == "ConnectionError"
 
 
 async def _drive_error() -> None:

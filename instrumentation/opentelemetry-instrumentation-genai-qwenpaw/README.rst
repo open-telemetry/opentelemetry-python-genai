@@ -42,7 +42,7 @@ Supported versions
 
 QwenPaw >= 1.1.0, < 3.0.0. Version 1.x uses the agent runner; version
 2.x uses the runtime request entry point and captures text, reasoning,
-tool calls/results, and image/video/file URIs from request messages and
+tool calls/results, and image/audio/video/file content from request messages and
 streamed SSE envelopes. Request normalization and span creation remain lazy;
 SDK-generated session IDs propagate to nested GenAI invocations.
 Version 2.x support requires ``opentelemetry-util-genai`` 1.4b0 or newer

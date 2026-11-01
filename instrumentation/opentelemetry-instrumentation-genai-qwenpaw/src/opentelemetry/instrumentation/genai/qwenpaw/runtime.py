@@ -11,7 +11,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import Enum
 from typing import cast
+from urllib.parse import urlsplit
 
+from opentelemetry.context import Context, attach, detach, get_current
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
 from opentelemetry.util.genai.stream import (
@@ -27,8 +29,8 @@ from opentelemetry.util.genai.types import (
     TextPart,
     ToolCallRequestPart,
     ToolCallResponsePart,
-    UriPart,
 )
+from opentelemetry.util.genai.utils import image_from_url
 
 from .utils import non_empty_str
 
@@ -84,16 +86,24 @@ def _part(block: object, message_type: object) -> MessagePart | None:
             )
     uri_field = {
         "image": "image_url",
+        "audio": "data",
         "video": "video_url",
         "file": "file_url",
     }.get(str(kind))
     if uri_field:
         uri = _field(block, uri_field)
         if isinstance(uri, str) and uri:
-            return UriPart(
-                uri=uri,
+            audio_format = _field(block, "format")
+            if (
+                kind == "audio"
+                and isinstance(audio_format, str)
+                and audio_format
+                and not urlsplit(uri).scheme
+            ):
+                uri = f"data:audio/{audio_format};base64,{uri}"
+            return image_from_url(
+                uri,
                 modality="document" if kind == "file" else str(kind),
-                mime_type=None,
             )
     return None
 
@@ -132,6 +142,7 @@ class _RuntimeInvocation:
         self.runtime = runtime
         self.request = request
         self.invocation: LocalAgentInvocation | None = None
+        self._context: Context | None = None
 
     def start(self, request: object) -> LocalAgentInvocation:
         if self.invocation is None:
@@ -151,18 +162,18 @@ class _RuntimeInvocation:
     @contextmanager
     def activate(self) -> Iterator[None]:
         token = _current_runtime.set(self)
-        invocation = self.invocation
+        context_token = (
+            attach(self._context) if self._context is not None else None
+        )
         try:
-            if invocation is None:
-                try:
-                    yield
-                finally:
-                    if self.invocation is not None:
-                        self.invocation.suspend()
-            else:
-                with invocation.activate():
-                    yield
+            yield
         finally:
+            # Runtime hooks can keep a child span open across SSE yields.
+            self._context = get_current()
+            if self.invocation is not None:
+                self.invocation.suspend()
+            if context_token is not None:
+                detach(context_token)
             _current_runtime.reset(token)
 
 
@@ -226,14 +237,18 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         message_id = non_empty_str(_field(message, "id"))
         if message_id is None:
             return
-        parts = _parts(message)
-        if parts:
+        blocks = self._self_blocks.setdefault(message_id, {})
+        for position, block in enumerate(_items(_field(message, "content"))):
+            part = _part(block, _field(message, "type"))
+            if part is not None:
+                index = _field(block, "index")
+                blocks[position if index is None else index] = part
+        if blocks:
             self._self_messages[message_id] = OutputMessage(
-                role=str(role), parts=parts
+                role=str(role), parts=list(blocks.values())
             )
         self._self_message_types[message_id] = _field(message, "type")
         self._self_message_roles[message_id] = str(role)
-        self._self_blocks.setdefault(message_id, {})
 
     def _capture_content(self, content: object) -> None:
         message_id = non_empty_str(_field(content, "msg_id"))

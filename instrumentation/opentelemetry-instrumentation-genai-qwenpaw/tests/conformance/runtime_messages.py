@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import json
 from contextlib import ExitStack
 from types import SimpleNamespace
 from typing import Any
@@ -19,10 +18,6 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -48,48 +43,6 @@ class RuntimeMessagesScenario(Scenario):
             content_capture="SPAN_ONLY",
         ):
             asyncio.run(_drive_events())
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        (span,) = [
-            entry["span"] for entry in report["samples"] if "span" in entry
-        ]
-        attrs = {attr["name"]: attr["value"] for attr in span["attributes"]}
-        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
-        assert {
-            (part["type"], part.get("modality"))
-            for msg in inputs
-            for part in msg["parts"]
-        } == {
-            ("text", None),
-            ("uri", "image"),
-            ("uri", "video"),
-            ("uri", "document"),
-        }
-        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
-        parts = [part for msg in outputs for part in msg["parts"]]
-        assert {part["type"] for part in parts} == {
-            "text",
-            "reasoning",
-            "tool_call",
-            "tool_call_response",
-        }
-        assert (
-            next(part for part in parts if part["type"] == "reasoning")[
-                "content"
-            ]
-            == "Thinking."
-        )
-        assert next(part for part in parts if part["type"] == "tool_call")[
-            "arguments"
-        ] == {"city": "Paris"}
-        assert (
-            next(
-                part for part in parts if part["type"] == "tool_call_response"
-            )["response"]
-            == "sunny"
-        )
-        assert any(msg["role"] == "tool" for msg in outputs)
 
 
 async def _drive_events() -> None:

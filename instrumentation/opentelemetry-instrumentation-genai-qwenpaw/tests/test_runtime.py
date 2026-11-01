@@ -587,3 +587,242 @@ async def test_unread_abandoned_stream_does_not_invoke_agent(
     del stream
     gc.collect()
     assert span_exporter.get_finished_spans() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail", [False, True])
+async def test_hook_context_survives_yields(
+    instrument_with_content: Any,
+    tracer_provider: Any,
+    span_exporter: Any,
+    fail: bool,
+) -> None:
+    from qwenpaw.runtime.hooks import HookBase, HookResult
+    from qwenpaw.runtime.phases import Phase
+
+    from opentelemetry import baggage
+    from opentelemetry.context import attach, detach
+
+    tracer = tracer_provider.get_tracer(__name__)
+    error = ConnectionError("after response")
+
+    class OpenScope(HookBase):
+        phase = Phase.PRE_DISPATCH
+        name = "open-scope"
+
+        async def run(self, ctx: Any) -> HookResult:
+            scope = tracer.start_as_current_span("hook")
+            ctx.extras["scope"] = scope
+            ctx.extras["span"] = scope.__enter__()
+            ctx.extras["token"] = attach(baggage.set_baggage("hook", "active"))
+            return HookResult()
+
+    class AfterResponse(HookBase):
+        phase = Phase.POST_RESPONSE
+        name = "after-response"
+
+        async def run(self, ctx: Any) -> HookResult:
+            assert get_current_span() is ctx.extras["span"]
+            assert baggage.get_baggage("hook") == "active"
+            with tracer.start_as_current_span("after-response"):
+                pass
+            if fail:
+                raise error
+            return HookResult()
+
+    class CloseScope(HookBase):
+        phase = Phase.FINALLY
+        name = "close-scope"
+
+        async def run(self, ctx: Any) -> HookResult:
+            assert get_current_span() is ctx.extras["span"]
+            detach(ctx.extras["token"])
+            ctx.extras["scope"].__exit__(None, None, None)
+            return HookResult()
+
+    runtime = make_runtime()
+    for hook in (OpenScope(), AfterResponse(), CloseScope()):
+        runtime.workspace.plugins.hook_registry.register(hook)
+    with tracer.start_as_current_span("parent") as parent:
+        try:
+            async for _ in runtime.run(runtime_request()):
+                assert get_current_span() is parent
+                assert baggage.get_baggage("hook") is None
+        except ConnectionError as caught:
+            assert fail
+            assert caught is error
+        else:
+            assert not fail
+        assert get_current_span() is parent
+        assert baggage.get_baggage("hook") is None
+    spans = {span.name: span for span in span_exporter.get_finished_spans()}
+    assert spans["hook"].parent == spans["invoke_agent Friday"].context
+    assert spans["after-response"].parent == spans["hook"].context
+    assert spans["invoke_agent Friday"].parent == parent.get_span_context()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", [ConnectionError("failed"), asyncio.CancelledError()]
+)
+async def test_error_preserves_unfinished_second_block(
+    instrument_with_content: Any,
+    tracer_provider: Any,
+    span_exporter: Any,
+    error: BaseException,
+) -> None:
+    from types import SimpleNamespace
+
+    from agentscope.event import EventType
+    from qwenpaw.runtime.envelope import Envelope
+
+    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
+        make_runtime_wrapper,
+    )
+
+    async def events(request: object) -> Any:
+        envelope = Envelope("sess-2")
+        for kind, block_id, delta in [
+            (EventType.TEXT_BLOCK_START, "first", ""),
+            (EventType.TEXT_BLOCK_DELTA, "first", "ready"),
+            (EventType.TEXT_BLOCK_END, "first", ""),
+            (EventType.TEXT_BLOCK_START, "second", ""),
+            (EventType.TEXT_BLOCK_DELTA, "second", "unfinished"),
+        ]:
+            async for chunk in envelope.translate_event(
+                SimpleNamespace(
+                    type=kind,
+                    block_id=block_id,
+                    delta=delta,
+                    metadata={},
+                )
+            ):
+                yield chunk
+        async for chunk in envelope.error_envelope(
+            "failed", "ConnectionError"
+        ):
+            yield chunk
+        raise error
+
+    stream = make_runtime_wrapper(
+        TelemetryHandler(tracer_provider=tracer_provider)
+    )(
+        events,
+        make_runtime(),
+        (runtime_request(),),
+        {},
+    )
+    with pytest.raises(type(error)) as caught:
+        await drain(stream)
+    assert caught.value is error
+    (span,) = span_exporter.get_finished_spans()
+    assert output_text(span) == ["ready", "unfinished"]
+    assert span.status.status_code is StatusCode.ERROR
+
+
+@pytest.mark.parametrize("kind", ["image", "video", "file", "audio"])
+def test_inline_request_media(kind: str) -> None:
+    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
+        input_messages_from_request,
+    )
+    from opentelemetry.util.genai.types import BlobPart
+
+    block = {"type": kind}
+    if kind == "audio":
+        block.update(data="YWJj", format="wav")
+    else:
+        block[f"{kind}_url"] = "data:application/octet-stream;base64,YWJj"
+    (message,) = input_messages_from_request(
+        {"input": [{"role": "user", "content": [block]}]}
+    )
+    (part,) = message.parts
+    assert isinstance(part, BlobPart)
+    assert part.content == b"abc"
+    assert part.modality == ("document" if kind == "file" else kind)
+    assert part.mime_type == (
+        "audio/wav" if kind == "audio" else "application/octet-stream"
+    )
+
+
+@pytest.mark.parametrize("audio_format", [None, "ogg"])
+def test_audio_only_request(audio_format: str | None) -> None:
+    from qwenpaw.schemas import AgentRequest, AudioContent, Message, Role
+
+    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
+        input_messages_from_request,
+    )
+    from opentelemetry.util.genai.types import UriPart
+
+    url = "https://example.invalid/voice.ogg"
+    (message,) = input_messages_from_request(
+        AgentRequest(
+            input=[
+                Message(
+                    role=Role.USER,
+                    content=[AudioContent(data=url, format=audio_format)],
+                )
+            ]
+        )
+    )
+    assert message.role == "user"
+    assert message.parts == [
+        UriPart(uri=url, modality="audio", mime_type=None)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mime_type", ["image/png", "video/mp4", "audio/wav"])
+async def test_real_envelope_inline_media(
+    tracer_provider: Any,
+    span_exporter: Any,
+    mime_type: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from agentscope.event import EventType
+    from qwenpaw.runtime.envelope import Envelope
+
+    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
+        make_runtime_wrapper,
+    )
+    from opentelemetry.util.genai.types import BlobPart
+
+    async def events(request: object) -> Any:
+        envelope = Envelope("sess-2")
+        for kind in (
+            EventType.DATA_BLOCK_START,
+            EventType.DATA_BLOCK_DELTA,
+            EventType.DATA_BLOCK_END,
+        ):
+            async for chunk in envelope.translate_event(
+                SimpleNamespace(
+                    type=kind,
+                    block_id="media",
+                    media_type=mime_type,
+                    data="YWJj",
+                    metadata={},
+                )
+            ):
+                yield chunk
+        async for chunk in envelope.finalize():
+            yield chunk
+
+    hook = MagicMock()
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=hook
+    )
+    stream = make_runtime_wrapper(handler)(
+        events, make_runtime(), (runtime_request(),), {}
+    )
+    await drain(stream)
+    hook.on_completion.assert_called_once()
+    (message,) = hook.on_completion.call_args.kwargs["outputs"]
+    assert message.parts == [
+        BlobPart(
+            content=b"abc",
+            mime_type=mime_type,
+            modality=mime_type.split("/")[0],
+        )
+    ]
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.UNSET

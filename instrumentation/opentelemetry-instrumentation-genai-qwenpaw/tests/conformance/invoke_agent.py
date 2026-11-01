@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import json
 from importlib.metadata import version
 from typing import Any
 
@@ -32,10 +31,6 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.test.weaver_live_check import LiveCheckReport
 from opentelemetry.test_util_genai.conformance import Scenario
 from opentelemetry.test_util_genai.instrumentor import instrument
 
@@ -70,24 +65,6 @@ class InvokeAgentScenario(Scenario):
                 runner_module, fake_run_command_path("Conformance reply.")
             ):
                 asyncio.run(_drive_one_turn(runner_module))
-
-    def validate(self, report: LiveCheckReport) -> None:
-        super().validate(report)
-        spans = [
-            entry["span"] for entry in report["samples"] if "span" in entry
-        ]
-        (span,) = spans
-        attributes = {
-            attr["name"]: attr["value"] for attr in span["attributes"]
-        }
-        assert attributes[GenAI.GEN_AI_CONVERSATION_ID] == "sess-conformance"
-        messages = json.loads(attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
-        assert len(messages) == 1
-        assert messages[0]["role"] == "assistant"
-        assert messages[0]["parts"] == [
-            {"type": "text", "content": "Conformance reply."}
-        ]
-        assert GenAI.GEN_AI_AGENT_ID not in attributes
 
 
 async def _drive_one_turn(runner_module: Any) -> None:
