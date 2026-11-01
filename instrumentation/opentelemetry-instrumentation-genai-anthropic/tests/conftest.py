@@ -183,6 +183,8 @@ def vcr_config():
             ("x-api-key", "test_anthropic_api_key"),
             ("authorization", "Bearer test_anthropic_api_key"),
         ],
+        # Older SDKs send `?beta=true` on beta endpoints and newer ones don't.
+        "filter_query_parameters": ["beta"],
         "decode_compressed_response": True,
         "before_record_response": scrub_response_headers(
             [
@@ -229,6 +231,5 @@ def instrument_event_only(tracer_provider, logger_provider, meter_provider):
         logger_provider=logger_provider,
         meter_provider=meter_provider,
         content_capture="EVENT_ONLY",
-        emit_event=True,
     ) as instrumentor:
         yield instrumentor

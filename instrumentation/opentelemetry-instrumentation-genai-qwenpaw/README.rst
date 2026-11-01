@@ -129,7 +129,7 @@ Tests cover both the oldest and latest releases of each runtime generation:
      - Conformance tox environment
    * - 1.1.0
      - ``AgentRunner.query_handler``
-     - ``py310-test-instrumentation-genai-qwenpaw-oldest-conformance``
+     - ``py311-test-instrumentation-genai-qwenpaw-oldest-conformance``
    * - Latest 1.x
      - ``AgentRunner.query_handler``
      - ``py313-test-instrumentation-genai-qwenpaw-v1-conformance``

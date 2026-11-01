@@ -33,6 +33,7 @@ from .extractors import (
     _is_list,
     _parse_body,
     _safe_int,
+    _total_input_tokens,
     extract_embedding_response,
     extract_invoke_model_response,
     map_finish_reason,
@@ -205,7 +206,11 @@ class _BedrockConverseStreamMixin:
                         finish_reason=finish_reason or "error",
                     )
                 ]
-        self._self_invocation.input_tokens = self._self_input_tokens
+        self._self_invocation.input_tokens = _total_input_tokens(
+            self._self_input_tokens,
+            self._self_cache_read_input_tokens,
+            self._self_cache_creation_input_tokens,
+        )
         self._self_invocation.output_tokens = self._self_output_tokens
         self._self_invocation.cache_read_input_tokens = (
             self._self_cache_read_input_tokens

@@ -165,10 +165,6 @@ class _RuntimeInvocation:
         finally:
             _current_runtime.reset(token)
 
-    def _on_stream_chunk(self, chunk_at: float) -> None:
-        if self.invocation is not None:
-            self.invocation.record_stream_chunk()
-
 
 def observe_context_build(
     wrapped: Callable[..., object],
