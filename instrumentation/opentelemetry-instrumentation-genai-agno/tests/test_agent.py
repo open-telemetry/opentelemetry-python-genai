@@ -2145,7 +2145,8 @@ def test_workflow_nested_hitl_captures_only_active_step_requirement(
         step_id="step_1",
         step_name="first_step",
         requires_confirmation=True,
-        confirmed=True,
+        confirmed=False,
+        rejection_feedback="no",
     )
     req2 = StepRequirement(
         step_id="step_2",
@@ -2174,8 +2175,17 @@ def test_workflow_nested_hitl_captures_only_active_step_requirement(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    # Step requirements are not LLM tool calls and must not be captured as tool messages
-    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    # Step requirements are not LLM tool calls and must not be
+    # captured as tool messages. Instead, resolved step requirements are
+    # captured as role: "user" input messages (#906).
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES in span.attributes
+    raw_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert isinstance(raw_msgs, str)
+    messages = json.loads(raw_msgs)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == {"confirmed": True}
 
 
 def test_workflow_nested_hitl_explicit_step_requirements(
@@ -2207,7 +2217,8 @@ def test_workflow_nested_hitl_explicit_step_requirements(
         step_id="step_2",
         step_name="second_step",
         requires_confirmation=True,
-        confirmed=True,
+        confirmed=False,
+        rejection_feedback="no",
     )
     mock_wf_output = WorkflowRunOutput(
         workflow_id="wf-1",
@@ -2232,8 +2243,17 @@ def test_workflow_nested_hitl_explicit_step_requirements(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    # Step requirements are not LLM tool calls and must not be captured as tool messages
-    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+    # Step requirements are not LLM tool calls and must not be
+    # captured as tool messages. Instead, resolved step requirements are
+    # captured as role: "user" input messages (#906).
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES in span.attributes
+    raw_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert isinstance(raw_msgs, str)
+    messages = json.loads(raw_msgs)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == {"confirmed": False, "rejection_feedback": "no"}
 
 
 def test_workflow_nested_hitl_acontinue_run(
@@ -2261,7 +2281,7 @@ def test_workflow_nested_hitl_acontinue_run(
         step_id="step_1",
         step_name="first_step",
         requires_confirmation=True,
-        confirmed=True,
+        confirmed=False,
     )
     req2 = StepRequirement(
         step_id="step_2",
@@ -2301,8 +2321,166 @@ def test_workflow_nested_hitl_acontinue_run(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    # Step requirements are not LLM tool calls and must not be captured as tool messages
+    # Step requirements are not LLM tool calls and must not be
+    # captured as tool messages. Instead, resolved step requirements are
+    # captured as role: "user" input messages (#906).
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES in span.attributes
+    raw_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert isinstance(raw_msgs, str)
+    messages = json.loads(raw_msgs)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == {"confirmed": True}
+
+
+def test_workflow_nested_hitl_content_capture_disabled(
+    instrument_agno, span_exporter
+) -> None:
+    """Test that Workflow.continue_run omits step requirements
+    when content capture is off.
+    """
+    from agno.workflow.workflow import Workflow
+
+    if not hasattr(Workflow, "continue_run"):
+        pytest.skip(
+            "Workflow.continue_run is not supported in this version of agno"
+        )
+
+    from agno.run.workflow import RunStatus, WorkflowRunOutput
+    from agno.workflow.types import StepRequirement
+
+    workflow = Workflow(
+        name="test-nested-hitl-workflow",
+        steps=[],
+        session_id="wf-session-nested",
+    )
+    req = StepRequirement(
+        step_id="step_1",
+        step_name="first_step",
+        requires_confirmation=True,
+        confirmed=True,
+    )
+    mock_wf_output = WorkflowRunOutput(
+        workflow_id="wf-1",
+        session_id="wf-session-nested",
+        status=RunStatus.paused,
+        paused_step_index=1,
+        content="Workflow continued",
+        step_requirements=[req],
+    )
+
+    with (
+        patch.object(Workflow, "get_session", return_value=MagicMock()),
+        patch.object(
+            Workflow, "_continue_execute", return_value=mock_wf_output
+        ),
+    ):
+        res = workflow.continue_run(run_response=mock_wf_output)
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
+
+
+@pytest.mark.parametrize(
+    "req_kwargs, expected",
+    [
+        (
+            {"requires_user_input": True, "user_input": {"a": 1}},
+            {"user_input": {"a": 1}},
+        ),
+        (
+            {"requires_route_selection": True, "selected_choices": ["r1"]},
+            {"selected_choices": ["r1"]},
+        ),
+        (
+            {
+                "requires_output_review": True,
+                "confirmed": True,
+                "edited_output": "new",
+            },
+            {"output_reviewed": True, "edited_output": "new"},
+        ),
+        (
+            {
+                "requires_confirmation": True,
+                "confirmed": False,
+                "rejection_feedback": "no",
+            },
+            {"confirmed": False, "rejection_feedback": "no"},
+        ),
+        (
+            {"requires_confirmation": True, "confirmed": True},
+            {"confirmed": True},
+        ),
+        (
+            {
+                "requires_output_review": True,
+                "confirmed": False,
+                "rejection_feedback": "rejected output",
+            },
+            {
+                "output_reviewed": False,
+                "rejection_feedback": "rejected output",
+            },
+        ),
+    ],
+)
+def test_workflow_step_requirement_kinds(
+    instrument_agno_content_capture, span_exporter, req_kwargs, expected
+) -> None:
+    """Test that Workflow.continue_run captures each step requirement kind without framework metadata."""
+    from agno.workflow.workflow import Workflow
+
+    if not hasattr(Workflow, "continue_run"):
+        pytest.skip(
+            "Workflow.continue_run is not supported in this version of agno"
+        )
+
+    from agno.run.workflow import RunStatus, WorkflowRunOutput
+    from agno.workflow.types import StepRequirement
+
+    workflow = Workflow(
+        name="test-step-kinds-workflow",
+        steps=[],
+        session_id="wf-session-kinds",
+    )
+    step_req = StepRequirement(
+        step_id="step_test",
+        step_name="test_step",
+        **req_kwargs,
+    )
+    mock_wf_output = WorkflowRunOutput(
+        workflow_id="wf-1",
+        session_id="wf-session-kinds",
+        status=RunStatus.paused,
+        paused_step_index=1,
+        content="Workflow continued",
+        step_requirements=[step_req],
+    )
+
+    with (
+        patch.object(Workflow, "get_session", return_value=MagicMock()),
+        patch.object(
+            Workflow, "_continue_execute", return_value=mock_wf_output
+        ),
+    ):
+        res = workflow.continue_run(run_response=mock_wf_output)
+        assert res is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES in span.attributes
+    raw_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    messages = json.loads(raw_msgs)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == expected
 
 
 def test_agent_continue_run_with_user_input_schema(
