@@ -673,6 +673,24 @@ def test_generate_stream_is_current_only_while_read(
     assert caller.parent is None
 
 
+def test_generate_stream_reads_under_the_chat_span(
+    instrument_with_content, span_exporter
+) -> None:
+    model = transformers_model()
+    seen = []
+
+    def chunks():
+        for text in ["In ", "Paris"]:
+            seen.append(get_current_span().get_span_context().span_id)
+            yield text
+
+    model.streamer = chunks()
+    list(model.generate_stream(messages=MESSAGES))
+
+    (chat,) = spans_by_operation(span_exporter.get_finished_spans(), "chat")
+    assert seen == [chat.context.span_id] * 2
+
+
 def test_generate_stream_stays_a_generator(
     instrument_with_content, span_exporter
 ) -> None:
