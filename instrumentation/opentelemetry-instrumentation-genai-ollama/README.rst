@@ -37,8 +37,8 @@ Instrumented methods
 
 * ``Client.chat`` and ``AsyncClient.chat``, including ``stream=True``:
   ``chat`` spans with request options, token usage, and finish reasons.
-* ``Client.embed`` and ``AsyncClient.embed``: ``embeddings`` spans with the
-  embedding dimension count and input token usage.
+* ``Client.embed`` and ``AsyncClient.embed``: ``embeddings`` spans with input
+  token usage, and the dimension count when ``dimensions`` is passed.
 * The module-level ``ollama.chat`` and ``ollama.embed`` functions.
 
 A ``chat`` call without messages only loads or unloads the model, and an

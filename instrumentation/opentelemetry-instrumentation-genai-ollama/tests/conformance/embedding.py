@@ -13,7 +13,10 @@ from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    ExpectedViolation,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 from ..conftest import EMBEDDING_MODEL, HOST
@@ -24,6 +27,13 @@ class EmbeddingScenario(Scenario):
     expected_metrics = (
         "gen_ai.client.operation.duration",
         "gen_ai.client.token.usage",
+    )
+    # The dimension count is recorded only when the caller passes dimensions.
+    expected_violations = (
+        ExpectedViolation(
+            advice_id="genai_expected_attribute_missing",
+            message_substring="gen_ai.embeddings.dimension.count",
+        ),
     )
 
     def run(

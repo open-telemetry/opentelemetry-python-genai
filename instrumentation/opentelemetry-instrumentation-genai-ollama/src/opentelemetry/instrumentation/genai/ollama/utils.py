@@ -51,28 +51,6 @@ def _arg(
     return None
 
 
-def materialize_chat_inputs(
-    args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    """Turn one-shot ``messages`` and ``tools`` iterables into lists.
-
-    Ollama reads them only once, so capturing content from a generator would
-    otherwise leave the request empty. The lists are passed on in their place.
-    """
-    messages = _arg(args, kwargs, 1, "messages")
-    if messages is not None and not isinstance(messages, Sequence):
-        materialized = list(cast(Iterable[Any], messages))
-        if "messages" in kwargs:
-            kwargs = {**kwargs, "messages": materialized}
-        else:
-            args = (*args[:1], materialized, *args[2:])
-
-    tools = kwargs.get("tools")
-    if tools is not None and not isinstance(tools, Sequence):
-        kwargs = {**kwargs, "tools": list(cast(Iterable[Any], tools))}
-    return args, kwargs
-
-
 def is_empty_embed_request(
     args: tuple[Any, ...], kwargs: Mapping[str, Any]
 ) -> bool:
@@ -157,9 +135,9 @@ def tool_call_requests(tool_calls: Any) -> list[MessagePart]:
     return parts
 
 
-def _input_messages(messages: Iterable[Any]) -> list[InputMessage]:
+def get_input_messages(messages: Iterable[Any] | None) -> list[InputMessage]:
     result: list[InputMessage] = []
-    for message in messages:
+    for message in messages or ():
         role = get(message, "role")
         if not role:
             continue
@@ -178,9 +156,11 @@ def _input_messages(messages: Iterable[Any]) -> list[InputMessage]:
     return result
 
 
-def _tool_definitions(tools: Iterable[Any]) -> list[ToolDefinition] | None:
+def get_tool_definitions(
+    tools: Iterable[Any] | None,
+) -> list[ToolDefinition] | None:
     definitions: list[ToolDefinition] = []
-    for tool in tools:
+    for tool in tools or ():
         if callable(tool) and not isinstance(tool, Mapping):
             # Ollama builds the schema of a Python function from its docstring
             # with a private helper, so only the name is recorded.
@@ -214,7 +194,6 @@ def create_chat_invocation(
     instance: Any,
     args: tuple[Any, ...],
     kwargs: Mapping[str, Any],
-    capture_content: bool,
 ) -> InferenceInvocation:
     model = _arg(args, kwargs, 0, "model")
     address, port = server_address_and_port(instance)
@@ -228,18 +207,6 @@ def create_chat_invocation(
     if kwargs.get("format"):
         invocation.output_type = (
             GenAIAttributes.GenAiOutputTypeValues.JSON.value
-        )
-
-    tools = kwargs.get("tools")
-    if isinstance(tools, Iterable):
-        invocation.tool_definitions = _tool_definitions(
-            cast(Iterable[Any], tools)
-        )
-
-    messages = _arg(args, kwargs, 1, "messages")
-    if capture_content and isinstance(messages, Iterable):
-        invocation.input_messages = _input_messages(
-            cast(Iterable[Any], messages)
         )
     return invocation
 
@@ -300,20 +267,17 @@ def create_embed_invocation(
 ) -> EmbeddingInvocation:
     model = _arg(args, kwargs, 0, "model")
     address, port = server_address_and_port(instance)
-    return handler.embedding(
+    invocation = handler.embedding(
         PROVIDER,
         request_model=str(model) if model else None,
         server_address=address,
         server_port=port,
     )
+    invocation.dimension_count = _as_int(_arg(args, kwargs, 5, "dimensions"))
+    return invocation
 
 
 def set_embed_response(invocation: EmbeddingInvocation, response: Any) -> None:
     if (model := get(response, "model")) is not None:
         invocation.response_model_name = str(model)
     invocation.input_tokens = _as_int(get(response, "prompt_eval_count"))
-    embeddings = get(response, "embeddings")
-    if isinstance(embeddings, Sequence) and embeddings:
-        first = cast(Sequence[Any], embeddings)[0]
-        if isinstance(first, Sequence):
-            invocation.dimension_count = len(cast(Sequence[Any], first))

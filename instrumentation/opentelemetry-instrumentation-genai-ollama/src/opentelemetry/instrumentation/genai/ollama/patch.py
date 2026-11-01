@@ -17,14 +17,16 @@ from opentelemetry.instrumentation.genai.ollama.stream import (
 from opentelemetry.instrumentation.genai.ollama.utils import (
     create_chat_invocation,
     create_embed_invocation,
+    get_input_messages,
+    get_tool_definitions,
     is_empty_embed_request,
     is_model_load_request,
-    materialize_chat_inputs,
     set_chat_response,
     set_embed_response,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 # ``ollama.chat`` and ``ollama.embed`` are methods bound to a default client
 # when ``ollama`` is imported, so wrapping the class alone does not reach them.
@@ -61,6 +63,16 @@ def unpatch_ollama() -> None:
     _original_module_functions.clear()
 
 
+def _messages_as_keyword(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    # IteratorCapture replaces a keyword argument, so a positional
+    # ``messages`` is moved into kwargs first.
+    if len(args) > 1:
+        return args[:1] + args[2:], {**kwargs, "messages": args[1]}
+    return args, kwargs
+
+
 def _chat(handler: TelemetryHandler) -> Callable[..., Any]:
     def traced_method(
         wrapped: Callable[..., Any],
@@ -68,15 +80,25 @@ def _chat(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        args, kwargs = materialize_chat_inputs(args, kwargs)
+        args, kwargs = _messages_as_keyword(args, kwargs)
         if is_model_load_request(args, kwargs):
             return wrapped(*args, **kwargs)
         capture_content = handler.should_capture_content()
-        invocation = create_chat_invocation(
-            handler, instance, args, kwargs, capture_content
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", enabled=capture_content
         )
+        tools_capture = IteratorCapture.from_property(kwargs, "tools")
+        invocation = create_chat_invocation(handler, instance, args, kwargs)
         try:
-            result = wrapped(*args, **kwargs)
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(get_input_messages) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    get_tool_definitions
+                )
         except BaseException as error:
             invocation.fail(error)
             raise
@@ -96,15 +118,25 @@ def _async_chat(handler: TelemetryHandler) -> Callable[..., Any]:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        args, kwargs = materialize_chat_inputs(args, kwargs)
+        args, kwargs = _messages_as_keyword(args, kwargs)
         if is_model_load_request(args, kwargs):
             return await wrapped(*args, **kwargs)
         capture_content = handler.should_capture_content()
-        invocation = create_chat_invocation(
-            handler, instance, args, kwargs, capture_content
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", enabled=capture_content
         )
+        tools_capture = IteratorCapture.from_property(kwargs, "tools")
+        invocation = create_chat_invocation(handler, instance, args, kwargs)
         try:
-            result = await wrapped(*args, **kwargs)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                invocation.input_messages = (
+                    messages_capture.extract(get_input_messages) or []
+                )
+                invocation.tool_definitions = tools_capture.extract(
+                    get_tool_definitions
+                )
         except BaseException as error:
             invocation.fail(error)
             raise
