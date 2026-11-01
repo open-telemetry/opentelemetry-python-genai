@@ -35,11 +35,9 @@ def vcr_config():
             ("openai-project", "test_openai_project_id"),
         ],
         "decode_compressed_response": True,
-        "before_record_response": scrub_response_headers_overwrite(
-            {
-                "openai-organization": "test_openai_org_id",
-                "openai-project": "test_openai_project_id",
-                "Set-Cookie": "test_set_cookie",
-            }
-        ),
+        "before_record_response": scrub_response_headers_overwrite({
+            "openai-organization": "test_openai_org_id",
+            "openai-project": "test_openai_project_id",
+            "Set-Cookie": "test_set_cookie",
+        }),
     }

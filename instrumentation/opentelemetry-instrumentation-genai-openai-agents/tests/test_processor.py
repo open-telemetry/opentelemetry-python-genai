@@ -16,6 +16,9 @@ from agents.tracing.span_data import (
     ResponseSpanData,
 )
 
+from opentelemetry.instrumentation.genai.openai_agents.patch import (
+    _current_conversation_id,
+)
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
@@ -93,6 +96,23 @@ def test_trace_group_id_is_passed_as_conversation_id() -> None:
     )
 
 
+def test_trace_uses_current_conversation_id_over_group_id() -> None:
+    handler = _build_handler()
+    handler.workflow.return_value = MagicMock(attributes={})
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow", group_id="chat-thread-42")
+
+    token = _current_conversation_id.set("preferred-conversation-id")
+    try:
+        processor.on_trace_start(trace)
+    finally:
+        _current_conversation_id.reset(token)
+
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", conversation_id="preferred-conversation-id"
+    )
+
+
 def test_agent_span_creates_invoke_local_agent() -> None:
     handler = _build_handler()
     processor = GenAITracingProcessor(handler, provider="openai")
@@ -103,6 +123,22 @@ def test_agent_span_creates_invoke_local_agent() -> None:
 
     processor.on_span_end(span)
     handler.invoke_local_agent.return_value.stop.assert_called_once_with()
+
+
+def test_agent_span_passes_current_conversation_id() -> None:
+    handler = _build_handler()
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(AgentSpanData(name="triage"))
+
+    token = _current_conversation_id.set("agent-conversation-id")
+    try:
+        processor.on_span_start(span)
+    finally:
+        _current_conversation_id.reset(token)
+
+    handler.invoke_local_agent.assert_called_once_with(
+        agent_name="triage", conversation_id="agent-conversation-id"
+    )
 
 
 def test_function_span_creates_tool_invocation() -> None:
@@ -218,6 +254,7 @@ def test_shutdown_stops_open_invocations() -> None:
         spec=ToolInvocation, metric_attributes={}
     )
     processor = GenAITracingProcessor(handler, provider="openai")
+
     # Hold strong references to the trace / span objects so the
     # WeakKeyDictionary entries survive until shutdown runs.
     trace = _Trace("t", "wf")

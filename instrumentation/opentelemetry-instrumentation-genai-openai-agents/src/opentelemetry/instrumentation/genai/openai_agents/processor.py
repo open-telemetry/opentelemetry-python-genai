@@ -56,6 +56,8 @@ from opentelemetry.util.genai.utils import (
     tool_arguments_to_any_value,
 )
 
+from .patch import _current_conversation_id
+
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
 # only puts the name in the span name, not as an attribute.
@@ -89,9 +91,10 @@ class GenAITracingProcessor(TracingProcessor):
         # ``group_id`` is public on ``TraceImpl`` but not declared on the
         # ``Trace`` ABC, hence the getattr.
         group_id: str | None = getattr(trace, "group_id", None)
+        conversation_id = _current_conversation_id.get() or group_id
         invocation = self._handler.workflow(
             name=trace.name,
-            conversation_id=group_id,
+            conversation_id=conversation_id,
         )
         if trace.name:
             invocation.attributes[_WORKFLOW_NAME_ATTR] = trace.name
@@ -105,8 +108,13 @@ class GenAITracingProcessor(TracingProcessor):
     def on_span_start(self, span: Span[Any]) -> None:
         span_data = span.span_data
         if isinstance(span_data, AgentSpanData):
+            conv_id = _current_conversation_id.get()
+            kwargs: dict[str, Any] = {}
+            if conv_id is not None:
+                kwargs["conversation_id"] = conv_id
             invocation = self._handler.invoke_local_agent(
                 agent_name=span_data.name,
+                **kwargs,
             )
             self._invocations[span] = invocation
             return

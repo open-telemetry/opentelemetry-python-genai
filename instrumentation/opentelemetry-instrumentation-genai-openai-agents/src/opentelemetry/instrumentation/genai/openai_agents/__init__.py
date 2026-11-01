@@ -53,6 +53,7 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
+from .patch import patch, unpatch
 from .processor import GenAITracingProcessor
 
 __all__ = ["OpenAIAgentsInstrumentor"]
@@ -105,6 +106,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         )
         provider = GenAI.GenAiProviderNameValues.OPENAI.value
         self._processor = GenAITracingProcessor(handler, provider)
+        patch()
 
         if kwargs.get("disable_openai_trace_export"):
             trace_provider = get_trace_provider()
@@ -122,6 +124,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         if self._processor is None:
             return
 
+        unpatch()
         if self._previous_processors is not None:
             set_trace_processors(list(self._previous_processors))
         else:
