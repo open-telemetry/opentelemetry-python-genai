@@ -1,0 +1,1 @@
+Initial Ollama instrumentation emitting `chat` and `embeddings` telemetry for `Client`, `AsyncClient`, and the module-level `ollama.chat` and `ollama.embed` functions.
