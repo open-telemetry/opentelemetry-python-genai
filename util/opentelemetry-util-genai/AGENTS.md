@@ -20,6 +20,11 @@ Shared attributes should behave consistently across invocation types (same condi
 defaults). If an attribute applies to more than one invocation per semconv, set it on all
 applicable ones.
 
+Attributes whose value is a structured document (messages, tool definitions, system
+instructions, retrieval documents, …) have a **model** defined in
+[`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py) and a JSON schema under `model/gen-ai/gen-ai-*.json`. Define these models in `opentelemetry.util.genai.types`. Use these models, don't invent new types
+or hand-roll dicts. Do not use the deprecated `GenericPart` — map content to a specific part type or drop it.
+
 ## 2. Invocation Lifecycle Pattern
 
 Every new operation type must follow this pattern:
