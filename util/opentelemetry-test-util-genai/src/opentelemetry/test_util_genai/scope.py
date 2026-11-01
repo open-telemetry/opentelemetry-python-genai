@@ -53,7 +53,6 @@ class TelemetryHandlerScopeTest:
                 logger_provider=logger_provider,
                 meter_provider=meter_provider,
                 content_capture="EVENT_ONLY",
-                emit_event=True,
             ):
                 assert len(handlers) == 1
                 with handlers[0].inference("provider", request_model="model"):
