@@ -2145,7 +2145,8 @@ def test_workflow_nested_hitl_captures_only_active_step_requirement(
         step_id="step_1",
         step_name="first_step",
         requires_confirmation=True,
-        confirmed=True,
+        confirmed=False,
+        rejection_feedback="no",
     )
     req2 = StepRequirement(
         step_id="step_2",
@@ -2183,8 +2184,8 @@ def test_workflow_nested_hitl_captures_only_active_step_requirement(
     messages = json.loads(raw_msgs)
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    assert "step_2" in messages[0]["parts"][0]["content"]
-    assert "step_1" not in messages[0]["parts"][0]["content"]
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == {"confirmed": True}
 
 
 def test_workflow_nested_hitl_explicit_step_requirements(
