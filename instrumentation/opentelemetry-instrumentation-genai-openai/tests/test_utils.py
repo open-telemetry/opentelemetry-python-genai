@@ -859,6 +859,18 @@ def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
             assert type(emitted) is int
 
 
+def assert_inference_event_without_content(logs):
+    (log,) = logs
+    assert (
+        log.log_record.event_name
+        == "gen_ai.client.inference.operation.details"
+    )
+    attributes = log.log_record.attributes or {}
+    assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in attributes
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in attributes
+    assert GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS not in attributes
+
+
 def assert_message_in_logs(log, event_name, expected_content, parent_span):
     assert log.log_record.event_name == event_name
     assert (
@@ -900,9 +912,17 @@ def assert_embedding_attributes(
         hasattr(span, "attributes")
         and "gen_ai.embeddings.dimension.count" in span.attributes
     ):
-        # If dimensions were specified, verify that they match the actual dimensions
-        assert span.attributes["gen_ai.embeddings.dimension.count"] == len(
-            response.data[0].embedding
+        embedding = response.data[0].embedding
+        if isinstance(embedding, str):
+            # OpenAI base64 embeddings contain four bytes per float32 value.
+            embedding_bytes = base64.b64decode(embedding, validate=True)
+            assert len(embedding_bytes) % 4 == 0
+            expected_dimensions = len(embedding_bytes) // 4
+        else:
+            expected_dimensions = len(embedding)
+        assert (
+            span.attributes["gen_ai.embeddings.dimension.count"]
+            == expected_dimensions
         )
 
 

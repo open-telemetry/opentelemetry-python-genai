@@ -93,8 +93,8 @@ Copy the shape from an existing package — paths in `tox.ini` are repo-root-rel
   `pyproject.toml [tool.uv.workspace] members` — no edit needed.
 - **`CHANGELOG.md`**: copy from an existing package (e.g. `instrumentation/opentelemetry-instrumentation-genai-anthropic/CHANGELOG.md`).
 - **`tox.ini`**:
-  - `envlist`: add `py3{10,14}-test-instrumentation-genai-<lib>-latest`,
-    `py310-test-instrumentation-genai-<lib>-oldest`, and the
+  - `envlist`: add `py3{11,15}-test-instrumentation-genai-<lib>-latest`,
+    `py311-test-instrumentation-genai-<lib>-oldest`, and the
     `py314-test-instrumentation-genai-<lib>-conformance` entry.
   - `[testenv] deps`: add the factor-conditional test-requirements lines
     (`<lib>-{oldest,latest,conformance}: -r …/tests/requirements.<factor>.txt` plus
@@ -339,6 +339,7 @@ Full transparency isn't always reachable — prefer the least intrusive option t
   [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py) and a JSON schema under `model/gen-ai/gen-ai-*.json`. genai-util should have models
   for them defined in `opentelemetry.util.genai.types`. Use these models, don't invent new types
   or hand-rolls dicts. 
+- Don't use the deprecated `GenericPart`. Map content to a specific part type or drop it.
 
 ### README
 

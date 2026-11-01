@@ -14,7 +14,7 @@ Key Components
 - ``CompletionHook`` -- protocol for uploading content to external storage (built-in ``fsspec`` support)
 - Metrics -- ``gen_ai.client.operation.duration`` and ``gen_ai.client.token.usage`` histograms, plus
   the streaming timing histograms ``gen_ai.client.operation.time_to_first_chunk`` and
-  ``gen_ai.client.operation.time_per_output_chunk``
+  ``gen_ai.client.operation.time_per_output_chunk``, recorded for streamed inference calls
 
 
 Usage
@@ -33,6 +33,83 @@ to manage context:
 
 - ``context``: An explicit OpenTelemetry ``Context`` to parent the span. When omitted, the current
   ambient context is used.
+
+
+Nested Invocation Suppression and Context Enrichment
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When an operation runs inside an active operation of the same type, nested spans, metrics,
+and events are suppressed to prevent duplicate telemetry. Agent, workflow, and tool invocations are
+exempt because those are usually legitimately nested.
+
+When using ``TelemetryHandler`` directly, you get this behavior for free—the outer invocation
+places its typed dataclass onto the context, inner invocations suppress telemetry and publish
+their attributes into it, and the outer invocation enriches its span and metrics on finish
+(outer values take precedence).
+
+Alternatively, you can manage suppression and enrichment directly using OpenTelemetry's
+context API with the exported context key and dataclass.
+
+**Outer invocation:**
+
+.. code-block:: python
+
+    from opentelemetry import context
+    from opentelemetry.util.genai.invocation import (
+        CLIENT_INFERENCE_CONTEXT_KEY,
+        InferenceData,
+    )
+
+    data = InferenceData()
+    token = context.attach(context.set_value(CLIENT_INFERENCE_CONTEXT_KEY, data))
+    try:
+        # Inner instrumented call detects data on context, suppresses its span,
+        # and populates attributes onto data
+        execute_operation()
+    finally:
+        context.detach(token)
+
+    # Attributes captured by inner calls are available on data
+    print(data.response_model, data.usage_input_tokens)
+
+**Inner invocation:**
+
+.. code-block:: python
+
+    from opentelemetry import context
+    from opentelemetry.util.genai.invocation import (
+        CLIENT_INFERENCE_CONTEXT_KEY,
+        InferenceData,
+    )
+
+    data = context.get_value(CLIENT_INFERENCE_CONTEXT_KEY)
+    if isinstance(data, InferenceData):
+        # Outer operation is active: suppress span/metrics and publish into shared dataclass
+        data.response_model = "gpt-4o-mini"
+        data.usage_input_tokens = 10
+    else:
+        # Emit telemetry normally
+        ...
+
+Exported from ``opentelemetry.util.genai.invocation``:
+
+- Inference: ``CLIENT_INFERENCE_CONTEXT_KEY``, ``InferenceData``
+- Embedding: ``CLIENT_EMBEDDING_CONTEXT_KEY``, ``EmbeddingData``
+- Fetch Response: ``CLIENT_FETCH_RESPONSE_CONTEXT_KEY``, ``FetchResponseData``
+- Retrieval: ``CLIENT_RETRIEVAL_CONTEXT_KEY``, ``RetrievalData``
+
+**Content capture and completion upload controls:**
+
+Context data classes accept two boolean parameters (defaulting to ``False``):
+
+- ``capture_content``: When set to ``True`` on the context data, signals that the outer instrumentation permits inner suppressed invocations to capture content attributes (such as input and output messages, system instructions, and tool definitions) and publish them into context.
+- ``upload_completion``: When set to ``True`` on the context data, signals that the outer instrumentation permits inner suppressed invocations to trigger completion hook uploads.
+
+.. note::
+
+   Setting these parameters only indicates that the outer instrumentation is OK with the inner instrumentation adding content capture attributes or uploading completions. Whether the inner instrumentation actually does so still depends on the user's settings.
+
+
 
 
 Stream execution context
@@ -111,20 +188,12 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
-To control event emission, you can optionally set ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` to ``true`` or ``false`` (case-insensitive).
-This variable controls whether to emit ``gen_ai.client.inference.operation.details`` events.
-If not explicitly set, the default value is automatically determined by ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``:
-
-- When ``NO_CONTENT`` or ``SPAN_ONLY`` is set: defaults to ``false``
-- When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` is set: defaults to ``true``
-
-If explicitly set, the user's value takes precedence over the default.
-
-When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode is enabled and a LoggerProvider is configured,
-the package also emits ``gen_ai.client.inference.operation.details`` events with structured
-message content (as dictionaries instead of JSON strings). Note that when using ``EVENT_ONLY``
-or ``SPAN_AND_EVENT``, the ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` environment variable defaults
-to ``true``, so events will be emitted automatically unless explicitly set to ``false``.
+When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
+events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
+included (as dictionaries instead of JSON strings) only in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
+To suppress these events while keeping a ``LoggerProvider`` active, configure your logger or
+``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
+<https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^

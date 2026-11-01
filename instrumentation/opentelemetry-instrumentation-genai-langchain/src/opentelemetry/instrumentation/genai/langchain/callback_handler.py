@@ -272,6 +272,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         invocation_manager: _InvocationManager | None = None,
     ) -> None:
         super().__init__()
+        self._enabled = True
         self._telemetry_handler = telemetry_handler
         self._invocation_manager = (
             invocation_manager
@@ -290,6 +291,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        if not self._enabled:
+            return
         serialized = serialized or {}
         parent_agent_name, ancestor_agent_names = self._find_agent_context(
             parent_run_id
@@ -385,7 +388,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     conversation_id=conversation_id,
                     _attach_to_context=False,
                 )
-                agent.input_messages = make_input_message(inputs)
+                if capture_content:
+                    agent.input_messages = make_input_message(inputs)
                 self._invocation_manager.add_invocation_state(
                     run_id, parent_run_id, agent
                 )
@@ -463,6 +467,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        if not self._enabled:
+            return
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -685,6 +691,9 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     ):
                         finish_reason = (
                             chat_generation.message.response_metadata.get(
+                                "finish_reason"
+                            )
+                            or chat_generation.message.response_metadata.get(
                                 "stopReason"
                             )
                             or chat_generation.message.response_metadata.get(
@@ -822,6 +831,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        if not self._enabled:
+            return
         name = "unknown"
         description = None
         if serialized is not None:
@@ -898,6 +909,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        if not self._enabled:
+            return
         meta = metadata or {}
         provider = meta.get("ls_vector_store_provider") or None
         request_model = meta.get("ls_embedding_model") or None

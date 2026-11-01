@@ -655,20 +655,37 @@ def extract_token_details(usage_metadata: dict[str, Any]) -> dict[str, int]:
             return val
         return None
 
-    cache_write = _get_positive_int(input_details, "cache_write")
+    def _get_detail(d: dict[str, Any], key: str) -> int | None:
+        # langchain-openai prefixes these keys with the service tier
+        # (e.g. ``flex_cache_read``) for flex and priority requests.
+        for prefix in ("", "flex_", "priority_"):
+            if (val := _get_positive_int(d, prefix + key)) is not None:
+                return val
+        return None
+
+    cache_write = _get_detail(input_details, "cache_write")
     if cache_write is None:
-        cache_write = _get_positive_int(input_details, "cache_creation")
+        cache_write = _get_detail(input_details, "cache_creation")
+    if cache_write is None:
+        # langchain-anthropic zeroes ``cache_creation`` when Anthropic reports
+        # the per-TTL breakdown, moving the count into these keys.
+        cache_write = (
+            sum(
+                _get_positive_int(input_details, key) or 0
+                for key in (
+                    "ephemeral_5m_input_tokens",
+                    "ephemeral_1h_input_tokens",
+                )
+            )
+            or None
+        )
     if cache_write is not None:
         token_details["cache_write_input_tokens"] = cache_write
 
-    if (
-        cache_read := _get_positive_int(input_details, "cache_read")
-    ) is not None:
+    if (cache_read := _get_detail(input_details, "cache_read")) is not None:
         token_details["cache_read_input_tokens"] = cache_read
 
-    if (
-        reasoning := _get_positive_int(output_details, "reasoning")
-    ) is not None:
+    if (reasoning := _get_detail(output_details, "reasoning")) is not None:
         token_details["reasoning_tokens"] = reasoning
 
     return token_details

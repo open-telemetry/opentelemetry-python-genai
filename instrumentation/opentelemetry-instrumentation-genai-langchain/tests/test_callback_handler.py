@@ -11,6 +11,7 @@ import math
 import uuid
 from unittest import mock
 
+import langchain.agents
 import pytest
 from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -383,6 +384,38 @@ async def test_chain_input_and_output_capture(
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
 
+@pytest.mark.skipif(
+    not hasattr(langchain.agents, "create_agent"),
+    reason="create_agent requires a newer langchain version",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_unnamed_agent_respects_content_capture(
+    asynchronous: bool,
+    content_capture: ContentCapturingMode,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    inputs = {"messages": [HumanMessage(content="hello")]}
+    agent = langchain.agents.create_agent(
+        FakeChatModel(responses=[AIMessage(content="done")]), tools=[]
+    )
+    if asynchronous:
+        await agent.ainvoke(inputs)
+    else:
+        agent.invoke(inputs)
+    span = finished_span(span_exporter, "invoke_agent")
+    attrs = span.attributes
+    assert attrs is not None
+    assert GenAI.GEN_AI_AGENT_NAME not in attrs
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        assert message["parts"] == [{"type": "text", "content": "hello"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("parent_name", ["MyLangGraph", "math_agent"])
@@ -598,6 +631,96 @@ async def test_chat_response_parts_and_finish_reason(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize(
+    ("generation_info", "response_metadata", "expected"),
+    [
+        pytest.param(
+            None,
+            {"finish_reason": "stop"},
+            "stop",
+            id="missing-generation-info",
+        ),
+        pytest.param(
+            {},
+            {"finish_reason": "length"},
+            "length",
+            id="empty-generation-info",
+        ),
+        pytest.param(
+            {"finish_reason": ""},
+            {"finish_reason": "tool_calls"},
+            "tool_calls",
+            id="empty-generation-finish-reason",
+        ),
+        pytest.param(
+            {"finish_reason": "length"},
+            {"finish_reason": "stop"},
+            "length",
+            id="generation-finish-reason-takes-precedence",
+        ),
+        pytest.param(
+            {"done_reason": "stop"},
+            {"finish_reason": "length"},
+            "stop",
+            id="generation-done-reason-takes-precedence",
+        ),
+        pytest.param(
+            None,
+            {"finish_reason": "stop", "stop_reason": "end_turn"},
+            "stop",
+            id="metadata-finish-reason-takes-precedence",
+        ),
+        pytest.param(
+            None,
+            {"finish_reason": "", "stop_reason": "end_turn"},
+            "end_turn",
+            id="empty-metadata-finish-reason-falls-back",
+        ),
+        pytest.param(None, {}, "error", id="missing-reason-keeps-default"),
+    ],
+)
+async def test_chat_finish_reason_metadata_fallback(
+    asynchronous: bool,
+    streaming: bool,
+    generation_info: dict[str, str] | None,
+    response_metadata: dict[str, str],
+    expected: str,
+    span_exporter: InMemorySpanExporter,
+    content_capture: ContentCapturingMode,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(
+        responses=[
+            AIMessage(content="answer", response_metadata=response_metadata)
+        ],
+        generation_info=generation_info,
+    )
+    if streaming:
+        if asynchronous:
+            chunks = [chunk async for chunk in model.astream("hello")]
+        else:
+            chunks = list(model.stream("hello"))
+        assert "".join(chunk.content for chunk in chunks) == "answer"
+    else:
+        result = await invoke(model, "hello", asynchronous)
+        assert result.content == "answer"
+
+    span = finished_chat(span_exporter)
+    assert span.status.status_code == StatusCode.UNSET
+    attrs = span.attributes
+    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (expected,)
+    if content_capture == ContentCapturingMode.SPAN_ONLY:
+        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        assert output["finish_reason"] == expected
+        assert output["parts"] == [{"type": "text", "content": "answer"}]
+    else:
+        assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
+        assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_chat_multiple_generations_keep_finish_reason_alignment(
     asynchronous: bool,
     span_exporter: InMemorySpanExporter,
@@ -669,6 +792,37 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
             },
         ),
         (
+            # Shape produced by langchain-openai for flex-tier requests.
+            {
+                "input_token_details": {
+                    "flex_cache_read": 4,
+                    "flex_cache_creation": 2,
+                    "flex": 6,
+                },
+                "output_token_details": {"flex_reasoning": 5, "flex": 15},
+            },
+            {
+                "gen_ai.usage.cache_write.input_tokens": 2,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 4,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 5,
+            },
+        ),
+        (
+            {
+                "input_token_details": {
+                    "audio": 1,
+                    "priority_cache_read": 3,
+                    "priority": 7,
+                },
+                "output_token_details": {"priority_reasoning": 8},
+            },
+            {
+                "gen_ai.usage.audio.input_tokens": 1,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 3,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 8,
+            },
+        ),
+        (
             {
                 "input_token_details": {"text": 7, "image": 2, "audio": 1},
                 "output_token_details": {"text": 14, "image": 4, "audio": 2},
@@ -684,7 +838,14 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         ),
         ({}, {}),
     ],
-    ids=["cache-creation", "cache-write", "modalities", "no-details"],
+    ids=[
+        "cache-creation",
+        "cache-write",
+        "flex-tier",
+        "priority-tier",
+        "modalities",
+        "no-details",
+    ],
 )
 async def test_chat_token_details(
     asynchronous: bool,
@@ -1973,6 +2134,28 @@ def test_extract_token_details_cache_write_key():
     details = extract_token_details(usage)
     assert details == {
         "cache_write_input_tokens": 4,
+        "cache_read_input_tokens": 2,
+        "reasoning_tokens": 5,
+    }
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority"])
+def test_extract_token_details_service_tier_prefix(tier: str):
+    # Shape produced by langchain-openai for flex and priority requests.
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "total_tokens": 30,
+        "input_token_details": {
+            f"{tier}_cache_read": 2,
+            f"{tier}_cache_creation": 3,
+            tier: 8,
+        },
+        "output_token_details": {f"{tier}_reasoning": 5, tier: 15},
+    }
+    details = extract_token_details(usage)
+    assert details == {
+        "cache_write_input_tokens": 3,
         "cache_read_input_tokens": 2,
         "reasoning_tokens": 5,
     }

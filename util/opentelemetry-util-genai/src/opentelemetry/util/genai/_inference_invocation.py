@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-import logging
-import os
+import timeit
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Final
 
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -23,15 +22,11 @@ from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
+    _ContextData,
+    _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
-from opentelemetry.util.genai.completion_hook import (
-    CompletionHook,
-    _NoOpCompletionHook,
-)
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-)
+from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
@@ -44,8 +39,6 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 from opentelemetry.util.types import AttributeValue
-
-_logger = logging.getLogger(__name__)
 
 _GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS: Final = (
     "gen_ai.usage.cache_write.input_tokens"
@@ -88,37 +81,13 @@ _GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
 _GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
 
 
-def _should_emit_event(
-    content_capturing_mode: ContentCapturingMode,
-) -> bool:
-    """Check if event emission is enabled."""
-    if (
-        envvar := os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
-        .lower()
-        .strip()
-    ):
-        if envvar == "true":
-            return True
-        if envvar == "false":
-            return False
-        _logger.warning(
-            "%s is not a valid option for `%s` environment variable. Must be one of true or false (case-insensitive). Defaulting based on content capturing mode.",
-            envvar,
-            OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-        )
-    return content_capturing_mode in (
-        ContentCapturingMode.EVENT_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-
 CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
     "opentelemetry.genai.client.inference.context"
 )
 
 
 @dataclass
-class InferenceData:
+class InferenceData(_ContextData):
     """Typed data passed from inner inference invocations to the outer invocation."""
 
     conversation_id: str | None = None
@@ -169,40 +138,6 @@ class InferenceData:
     usage_text_cache_read_input_tokens: int | None = None
     usage_text_input_tokens: int | None = None
     usage_text_output_tokens: int | None = None
-    attributes: dict[str, AttributeValue] = field(
-        default_factory=dict[str, AttributeValue]
-    )
-    metric_attributes: dict[str, AttributeValue] = field(
-        default_factory=dict[str, AttributeValue]
-    )
-
-    def merge(self, other: InferenceData, *, overwrite: bool = True) -> None:
-        """Merge another context data instance into this one.
-
-        Args:
-            other: The context data to merge from.
-            overwrite: If True, values from ``other`` overwrite existing values
-                (used when inner invocations publish to context). If False,
-                existing non-None values in ``self`` are preserved (used when
-                the root invocation enriches from context).
-        """
-        for f in fields(self):
-            if f.name in ("attributes", "metric_attributes"):
-                continue
-            val = getattr(other, f.name)
-            if val is not None and (
-                overwrite or getattr(self, f.name) is None
-            ):
-                setattr(self, f.name, val)
-
-        if overwrite:
-            self.attributes.update(other.attributes)
-            self.metric_attributes.update(other.metric_attributes)
-        else:
-            for k, v in other.attributes.items():
-                self.attributes.setdefault(k, v)
-            for k, v in other.metric_attributes.items():
-                self.metric_attributes.setdefault(k, v)
 
 
 class InferenceInvocation(GenAIInvocation):
@@ -211,8 +146,12 @@ class InferenceInvocation(GenAIInvocation):
     Use handler.inference(provider) rather than constructing this directly.
     """
 
-    _context_key = CLIENT_INFERENCE_CONTEXT_KEY
-    _dataclass_class_object = InferenceData
+    _records_stream_telemetry = True
+
+    # Set once the invocation is handed to a stream wrapper.
+    _request_stream: bool | None = None
+    _ttfc_seconds: float | None = None
+    _stream_last_chunk_at: float | None = None
 
     def __init__(
         self,
@@ -276,6 +215,8 @@ class InferenceInvocation(GenAIInvocation):
             _attach_to_context=_attach_to_context,
             attributes=self.data.attributes,
             metric_attributes=self.data.metric_attributes,
+            context_key=CLIENT_INFERENCE_CONTEXT_KEY,
+            dataclass_class_object=InferenceData,
         )
         self._provider: str = provider
         self._request_model: str | None = request_model
@@ -283,8 +224,10 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
-        self._emit_event: bool = _should_emit_event(
-            self._content_capturing_mode
+        self._emit_event: bool = self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
+            event_name="gen_ai.client.inference.operation.details",
         )
 
     @property
@@ -746,10 +689,52 @@ class InferenceInvocation(GenAIInvocation):
             return reasons or None
         return None
 
+    def record_stream_chunk(self) -> None:
+        """Mark the request as streamed and record one output chunk arriving."""
+        if self._finished:
+            return
+        self._request_stream = True
+        self._on_stream_chunk(timeit.default_timer())
+
     def _on_stream_chunk(self, chunk_at: float) -> None:
-        super()._on_stream_chunk(chunk_at)
+        """Record streaming timing for one output chunk as it arrives.
+
+        The first chunk's delta from the invocation start is the
+        time-to-first-chunk; each later chunk's delta from the previous one is
+        the inter-chunk gap.
+
+        Reference: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-metrics.md#metric-gen_aiclientoperationtime_to_first_chunk
+        """
+        last_chunk_at = (
+            self._stream_last_chunk_at
+            if self._stream_last_chunk_at is not None
+            else self._monotonic_start_s
+        )
+
+        self._stream_last_chunk_at = chunk_at
+        delta = max(chunk_at - last_chunk_at, 0.0)
+        is_first_chunk = self._ttfc_seconds is None
+        if is_first_chunk:
+            self._ttfc_seconds = delta
         self.data.request_stream = True
         self.data.response_time_to_first_chunk = self._ttfc_seconds
+
+        if not self._start_span:
+            return
+
+        attributes = self._get_metric_attributes()
+        if is_first_chunk:
+            self._instruments.time_to_first_chunk.record(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
+        else:
+            self._instruments.time_per_output_chunk.record(
+                delta,
+                attributes=attributes,
+                context=self._span_context,
+            )
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
         attrs: dict[str, AttributeValue] = {}
@@ -870,10 +855,8 @@ class InferenceInvocation(GenAIInvocation):
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
-        invocations never override content capture fields.
+        invocations never override content capture fields unless explicitly enabled.
         """
-        # Content capture is always set to false on inner invocations.
-        # We always want to use content capture from the outer invocation.
         input_messages = self.data.input_messages
         output_messages = self.data.output_messages
         system_instructions = self.data.system_instructions
@@ -882,11 +865,30 @@ class InferenceInvocation(GenAIInvocation):
 
         self.data.merge(data, overwrite=False)
 
-        self.data.input_messages = input_messages
-        self.data.output_messages = output_messages
-        self.data.system_instructions = system_instructions
-        self.data.prompt_variable = prompt_variable
-        self.data.tool_definitions = tool_definitions
+        if data.capture_content:
+            self.data.input_messages = (
+                input_messages if input_messages else data.input_messages
+            )
+            self.data.output_messages = (
+                output_messages if output_messages else data.output_messages
+            )
+            self.data.system_instructions = (
+                system_instructions
+                if system_instructions
+                else data.system_instructions
+            )
+            self.data.prompt_variable = (
+                prompt_variable if prompt_variable else data.prompt_variable
+            )
+            self.data.tool_definitions = (
+                tool_definitions if tool_definitions else data.tool_definitions
+            )
+        else:
+            self.data.input_messages = input_messages
+            self.data.output_messages = output_messages
+            self.data.system_instructions = system_instructions
+            self.data.prompt_variable = prompt_variable
+            self.data.tool_definitions = tool_definitions
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         attrs = dict(self._start_attributes)
@@ -966,6 +968,7 @@ class InferenceInvocation(GenAIInvocation):
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
             context=self._span_context,
+            severity_number=SeverityNumber.DEBUG,
         )
 
 
@@ -994,18 +997,28 @@ class SuppressedInferenceInvocation(InferenceInvocation):
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
     ) -> None:
+        ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context)
+        (
+            self._capture_content_to_context,
+            self._upload_completion,
+            effective_content_mode,
+            effective_completion_hook,
+        ) = _resolve_suppressed_content_and_hook(
+            ctx_data, content_capturing_mode, completion_hook
+        )
+
         super().__init__(
             tracer,
             instruments,
             logger,
-            _NoOpCompletionHook(),
+            effective_completion_hook,
             provider,
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
-            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+            content_capturing_mode=effective_content_mode,
             start_span=False,
             context=context,
             _attach_to_context=_attach_to_context,
@@ -1013,17 +1026,9 @@ class SuppressedInferenceInvocation(InferenceInvocation):
         )
 
     def _on_stream_chunk(self, chunk_at: float) -> None:
-        last_chunk_at = (
-            self._stream_last_chunk_at
-            if self._stream_last_chunk_at is not None
-            else self._monotonic_start_s
-        )
-        self._stream_last_chunk_at = chunk_at
-        delta = max(chunk_at - last_chunk_at, 0.0)
-        if self._ttfc_seconds is None:
-            self._ttfc_seconds = delta
-            self.data.response_time_to_first_chunk = delta
+        super()._on_stream_chunk(chunk_at)
         self.data.request_stream = True
+        self.data.response_time_to_first_chunk = self._ttfc_seconds
 
     def publish_to_context(self, data: InferenceData) -> None:
         """Publish invocation attributes to the active inference context."""
@@ -1033,6 +1038,16 @@ class SuppressedInferenceInvocation(InferenceInvocation):
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:
             self.data.request_stream = self._request_stream
+
+        # Prevent inner content from merging into context when content capture is off,
+        # such as when messages were populated only for completion hook upload.
+        if not self._capture_content_to_context:
+            self.data.input_messages = None
+            self.data.output_messages = None
+            self.data.system_instructions = None
+            self.data.tool_definitions = None
+            self.data.prompt_variable = None
+
         # Overwrite so later inner invocations update the context; the root invocation enriches with overwrite=False.
         data.merge(self.data, overwrite=True)
 
@@ -1043,6 +1058,15 @@ class SuppressedInferenceInvocation(InferenceInvocation):
 
         if self.data.response_finish_reasons is None:
             self.data.response_finish_reasons = self._get_finish_reasons()
+
+        if self._upload_completion:
+            self._call_completion_hook(
+                inputs=self.input_messages,
+                outputs=self.output_messages,
+                system_instruction=self.system_instruction,
+                tool_definitions=self.tool_definitions,
+                log_record=None,
+            )
 
         ctx_data = get_value(
             CLIENT_INFERENCE_CONTEXT_KEY, context=self._span_context

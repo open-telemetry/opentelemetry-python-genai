@@ -96,6 +96,8 @@ Flag, with a link to the rule:
   [`models.py`](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py)
   (messages, tool definitions, system instructions, retrieval documents, …). These must be built
   from the matching `opentelemetry.util.genai.types` dataclass.
+- Flag `GenericPart` usage. It is deprecated; content must map to a specific part type or be
+  dropped.
 - Flag a local workaround for a util type that cannot represent what the provider returns —
   dropping the data, stuffing it into an unrelated field, or bypassing the type. The util type
   must be extended instead.

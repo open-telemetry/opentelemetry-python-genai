@@ -1,1 +1,0 @@
-Stop request extraction from raising on a Converse `document` block whose `format` is not a string.

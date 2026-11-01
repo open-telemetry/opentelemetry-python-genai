@@ -4,17 +4,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from opentelemetry._logs import Logger
-from opentelemetry.context import Context
+from opentelemetry.context import Context, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    _ContextData,
+    _resolve_suppressed_content_and_hook,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
@@ -23,7 +29,26 @@ from opentelemetry.util.genai.utils import (
 )
 from opentelemetry.util.types import AttributeValue
 
+CLIENT_RETRIEVAL_CONTEXT_KEY: Final[str] = (
+    "opentelemetry.genai.client.retrieval.context"
+)
 _GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
+
+
+@dataclass
+class RetrievalData(_ContextData):
+    """Typed data passed from inner retrieval invocations to the outer invocation."""
+
+    data_source_id: str | None = None
+    provider_name: str | None = None
+    request_model: str | None = None
+    server_address: str | None = None
+    server_port: int | None = None
+    retrieval_top_k: int | None = None
+    retrieval_query_text: str | None = None
+    retrieval_documents: (
+        Sequence[RetrievalDocument | Mapping[str, object]] | None
+    ) = None
 
 
 class RetrievalInvocation(GenAIInvocation):
@@ -59,6 +84,7 @@ class RetrievalInvocation(GenAIInvocation):
         server_address: str | None = None,
         server_port: int | None = None,
         content_capturing_mode: ContentCapturingMode | None = None,
+        start_span: bool = True,
         context: Context | None = None,
         _attach_to_context: bool = True,
     ) -> None:
@@ -75,6 +101,13 @@ class RetrievalInvocation(GenAIInvocation):
             )
             if v is not None
         }
+        self._data: RetrievalData = RetrievalData(
+            data_source_id=data_source_id,
+            provider_name=provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+        )
         super().__init__(
             tracer,
             instruments,
@@ -87,32 +120,109 @@ class RetrievalInvocation(GenAIInvocation):
             span_kind=SpanKind.CLIENT,
             start_attributes=start_attributes,
             content_capturing_mode=content_capturing_mode,
+            start_span=start_span,
             context=context,
             _attach_to_context=_attach_to_context,
+            attributes=self._data.attributes,
+            metric_attributes=self._data.metric_attributes,
+            context_key=CLIENT_RETRIEVAL_CONTEXT_KEY,
+            dataclass_class_object=RetrievalData,
         )
         self._data_source_id: str | None = data_source_id
         self._provider: str | None = provider
         self._request_model: str | None = request_model
         self._server_address: str | None = server_address
         self._server_port: int | None = server_port
-        self.top_k: int | None = None
-        self.query_text: str | None = None
-        self.documents: (
-            Sequence[RetrievalDocument | Mapping[str, object]] | None
-        ) = None
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
+
+    @property
+    def data_source_id(self) -> str | None:
+        return self._data.data_source_id
+
+    @property
+    def provider(self) -> str | None:
+        return self._data.provider_name
+
+    @property
+    def request_model(self) -> str | None:
+        return self._data.request_model
+
+    @property
+    def server_address(self) -> str | None:
+        return self._data.server_address
+
+    @property
+    def server_port(self) -> int | None:
+        return self._data.server_port
+
+    @property
+    def top_k(self) -> int | None:
+        return self._data.retrieval_top_k
+
+    @top_k.setter
+    def top_k(self, value: int | None) -> None:
+        self._data.retrieval_top_k = value
+
+    @property
+    def query_text(self) -> str | None:
+        return self._data.retrieval_query_text
+
+    @query_text.setter
+    def query_text(self, value: str | None) -> None:
+        self._data.retrieval_query_text = value
+
+    @property
+    def documents(
+        self,
+    ) -> Sequence[RetrievalDocument | Mapping[str, object]] | None:
         """Retrieved document models, captured only in span content modes.
 
         Passing mappings is deprecated; use ``RetrievalDocument`` instead.
         Legacy mappings are still serialized unchanged.
         """
+        return self._data.retrieval_documents
+
+    @documents.setter
+    def documents(
+        self,
+        value: Sequence[RetrievalDocument | Mapping[str, object]] | None,
+    ) -> None:
+        self._data.retrieval_documents = value
+
+    def enrich_from_context(self, data: RetrievalData) -> None:
+        """Enrich invocation attributes from context data published by inner invocations.
+
+        Outer (root) attributes take precedence over inner values. Inner
+        invocations never override content capture fields unless explicitly enabled.
+        """
+        retrieval_query_text = self._data.retrieval_query_text
+        retrieval_documents = self._data.retrieval_documents
+
+        self._data.merge(data, overwrite=False)
+
+        if data.capture_content:
+            self._data.retrieval_query_text = (
+                retrieval_query_text
+                if retrieval_query_text is not None
+                else data.retrieval_query_text
+            )
+            self._data.retrieval_documents = (
+                retrieval_documents
+                if retrieval_documents is not None
+                else data.retrieval_documents
+            )
+        else:
+            self._data.retrieval_query_text = retrieval_query_text
+            self._data.retrieval_documents = retrieval_documents
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         # data_source_id intentionally excluded — high cardinality
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_PROVIDER_NAME, self._provider),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._request_model),
-            (server_attributes.SERVER_ADDRESS, self._server_address),
-            (server_attributes.SERVER_PORT, self._server_port),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
+            (server_attributes.SERVER_ADDRESS, self._data.server_address),
+            (server_attributes.SERVER_PORT, self._data.server_port),
         )
         attrs: dict[str, AttributeValue] = {
             GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
@@ -128,11 +238,14 @@ class RetrievalInvocation(GenAIInvocation):
         ):
             return {}
         optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT, self.query_text),
+            (
+                GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT,
+                self._data.retrieval_query_text,
+            ),
             (
                 GenAI.GEN_AI_RETRIEVAL_DOCUMENTS,
-                gen_ai_json_dumps(self.documents)
-                if self.documents is not None
+                gen_ai_json_dumps(self._data.retrieval_documents)
+                if self._data.retrieval_documents is not None
                 else None,
             ),
         )
@@ -141,10 +254,104 @@ class RetrievalInvocation(GenAIInvocation):
     def _apply_finish(self, error: Error | None = None) -> None:
         if error is not None:
             self._apply_error_attributes(error)
-        attributes: dict[str, AttributeValue] = {}
-        if self.top_k is not None:
-            attributes[_GEN_AI_RETRIEVAL_TOP_K] = int(self.top_k)
+        ctx_data = get_value(
+            CLIENT_RETRIEVAL_CONTEXT_KEY, context=self._span_context
+        )
+        if isinstance(ctx_data, RetrievalData):
+            self.enrich_from_context(ctx_data)
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
+        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
+            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data.data_source_id),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
+            (server_attributes.SERVER_ADDRESS, self._data.server_address),
+            (server_attributes.SERVER_PORT, self._data.server_port),
+            (
+                _GEN_AI_RETRIEVAL_TOP_K,
+                int(self._data.retrieval_top_k)
+                if self._data.retrieval_top_k is not None
+                else None,
+            ),
+        )
+        attributes: dict[str, AttributeValue] = {
+            k: v for k, v in optional_attrs if v is not None
+        }
         attributes.update(self._get_content_attributes_for_span())
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._record_client_metrics()
+
+
+class SuppressedRetrievalInvocation(RetrievalInvocation):
+    """Represents a retrieval invocation running inside an active retrieval context.
+
+    Suppresses span creation and metrics. On stop or fail, publishes its
+    attributes to the active retrieval context.
+    """
+
+    def __init__(
+        self,
+        tracer: Tracer,
+        instruments: _Instruments,
+        logger: Logger,
+        completion_hook: CompletionHook,
+        *,
+        data_source_id: str | None = None,
+        provider: str | None = None,
+        request_model: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+    ) -> None:
+        ctx_data = get_value(CLIENT_RETRIEVAL_CONTEXT_KEY, context=context)
+        (
+            self._capture_content_to_context,
+            _upload_completion,
+            effective_content_mode,
+            effective_completion_hook,
+        ) = _resolve_suppressed_content_and_hook(
+            ctx_data, content_capturing_mode, completion_hook
+        )
+        super().__init__(
+            tracer,
+            instruments,
+            logger,
+            effective_completion_hook,
+            data_source_id=data_source_id,
+            provider=provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            content_capturing_mode=effective_content_mode,
+            start_span=False,
+            context=context,
+            _attach_to_context=_attach_to_context,
+        )
+
+    def publish_to_context(self, data: RetrievalData) -> None:
+        """Publish invocation attributes to the active retrieval context."""
+        self._data.attributes = self.attributes
+        self._data.metric_attributes = self.metric_attributes
+
+        # Prevent inner content from merging into context when content capture is off.
+        if not self._capture_content_to_context:
+            self._data.retrieval_query_text = None
+            self._data.retrieval_documents = None
+
+        data.merge(self._data, overwrite=True)
+
+    def _finish(self, error: Error | None = None) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        ctx_data = get_value(
+            CLIENT_RETRIEVAL_CONTEXT_KEY, context=self._span_context
+        )
+        if isinstance(ctx_data, RetrievalData):
+            self.publish_to_context(ctx_data)
+
+    def _apply_finish(self, error: Error | None = None) -> None:
+        pass
