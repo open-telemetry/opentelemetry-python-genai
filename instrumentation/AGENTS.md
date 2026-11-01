@@ -153,6 +153,12 @@ Instrumentation observes; it should not change what a call returns or when its w
 
 Full transparency isn't always reachable — prefer the least intrusive option that works.
 
+### Streaming responses
+
+Follow [Streaming responses](../util/opentelemetry-util-genai/AGENTS.md#streaming-responses): subclass
+`SyncStreamWrapper` / `AsyncStreamWrapper`, call `invocation.suspend()` before returning the stream,
+and don't call `invocation.stop()` when the SDK returns the stream.
+
 ## Exception handling
 
 - When catching exceptions from an underlying library after starting telemetry,

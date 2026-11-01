@@ -194,8 +194,8 @@ This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage changelo
 
 Detailed subsystem rules are maintained in their respective directories so they load on demand when working in those areas:
 
-- For instrumentation package rules (telemetry handling, completion hooks, iterator capture, SDK contract preservation, README requirements, unit and conformance testing), see [instrumentation/AGENTS.md](instrumentation/AGENTS.md).
-- For shared utility rules (semconv compliance, invocation lifecycle patterns, stream wrapper protocols), see [util/opentelemetry-util-genai/AGENTS.md](util/opentelemetry-util-genai/AGENTS.md).
+- Before writing or changing code under `instrumentation/`, read [instrumentation/AGENTS.md](instrumentation/AGENTS.md) - it has the rules for util usage, streaming, tests, and conformance.
+- Before changing `util/opentelemetry-util-genai/`, or when using its invocation or stream wrapper APIs from an instrumentation, read [util/opentelemetry-util-genai/AGENTS.md](util/opentelemetry-util-genai/AGENTS.md).
 
 ## Commit formatting
 
