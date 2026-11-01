@@ -531,12 +531,6 @@ def _extract_workflow_step_requirement_messages(
             continue
 
         req_data: dict[str, Any] = {}
-        step_id = _get_property_value(req, "step_id")
-        if step_id is not None:
-            req_data["step_id"] = str(step_id)
-        step_name = _get_property_value(req, "step_name")
-        if step_name is not None:
-            req_data["step_name"] = str(step_name)
 
         requires_confirmation = _get_property_value(
             req, "requires_confirmation"
@@ -544,9 +538,6 @@ def _extract_workflow_step_requirement_messages(
         confirmed = _get_property_value(req, "confirmed")
         if requires_confirmation and confirmed is not None:
             req_data["confirmed"] = bool(confirmed)
-            note = _get_property_value(req, "confirmation_message")
-            if note:
-                req_data["confirmation_message"] = str(note)
             rejection = _get_property_value(req, "rejection_feedback")
             if rejection:
                 req_data["rejection_feedback"] = str(rejection)
@@ -572,78 +563,9 @@ def _extract_workflow_step_requirement_messages(
                 req_data["output_reviewed"] = bool(confirmed)
             if edited_output is not None:
                 req_data["edited_output"] = edited_output
-
-        requires_executor_input = _get_property_value(
-            req, "requires_executor_input"
-        )
-        if requires_executor_input:
-            executor_id = _get_property_value(req, "executor_id")
-            if executor_id:
-                req_data["executor_id"] = str(executor_id)
-            executor_name = _get_property_value(req, "executor_name")
-            if executor_name:
-                req_data["executor_name"] = str(executor_name)
-
-            exec_reqs = _get_property_value(req, "executor_requirements")
-            if (
-                exec_reqs
-                and isinstance(exec_reqs, Iterable)
-                and not isinstance(exec_reqs, (str, bytes, Mapping))
-            ):
-                resolved_exec_reqs: list[dict[str, Any]] = []
-                for er in cast(Iterable[object], exec_reqs):
-                    tool_exec = getattr(er, "tool_execution", None)
-                    if tool_exec is None and isinstance(er, Mapping):
-                        tool_exec = cast(dict[str, Any], er).get(
-                            "tool_execution"
-                        )
-
-                    er_data: dict[str, Any] = {}
-                    if tool_exec is not None:
-                        t_call_id = _get_property_value(
-                            tool_exec, "tool_call_id"
-                        )
-                        if t_call_id is not None:
-                            er_data["tool_call_id"] = str(t_call_id)
-                        t_name = _get_property_value(tool_exec, "tool_name")
-                        if t_name is not None:
-                            er_data["tool_name"] = str(t_name)
-                        conf = _get_property_value(tool_exec, "confirmed")
-                        if conf is not None:
-                            er_data["confirmed"] = bool(conf)
-                        note = _get_property_value(
-                            tool_exec, "confirmation_note"
-                        )
-                        if note is not None:
-                            er_data["confirmation_note"] = str(note)
-                        res = _get_property_value(tool_exec, "result")
-                        if res is not None:
-                            er_data["result"] = res
-
-                        input_schema = getattr(
-                            tool_exec, "user_input_schema", None
-                        )
-                        if input_schema:
-                            er_data["user_input"] = {
-                                field.name: field.value
-                                for field in input_schema
-                                if getattr(field, "value", None) is not None
-                            }
-                        feedback_schema = getattr(
-                            tool_exec, "user_feedback_schema", None
-                        )
-                        if feedback_schema:
-                            er_data["user_feedback"] = {
-                                q.question: q.selected_options
-                                for q in feedback_schema
-                                if getattr(q, "selected_options", None)
-                                is not None
-                            }
-                    if er_data:
-                        resolved_exec_reqs.append(er_data)
-
-                if resolved_exec_reqs:
-                    req_data["executor_requirements"] = resolved_exec_reqs
+            rejection = _get_property_value(req, "rejection_feedback")
+            if rejection:
+                req_data["rejection_feedback"] = str(rejection)
 
         if req_data:
             content_str = format_content(req_data)
@@ -732,7 +654,7 @@ def _set_continue_invocation_input(
     input_val = (
         get_argument("input", wrapped, args, kwargs)
         if isinstance(invocation, LocalAgentInvocation)
-        else get_argument("execution_input", wrapped, args, kwargs)
+        else None
     )
     if input_val is not None:
         content_str = _extract_input_content(input_val)

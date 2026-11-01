@@ -2216,7 +2216,8 @@ def test_workflow_nested_hitl_explicit_step_requirements(
         step_id="step_2",
         step_name="second_step",
         requires_confirmation=True,
-        confirmed=True,
+        confirmed=False,
+        rejection_feedback="no",
     )
     mock_wf_output = WorkflowRunOutput(
         workflow_id="wf-1",
@@ -2250,8 +2251,8 @@ def test_workflow_nested_hitl_explicit_step_requirements(
     messages = json.loads(raw_msgs)
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    assert "step_2" in messages[0]["parts"][0]["content"]
-    assert "step_1" not in messages[0]["parts"][0]["content"]
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == {"confirmed": False, "rejection_feedback": "no"}
 
 
 def test_workflow_nested_hitl_acontinue_run(
@@ -2279,7 +2280,7 @@ def test_workflow_nested_hitl_acontinue_run(
         step_id="step_1",
         step_name="first_step",
         requires_confirmation=True,
-        confirmed=True,
+        confirmed=False,
     )
     req2 = StepRequirement(
         step_id="step_2",
@@ -2328,6 +2329,8 @@ def test_workflow_nested_hitl_acontinue_run(
     messages = json.loads(raw_msgs)
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == {"confirmed": True}
 
 
 def test_workflow_nested_hitl_content_capture_disabled(
@@ -2381,10 +2384,54 @@ def test_workflow_nested_hitl_content_capture_disabled(
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES not in span.attributes
 
 
-def test_workflow_nested_hitl_executor_requirements(
-    instrument_agno_content_capture, span_exporter
+@pytest.mark.parametrize(
+    "req_kwargs, expected",
+    [
+        (
+            {"requires_user_input": True, "user_input": {"a": 1}},
+            {"user_input": {"a": 1}},
+        ),
+        (
+            {"requires_route_selection": True, "selected_choices": ["r1"]},
+            {"selected_choices": ["r1"]},
+        ),
+        (
+            {
+                "requires_output_review": True,
+                "confirmed": True,
+                "edited_output": "new",
+            },
+            {"output_reviewed": True, "edited_output": "new"},
+        ),
+        (
+            {
+                "requires_confirmation": True,
+                "confirmed": False,
+                "rejection_feedback": "no",
+            },
+            {"confirmed": False, "rejection_feedback": "no"},
+        ),
+        (
+            {"requires_confirmation": True, "confirmed": True},
+            {"confirmed": True},
+        ),
+        (
+            {
+                "requires_output_review": True,
+                "confirmed": False,
+                "rejection_feedback": "rejected output",
+            },
+            {
+                "output_reviewed": False,
+                "rejection_feedback": "rejected output",
+            },
+        ),
+    ],
+)
+def test_workflow_step_requirement_kinds(
+    instrument_agno_content_capture, span_exporter, req_kwargs, expected
 ) -> None:
-    """Test that Workflow.continue_run captures executor-level HITL requirements."""
+    """Test that Workflow.continue_run captures each step requirement kind without framework metadata."""
     from agno.workflow.workflow import Workflow
 
     if not hasattr(Workflow, "continue_run"):
@@ -2392,36 +2439,22 @@ def test_workflow_nested_hitl_executor_requirements(
             "Workflow.continue_run is not supported in this version of agno"
         )
 
-    from agno.models.response import ToolExecution
-    from agno.run.requirement import RunRequirement, UserInputField
     from agno.run.workflow import RunStatus, WorkflowRunOutput
     from agno.workflow.types import StepRequirement
 
     workflow = Workflow(
-        name="test-nested-hitl-workflow-exec",
+        name="test-step-kinds-workflow",
         steps=[],
-        session_id="wf-session-exec",
+        session_id="wf-session-kinds",
     )
-    field = UserInputField(name="amount", field_type="str", value="100")
-    tool_exec = ToolExecution(
-        tool_call_id="call_exec_1",
-        tool_name="approve_payment",
-        confirmed=True,
-        confirmation_note="looks good",
-        user_input_schema=[field],
-    )
-    run_req = RunRequirement(tool_execution=tool_exec)
     step_req = StepRequirement(
-        step_id="step_exec_1",
-        step_name="payment_step",
-        requires_executor_input=True,
-        executor_id="agent_pay",
-        executor_name="PaymentAgent",
-        executor_requirements=[run_req],
+        step_id="step_test",
+        step_name="test_step",
+        **req_kwargs,
     )
     mock_wf_output = WorkflowRunOutput(
         workflow_id="wf-1",
-        session_id="wf-session-exec",
+        session_id="wf-session-kinds",
         status=RunStatus.paused,
         paused_step_index=1,
         content="Workflow continued",
@@ -2442,17 +2475,11 @@ def test_workflow_nested_hitl_executor_requirements(
     span = spans[0]
     assert GenAIAttributes.GEN_AI_INPUT_MESSAGES in span.attributes
     raw_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    assert isinstance(raw_msgs, str)
     messages = json.loads(raw_msgs)
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    content = messages[0]["parts"][0]["content"]
-    assert "step_exec_1" in content
-    assert "PaymentAgent" in content
-    assert "approve_payment" in content
-    assert "call_exec_1" in content
-    assert "looks good" in content
-    assert "100" in content
+    content = json.loads(messages[0]["parts"][0]["content"])
+    assert content == expected
 
 
 def test_agent_continue_run_with_user_input_schema(
