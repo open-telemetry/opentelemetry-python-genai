@@ -1782,24 +1782,7 @@ async def test_async_chat_completion_messages_generator_reaches_sdk(
         seen["body"] = json.loads(request.content)
         return httpx.Response(
             200,
-            json={
-                "id": "chatcmpl-async-generator-test",
-                "object": "chat.completion",
-                "created": 1234567890,
-                "model": "gpt-4o-mini",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Hi!"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 5,
-                    "total_tokens": 15,
-                },
-            },
+            json=_ASYNC_GENERATOR_TEST_COMPLETION,
         )
 
     client = AsyncOpenAI(
@@ -1816,6 +1799,46 @@ async def test_async_chat_completion_messages_generator_reaches_sdk(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     assert "gen_ai.input.messages" in spans[0].attributes
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_streaming_messages_generator(
+    span_exporter, instrument_with_content
+):
+    """Async: a ``messages`` generator with ``stream=True`` reaches the SDK and is recorded."""
+    seen = {}
+
+    async def respond(request):
+        seen["body"] = json.loads(request.content)
+        body = (
+            'data: {"id":"chatcmpl-1","object":"chat.completion.chunk",'
+            '"created":1,"model":"gpt-4o-mini","choices":[{"index":0,'
+            '"delta":{"role":"assistant","content":"Hi!"},'
+            '"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        )
+
+    client = AsyncOpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    test_messages = [{"role": "user", "content": "hello"}]
+    stream = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=(msg for msg in test_messages),
+        stream=True,
+    )
+    async for _ in stream:
+        pass
+
+    assert seen["body"]["messages"] == test_messages
+    (span,) = span_exporter.get_finished_spans()
+    recorded = json.loads(span.attributes["gen_ai.input.messages"])
+    assert recorded[0]["parts"][0]["content"] == "hello"
 
 
 @pytest.mark.asyncio()
@@ -1837,24 +1860,7 @@ async def test_async_chat_completion_tools_generator_reaches_sdk(
         seen["body"] = json.loads(request.content)
         return httpx.Response(
             200,
-            json={
-                "id": "chatcmpl-async-generator-test",
-                "object": "chat.completion",
-                "created": 1234567890,
-                "model": "gpt-4o-mini",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Ok"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 5,
-                    "total_tokens": 15,
-                },
-            },
+            json=_ASYNC_GENERATOR_TEST_COMPLETION,
         )
 
     client = AsyncOpenAI(
@@ -1897,24 +1903,7 @@ async def test_async_chat_completion_generator_no_content_transparency(
         seen["body"] = json.loads(request.content)
         return httpx.Response(
             200,
-            json={
-                "id": "chatcmpl-async-generator-no-content-test",
-                "object": "chat.completion",
-                "created": 1234567890,
-                "model": "gpt-4o-mini",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Hi!"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 5,
-                    "total_tokens": 15,
-                },
-            },
+            json=_ASYNC_GENERATOR_TEST_COMPLETION,
         )
 
     client = AsyncOpenAI(
@@ -1961,10 +1950,8 @@ async def test_async_chat_completion_messages_generator_reusing_mutable_dict(
     span_exporter, instrument_with_content
 ):
     """Async: same mutated dict yielded twice records both values."""
-    seen = {}
 
     async def respond(request):
-        seen["body"] = json.loads(request.content)
         return httpx.Response(
             200,
             json=_ASYNC_GENERATOR_TEST_COMPLETION,
@@ -2001,15 +1988,11 @@ async def test_async_chat_completion_nested_content_iterator_captured(
     seen = {}
 
     async def respond(request):
-        seen["body"] = json.loads(request.content)
+        seen.setdefault("bodies", []).append(json.loads(request.content))
         return httpx.Response(
             200,
             json=_ASYNC_GENERATOR_TEST_COMPLETION,
         )
-
-    def content():
-        yield "a"
-        yield "b"
 
     client = AsyncOpenAI(
         api_key="test_openai_api_key",
@@ -2019,11 +2002,18 @@ async def test_async_chat_completion_nested_content_iterator_captured(
     await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "user", "content": list(content())},
+            {
+                "role": "user",
+                "content": ({"type": "text", "text": t} for t in ("a", "b")),
+            },
         ],
     )
 
-    assert seen["body"]["messages"][0]["content"] == ["a", "b"]
+    (body,) = seen["bodies"]
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"},
+    ]
     spans = span_exporter.get_finished_spans()
     (span,) = spans
     recorded = json.loads(span.attributes["gen_ai.input.messages"])
@@ -2035,10 +2025,8 @@ async def test_async_chat_completion_generator_sdk_error_records_captured(
     span_exporter, instrument_with_content
 ):
     """Async: values the SDK consumed before the failure are recorded."""
-    seen = {}
 
     async def respond(request):
-        seen["body"] = json.loads(request.content)
         return httpx.Response(
             200,
             json=_ASYNC_GENERATOR_TEST_COMPLETION,
