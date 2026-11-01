@@ -117,6 +117,33 @@ Conformance
 Semantic-convention conformance scenarios live in `tests/conformance
 <tests/conformance>`_.
 
+The same ``QwenPawInstrumentor`` selects the entry point for the installed
+QwenPaw major version. The 1.x runner instrumentation remains supported.
+Tests cover both the oldest and latest releases of each runtime generation:
+
+.. list-table::
+   :header-rows: 1
+
+   * - QwenPaw
+     - Entry point
+     - Conformance tox environment
+   * - 1.1.0
+     - ``AgentRunner.query_handler``
+     - ``py310-test-instrumentation-genai-qwenpaw-oldest-conformance``
+   * - Latest 1.x
+     - ``AgentRunner.query_handler``
+     - ``py313-test-instrumentation-genai-qwenpaw-v1-conformance``
+   * - 2.0.0
+     - ``Runtime.run``
+     - ``py311-test-instrumentation-genai-qwenpaw-v2-conformance``
+   * - Latest 2.x
+     - ``Runtime.run``
+     - ``py313-test-instrumentation-genai-qwenpaw-conformance``
+
+Each version runs successful and failed turns through Weaver live-check.
+The 2.x scenarios additionally cover reasoning, tool calls/results, and
+multimodal request messages.
+
 References
 ----------
 

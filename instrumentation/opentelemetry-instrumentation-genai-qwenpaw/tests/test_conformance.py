@@ -30,8 +30,9 @@ from .conformance.runtime_messages import RuntimeMessagesScenario
     "scenario",
     [
         InvokeAgentScenario(),
+        RuntimeErrorScenario(),
         *(
-            [RuntimeErrorScenario(), RuntimeMessagesScenario()]
+            [RuntimeMessagesScenario()]
             if int(version("qwenpaw").split(".")[0]) >= 2
             else []
         ),
