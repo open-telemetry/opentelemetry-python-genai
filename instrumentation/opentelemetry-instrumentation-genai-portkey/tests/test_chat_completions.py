@@ -34,6 +34,10 @@ from opentelemetry.trace import StatusCode
 _has_async_portkey = AsyncPortkey is not None
 
 
+_sent: list[Any] = []
+_sent_tools: list[Any] = []
+
+
 def _consume_chat_request(*args: Any, **kwargs: Any) -> None:
     body = kwargs.get("body") or kwargs.get("json")
     if not isinstance(body, dict):
@@ -47,22 +51,28 @@ def _consume_chat_request(*args: Any, **kwargs: Any) -> None:
         and isinstance(messages, Iterable)
         and not isinstance(messages, (str, bytes))
     ):
+        consumed_messages: list[Any] = []
         for msg in list(messages):
             if isinstance(msg, dict):
-                content = msg.get("content")
+                m = dict(msg)
+                content = m.get("content")
                 if (
                     content is not None
                     and isinstance(content, Iterable)
                     and not isinstance(content, (str, bytes))
                 ):
-                    list(content)
-                tool_calls = msg.get("tool_calls")
+                    m["content"] = list(content)
+                tool_calls = m.get("tool_calls")
                 if (
                     tool_calls is not None
                     and isinstance(tool_calls, Iterable)
                     and not isinstance(tool_calls, (str, bytes))
                 ):
-                    list(tool_calls)
+                    m["tool_calls"] = list(tool_calls)
+                consumed_messages.append(m)
+            else:
+                consumed_messages.append(msg)
+        _sent.append(consumed_messages)
     tools = body.get("tools")
     if tools is None:
         extra_body = body.get("extra_body")
@@ -73,7 +83,7 @@ def _consume_chat_request(*args: Any, **kwargs: Any) -> None:
         and isinstance(tools, Iterable)
         and not isinstance(tools, (str, bytes))
     ):
-        list(tools)
+        _sent_tools.append(list(tools))
 
 
 def _create_mock_chat_completion(
@@ -217,6 +227,18 @@ def _setup_async_mock_chat(
         return mock_resp
 
     client.chat.completions._post = AsyncMock(side_effect=async_mock_post)
+
+
+def _sent_messages(client: Any) -> Any:
+    completions = client.chat.completions
+    if hasattr(completions, "openai_client"):
+        create = (
+            completions.openai_client.with_raw_response.chat.completions.create
+        )
+        return create.call_args.kwargs["messages"]
+    call_args = completions._post.call_args
+    body = call_args.kwargs.get("body")
+    return (body if isinstance(body, dict) else call_args.kwargs)["messages"]
 
 
 def test_sync_chat_completions_basic(
@@ -743,20 +765,14 @@ def test_chat_completions_generator_content_captured(
             {"content": "item 1", "type": "text"},
         ]
 
-        if hasattr(p.chat.completions, "openai_client"):
-            call_args = p.chat.completions.openai_client.with_raw_response.chat.completions.create.call_args
-            received_messages = call_args.kwargs["messages"]
-        else:
-            call_args = p.chat.completions._post.call_args
-            body = (
-                call_args.kwargs.get("body")
-                if isinstance(call_args.kwargs.get("body"), dict)
-                else call_args.kwargs
-            )
-            received_messages = body["messages"]
+        received_messages = _sent_messages(p)
         received_content = received_messages[0]["content"]
         assert not isinstance(received_content, list)
         assert isinstance(received_content, Iterator)
+        assert _sent[-1][0]["content"] == [
+            {"type": "text", "text": "item 0"},
+            {"type": "text", "text": "item 1"},
+        ]
 
 
 def test_chat_completions_generator_messages_and_tools_captured(
@@ -810,9 +826,13 @@ def test_chat_completions_generator_messages_and_tools_captured(
 
         # Check what the mocked SDK received: messages and tools should NOT be lists,
         # but iterators wrapped by IteratorCapture.
+        received_messages = _sent_messages(p)
+        assert not isinstance(received_messages, list)
+        assert isinstance(received_messages, Iterator)
+        assert _sent[-1] == raw_msgs
+
         if hasattr(p.chat.completions, "openai_client"):
             call_args = p.chat.completions.openai_client.with_raw_response.chat.completions.create.call_args
-            received_messages = call_args.kwargs["messages"]
             extra_body = call_args.kwargs.get("extra_body", {})
             received_tools = extra_body.get("tools")
         else:
@@ -822,12 +842,10 @@ def test_chat_completions_generator_messages_and_tools_captured(
                 if isinstance(call_args.kwargs.get("body"), dict)
                 else call_args.kwargs
             )
-            received_messages = body["messages"]
             received_tools = body.get("tools")
-        assert not isinstance(received_messages, list)
-        assert isinstance(received_messages, Iterator)
         assert not isinstance(received_tools, list)
         assert isinstance(received_tools, Iterator)
+        assert _sent_tools[-1] == raw_tools
 
 
 def test_chat_completions_generator_tools_not_consumed_without_content_capture(
@@ -973,23 +991,15 @@ def test_chat_completions_nested_generators_captured(
             {"content": "Running tool", "type": "text"},
         ]
 
-        if hasattr(p.chat.completions, "openai_client"):
-            call_args = p.chat.completions.openai_client.with_raw_response.chat.completions.create.call_args
-            received_messages = call_args.kwargs["messages"]
-        else:
-            call_args = p.chat.completions._post.call_args
-            body = (
-                call_args.kwargs.get("body")
-                if isinstance(call_args.kwargs.get("body"), dict)
-                else call_args.kwargs
-            )
-            received_messages = body["messages"]
+        received_messages = _sent_messages(p)
         received_content = received_messages[0]["content"]
         assert not isinstance(received_content, list)
         assert isinstance(received_content, Iterator)
+        assert _sent[-1][0]["content"] == raw_parts
         received_tool_calls = received_messages[1]["tool_calls"]
         assert not isinstance(received_tool_calls, list)
         assert isinstance(received_tool_calls, Iterator)
+        assert _sent[-1][1]["tool_calls"] == raw_tool_calls
 
 
 def test_chat_completions_generator_tool_calls_reaches_the_sdk(
@@ -1231,13 +1241,17 @@ async def test_async_chat_completions_generator_messages_and_tools_captured(
         assert len(tool_defs) == 1
         assert tool_defs[0]["name"] == "async_weather"
 
+        received_messages = _sent_messages(ap)
+        assert not isinstance(received_messages, list)
+        assert isinstance(received_messages, Iterator)
+        assert _sent[-1] == raw_msgs
+
         if hasattr(ap.chat.completions, "openai_client"):
             call_args = ap.chat.completions.openai_client.with_raw_response.chat.completions.create.call_args
-            assert not isinstance(call_args.kwargs["messages"], list)
-            assert isinstance(call_args.kwargs["messages"], Iterator)
             extra_body = call_args.kwargs.get("extra_body", {})
             assert not isinstance(extra_body.get("tools"), list)
             assert isinstance(extra_body.get("tools"), Iterator)
+        assert _sent_tools[-1] == raw_tools
 
 
 def test_chat_completions_generator_messages_captured_on_error(
