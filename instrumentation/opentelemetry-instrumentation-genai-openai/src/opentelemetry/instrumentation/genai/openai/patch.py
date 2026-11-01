@@ -20,11 +20,14 @@ from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     InferenceInvocation,
 )
+from opentelemetry.util.genai.iterator_capture import IteratorCapture
 
 from ._raw_response import ParsableResponse, wrap_stream_result
 from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
 from .utils import (
+    _prepare_input_messages,
     _prepare_output_messages,
+    _prepare_tool_definitions,
     create_chat_invocation,
     get_server_address_and_port,
     get_value,
@@ -66,12 +69,30 @@ def chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     def traced_method(wrapped, instance, args, kwargs):
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", capture_content
+        )
         chat_invocation = create_chat_invocation(
             handler, kwargs, instance, capture_content=capture_content
         )
 
         try:
-            result = wrapped(*args, **kwargs)
+            try:
+                result = wrapped(*args, **kwargs)
+            finally:
+                # The SDK has consumed the request iterators by the time
+                # wrapped() returns, even when it raises; extract() never
+                # advances them again and swallows its own errors.
+                chat_invocation.input_messages = (
+                    messages_capture.extract(_prepare_input_messages) or []
+                )
+                chat_invocation.tool_definitions = tools_capture.extract(
+                    _prepare_tool_definitions
+                )
+
             if is_streaming(kwargs):
                 return wrap_stream_result(
                     ChatStreamWrapper,
@@ -97,12 +118,30 @@ def async_chat_completions_create_v_new(
     capture_content = handler.should_capture_content()
 
     async def traced_method(wrapped, instance, args, kwargs):
+        messages_capture = IteratorCapture.from_property(
+            kwargs, "messages", capture_content
+        )
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", capture_content
+        )
         chat_invocation = create_chat_invocation(
             handler, kwargs, instance, capture_content=capture_content
         )
 
         try:
-            result = await wrapped(*args, **kwargs)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                # The SDK has consumed the request iterators by the time
+                # wrapped() returns, even when it raises; extract() never
+                # advances them again and swallows its own errors.
+                chat_invocation.input_messages = (
+                    messages_capture.extract(_prepare_input_messages) or []
+                )
+                chat_invocation.tool_definitions = tools_capture.extract(
+                    _prepare_tool_definitions
+                )
+
             if is_streaming(kwargs):
                 return wrap_stream_result(
                     AsyncChatStreamWrapper,
@@ -114,7 +153,6 @@ def async_chat_completions_create_v_new(
             _set_response_properties(chat_invocation, result, capture_content)
             chat_invocation.stop()
             return result
-
         except BaseException as error:
             chat_invocation.fail(error)
             raise
