@@ -1,0 +1,88 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "deepseek-r1:1.5b",
+        "stream": true,
+        "options": {
+          "num_predict": 40
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is 17 * 23?"
+          }
+        ],
+        "tools": [],
+        "think": true
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '153'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3164356Z","message":{"role":"assistant","content":"","thinking":"\nFirst"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3302966Z","message":{"role":"assistant","content":"","thinking":","},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3441604Z","message":{"role":"assistant","content":"","thinking":" I"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3578804Z","message":{"role":"assistant","content":"","thinking":" need"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3719825Z","message":{"role":"assistant","content":"","thinking":" to"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3859112Z","message":{"role":"assistant","content":"","thinking":" calculate"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.3998172Z","message":{"role":"assistant","content":"","thinking":" the"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.413719Z","message":{"role":"assistant","content":"","thinking":" product"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.4274287Z","message":{"role":"assistant","content":"","thinking":" of"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.4415574Z","message":{"role":"assistant","content":"","thinking":" "},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.4553466Z","message":{"role":"assistant","content":"","thinking":"1"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.4690765Z","message":{"role":"assistant","content":"","thinking":"7"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.4829426Z","message":{"role":"assistant","content":"","thinking":" and"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.4967735Z","message":{"role":"assistant","content":"","thinking":" "},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.5068956Z","message":{"role":"assistant","content":"","thinking":"2"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.5169887Z","message":{"role":"assistant","content":"","thinking":"3"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.53339Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.5475678Z","message":{"role":"assistant","content":"","thinking":" \n\n"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.565818Z","message":{"role":"assistant","content":"","thinking":"I"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.5796891Z","message":{"role":"assistant","content":"","thinking":"'ll"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.5934074Z","message":{"role":"assistant","content":"","thinking":" start"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6072767Z","message":{"role":"assistant","content":"","thinking":" by"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6212222Z","message":{"role":"assistant","content":"","thinking":" breaking"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6349725Z","message":{"role":"assistant","content":"","thinking":" down"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6485389Z","message":{"role":"assistant","content":"","thinking":" the"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6578029Z","message":{"role":"assistant","content":"","thinking":" multiplication"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6754611Z","message":{"role":"assistant","content":"","thinking":" into"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.6891749Z","message":{"role":"assistant","content":"","thinking":" simpler"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7027106Z","message":{"role":"assistant","content":"","thinking":" parts"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7161534Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7295965Z","message":{"role":"assistant","content":"","thinking":" I"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7431818Z","message":{"role":"assistant","content":"","thinking":"'ll"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7566336Z","message":{"role":"assistant","content":"","thinking":" multiply"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7688479Z","message":{"role":"assistant","content":"","thinking":" "},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7832723Z","message":{"role":"assistant","content":"","thinking":"1"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.7970623Z","message":{"role":"assistant","content":"","thinking":"7"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.8107149Z","message":{"role":"assistant","content":"","thinking":" by"},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.8245136Z","message":{"role":"assistant","content":"","thinking":" "},"done":false}
+        {"model":"deepseek-r1:1.5b","created_at":"2026-11-01T14:53:55.8245136Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"length","total_duration":2938230200,"load_duration":2307409200,"prompt_eval_count":13,"prompt_eval_cached_count":0,"prompt_eval_duration":78436000,"eval_count":40,"eval_duration":547525000}
+    headers:
+      content-type:
+      - application/x-ndjson
+      date:
+      - Sun, 01 Nov 2026 14:53:55 GMT
+      transfer-encoding:
+      - chunked
+    status:
+      code: 200
+      message: OK
+version: 1

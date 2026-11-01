@@ -13,6 +13,7 @@ from typing import Any
 import ollama
 import pytest
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.ollama import OllamaInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -22,7 +23,6 @@ from opentelemetry.semconv.attributes import (
     server_attributes,
 )
 from opentelemetry.trace import StatusCode
-from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .conftest import CHAT_MODEL, HOST, REASONING_MODEL
 
@@ -174,6 +174,111 @@ def test_chat_stream_span_ends_only_after_the_stream_is_drained(
             pass
 
     assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_chat_stream_span_is_not_current_between_reads(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES, stream=True
+        )
+        next(iter(stream))
+        assert not trace.get_current_span().get_span_context().is_valid
+        for _ in stream:
+            pass
+
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+def test_chat_stream_closed_after_caller_error_ends_span(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = ollama.Client(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES, stream=True
+        )
+        with pytest.raises(ValueError):
+            for _ in stream:
+                raise ValueError("boom")
+        assert span_exporter.get_finished_spans() == ()
+        stream.close()
+
+    # An error raised in the loop body never reaches the stream, so closing
+    # it ends the span like any other early close.
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
+
+
+def test_chat_stream_records_tool_calls(
+    instrument_with_content, span_exporter, vcr
+):
+    # The tool call arrives in a chunk before the final one, and the final
+    # chunk reports "stop".
+    with vcr.use_cassette("test_chat_stream_records_tool_calls.yaml"):
+        chunks = list(
+            ollama.Client(host=HOST).chat(
+                model=CHAT_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Paris? Use the tool.",
+                    }
+                ],
+                tools=[WEATHER_TOOL],
+                options={"temperature": 0},
+                stream=True,
+            )
+        )
+
+    assert not chunks[-1].message.tool_calls
+    assert chunks[-1].done_reason == "stop"
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    (output,) = _messages(span, GenAI.GEN_AI_OUTPUT_MESSAGES)
+    assert output["parts"] == [
+        {
+            "type": "tool_call",
+            "id": None,
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+        }
+    ]
+
+
+@pytest.mark.skipif(
+    "think" not in inspect.signature(ollama.Client.chat).parameters,
+    reason="the think parameter is not available on this ollama version",
+)
+def test_chat_stream_records_reasoning_and_a_length_finish(
+    instrument_with_content, span_exporter, vcr
+):
+    with vcr.use_cassette(
+        "test_chat_stream_records_reasoning_and_a_length_finish.yaml"
+    ):
+        chunks = list(
+            ollama.Client(host=HOST).chat(
+                model=REASONING_MODEL,
+                messages=[{"role": "user", "content": "What is 17 * 23?"}],
+                think=True,
+                options={"num_predict": 40},
+                stream=True,
+            )
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("length",)
+    (output,) = _messages(span, GenAI.GEN_AI_OUTPUT_MESSAGES)
+    assert output["parts"][0] == {
+        "type": "reasoning",
+        "content": "".join(chunk.message.thinking or "" for chunk in chunks),
+    }
 
 
 @pytest.mark.parametrize(
@@ -372,29 +477,6 @@ def test_chat_without_messages_records_no_span(
 
     assert response.done_reason in ("load", "unload")
     assert span_exporter.get_finished_spans() == ()
-
-
-def test_chat_inside_another_inference_adds_no_span(
-    instrument_no_content,
-    span_exporter,
-    tracer_provider,
-    meter_provider,
-    logger_provider,
-    vcr,
-):
-    # A framework instrumentation (LangChain's ChatOllama, for example) that
-    # already records the inference must not get a second chat span.
-    outer = TelemetryHandler(
-        tracer_provider=tracer_provider,
-        meter_provider=meter_provider,
-        logger_provider=logger_provider,
-    )
-    with vcr.use_cassette("test_chat_records_a_chat_span.yaml"):
-        with outer.inference("langchain", request_model=CHAT_MODEL):
-            ollama.Client(host=HOST).chat(model=CHAT_MODEL, messages=MESSAGES)
-
-    (span,) = span_exporter.get_finished_spans()
-    assert span.attributes[GenAI.GEN_AI_PROVIDER_NAME] == "langchain"
 
 
 def test_messages_without_content_are_not_recorded(

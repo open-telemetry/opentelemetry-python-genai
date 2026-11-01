@@ -14,6 +14,8 @@ import pytest
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
+from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.trace import StatusCode
 
 from .conftest import CHAT_MODEL, HOST
 
@@ -90,3 +92,62 @@ async def test_concurrent_async_chats_record_their_own_usage(
         s.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] for s in spans
     ) == sorted(response.eval_count for response in responses)
     assert len({s.context.trace_id for s in spans}) == 3
+
+
+@pytest.mark.asyncio
+async def test_async_chat_error_is_recorded_and_reraised(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette("test_chat_error_is_recorded_and_reraised.yaml"):
+        with pytest.raises(ollama.ResponseError):
+            await ollama.AsyncClient(host=HOST).chat(
+                model="no-such-model:1b", messages=MESSAGES
+            )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        span.attributes[error_attributes.ERROR_TYPE]
+        == "ollama._types.ResponseError"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_chat_stream_error_is_recorded(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette("test_chat_stream_error_is_recorded.yaml"):
+        stream = await ollama.AsyncClient(host=HOST).chat(
+            model="no-such-model:1b", messages=MESSAGES, stream=True
+        )
+        with pytest.raises(ollama.ResponseError):
+            [chunk async for chunk in stream]
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert (
+        span.attributes[error_attributes.ERROR_TYPE]
+        == "ollama._types.ResponseError"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_chat_stream_closed_after_caller_error_ends_span(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette(
+        "test_async_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = await ollama.AsyncClient(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES, stream=True
+        )
+        with pytest.raises(ValueError):
+            async for _ in stream:
+                raise ValueError("boom")
+        assert span_exporter.get_finished_spans() == ()
+        await stream.aclose()
+
+    # An error raised in the loop body never reaches the stream, so closing
+    # it ends the span like any other early close.
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.UNSET
