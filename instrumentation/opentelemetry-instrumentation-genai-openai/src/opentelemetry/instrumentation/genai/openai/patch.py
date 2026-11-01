@@ -92,21 +92,21 @@ def chat_completions_create_v_new(
                 chat_invocation.tool_definitions = tools_capture.extract(
                     _prepare_tool_definitions
                 )
+
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    ChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
+                )
+
+            _set_response_properties(chat_invocation, result, capture_content)
+            chat_invocation.stop()
+            return result
         except BaseException as error:
             chat_invocation.fail(error)
             raise
-
-        if is_streaming(kwargs):
-            return wrap_stream_result(
-                ChatStreamWrapper,
-                result,
-                chat_invocation,
-                capture_content,
-            )
-
-        _set_response_properties(chat_invocation, result, capture_content)
-        chat_invocation.stop()
-        return result
 
     return traced_method
 
@@ -141,21 +141,21 @@ def async_chat_completions_create_v_new(
                 chat_invocation.tool_definitions = tools_capture.extract(
                     _prepare_tool_definitions
                 )
+
+            if is_streaming(kwargs):
+                return wrap_stream_result(
+                    AsyncChatStreamWrapper,
+                    result,
+                    chat_invocation,
+                    capture_content,
+                )
+
+            _set_response_properties(chat_invocation, result, capture_content)
+            chat_invocation.stop()
+            return result
         except BaseException as error:
             chat_invocation.fail(error)
             raise
-
-        if is_streaming(kwargs):
-            return wrap_stream_result(
-                AsyncChatStreamWrapper,
-                result,
-                chat_invocation,
-                capture_content,
-            )
-
-        _set_response_properties(chat_invocation, result, capture_content)
-        chat_invocation.stop()
-        return result
 
     return traced_method
 

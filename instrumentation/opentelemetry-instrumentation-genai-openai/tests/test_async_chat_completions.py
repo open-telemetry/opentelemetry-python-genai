@@ -2053,3 +2053,32 @@ async def test_async_chat_completion_generator_sdk_error_records_captured(
     assert [part["content"] for part in recorded[0]["parts"]] == [
         "before the failure"
     ]
+
+
+@pytest.mark.asyncio()
+async def test_async_chat_completion_response_processing_error_ends_span(
+    span_exporter, instrument_with_content, monkeypatch
+):
+    async def respond(request):
+        return httpx.Response(200, json=_ASYNC_GENERATOR_TEST_COMPLETION)
+
+    def raise_on_response(*args, **kwargs):
+        raise RuntimeError("response processing failed")
+
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.genai.openai.patch._set_response_properties",
+        raise_on_response,
+    )
+    client = AsyncOpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    with pytest.raises(RuntimeError, match="response processing failed"):
+        await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"

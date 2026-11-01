@@ -2364,3 +2364,32 @@ def test_chat_completion_generator_sdk_error_records_captured_values(
     assert [part["content"] for part in recorded[0]["parts"]] == [
         "before the failure"
     ]
+
+
+def test_chat_completion_response_processing_error_ends_span(
+    span_exporter, instrument_with_content, monkeypatch
+):
+    def respond(request):
+        return httpx.Response(200, json=_REQUEST_TEST_COMPLETION)
+
+    def raise_on_response(*args, **kwargs):
+        raise RuntimeError("response processing failed")
+
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.genai.openai.patch._set_response_properties",
+        raise_on_response,
+    )
+    client = OpenAI(
+        api_key="test_openai_api_key",
+        base_url="http://openai.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    with pytest.raises(RuntimeError, match="response processing failed"):
+        client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+    assert not trace.get_current_span().get_span_context().is_valid
