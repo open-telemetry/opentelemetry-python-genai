@@ -41,12 +41,12 @@
 # It also includes opentelemetry-instrumentation-httpx to exercise the httpx interop tests.
 
 openai==3.37.0
-pydantic==2.14.1
+pydantic==2.14.2
 httpx==0.28.1
-opentelemetry-instrumentation-httpx==0.66b1
+opentelemetry-instrumentation-httpx==0.66b2
 importlib-metadata==9.0.1
 packaging==26.3
-wrapt==2.5.1
+wrapt==2.5.2
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e instrumentation/opentelemetry-instrumentation-genai-openai

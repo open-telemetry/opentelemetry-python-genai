@@ -1,6 +1,6 @@
-claude-agent-sdk>=0.2.174
+claude-agent-sdk>=0.2.175
 anyio>=4.15.1
 
-opentelemetry-sdk~=1.45.1
-opentelemetry-exporter-otlp-proto-grpc~=1.45.1
+opentelemetry-sdk~=1.45.2
+opentelemetry-exporter-otlp-proto-grpc~=1.45.2
 opentelemetry-instrumentation-genai-claude-agent-sdk~=1.0b0
