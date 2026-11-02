@@ -40,6 +40,8 @@ class _InvocationState:
     parent_run_id: UUID | None = None
     ended: bool = False
     agent_name: str | None = None
+    # None leaves this run outside logical inference accounting.
+    inference_counted: bool | None = None
     prompt_context: _PromptContext | None = None
     pending_prompt_contexts: list[_PromptContext] = field(
         default_factory=lambda: list[_PromptContext]()
@@ -59,10 +61,13 @@ class _InvocationManager:
         parent_run_id: UUID | None,
         invocation: _AnyInvocation | None,
         agent_name: str | None = None,
+        *,
+        logical_inference: bool = False,
     ) -> None:
         invocation_state = _InvocationState(
             invocation=invocation,
             agent_name=agent_name,
+            inference_counted=False if logical_inference else None,
         )
 
         invocation_state.parent_run_id = parent_run_id
@@ -98,14 +103,23 @@ class _InvocationManager:
     ) -> None:
         with self._call_count_lock:
             current = parent_run_id
+            logical_call: _InvocationState | None = None
             while current is not None:
+                state = self._invocations.get(current)
+                if state is not None and state.inference_counted is not None:
+                    logical_call = state
                 invocation = self.get_invocation(current)
                 if isinstance(invocation, LocalAgentInvocation):
                     if tool_call:
                         if invocation.tool_calls is not None:
                             invocation.tool_calls += 1
-                    elif invocation.inference_calls is not None:
+                    elif invocation.inference_calls is not None and (
+                        logical_call is None
+                        or logical_call.inference_counted is False
+                    ):
                         invocation.inference_calls += 1
+                        if logical_call is not None:
+                            logical_call.inference_counted = True
                     return
                 if isinstance(
                     invocation,

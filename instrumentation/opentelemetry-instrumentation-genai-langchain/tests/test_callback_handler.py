@@ -107,6 +107,8 @@ from opentelemetry.util.genai.types import (
 def _make_agent_inv_mock() -> mock.MagicMock:
     agent_inv = mock.MagicMock(spec=LocalAgentInvocation)
     agent_inv.agent_id = None
+    agent_inv.inference_calls = None
+    agent_inv.tool_calls = None
     return agent_inv
 
 
@@ -127,7 +129,7 @@ def _run_id():
 @pytest.mark.parametrize("callback", ["on_llm_start", "on_chat_model_start"])
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("native_agent", [False, True])
-def test_model_start_counts_without_request_model(
+def test_model_start_does_not_count_untraced_calls(
     callback: str, enabled: bool, native_agent: bool
 ) -> None:
     handler, telemetry, _, agent = _make_handler()
@@ -149,9 +151,7 @@ def test_model_start_counts_without_request_model(
             {}, [], run_id=_run_id(), parent_run_id=parent_run_id
         )
 
-    assert agent.inference_calls == (
-        2 if native_agent and enabled else initial_count
-    )
+    assert agent.inference_calls == initial_count
     assert agent.tool_calls == initial_count
     telemetry.inference.assert_not_called()
 
