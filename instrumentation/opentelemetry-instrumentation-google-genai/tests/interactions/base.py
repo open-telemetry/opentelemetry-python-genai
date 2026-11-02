@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import unittest
 import unittest.mock
 from typing import Any
@@ -378,7 +377,7 @@ class TestCase(CommonTestCaseBase):
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":"stop","name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Response from interactions!","type":"text"}],"finish_reason":null,"name":null}]',
         )
 
     @patch.dict(
@@ -421,7 +420,7 @@ class TestCase(CommonTestCaseBase):
         "os.environ",
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
     )
-    def test_output_message_finish_reason_matches_status(self) -> None:
+    def test_output_message_omits_finish_reason(self) -> None:
         self.configure_valid_interaction(
             output_text="Calling a tool.", status="requires_action"
         )
@@ -429,7 +428,10 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":"tool_calls","name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":null,"name":null}]',
+        )
+        self.assertEqual(
+            span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
         )
 
     def test_omits_finish_reason_while_in_progress(self) -> None:
@@ -535,9 +537,7 @@ class TestCase(CommonTestCaseBase):
         "os.environ",
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
     )
-    def test_streaming_output_message_finish_reason_matches_status(
-        self,
-    ) -> None:
+    def test_streaming_output_message_omits_finish_reason(self) -> None:
         self.configure_valid_interaction(output_text="Calling a tool.")
         self._interactions[-1].status = "requires_action"
         self.run_streaming_interaction(
@@ -546,7 +546,10 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named("interactions.create gemini-2.5-flash")
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":"tool_calls","name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Calling a tool.","type":"text"}],"finish_reason":null,"name":null}]',
+        )
+        self.assertEqual(
+            span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
         )
 
     def test_streaming_agent_records_finish_reason_from_status(self) -> None:

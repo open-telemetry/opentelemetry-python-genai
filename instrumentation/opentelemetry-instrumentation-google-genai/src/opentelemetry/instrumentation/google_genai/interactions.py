@@ -232,12 +232,10 @@ def _apply_interaction_response_attributes(
 
     if telemetry_handler.should_capture_content():
         messages = _interactions_response_to_messages(
-            response, finish_reason=finish_reason
+            response, finish_reason=None
         )
         if streamed_parts and not _has_content(messages):
-            messages = _streamed_output_messages(
-                streamed_parts, finish_reason=finish_reason
-            )
+            messages = _streamed_output_messages(streamed_parts)
         invocation.output_messages = messages
 
 
@@ -838,18 +836,9 @@ class _StreamedContent:
         return parts
 
 
-def _streamed_output_messages(
-    parts: list[MessagePart],
-    finish_reason: str | None = None,
-) -> list[OutputMessage]:
+def _streamed_output_messages(parts: list[MessagePart]) -> list[OutputMessage]:
     """Wrap parts accumulated from stream events as an output message."""
-    return [
-        OutputMessage(
-            role=Role.ASSISTANT.value,
-            parts=parts,
-            finish_reason=finish_reason,
-        )
-    ]
+    return [OutputMessage(role=Role.ASSISTANT.value, parts=parts)]
 
 
 def _has_content(messages: list[OutputMessage]) -> bool:

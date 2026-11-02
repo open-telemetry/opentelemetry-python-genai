@@ -390,7 +390,7 @@ def _assert_streamed_create_output(
     [message] = json.loads(span.attributes["gen_ai.output.messages"])
     assert message["role"] == "assistant"
     assert message["parts"] == [{"type": "text", "content": expected_output}]
-    assert message["finish_reason"] == "stop"
+    assert message["finish_reason"] is None
     assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
 
 
@@ -461,7 +461,7 @@ def _assert_streamed_tool_call(
         assert "gen_ai.output.messages" not in span.attributes
         return
     [message] = json.loads(span.attributes["gen_ai.output.messages"])
-    assert message["finish_reason"] == "tool_calls"
+    assert message["finish_reason"] is None
     assert message["parts"] == [
         {
             "type": "tool_call",
