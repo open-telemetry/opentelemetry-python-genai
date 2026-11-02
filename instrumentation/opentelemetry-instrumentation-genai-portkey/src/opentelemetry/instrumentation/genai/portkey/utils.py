@@ -269,11 +269,7 @@ def _content_to_parts(content: object) -> list[MessagePart]:
             continue
 
         file_id = get_property_value(item, "file_id")
-        if (
-            part_type == "input_image"
-            and isinstance(file_id, str)
-            and file_id
-        ):
+        if part_type == "input_image" and isinstance(file_id, str) and file_id:
             parts.append(
                 FilePart(
                     mime_type=None,

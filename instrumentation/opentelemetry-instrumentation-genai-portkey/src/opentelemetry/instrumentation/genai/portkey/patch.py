@@ -97,9 +97,7 @@ def _capture_chat_request(
         IteratorCapture.from_property(
             kwargs, "messages", enabled=capture_content
         ),
-        IteratorCapture.from_property(
-            kwargs, "tools", enabled=True
-        ),
+        IteratorCapture.from_property(kwargs, "tools", enabled=True),
     )
 
 

@@ -901,36 +901,37 @@ def test_sync_chat_completions_nested_tool_calls_generator(
             for msg in messages:
                 if msg.get("role") == "assistant" and "tool_calls" in msg:
                     seen_tool_calls.extend(list(msg["tool_calls"]))
-            mock_raw = MagicMock()
-            mock_raw.text = json.dumps(
-                {
-                    "id": mock_resp.id,
-                    "model": mock_resp.model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {
-                                "role": "assistant",
-                                "content": "Done",
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 10,
-                        "completion_tokens": 5,
-                        "total_tokens": 15,
-                    },
-                }
-            )
-            mock_raw.headers = {}
-            return mock_raw
+            if hasattr(p.chat.completions, "openai_client"):
+                mock_raw = MagicMock()
+                mock_raw.text = json.dumps(
+                    {
+                        "id": mock_resp.id,
+                        "model": mock_resp.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "Done",
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "total_tokens": 15,
+                        },
+                    }
+                )
+                mock_raw.headers = {}
+                return mock_raw
+            return mock_resp
 
-        openai_chat = (
-            p.chat.completions.openai_client.with_raw_response.chat.completions
-        )
-        mock_raw_fn = openai_chat.create
-        mock_raw_fn.side_effect = mock_create
+        if hasattr(p.chat.completions, "openai_client"):
+            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = mock_create
+        else:
+            p.chat.completions._post.side_effect = mock_create
 
         p.chat.completions.create(
             messages=[
@@ -957,9 +958,7 @@ def test_sync_chat_completions_nested_tool_calls_generator(
         assert assistant_parts[0]["type"] == "tool_call"
         assert assistant_parts[0]["id"] == "call_123"
         assert assistant_parts[0]["name"] == "get_weather"
-        assert assistant_parts[0]["arguments"] == {
-            "location": "San Francisco"
-        }
+        assert assistant_parts[0]["arguments"] == {"location": "San Francisco"}
 
 
 def test_sync_chat_completions_audio_and_file_parts(
