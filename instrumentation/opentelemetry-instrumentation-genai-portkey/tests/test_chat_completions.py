@@ -897,7 +897,12 @@ def test_sync_chat_completions_nested_tool_calls_generator(
         seen_tool_calls: list[object] = []
 
         def mock_create(*args, **kwargs):
-            messages = kwargs.get("messages", [])
+            body = (
+                kwargs.get("body")
+                if isinstance(kwargs.get("body"), dict)
+                else kwargs
+            )
+            messages = body.get("messages", [])
             for msg in messages:
                 if msg.get("role") == "assistant" and "tool_calls" in msg:
                     seen_tool_calls.extend(list(msg["tool_calls"]))
@@ -931,7 +936,7 @@ def test_sync_chat_completions_nested_tool_calls_generator(
         if hasattr(p.chat.completions, "openai_client"):
             p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = mock_create
         else:
-            p.chat.completions._post.side_effect = mock_create
+            p.chat.completions._post = MagicMock(side_effect=mock_create)
 
         p.chat.completions.create(
             messages=[
