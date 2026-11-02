@@ -76,6 +76,4 @@ class TestEventOnlyAttributes(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         event_attrs = logs[0].log_record.attributes
         self.assertEqual(event_attrs["user.id"], "alice")
-        self.assertEqual(
-            event_attrs["shared.key"], "from-event-attributes"
-        )
+        self.assertEqual(event_attrs["shared.key"], "from-event-attributes")

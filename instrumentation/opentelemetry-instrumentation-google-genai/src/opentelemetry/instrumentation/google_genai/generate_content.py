@@ -83,8 +83,10 @@ GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
     "generate_content_extra_attributes_context_key"
 )
 
-GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY = context_api.create_key(
-    "generate_content_event_only_extra_attributes_context_key"
+GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY = (
+    context_api.create_key(
+        "generate_content_event_only_extra_attributes_context_key"
+    )
 )
 
 
@@ -424,7 +426,9 @@ def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
     return dict(attrs or {})
 
 
-def _get_event_only_extra_generate_content_attributes() -> dict[str, AttributeValue]:
+def _get_event_only_extra_generate_content_attributes() -> dict[
+    str, AttributeValue
+]:
     attrs = context_api.get_value(
         GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY
     )
