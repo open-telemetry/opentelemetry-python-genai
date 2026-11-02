@@ -13,7 +13,7 @@ All instrumentations use [opentelemetry-util-genai](./util/opentelemetry-util-ge
 
 | Instrumentation | Supported Package | Version |
 | --------------- | ----------------- | ------- |
-| [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.0.0, < 4 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-agno/) |
+| [opentelemetry-instrumentation-genai-agno](./instrumentation/opentelemetry-instrumentation-genai-agno) | agno >= 2.3.9, < 4 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-agno/) |
 | [opentelemetry-instrumentation-genai-anthropic](./instrumentation/opentelemetry-instrumentation-genai-anthropic) | anthropic >= 0.51.0, < 3 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-anthropic/) |
 | [opentelemetry-instrumentation-genai-bedrock](./instrumentation/opentelemetry-instrumentation-genai-bedrock) | boto3 >= 1.40.46, < 2 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-bedrock/) |
 | [opentelemetry-instrumentation-genai-dspy](./instrumentation/opentelemetry-instrumentation-genai-dspy) | dspy >= 3.3.0, < 4 | [1.3b0](https://pypi.org/project/opentelemetry-instrumentation-genai-dspy/) |

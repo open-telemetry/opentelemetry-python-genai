@@ -411,7 +411,8 @@ def test_stream_wrapper_no_content(tracer_provider) -> None:
     assert not invocation.output_messages
     assert invocation.finish_reasons == ["stop"]
     assert invocation.response_model_name is None
-    assert invocation.input_tokens == 10
+    # inputTokens (10) excludes the cached tokens: 10 + 4 read + 8 written
+    assert invocation.input_tokens == 22
     assert invocation.output_tokens == 5
     assert invocation.cache_read_input_tokens == 4
     assert invocation.cache_creation_input_tokens == 8

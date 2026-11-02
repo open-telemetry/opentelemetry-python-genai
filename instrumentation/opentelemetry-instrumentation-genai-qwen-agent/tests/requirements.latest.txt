@@ -40,7 +40,7 @@
 qwen-agent==0.0.34
 # qwen-agent imports numpy, soundfile, dateutil, and tqdm at import time but
 # does not declare them. numpy is left unpinned because the newest numpy
-# requires Python >= 3.11 while this env also runs on 3.10.
+# requires Python >= 3.12 while this env also runs on 3.11.
 numpy
 soundfile==0.14.0
 python-dateutil==3.0.0

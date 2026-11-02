@@ -93,8 +93,8 @@ Copy the shape from an existing package — paths in `tox.ini` are repo-root-rel
   `pyproject.toml [tool.uv.workspace] members` — no edit needed.
 - **`CHANGELOG.md`**: copy from an existing package (e.g. `instrumentation/opentelemetry-instrumentation-genai-anthropic/CHANGELOG.md`).
 - **`tox.ini`**:
-  - `envlist`: add `py3{10,14}-test-instrumentation-genai-<lib>-latest`,
-    `py310-test-instrumentation-genai-<lib>-oldest`, and the
+  - `envlist`: add `py3{11,15}-test-instrumentation-genai-<lib>-latest`,
+    `py311-test-instrumentation-genai-<lib>-oldest`, and the
     `py314-test-instrumentation-genai-<lib>-conformance` entry.
   - `[testenv] deps`: add the factor-conditional test-requirements lines
     (`<lib>-{oldest,latest,conformance}: -r …/tests/requirements.<factor>.txt` plus
