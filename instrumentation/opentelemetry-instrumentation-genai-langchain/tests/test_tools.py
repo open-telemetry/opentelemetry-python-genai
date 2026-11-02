@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import langchain.agents
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, ToolMessage
@@ -697,6 +698,191 @@ async def test_native_agent_call_counts(
         ),
     ):
         (point,) = metrics[name].data.data_points
+        assert point.count == 1
+        assert type(point.sum) is int
+        assert point.sum == total
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize("strategy", ["retry", "fallback"])
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("use_tool", [False, True])
+@pytest.mark.parametrize(
+    "use_middleware",
+    [
+        False,
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                not hasattr(langchain.agents, "create_agent"),
+                reason="Model middleware requires LangChain 1.x",
+            ),
+        ),
+    ],
+)
+async def test_native_agent_retries_count_logical_inferences(
+    asynchronous: bool,
+    streaming: bool,
+    strategy: str,
+    failure: bool,
+    use_tool: bool,
+    use_middleware: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    error = RuntimeError("model call failed")
+    attempts = 3 if strategy == "retry" and failure else 2
+
+    @tool
+    def calculate() -> str:
+        """Return the calculation result."""
+        return "42"
+
+    tools = [calculate] if use_tool else []
+    responses = (
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "calculate", "args": {}, "id": "1"}],
+            ),
+            AIMessage(content="42"),
+        ]
+        if use_tool
+        else [AIMessage(content="42")]
+    )
+    model = _ToolChatModel(responses=responses, error=error)
+    fallback = _ToolChatModel(
+        responses=responses,
+        model_name="fallback-model",
+        error=error if failure else None,
+    )
+
+    class RecoverOnError(BaseCallbackHandler):
+        def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+            if strategy == "retry" and not failure:
+                model.error = None
+
+    if use_middleware:
+        from langchain.agents.middleware import (
+            ModelFallbackMiddleware,
+            ModelRetryMiddleware,
+        )
+
+        policy = (
+            ModelRetryMiddleware(
+                max_retries=attempts - 1,
+                retry_on=(RuntimeError,),
+                initial_delay=0,
+                jitter=False,
+                on_failure="error",
+            )
+            if strategy == "retry"
+            else ModelFallbackMiddleware(fallback)
+        )
+        agent = langchain.agents.create_agent(
+            model, tools=tools, middleware=[policy]
+        )
+    else:
+        wrapped = (
+            model.with_retry(
+                wait_exponential_jitter=False, stop_after_attempt=attempts
+            )
+            if strategy == "retry"
+            else model.with_fallbacks([fallback])
+        )
+        if tools:
+            wrapped = wrapped.bind(
+                tools=[
+                    {
+                        "type": "function",
+                        "function": convert_to_openai_function(item),
+                    }
+                    for item in tools
+                ]
+            )
+        agent = create_react_agent(wrapped, tools=tools)
+
+    agent_name = "model" if use_middleware else "retry_agent"
+
+    async def run() -> None:
+        inputs = {"messages": [("user", "calculate")]}
+        config: RunnableConfig = {
+            "callbacks": [RecoverOnError()],
+            "metadata": {
+                "agent_name": agent_name,
+                "otel_agent_span": use_middleware and not use_tool,
+            },
+        }
+        if not streaming:
+            result = await _invoke(agent, inputs, asynchronous, config=config)
+            assert result["messages"][-1].content == "42"
+        elif asynchronous:
+            async for _ in agent.astream(inputs, config=config):
+                pass
+        else:
+            list(agent.stream(inputs, config=config))
+
+    if failure:
+        with pytest.raises(RuntimeError) as raised:
+            await run()
+        assert raised.value is error
+    else:
+        await run()
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = [
+        span
+        for span in spans
+        if span.parent is None
+        and span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
+        == "invoke_agent"
+    ]
+    assert agent_span.status.status_code == (
+        StatusCode.ERROR if failure else StatusCode.UNSET
+    )
+    chats = [
+        span
+        for span in spans
+        if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
+    ]
+    logical_calls = 2 if use_tool and not failure else 1
+    assert len(chats) == attempts + (logical_calls - 1) * (
+        2 if strategy == "fallback" else 1
+    )
+    errors = [
+        chat for chat in chats if chat.status.status_code == StatusCode.ERROR
+    ]
+    if failure:
+        assert len(errors) == attempts
+    elif strategy == "fallback":
+        assert len(errors) == logical_calls
+    else:
+        assert len(errors) == 1
+    for chat in chats:
+        if chat.status.status_code == StatusCode.ERROR:
+            assert (
+                chat.attributes[error_attributes.ERROR_TYPE] == "RuntimeError"
+            )
+        else:
+            assert chat.status.status_code == StatusCode.UNSET
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    for name, total in (
+        ("gen_ai.invoke_agent.inference_calls", logical_calls),
+        ("gen_ai.invoke_agent.tool_calls", int(use_tool and not failure)),
+    ):
+        (point,) = metrics[name].data.data_points
+        assert (
+            point.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME] == agent_name
+        )
         assert point.count == 1
         assert type(point.sum) is int
         assert point.sum == total

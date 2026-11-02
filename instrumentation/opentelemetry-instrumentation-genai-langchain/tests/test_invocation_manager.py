@@ -155,6 +155,36 @@ def test_record_agent_call_leaves_untracked_counts_unset(
     assert outer.tool_calls == 0
 
 
+@pytest.mark.parametrize("logical_inference", [False, True])
+def test_record_agent_call_counts_logical_inferences_once(
+    invocation_manager: _InvocationManager,
+    logical_inference: bool,
+) -> None:
+    agent_id, node_id, child_id = (uuid.uuid4() for _ in range(3))
+    agent = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    invocation_manager.add_invocation_state(agent_id, None, agent)
+    invocation_manager.add_invocation_state(
+        node_id, agent_id, None, logical_inference=logical_inference
+    )
+    invocation_manager.add_invocation_state(child_id, node_id, None)
+    for _ in range(2):
+        invocation_manager.record_agent_call(child_id)
+        invocation_manager.record_agent_call(child_id, tool_call=True)
+    assert agent.inference_calls == (1 if logical_inference else 2)
+    assert agent.tool_calls == 2
+
+    invocation_manager.delete_invocation_state(child_id)
+    invocation_manager.delete_invocation_state(node_id)
+    next_node_id = uuid.uuid4()
+    invocation_manager.add_invocation_state(
+        next_node_id, agent_id, None, logical_inference=logical_inference
+    )
+    invocation_manager.record_agent_call(next_node_id)
+    assert agent.inference_calls == (2 if logical_inference else 3)
+
+
 def test_delete_invocation_state(invocation_manager, mock_invocation):
     run_id = uuid.uuid4()
     invocation_manager.add_invocation_state(

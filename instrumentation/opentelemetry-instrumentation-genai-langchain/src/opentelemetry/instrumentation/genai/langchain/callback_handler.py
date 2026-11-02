@@ -25,6 +25,7 @@ from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _PromptContext,
 )
 from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
+    LANGGRAPH_NODE_KEY,
     OperationName,
     classify_chain_run,
     resolve_agent_name,
@@ -315,6 +316,20 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_context = self._invocation_manager.get_parent_context(
             parent_run_id
         )
+        parent_invocation = (
+            self._invocation_manager.get_invocation(parent_run_id)
+            if parent_run_id is not None
+            else None
+        )
+        # Retry/fallback attempts share the native model node's run.
+        logical_inference = (
+            agent_announcement is None
+            and isinstance(parent_invocation, LocalAgentInvocation)
+            and parent_invocation.inference_calls is not None
+            and metadata is not None
+            and metadata.get(LANGGRAPH_NODE_KEY) in ("agent", "model")
+            and kwargs.get("name") == metadata.get(LANGGRAPH_NODE_KEY)
+        )
         conversation_id = _conversation_id(metadata)
         capture_content = self._telemetry_handler.should_capture_content()
         if operation == OperationName.INVOKE_WORKFLOW:
@@ -379,7 +394,10 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, None
+                        run_id,
+                        parent_run_id,
+                        None,
+                        logical_inference=logical_inference,
                     )
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
@@ -398,20 +416,28 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 # parent-child traversal through _find_agent_context is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
-                    run_id, parent_run_id, None
+                    run_id,
+                    parent_run_id,
+                    None,
+                    logical_inference=logical_inference,
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, None
+                run_id,
+                parent_run_id,
+                None,
+                logical_inference=logical_inference,
             )
 
         invocation = self._invocation_manager.get_invocation(run_id)
-        if isinstance(invocation, LocalAgentInvocation):
-            # Without a native graph boundary, missing callbacks do not prove zero.
-            initial_count = 0 if agent_announcement is not None else None
-            invocation.inference_calls = initial_count
-            invocation.tool_calls = initial_count
+        # Only create_agent/create_react_agent graphs report every model and tool call
+        # through callbacks; other agents may call models directly, so their counts are unknown.
+        if agent_announcement is not None and isinstance(
+            invocation, LocalAgentInvocation
+        ):
+            invocation.inference_calls = 0
+            invocation.tool_calls = 0
 
         if prompt_context := _extract_prompt_context(
             serialized,
@@ -463,18 +489,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         invocation.fail(error)
         self._invocation_manager.delete_invocation_state(run_id=run_id)
 
-    def on_llm_start(
-        self,
-        serialized: dict[str, Any],
-        prompts: list[str],
-        *,
-        run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
-    ) -> None:
-        if self._enabled:
-            self._invocation_manager.record_agent_call(parent_run_id)
-
     def on_chat_model_start(
         self,
         serialized: dict[str, Any],
@@ -488,7 +502,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> None:
         if not self._enabled:
             return
-        self._invocation_manager.record_agent_call(parent_run_id)
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -607,6 +620,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             parent_run_id=parent_run_id,
             invocation=llm_invocation,
         )
+        self._invocation_manager.record_agent_call(parent_run_id)
 
     def on_llm_new_token(
         self,
