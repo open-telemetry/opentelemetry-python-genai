@@ -33,6 +33,7 @@ Usage
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Collection
 from typing import Any
 
@@ -58,6 +59,9 @@ from .processor import GenAITracingProcessor
 __all__ = ["OpenAIAgentsInstrumentor"]
 
 logger = logging.getLogger(__name__)
+_DISABLE_OPENAI_TRACE_EXPORT_ENV = (
+    "OTEL_INSTRUMENTATION_GENAI_OPENAI_AGENTS_DISABLE_TRACE_EXPORT"
+)
 
 
 class OpenAIAgentsInstrumentor(BaseInstrumentor):
@@ -75,6 +79,9 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         ``agents.tracing.set_trace_processors`` so traces flow only through
         OpenTelemetry while this instrumentor is active. Previously registered
         processors are restored on ``uninstrument()``.
+
+        When omitted, this option follows
+        ``OTEL_INSTRUMENTATION_GENAI_OPENAI_AGENTS_DISABLE_TRACE_EXPORT``.
     """
 
     # BaseInstrumentor is a singleton: __init__ re-runs on the existing
@@ -106,7 +113,13 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         provider = GenAI.GenAiProviderNameValues.OPENAI.value
         self._processor = GenAITracingProcessor(handler, provider)
 
-        if kwargs.get("disable_openai_trace_export"):
+        disable_openai_trace_export = kwargs.get("disable_openai_trace_export")
+        if disable_openai_trace_export is None:
+            disable_openai_trace_export = os.getenv(
+                _DISABLE_OPENAI_TRACE_EXPORT_ENV, ""
+            ).strip().lower() in ("true", "1")
+
+        if disable_openai_trace_export:
             trace_provider = get_trace_provider()
             current = getattr(
                 getattr(trace_provider, "_multi_processor", None),
