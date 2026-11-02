@@ -2039,3 +2039,49 @@ def test_chat_completion_malformed_messages_reach_the_client(
         == "openai.APIConnectionError"
     )
     assert not trace.get_current_span().get_span_context().is_valid
+
+
+def test_chat_completion_streaming_tool_calls_without_index(
+    span_exporter, gemini_client, instrument_with_content, vcr
+):
+    # Gemini's OpenAI-compatible API sends `index=None` on every tool call
+    # delta; replay a real stream through the public client.
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_tool_calls_without_index.yaml"
+    ):
+        stream = gemini_client.chat.completions.create(
+            messages=WEATHER_TOOL_PROMPT,
+            model="gemini-3.5-flash",
+            tools=[get_current_weather_tool_definition()],
+            stream=True,
+        )
+        tool_calls = [
+            tool_call
+            for chunk in stream
+            for choice in chunk.choices
+            for tool_call in choice.delta.tool_calls or []
+        ]
+
+    assert [tool_call.index for tool_call in tool_calls] == [None, None]
+    (span,) = span_exporter.get_finished_spans()
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": tool_call.id,
+                        "name": "get_current_weather",
+                        "arguments": json.loads(tool_call.function.arguments),
+                    }
+                    for tool_call in tool_calls
+                ],
+                # Gemini reports "stop" rather than "tool_calls".
+                "finish_reason": "stop",
+                "name": None,
+            }
+        ],
+    )

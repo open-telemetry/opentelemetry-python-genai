@@ -3,6 +3,8 @@
 
 # pylint: disable=too-many-locals,too-many-lines
 
+import json
+
 import pytest
 from openai import (
     APIConnectionError,
@@ -1761,3 +1763,50 @@ async def async_chat_completion_multiple_tools_streaming(
         assert_message_in_logs(
             logs[2], "gen_ai.choice", choice_event, spans[0]
         )
+
+
+@pytest.mark.asyncio()
+async def test_chat_completion_streaming_tool_calls_without_index(
+    span_exporter, async_gemini_client, instrument_with_content, vcr
+):
+    # Gemini's OpenAI-compatible API sends `index=None` on every tool call
+    # delta; replay a real stream through the public client.
+    with vcr.use_cassette(
+        "test_chat_completion_streaming_tool_calls_without_index.yaml"
+    ):
+        stream = await async_gemini_client.chat.completions.create(
+            messages=WEATHER_TOOL_PROMPT,
+            model="gemini-3.5-flash",
+            tools=[get_current_weather_tool_definition()],
+            stream=True,
+        )
+        tool_calls = [
+            tool_call
+            async for chunk in stream
+            for choice in chunk.choices
+            for tool_call in choice.delta.tool_calls or []
+        ]
+
+    assert [tool_call.index for tool_call in tool_calls] == [None, None]
+    (span,) = span_exporter.get_finished_spans()
+    assert ErrorAttributes.ERROR_TYPE not in span.attributes
+    assert_messages_attribute(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+        [
+            {
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool_call",
+                        "id": tool_call.id,
+                        "name": "get_current_weather",
+                        "arguments": json.loads(tool_call.function.arguments),
+                    }
+                    for tool_call in tool_calls
+                ],
+                # Gemini reports "stop" rather than "tool_calls".
+                "finish_reason": "stop",
+                "name": None,
+            }
+        ],
+    )
