@@ -30,11 +30,15 @@ API
 ---
 """
 
-from .generate_content import GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY
+from .generate_content import (
+    GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+    GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY,
+)
 from .instrumentor import GoogleGenAiSdkInstrumentor
 from .version import __version__
 
 __all__ = [
+    "GENERATE_CONTENT_EVENT_ONLY_EXTRA_ATTRIBUTES_CONTEXT_KEY",
     "GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY",
     "GoogleGenAiSdkInstrumentor",
     "__version__",

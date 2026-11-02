@@ -85,6 +85,9 @@ class _ContextData:
     metric_attributes: dict[str, AttributeValue] = field(
         default_factory=dict[str, AttributeValue]
     )
+    event_attributes: dict[str, AttributeValue] = field(
+        default_factory=dict[str, AttributeValue]
+    )
 
     def merge(self: Self, other: Self, *, overwrite: bool = True) -> None:
         """Merge another context data instance into this one.
@@ -100,6 +103,7 @@ class _ContextData:
             if f.name in (
                 "attributes",
                 "metric_attributes",
+                "event_attributes",
                 "capture_content",
                 "upload_completion",
             ):
@@ -113,11 +117,14 @@ class _ContextData:
         if overwrite:
             self.attributes.update(other.attributes)
             self.metric_attributes.update(other.metric_attributes)
+            self.event_attributes.update(other.event_attributes)
         else:
             for k, v in other.attributes.items():
                 self.attributes.setdefault(k, v)
             for k, v in other.metric_attributes.items():
                 self.metric_attributes.setdefault(k, v)
+            for k, v in other.event_attributes.items():
+                self.event_attributes.setdefault(k, v)
 
 
 def _is_active_completion_hook(hook: CompletionHook | None) -> bool:
@@ -206,6 +213,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         span_kind: SpanKind = SpanKind.CLIENT,
         attributes: dict[str, AttributeValue] | None = None,
         metric_attributes: dict[str, AttributeValue] | None = None,
+        event_attributes: dict[str, AttributeValue] | None = None,
         error_type_resolver: ErrorTypeResolver | None = None,
         *,
         start_attributes: dict[str, AttributeValue] | None = None,
@@ -240,6 +248,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             {} if metric_attributes is None else metric_attributes
         )
         """Additional attributes to set on metrics. Must be low cardinality. Not set on spans or events."""
+        self.event_attributes: dict[str, AttributeValue] = (
+            {} if event_attributes is None else event_attributes
+        )
+        """Additional attributes to set on the operation.details event only. Not set on spans or metrics."""
         self.conversation_id: str | None = (
             conversation_id
             if conversation_id is not None

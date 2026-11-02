@@ -215,6 +215,7 @@ class InferenceInvocation(GenAIInvocation):
             _attach_to_context=_attach_to_context,
             attributes=self.data.attributes,
             metric_attributes=self.data.metric_attributes,
+            event_attributes=self.data.event_attributes,
             context_key=CLIENT_INFERENCE_CONTEXT_KEY,
             dataclass_class_object=InferenceData,
         )
@@ -224,6 +225,7 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
+        self.data.event_attributes = self.event_attributes
         self._emit_event: bool = self._logger.enabled(
             context=self._span_context,
             severity_number=SeverityNumber.DEBUG,
@@ -964,6 +966,9 @@ class InferenceInvocation(GenAIInvocation):
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
         attributes.update(self.attributes)
+        # event_attributes are operation.details-event only: never on the
+        # span, and win collisions with ``attributes`` on the event.
+        attributes.update(self.event_attributes)
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,
