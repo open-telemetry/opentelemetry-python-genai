@@ -620,17 +620,10 @@ class TestCase(CommonTestCaseBase):
             span.attributes["gen_ai.response.finish_reasons"], ("stop",)
         )
         # Neither the text before the failure nor after it is reported as a
-        # complete response.
-        messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, "[]")
+        # complete response, and no empty message stands in for it.
+        self.assertNotIn(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, span.attributes
         )
-        captured_text = [
-            part["content"]
-            for message in messages
-            for part in message["parts"]
-            if part.get("type") == "text" and part.get("content")
-        ]
-        self.assertEqual(captured_text, [])
 
     @patch.dict(
         "os.environ",
@@ -675,16 +668,8 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(
             span.attributes["gen_ai.response.finish_reasons"], ("tool_calls",)
         )
-        messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, "[]")
-        )
-        self.assertFalse(
-            [
-                part
-                for message in messages
-                for part in message["parts"]
-                if part["type"] == "tool_call"
-            ]
+        self.assertNotIn(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, span.attributes
         )
 
     def test_interaction_with_non_dict_tools_ignored(self) -> None:

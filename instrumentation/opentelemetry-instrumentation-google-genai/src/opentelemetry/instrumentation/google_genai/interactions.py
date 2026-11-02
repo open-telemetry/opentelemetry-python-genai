@@ -618,6 +618,8 @@ class _InteractionStreamMixin:
             self._record_interaction(
                 self._self_last_interaction, streamed_parts
             )
+            if not self._self_capture_content:
+                self._self_invocation.output_messages = []
         elif streamed_parts and self._self_capture_content:
             # No completion event arrived, but report what was received.
             self._self_invocation.output_messages = _streamed_output_messages(
