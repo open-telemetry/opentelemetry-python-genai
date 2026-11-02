@@ -1,4 +1,4 @@
-boto3>=1.43.120
-opentelemetry-sdk~=1.45.1
+boto3>=1.43.122
+opentelemetry-sdk~=1.45.2
 opentelemetry-instrumentation-genai-bedrock
-opentelemetry-exporter-otlp-proto-grpc~=1.45.1
+opentelemetry-exporter-otlp-proto-grpc~=1.45.2

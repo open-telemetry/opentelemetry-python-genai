@@ -38,11 +38,11 @@
 # the newest supported version of external dependencies.
 
 openai==3.37.0
-pydantic==2.14.1
+pydantic==2.14.2
 httpx2==2.16.0
 importlib-metadata==9.0.1
 packaging==26.3
-wrapt==2.5.1
+wrapt==2.5.2
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e instrumentation/opentelemetry-instrumentation-genai-openai
