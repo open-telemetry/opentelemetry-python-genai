@@ -369,9 +369,6 @@ def unpatch_agent() -> None:
             pass
 
 
-_extract_embedder_provider = resolve_embedder_provider
-
-
 def _extract_embedder_model(embedder: Embedder) -> str | None:
     model = (
         getattr(embedder, "id", None)
@@ -392,7 +389,7 @@ def _start_embedding(
     handler: TelemetryHandler,
     instance: Embedder,
 ) -> EmbeddingInvocation:
-    provider = _extract_embedder_provider(instance)
+    provider = resolve_embedder_provider(instance)
     request_model = _extract_embedder_model(instance)
     invocation = handler.embedding(
         provider=provider,
