@@ -826,3 +826,110 @@ async def test_real_envelope_inline_media(
     ]
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.UNSET
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mime_type", ["image/png", "video/mp4", "audio/wav"])
+@pytest.mark.parametrize("ending", ["complete", "close", "error"])
+async def test_real_envelope_mixed_content(
+    tracer_provider: Any,
+    span_exporter: Any,
+    monkeypatch: Any,
+    mime_type: str,
+    ending: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from agentscope.event import EventType
+    from qwenpaw.runtime.envelope import Envelope
+
+    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
+        make_runtime_wrapper,
+    )
+    from opentelemetry.util.genai.types import BlobPart, TextPart
+
+    error = ConnectionError("mixed content interrupted")
+
+    async def events(request: object) -> Any:
+        envelope = Envelope("sess-2")
+        for kind, block_id, fields in [
+            (EventType.TEXT_BLOCK_START, "before", {}),
+            (EventType.TEXT_BLOCK_DELTA, "before", {"delta": "before"}),
+            (EventType.TEXT_BLOCK_END, "before", {}),
+            (EventType.DATA_BLOCK_START, "media", {"media_type": mime_type}),
+            (EventType.DATA_BLOCK_DELTA, "media", {"data": "YWJj"}),
+            (EventType.DATA_BLOCK_END, "media", {}),
+            (EventType.TEXT_BLOCK_START, "after", {}),
+            (EventType.TEXT_BLOCK_DELTA, "after", {"delta": "af"}),
+            (EventType.TEXT_BLOCK_DELTA, "after", {"delta": "ter"}),
+        ]:
+            async for chunk in envelope.translate_event(
+                SimpleNamespace(
+                    type=kind, block_id=block_id, metadata={}, **fields
+                )
+            ):
+                yield chunk
+        if ending == "error":
+            async for chunk in envelope.error_envelope(
+                "interrupted", "ConnectionError"
+            ):
+                yield chunk
+            raise error
+        async for chunk in envelope.translate_event(
+            SimpleNamespace(
+                type=EventType.TEXT_BLOCK_END, block_id="after", metadata={}
+            )
+        ):
+            yield chunk
+        async for chunk in envelope.finalize():
+            yield chunk
+
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    hook = MagicMock()
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider, completion_hook=hook
+    )
+    stream = make_runtime_wrapper(handler)(
+        events, make_runtime(), (runtime_request(),), {}
+    )
+    if ending == "close":
+        async for chunk in stream:
+            if getattr(chunk, "text", None) == "ter":
+                break
+        await stream.aclose()
+    elif ending == "error":
+        with pytest.raises(ConnectionError) as caught:
+            await drain(stream)
+        assert caught.value is error
+    else:
+        await drain(stream)
+    expected = [
+        TextPart(content="before"),
+        BlobPart(
+            content=b"abc",
+            mime_type=mime_type,
+            modality=mime_type.split("/")[0],
+        ),
+        TextPart(content="after"),
+    ]
+    hook.on_completion.assert_called_once()
+    (message,) = hook.on_completion.call_args.kwargs["outputs"]
+    assert message.parts == expected
+    (span,) = span_exporter.get_finished_spans()
+    (recorded,) = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    assert recorded["role"] == "assistant"
+    assert recorded["parts"] == [
+        {"type": "text", "content": "before"},
+        {
+            "type": "blob",
+            "content": "YWJj",
+            "mime_type": mime_type,
+            "modality": mime_type.split("/")[0],
+        },
+        {"type": "text", "content": "after"},
+    ]
+    assert span.status.status_code is (
+        StatusCode.ERROR if ending == "error" else StatusCode.UNSET
+    )

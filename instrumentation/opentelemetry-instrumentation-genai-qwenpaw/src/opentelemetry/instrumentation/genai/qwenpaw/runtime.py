@@ -237,12 +237,20 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         message_id = non_empty_str(_field(message, "id"))
         if message_id is None:
             return
-        blocks = self._self_blocks.setdefault(message_id, {})
+        blocks: dict[object, MessagePart] = {}
         for position, block in enumerate(_items(_field(message, "content"))):
             part = _part(block, _field(message, "type"))
             if part is not None:
                 index = _field(block, "index")
-                blocks[position if index is None else index] = part
+                key = (
+                    _field(block, "type"),
+                    position if index is None else index,
+                )
+                blocks[key] = part
+        # Snapshots order completed blocks but can omit an unfinished block.
+        for key, part in self._self_blocks.get(message_id, {}).items():
+            blocks.setdefault(key, part)
+        self._self_blocks[message_id] = blocks
         if blocks:
             self._self_messages[message_id] = OutputMessage(
                 role=str(role), parts=list(blocks.values())
@@ -255,7 +263,8 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         if message_id is None:
             return
         blocks = self._self_blocks.setdefault(message_id, {})
-        index = _field(content, "index", 0)
+        # QwenPaw numbers text separately from media, so their indexes can collide.
+        index = (_field(content, "type"), _field(content, "index", 0))
         previous = blocks.get(index)
         part = _part(content, self._self_message_types.get(message_id))
         if (
