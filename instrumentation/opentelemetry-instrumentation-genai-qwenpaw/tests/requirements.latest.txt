@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Latest release of the 1.x line; 2.0 removed `AgentRunner.query_handler`
-# and is outside this package's supported range.
-qwenpaw==1.1.12.post3
-# AgentScope 1.0.x imports streamablehttp_client, removed in MCP 2.
-mcp<2
+qwenpaw==2.2.2.post1
 wrapt>=2.5.1
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-qwenpaw
