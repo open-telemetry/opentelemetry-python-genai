@@ -132,19 +132,38 @@ async def test_run_hooks_forward_callbacks(
 
 def test_run_hooks_implement_sdk_callbacks() -> None:
     processor = GenAITracingProcessor(_build_handler(), provider="openai")
-    assert isinstance(GenAIRunHooks(None, processor), type(RunHooks()))
+    hooks = GenAIRunHooks(None, processor)
+    assert isinstance(hooks, type(RunHooks()))
     callbacks = {name for name in dir(RunHooks()) if name.startswith("on_")}
-    assert callbacks <= GenAIRunHooks.__dict__.keys()
+    assert all(callable(getattr(hooks, name)) for name in callbacks)
+
+
+@pytest.mark.asyncio
+async def test_run_hooks_forward_future_sdk_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sdk_callback = AsyncMock()
+    monkeypatch.setattr(
+        type(RunHooks()), "on_new_event", sdk_callback, raising=False
+    )
+    application_hooks = AsyncMock()
+    processor = GenAITracingProcessor(_build_handler(), provider="openai")
+    hooks = GenAIRunHooks(application_hooks, processor)
+
+    await getattr(hooks, "on_new_event")(None, event="new SDK event")
+
+    application_hooks.on_new_event.assert_awaited_once_with(
+        None, event="new SDK event"
+    )
+    sdk_callback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event", ["on_llm_start", "on_tool_start"])
 @pytest.mark.parametrize("calls", [0, 1, 2])
-@pytest.mark.parametrize("count_inference_calls", [False, True])
 async def test_agent_call_counts(
     event: str,
     calls: int,
-    count_inference_calls: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     handler = _build_handler()
@@ -165,17 +184,13 @@ async def test_agent_call_counts(
         lambda: tool_span,
     )
     application_hooks = AsyncMock()
-    hooks = GenAIRunHooks(
-        application_hooks,
-        processor,
-        count_inference_calls=count_inference_calls,
-    )
+    hooks = GenAIRunHooks(application_hooks, processor)
     await hooks.on_agent_start(None, None)
     for _ in range(calls):
         await getattr(hooks, event)(None, None, None)
 
     assert invocation.inference_calls == (
-        calls if event == "on_llm_start" and count_inference_calls else 0
+        calls if event == "on_llm_start" else 0
     )
     assert invocation.tool_calls == (calls if event == "on_tool_start" else 0)
     assert getattr(application_hooks, event).await_count == calls

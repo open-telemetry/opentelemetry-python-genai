@@ -188,18 +188,20 @@ class GenAITracingProcessor(TracingProcessor):
 
 
 class GenAIRunHooks(RunHooks[Any]):
-    """Count execution events while forwarding application lifecycle hooks."""
+    """Count logical model calls and tools while forwarding lifecycle hooks."""
 
     def __init__(
         self,
         hooks: RunHooks[Any] | None,
         processor: GenAITracingProcessor,
-        *,
-        count_inference_calls: bool = True,
     ) -> None:
         self._hooks = hooks if hooks is not None else RunHooks()
         self._processor = processor
-        self._count_inference_calls = count_inference_calls
+
+    def __getattribute__(self, name: str) -> Any:
+        if name.startswith("on_") and name not in GenAIRunHooks.__dict__:
+            return getattr(object.__getattribute__(self, "_hooks"), name)
+        return object.__getattribute__(self, name)
 
     def _get_invocation(self) -> LocalAgentInvocation | None:
         invocation = self._processor._get_current_agent()
@@ -214,26 +216,14 @@ class GenAIRunHooks(RunHooks[Any]):
         self._get_invocation()
         await self._hooks.on_agent_start(*args, **kwargs)
 
-    async def on_agent_end(self, *args: Any, **kwargs: Any) -> None:
-        await self._hooks.on_agent_end(*args, **kwargs)
-
     async def on_llm_start(self, *args: Any, **kwargs: Any) -> None:
         invocation = self._get_invocation()
-        if self._count_inference_calls and invocation is not None:
+        if invocation is not None:
             invocation.inference_calls = (invocation.inference_calls or 0) + 1
         await self._hooks.on_llm_start(*args, **kwargs)
-
-    async def on_llm_end(self, *args: Any, **kwargs: Any) -> None:
-        await self._hooks.on_llm_end(*args, **kwargs)
 
     async def on_tool_start(self, *args: Any, **kwargs: Any) -> None:
         invocation = self._get_invocation()
         if invocation is not None:
             invocation.tool_calls = (invocation.tool_calls or 0) + 1
         await self._hooks.on_tool_start(*args, **kwargs)
-
-    async def on_tool_end(self, *args: Any, **kwargs: Any) -> None:
-        await self._hooks.on_tool_end(*args, **kwargs)
-
-    async def on_handoff(self, *args: Any, **kwargs: Any) -> None:
-        await self._hooks.on_handoff(*args, **kwargs)

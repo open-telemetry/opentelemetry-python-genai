@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from importlib import import_module
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock
 
@@ -156,32 +155,12 @@ def test_uninstrument_after_reinstantiation(
         name: agents.Runner.__dict__[name]
         for name in ("run", "run_sync", "run_streamed")
     }
-    retry_module = (
-        import_module("agents.run_internal.run_loop")
-        if hasattr(agents.ModelSettings, "retry")
-        else None
-    )
-    retry_functions = (
-        {
-            name: getattr(retry_module, name)
-            for name in (
-                "get_response_with_retry",
-                "stream_response_with_retry",
-            )
-        }
-        if retry_module is not None
-        else {}
-    )
     instrumentor = OpenAIAgentsInstrumentor()
     instrumentor.instrument(
         disable_openai_trace_export=disable_openai_trace_export,
     )
     try:
         assert len(_our_processors()) == 1
-        assert all(
-            getattr(retry_module, name) is not function
-            for name, function in retry_functions.items()
-        )
     finally:
         OpenAIAgentsInstrumentor().uninstrument()
     assert len(_our_processors()) == 0
@@ -189,10 +168,6 @@ def test_uninstrument_after_reinstantiation(
     assert all(
         agents.Runner.__dict__[name] is method
         for name, method in runner_methods.items()
-    )
-    assert all(
-        getattr(retry_module, name) is function
-        for name, function in retry_functions.items()
     )
 
 
@@ -531,7 +506,7 @@ async def test_unused_function_tools_preserve_call_counts(
 )
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("exhausted", [False, True])
-async def test_model_retry_attempts_record_inference_calls(
+async def test_model_retries_count_one_logical_inference_call(
     streaming: bool,
     exhausted: bool,
     tracer_provider: TracerProvider,
@@ -600,7 +575,7 @@ async def test_model_retry_attempts_record_inference_calls(
     application_hooks.on_llm_start.assert_awaited_once()
     assert application_hooks.on_llm_end.await_count == (0 if exhausted else 1)
     _assert_agent_call_metrics(
-        metric_reader, span_exporter, inference_calls=3, tool_calls=0
+        metric_reader, span_exporter, inference_calls=1, tool_calls=0
     )
 
 
