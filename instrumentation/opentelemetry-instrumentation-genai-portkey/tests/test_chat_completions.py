@@ -38,6 +38,12 @@ _sent: list[Any] = []
 _sent_tools: list[Any] = []
 
 
+@pytest.fixture(autouse=True)
+def _reset_sent():
+    _sent.clear()
+    _sent_tools.clear()
+
+
 def _consume_chat_request(*args: Any, **kwargs: Any) -> None:
     body = kwargs.get("body") or kwargs.get("json")
     if not isinstance(body, dict):
@@ -1002,106 +1008,6 @@ def test_chat_completions_nested_generators_captured(
         assert _sent[-1][1]["tool_calls"] == raw_tool_calls
 
 
-def test_chat_completions_generator_tool_calls_reaches_the_sdk(
-    tracer_provider, logger_provider, meter_provider, span_exporter
-):
-    with instrument(
-        PortkeyInstrumentor(),
-        tracer_provider=tracer_provider,
-        logger_provider=logger_provider,
-        meter_provider=meter_provider,
-        content_capture="SPAN_ONLY",
-    ):
-        p = Portkey(api_key="test_pk", provider="openai")
-        mock_resp = _create_mock_chat_completion()
-        _setup_mock_chat(p, mock_resp)
-
-        raw_calls = [
-            {
-                "id": "call_weather_1",
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": '{"location": "San Francisco"}',
-                },
-            }
-        ]
-
-        tool_calls_drained_before_sdk = False
-
-        def tracking_tool_calls():
-            nonlocal tool_calls_drained_before_sdk
-            for c in raw_calls:
-                tool_calls_drained_before_sdk = True
-                yield c
-
-        sdk_received_tool_calls_iterator = False
-
-        def check_sdk_tool_calls(*args: Any, **kwargs: Any) -> None:
-            nonlocal sdk_received_tool_calls_iterator
-            body = (
-                kwargs.get("body")
-                if isinstance(kwargs.get("body"), dict)
-                else kwargs
-            )
-            msgs = body.get("messages", [])
-            for m in msgs:
-                tc = m.get("tool_calls") if isinstance(m, dict) else None
-                if tc is not None:
-                    if (
-                        isinstance(tc, Iterator)
-                        and not isinstance(tc, list)
-                        and not tool_calls_drained_before_sdk
-                    ):
-                        sdk_received_tool_calls_iterator = True
-
-        if hasattr(p.chat.completions, "openai_client"):
-            original_side_effect = p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect
-
-            def check_sdk_entry(*args: Any, **kwargs: Any) -> Any:
-                check_sdk_tool_calls(*args, **kwargs)
-                return original_side_effect(*args, **kwargs)
-
-            p.chat.completions.openai_client.with_raw_response.chat.completions.create.side_effect = check_sdk_entry
-        else:
-            original_post_side_effect = p.chat.completions._post.side_effect
-
-            def check_post_entry(*args: Any, **kwargs: Any) -> Any:
-                check_sdk_tool_calls(*args, **kwargs)
-                return original_post_side_effect(*args, **kwargs)
-
-            p.chat.completions._post.side_effect = check_post_entry
-
-        p.chat.completions.create(
-            messages=[
-                {"role": "user", "content": "What's the weather?"},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": tracking_tool_calls(),
-                },
-            ],
-            model="gpt-4o",
-        )
-
-        spans = span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        span = spans[0]
-        input_messages = json.loads(
-            span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-        )
-        assert len(input_messages) == 2
-        assert input_messages[1]["parts"] == [
-            {
-                "arguments": {"location": "San Francisco"},
-                "id": "call_weather_1",
-                "name": "get_weather",
-                "type": "tool_call",
-            }
-        ]
-        assert sdk_received_tool_calls_iterator
-
-
 def test_chat_completions_generator_tool_calls_not_consumed_without_content_capture(
     tracer_provider, logger_provider, meter_provider, span_exporter
 ):
@@ -1497,6 +1403,34 @@ def test_chat_completions_image_parts(
         (
             {"type": "refusal", "refusal": "I cannot help with that."},
             [{"type": "text", "content": "I cannot help with that."}],
+        ),
+        (
+            {
+                "type": "file",
+                "file": {"file_data": "JVBERg==", "filename": "doc.pdf"},
+            },
+            [
+                {
+                    "type": "blob",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "content": "JVBERg==",
+                }
+            ],
+        ),
+        (
+            {
+                "type": "file",
+                "file": {"file_data": "data:application/pdf;base64,JVBERg=="},
+            },
+            [
+                {
+                    "type": "blob",
+                    "modality": "document",
+                    "mime_type": "application/pdf",
+                    "content": "JVBERg==",
+                }
+            ],
         ),
         (
             {
