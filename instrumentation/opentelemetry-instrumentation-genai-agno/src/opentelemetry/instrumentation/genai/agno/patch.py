@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from agno.knowledge.knowledge import Knowledge
     from agno.models.base import MessageData, Model
     from agno.models.message import Message
-    from agno.models.response import ModelResponse, ToolExecution
+    from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
     from wrapt import BoundFunctionWrapper, FunctionWrapper
 
@@ -1764,7 +1764,7 @@ def _start_model_inference(
 ) -> tuple[
     InferenceInvocation,
     Message | None,
-    ModelResponse | MessageData | None,
+    MessageData | None,
 ]:
     """Start an InferenceInvocation for an Agno model response call."""
     messages = cast(
@@ -1775,10 +1775,9 @@ def _start_model_inference(
         "Message | None",
         get_argument("assistant_message", wrapped, args, kwargs),
     )
-    response_obj = cast(
-        "ModelResponse | MessageData | None",
-        get_argument("model_response", wrapped, args, kwargs)
-        or get_argument("stream_data", wrapped, args, kwargs),
+    stream_data = cast(
+        "MessageData | None",
+        get_argument("stream_data", wrapped, args, kwargs),
     )
     tools = cast(
         "Iterable[Any] | str | None",
@@ -1851,20 +1850,19 @@ def _start_model_inference(
     if invocation.should_capture_content and messages:
         invocation.input_messages = format_model_input_messages(messages)
 
-    return invocation, assistant_message, response_obj
+    return invocation, assistant_message, stream_data
 
 
 def _populate_model_response_telemetry(
     invocation: InferenceInvocation,
     assistant_message: Message | None,
-    model_response: ModelResponse | None,
 ) -> None:
     """Populate final response telemetry on an InferenceInvocation."""
-    provider_data = None
-    if assistant_message is not None:
-        provider_data = getattr(assistant_message, "provider_data", None)
-    if not provider_data and model_response is not None:
-        provider_data = getattr(model_response, "provider_data", None)
+    provider_data = (
+        getattr(assistant_message, "provider_data", None)
+        if assistant_message is not None
+        else None
+    )
 
     if isinstance(provider_data, dict):
         provider_dict = cast(dict[str, Any], provider_data)
@@ -1875,12 +1873,8 @@ def _populate_model_response_telemetry(
                 cast(object, provider_dict["model"])
             )
 
-    source_metrics = (
-        getattr(model_response, "response_usage", None)
-        if model_response is not None
-        else None
-    )
-    if source_metrics is None and assistant_message is not None:
+    source_metrics = None
+    if assistant_message is not None:
         metrics = getattr(assistant_message, "metrics", None)
         if metrics is not None and any(
             (val := safe_int(getattr(metrics, attr, None))) is not None
@@ -1921,34 +1915,20 @@ def _populate_model_response_telemetry(
         ) is not None and reasoning > 0:
             invocation.thinking_tokens = reasoning
 
-    finish_reasons = extract_model_finish_reasons(
-        assistant_message, model_response
-    )
+    finish_reasons = extract_model_finish_reasons(assistant_message)
     invocation.finish_reasons = finish_reasons
 
-    if invocation.should_capture_content:
-        if assistant_message is not None and has_model_output_content(
-            assistant_message
-        ):
-            invocation.output_messages = [
-                format_model_output_message(
-                    assistant_message,
-                    finish_reason=finish_reasons[0]
-                    if finish_reasons
-                    else "stop",
-                )
-            ]
-        elif model_response is not None and has_model_output_content(
-            model_response
-        ):
-            invocation.output_messages = [
-                format_model_output_message(
-                    model_response,
-                    finish_reason=finish_reasons[0]
-                    if finish_reasons
-                    else "stop",
-                )
-            ]
+    if (
+        invocation.should_capture_content
+        and assistant_message is not None
+        and has_model_output_content(assistant_message)
+    ):
+        invocation.output_messages = [
+            format_model_output_message(
+                assistant_message,
+                finish_reason=finish_reasons[0] if finish_reasons else "stop",
+            )
+        ]
 
 
 def _model_process_response(
@@ -1960,7 +1940,7 @@ def _model_process_response(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation, assistant_message, model_response = _start_model_inference(
+        invocation, assistant_message, _ = _start_model_inference(
             handler, instance, args, kwargs, wrapped=wrapped
         )
         try:
@@ -1972,7 +1952,6 @@ def _model_process_response(
         _populate_model_response_telemetry(
             invocation,
             assistant_message=assistant_message,
-            model_response=cast("ModelResponse | None", model_response),
         )
         invocation.stop()
         return result
@@ -1989,7 +1968,7 @@ def _model_aprocess_response(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        invocation, assistant_message, model_response = _start_model_inference(
+        invocation, assistant_message, _ = _start_model_inference(
             handler, instance, args, kwargs, wrapped=wrapped
         )
         try:
@@ -2001,7 +1980,6 @@ def _model_aprocess_response(
         _populate_model_response_telemetry(
             invocation,
             assistant_message=assistant_message,
-            model_response=cast("ModelResponse | None", model_response),
         )
         invocation.stop()
         return result
@@ -2031,7 +2009,7 @@ def _model_process_response_stream(
             stream,
             invocation=invocation,
             assistant_message=assistant_message,
-            stream_data=cast("MessageData | None", stream_data),
+            stream_data=stream_data,
         )
 
     return traced_method
@@ -2059,7 +2037,7 @@ def _model_aprocess_response_stream(
             stream,
             invocation=invocation,
             assistant_message=assistant_message,
-            stream_data=cast("MessageData | None", stream_data),
+            stream_data=stream_data,
         )
 
     return traced_method
