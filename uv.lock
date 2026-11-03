@@ -5061,7 +5061,7 @@ instruments = [
 [package.metadata]
 requires-dist = [
     { name = "ollama", marker = "extra == 'instruments'", specifier = ">=0.4.0,<1" },
-    { name = "opentelemetry-api", specifier = "~=1.43" },
+    { name = "opentelemetry-api", specifier = "~=1.45" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
