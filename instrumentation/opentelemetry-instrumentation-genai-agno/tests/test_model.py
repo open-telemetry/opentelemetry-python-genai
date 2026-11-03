@@ -860,10 +860,10 @@ def test_agent_multi_turn_tool_calling_spans(
     assert tool_span.parent.span_id == agent_span_id
     assert tool_span.kind == SpanKind.INTERNAL
 
-    # Verify finish reasons: first turn is tool_calls, second turn is stop
+    # Verify finish reasons: first turn is tool_call, second turn is stop
     assert chat_spans[0].attributes.get(
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
-    ) == ("tool_calls",)
+    ) == ("tool_call",)
     assert chat_spans[1].attributes.get(
         GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
     ) == ("stop",)
@@ -913,6 +913,41 @@ def test_resolve_model_provider() -> None:
     assert (
         resolve_model_provider(_SyncModel(id="m", provider=None)) == "unknown"
     )
+
+
+def test_resolve_model_provider_prefers_class() -> None:
+    """Test that class hierarchy mapping takes precedence over ambiguous default provider strings."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class AzureAIFoundry(MockModel):
+        provider: str = "Azure"
+
+    @dataclass
+    class WatsonX(MockModel):
+        provider: str = "IBM"
+
+    assert (
+        resolve_model_provider(AzureAIFoundry(id="m")) == "azure.ai.inference"
+    )
+    assert resolve_model_provider(WatsonX(id="m")) == "ibm.watsonx.ai"
+
+
+@pytest.mark.parametrize(
+    "raw_reason", ["tool_calls", "tool_use", "function_call"]
+)
+def test_extract_model_finish_reasons_maps_to_tool_call(
+    raw_reason: str,
+) -> None:
+    """Test that provider tool finish reasons normalize to semconv 'tool_call'."""
+    from opentelemetry.instrumentation.genai.agno.utils import (
+        extract_model_finish_reasons,
+    )
+
+    msg = Message(
+        role="assistant", provider_data={"finish_reason": raw_reason}
+    )
+    assert extract_model_finish_reasons(msg) == ["tool_call"]
 
 
 def test_model_multimodal_inputs_and_outputs(
@@ -1125,3 +1160,129 @@ def test_model_aresponse_stream_without_usage(
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in attrs
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in attrs
     assert GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS not in attrs
+
+
+def test_model_tool_loop_does_not_reuse_previous_call_data(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test that subsequent tool-loop calls do not inherit response_id, usage, finish_reason, or content from earlier calls."""
+    turn = 0
+
+    class _Model(MockModel):
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            nonlocal turn
+            turn += 1
+            if turn == 1:
+                return ModelResponse(
+                    content="Calling calculate...",
+                    tool_calls=[
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {
+                                "name": "calculate",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                    provider_data={
+                        "id": "resp-1",
+                        "model": "m-snapshot-1",
+                        "finish_reason": "tool_calls",
+                    },
+                    response_usage=MessageMetrics(
+                        input_tokens=15, output_tokens=8
+                    ),
+                )
+            return ModelResponse(content=None)
+
+    def calculate() -> int:
+        return 42
+
+    Agent(model=_Model(id="m", provider="OpenAI"), tools=[calculate]).run("hi")
+
+    chat_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name == "chat m"
+    ]
+    assert len(chat_spans) == 2
+
+    first, second = chat_spans
+    assert first.attributes.get(GenAIAttributes.GEN_AI_RESPONSE_ID) == "resp-1"
+    assert first.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("tool_call",)
+    assert (
+        first.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 15
+    )
+
+    assert GenAIAttributes.GEN_AI_RESPONSE_ID not in second.attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in second.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in second.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in second.attributes
+    assert second.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in second.attributes
+
+
+def test_model_async_tool_loop_does_not_reuse_previous_call_data(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    """Test async tool-loop calls do not inherit response_id, usage, finish_reason, or content from earlier calls."""
+    turn = 0
+
+    class _AsyncLoopModel(MockModel):
+        async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            nonlocal turn
+            turn += 1
+            if turn == 1:
+                return ModelResponse(
+                    content="Calling calculate...",
+                    tool_calls=[
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {
+                                "name": "calculate",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                    provider_data={
+                        "id": "resp-async-1",
+                        "model": "m-async-1",
+                        "finish_reason": "tool_use",
+                    },
+                    response_usage=MessageMetrics(
+                        input_tokens=15, output_tokens=8
+                    ),
+                )
+            return ModelResponse(content="done")
+
+    def calculate() -> int:
+        return 42
+
+    agent = Agent(
+        model=_AsyncLoopModel(id="m", provider="Anthropic"), tools=[calculate]
+    )
+    asyncio.run(agent.arun("hi"))
+
+    chat_spans = [
+        s for s in span_exporter.get_finished_spans() if s.name == "chat m"
+    ]
+    assert len(chat_spans) == 2
+
+    second = chat_spans[1]
+    assert GenAIAttributes.GEN_AI_RESPONSE_ID not in second.attributes
+    assert GenAIAttributes.GEN_AI_RESPONSE_MODEL not in second.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS not in second.attributes
+    assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS not in second.attributes
+    assert second.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+    output_msgs = json.loads(
+        str(second.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES))
+    )
+    assert output_msgs[0]["parts"] == [{"type": "text", "content": "done"}]
