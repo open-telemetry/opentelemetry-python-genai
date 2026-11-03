@@ -1290,3 +1290,25 @@ def test_workflow_run_stream_output_is_last_step(
     assert isinstance(output, str)
     assert "second step output" in output
     assert "first step output" not in output
+
+
+def test_agent_run_stream_closed_early_has_no_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="closed-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield "chunk 2"
+
+    with _patch_agent_stream(fake_stream):
+        stream = agent.run("hello", stream=True)
+        next(stream)
+        stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code != StatusCode.ERROR
+    assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
+        span.attributes or {}
+    )

@@ -52,7 +52,10 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[Any]):
         self._self_last_response = chunk
 
     def _on_stream_end(self) -> None:
-        if self._self_last_response:
+        if (
+            self._self_last_response
+            and self._self_invocation.should_capture_content
+        ):
             self._set_output_messages(
                 convert_to_final_output_messages(self._self_last_response)
             )

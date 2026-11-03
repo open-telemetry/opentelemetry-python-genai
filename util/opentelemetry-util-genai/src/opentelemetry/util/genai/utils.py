@@ -180,6 +180,8 @@ def content_to_text(content: object) -> str | None:
         any_value = object_to_any_value(content)
         if any_value is None:
             return str(content)
+        if isinstance(any_value, str):
+            return any_value
         return gen_ai_json_dumps(any_value, ensure_ascii=False)
     except Exception:  # pylint: disable=broad-exception-caught
         logger.debug("GenAI content not convertible to text", exc_info=True)

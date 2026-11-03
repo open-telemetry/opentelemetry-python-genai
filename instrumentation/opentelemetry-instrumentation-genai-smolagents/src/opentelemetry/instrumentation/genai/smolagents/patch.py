@@ -431,13 +431,16 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
 
     def __del__(self) -> None:
         # An abandoned run is treated as finished; close its generator inside
-        # the agent span so the run's own cleanup is parented under it.
-        if getattr(self, "_self_finalized", True):
+        # the agent span so the run's own cleanup is parented under it. The
+        # span may already have ended at the final answer, but the generator
+        # still needs closing.
+        stream = getattr(self, "_self_stream", None)
+        if stream is None:
             return
         try:
             with self._execution_context():
                 try:
-                    self._self_stream.close()
+                    stream.close()
                 finally:
                     self._finalize_success()
         except BaseException:  # pylint: disable=broad-except
@@ -453,14 +456,22 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
 
     def _on_stream_end(self) -> None:
         invocation = self._self_invocation
-        if self._self_saw_final and isinstance(invocation, AgentInvocation):
-            _record_run_answer(
-                invocation,
-                self._self_agent,
-                self._self_final_output,
-                capture_content=invocation.should_capture_content,
+        try:
+            if self._self_saw_final and isinstance(
+                invocation, AgentInvocation
+            ):
+                _record_run_answer(
+                    invocation,
+                    self._self_agent,
+                    self._self_final_output,
+                    capture_content=invocation.should_capture_content,
+                )
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.debug(
+                "Failed to record smolagents run answer", exc_info=True
             )
-        super()._on_stream_end()
+        finally:
+            super()._on_stream_end()
 
 
 def _record_agent(

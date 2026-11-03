@@ -589,3 +589,23 @@ def test_agent_run_held_stream_does_not_parent_caller_work(
     (caller_span,) = _spans_named(span_exporter, "caller-work")
     assert caller_span.parent is None
     assert inside[0].get_span_context() == agent_span.get_span_context()
+
+
+def test_agent_run_skips_output_conversion_without_content_capture(
+    span_exporter, instrument_no_content
+):
+    agent = _StubAgent.create(name="NoContentBot", llm=_StubLLM())
+
+    def fake_run(messages, **kwargs):
+        yield [Message(role="assistant", content="Done!")]
+
+    with (
+        patch.object(_StubAgent, "_run", side_effect=fake_run),
+        patch(
+            "opentelemetry.instrumentation.genai.qwen_agent.patch.convert_to_final_output_messages"
+        ) as convert,
+    ):
+        list(agent.run([Message(role="user", content="Go")]))
+
+    convert.assert_not_called()
+    assert len(_spans_named(span_exporter, "invoke_agent NoContentBot")) == 1

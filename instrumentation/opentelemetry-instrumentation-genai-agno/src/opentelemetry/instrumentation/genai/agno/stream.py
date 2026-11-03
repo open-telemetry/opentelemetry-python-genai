@@ -94,6 +94,7 @@ def _set_conversation_id(
 class _OutputHooks:
     if TYPE_CHECKING:
         _self_invocation: AgentInvocation | WorkflowInvocation
+        _self_exhausted: bool
 
         def _add_output(self, content: object) -> None: ...
 
@@ -106,11 +107,11 @@ class _OutputHooks:
 
 class _AgentStreamMixin(_OutputHooks):
     _self_completed: bool
-    _self_finish_reason: str
+    _self_finish_reason: str | None
 
     def _init_agent_state(self) -> None:
         self._self_completed = False
-        self._self_finish_reason = "stop"
+        self._self_finish_reason = None
 
     def _process_chunk(self, chunk: Any) -> None:
         invocation = self._self_invocation
@@ -153,7 +154,11 @@ class _AgentStreamMixin(_OutputHooks):
             self._self_invocation.finish_reasons = [reason]
 
     def _on_stream_end(self) -> None:
-        self._set_finish_reason(self._self_finish_reason)
+        # A run the caller closed before it completed has no finish reason.
+        if self._self_finish_reason is not None:
+            self._set_finish_reason(self._self_finish_reason)
+        elif self._self_completed or self._self_exhausted:
+            self._set_finish_reason("stop")
         super()._on_stream_end()
 
     def _on_stream_error(self, error: BaseException) -> None:

@@ -8,6 +8,8 @@ import gc
 import json
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
+from decimal import Decimal
+from pathlib import PurePosixPath
 from unittest.mock import patch
 
 import pytest
@@ -530,7 +532,43 @@ def test_async_agent_stream_init_failure_fails_invocation(telemetry):
         ),
         ({"k": "é"}, '{"k":"é"}'),
         (_Unserializable(), None),
+        (Decimal("1.5"), "1.5"),
+        (PurePosixPath("/tmp/a.txt"), "/tmp/a.txt"),
+        ([Decimal("1.5")], '["1.5"]'),
     ],
 )
 def test_content_to_text(content, expected):
     assert content_to_text(content) == expected
+
+
+def test_agent_stream_tells_exhaustion_from_early_close(telemetry):
+    drained = _DeltaStream(
+        _chunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
+    )
+    list(drained)
+    closed = _DeltaStream(
+        _chunks("a", "b"), telemetry.handler.invoke_local_agent(agent_name="b")
+    )
+    next(closed)
+    closed.close()
+
+    assert drained._self_exhausted is True
+    assert closed._self_exhausted is False
+
+
+def test_async_agent_stream_tells_exhaustion_from_early_close(telemetry):
+    async def exercise() -> tuple[bool, bool]:
+        drained = _AsyncDeltaStream(
+            _achunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
+        )
+        async for _ in drained:
+            pass
+        closed = _AsyncDeltaStream(
+            _achunks("a", "b"),
+            telemetry.handler.invoke_local_agent(agent_name="b"),
+        )
+        await closed.__anext__()
+        await closed.aclose()
+        return drained._self_exhausted, closed._self_exhausted
+
+    assert asyncio.run(exercise()) == (True, False)
