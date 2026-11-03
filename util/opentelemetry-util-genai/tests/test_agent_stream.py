@@ -181,13 +181,13 @@ async def _achunks(*items: object) -> AsyncIterator[object]:
 
 def test_sync_agent_stream_joins_streamed_output(telemetry):
     invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    wrapper = _DeltaStream(_chunks("Hel", "lo", "!"), invocation)
+    wrapper = _DeltaStream(_chunks("Hello", ", ", "world"), invocation)
 
-    assert list(wrapper) == ["Hel", "lo", "!"]
+    assert list(wrapper) == ["Hello", ", ", "world"]
 
     span = telemetry.span("invoke_agent writer")
     assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("Hello!")
+    assert _output_messages(span) == _assistant_text("Hello, world")
     assert GenAI.GEN_AI_REQUEST_STREAM not in (span.attributes or {})
 
 
@@ -217,7 +217,7 @@ def test_sync_agent_stream_final_output_replaces_streamed_pieces(telemetry):
     invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
     list(
         _FinalStream(
-            _chunks(("Hel", False), ("lo", False), ("Hello there", True)),
+            _chunks(("Hi", False), (" there", False), ("Hello there", True)),
             invocation,
         )
     )
@@ -359,14 +359,14 @@ def test_sync_agent_stream_supports_workflow_invocation(telemetry):
 def test_async_agent_stream_joins_streamed_output(telemetry):
     async def exercise() -> list[object]:
         invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        wrapper = _AsyncDeltaStream(_achunks("Hel", "lo"), invocation)
+        wrapper = _AsyncDeltaStream(_achunks("Hello", " world"), invocation)
         return [chunk async for chunk in wrapper]
 
-    assert asyncio.run(exercise()) == ["Hel", "lo"]
+    assert asyncio.run(exercise()) == ["Hello", " world"]
 
     span = telemetry.span("invoke_agent writer")
     assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("Hello")
+    assert _output_messages(span) == _assistant_text("Hello world")
     assert not telemetry.metric_names() & _INFERENCE_STREAM_METRICS
 
 
