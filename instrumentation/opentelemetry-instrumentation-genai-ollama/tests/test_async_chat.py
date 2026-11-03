@@ -151,3 +151,23 @@ async def test_async_chat_stream_closed_after_caller_error_ends_span(
     # it ends the span like any other early close.
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.UNSET
+
+
+@pytest.mark.asyncio
+async def test_async_chat_stream_caller_error_in_async_with_is_recorded(
+    instrument_no_content, span_exporter, vcr
+):
+    with vcr.use_cassette(
+        "test_async_chat_stream_records_the_drained_response.yaml"
+    ):
+        stream = await ollama.AsyncClient(host=HOST).chat(
+            model=CHAT_MODEL, messages=MESSAGES, stream=True
+        )
+        with pytest.raises(ValueError, match="boom"):
+            async with stream:
+                async for _ in stream:
+                    raise ValueError("boom")
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes[error_attributes.ERROR_TYPE] == "ValueError"
