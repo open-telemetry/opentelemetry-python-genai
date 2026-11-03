@@ -1,0 +1,1 @@
+Streamed agent and workflow runs use the shared util-genai agent stream wrappers: their span is no longer current in the caller's context between chunks, and agent streams report ``gen_ai.response.finish_reasons`` instead of a per-message finish reason.

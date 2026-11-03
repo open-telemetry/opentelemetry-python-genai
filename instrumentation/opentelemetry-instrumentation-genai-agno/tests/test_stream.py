@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import inspect
 from unittest.mock import patch
 
@@ -1123,20 +1124,20 @@ def test_agent_stream_empty_session_id_not_set() -> None:
     )
 
     mixin = _AgentStreamMixin()
-    mixin._self_agent_invocation = MagicMock()
-    mixin._self_agent_invocation.conversation_id = None
-    mixin._self_capture_content = False
+    mixin._self_invocation = MagicMock()
+    mixin._self_invocation.conversation_id = None
+    mixin._init_agent_state()
 
     class FakeChunk:
         session_id = ""
         event = ""
 
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_agent_invocation.conversation_id is None
+    assert mixin._self_invocation.conversation_id is None
 
     FakeChunk.session_id = "sess-123"
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_agent_invocation.conversation_id == "sess-123"
+    assert mixin._self_invocation.conversation_id == "sess-123"
 
 
 def test_workflow_stream_empty_session_id_not_set() -> None:
@@ -1148,17 +1149,144 @@ def test_workflow_stream_empty_session_id_not_set() -> None:
     )
 
     mixin = _WorkflowStreamMixin()
-    mixin._self_workflow_invocation = MagicMock()
-    mixin._self_workflow_invocation.conversation_id = None
-    mixin._self_capture_content = False
+    mixin._self_invocation = MagicMock()
+    mixin._self_invocation.conversation_id = None
+    mixin._init_workflow_state(None)
 
     class FakeChunk:
         session_id = ""
         event = ""
 
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_workflow_invocation.conversation_id is None
+    assert mixin._self_invocation.conversation_id is None
 
     FakeChunk.session_id = "wf-sess-456"
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_workflow_invocation.conversation_id == "wf-sess-456"
+    assert mixin._self_invocation.conversation_id == "wf-sess-456"
+
+
+def test_agent_run_stream_records_finish_reasons(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield ModelResponse(content="done")
+
+    with patch(
+        "agno.models.base.Model.response_stream", side_effect=fake_stream
+    ):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+
+
+def test_agent_run_stream_error_records_error_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    agent = Agent(name="finish-agent", model=MockModel(id="mock-model"))
+
+    def failing_stream(*args, **kwargs):
+        yield "chunk 1"
+        raise ConnectionError("dropped")
+
+    with (
+        _patch_agent_stream(failing_stream),
+        pytest.raises(ConnectionError),
+    ):
+        list(agent.run("hello", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("error",)
+
+
+def test_agent_run_stream_abandoned_does_not_parent_caller_work(
+    instrument_agno,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    agent = Agent(name="abandoned-agent", model=MockModel(id="mock-model"))
+    tracer = tracer_provider.get_tracer(__name__)
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield "chunk 2"
+
+    def consume() -> None:
+        # Keep the stream referenced, as a caller holding it would.
+        stream = agent.run("hello", stream=True)
+        for _ in stream:
+            break
+        with tracer.start_as_current_span("caller-work"):
+            pass
+        del stream
+
+    with _patch_agent_stream(fake_stream):
+        consume()
+    gc.collect()
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert spans["caller-work"].parent is None
+    agent_span = spans["invoke_agent abandoned-agent"]
+    assert agent_span.attributes.get("error.type") == "_OTHER"
+
+
+def test_agent_arun_stream_abandoned_does_not_parent_caller_work(
+    instrument_agno,
+    span_exporter,
+    tracer_provider,
+) -> None:
+    agent = Agent(name="abandoned-agent", model=MockModel(id="mock-model"))
+    tracer = tracer_provider.get_tracer(__name__)
+
+    async def fake_stream(*args, **kwargs):
+        yield "chunk 1"
+        yield "chunk 2"
+
+    async def consume() -> None:
+        # Keep the stream referenced, as a caller holding it would.
+        stream = agent.arun("hello", stream=True)
+        async for _ in stream:
+            break
+        with tracer.start_as_current_span("caller-work"):
+            pass
+        del stream
+
+    with _patch_agent_astream(fake_stream):
+        asyncio.run(consume())
+    gc.collect()
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert spans["caller-work"].parent is None
+    agent_span = spans["invoke_agent abandoned-agent"]
+    assert agent_span.attributes.get("error.type") == "_OTHER"
+
+
+def test_workflow_run_stream_output_is_last_step(
+    instrument_agno_content_capture,
+    span_exporter,
+) -> None:
+    pytest.importorskip("agno.workflow.workflow")
+    from agno.workflow.workflow import Workflow
+
+    def step1(step_input):
+        return "first step output"
+
+    def step2(step_input):
+        return "second step output"
+
+    workflow = Workflow(name="two-step-workflow", steps=[step1, step2])
+    list(workflow.run("input", stream=True))
+
+    (span,) = span_exporter.get_finished_spans()
+    output = span.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES)
+    assert isinstance(output, str)
+    assert "second step output" in output
+    assert "first step output" not in output
