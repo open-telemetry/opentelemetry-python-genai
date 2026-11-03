@@ -8,6 +8,7 @@ import logging
 import math
 from collections.abc import (
     AsyncIterable,
+    Awaitable,
     Callable,
     Iterable,
     Mapping,
@@ -674,6 +675,24 @@ class AsyncInteractionsStreamWrapper(
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
         self._init_stream_state(telemetry_handler)
+        self._self_stream_close: Callable[[], Awaitable[object]] | None = (
+            getattr(stream, "close", None)
+        )
+        self._self_closing = False
+
+    async def _close(self) -> None:
+        # google-genai >= 2.34 replaces the stream's `close` with one that
+        # calls the `close` it read from this wrapper, which would recurse.
+        # Close the stream directly on the re-entrant call. See #1032.
+        if self._self_closing:
+            if self._self_stream_close is not None:
+                await self._self_stream_close()
+            return
+        self._self_closing = True
+        try:
+            await super()._close()
+        finally:
+            self._self_closing = False
 
 
 def _maybe_json(value: str) -> Any:
