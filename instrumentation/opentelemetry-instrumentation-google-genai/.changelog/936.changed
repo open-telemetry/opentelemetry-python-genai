@@ -1,1 +1,0 @@
-Drop unsupported interaction input items and non-text system instruction parts instead of recording them as type-only `GenericPart`.

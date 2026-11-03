@@ -31,6 +31,7 @@ from opentelemetry.util.genai._inference_invocation import (
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.stream import (
     AbandonedStreamError,
     AsyncStreamManagerWrapper,
@@ -635,6 +636,8 @@ def test_async_stream_wrapper_abandon_does_not_override_failure():
 class _FakeTimingInvocation:
     """Minimal stand-in for InferenceInvocation's timing seam."""
 
+    _records_stream_telemetry = True
+
     def __init__(self):
         self.chunk_times = []
         self._request_stream = None
@@ -643,8 +646,8 @@ class _FakeTimingInvocation:
         self.chunk_times.append(chunk_at)
 
 
-class _ProtocolOnlyTimingInvocation:
-    """Implements only the timing protocol without _request_stream."""
+class _UnflaggedTimingInvocation:
+    """Has the timing hook but does not opt in to stream telemetry."""
 
     def __init__(self):
         self.chunk_times = []
@@ -707,15 +710,14 @@ def test_sync_wrapper_marks_request_stream():
     assert invocation._request_stream is True
 
 
-def test_sync_wrapper_works_without_request_stream():
-    invocation = _ProtocolOnlyTimingInvocation()
+def test_sync_wrapper_skips_stream_telemetry_without_flag():
+    invocation = _UnflaggedTimingInvocation()
     wrapper = _TimingSyncWrapper(
         _FakeSyncStream(chunks=["a"]), invocation=invocation
     )
-    with patch("timeit.default_timer", side_effect=iter([10.0])):
-        assert list(wrapper) == ["a"]
+    assert list(wrapper) == ["a"]
 
-    assert invocation.chunk_times == pytest.approx([10.0])
+    assert invocation.chunk_times == []
     assert not hasattr(invocation, "_request_stream")
 
 
@@ -788,20 +790,176 @@ def test_async_wrapper_reports_each_chunk_arrival():
     asyncio.run(exercise())
 
 
-def test_async_wrapper_works_without_request_stream():
+def test_async_wrapper_skips_stream_telemetry_without_flag():
     async def exercise():
-        invocation = _ProtocolOnlyTimingInvocation()
+        invocation = _UnflaggedTimingInvocation()
         stream = _FakeAsyncStream(chunks=["x"])
         wrapper = _TimingAsyncWrapper(stream, invocation=invocation)
 
-        with patch("timeit.default_timer", side_effect=iter([20.0])):
-            chunks = [chunk async for chunk in wrapper]
+        chunks = [chunk async for chunk in wrapper]
 
         assert chunks == ["x"]
-        assert invocation.chunk_times == pytest.approx([20.0])
+        assert invocation.chunk_times == []
         assert not hasattr(invocation, "_request_stream")
 
     asyncio.run(exercise())
+
+
+_CHUNK_METRICS = {
+    "gen_ai.client.operation.time_to_first_chunk",
+    "gen_ai.client.operation.time_per_output_chunk",
+}
+
+_NON_INFERENCE_INVOCATIONS = {
+    "local_agent": lambda handler: handler.invoke_local_agent(
+        agent_name="agent"
+    ),
+    "remote_agent": lambda handler: handler.invoke_remote_agent(
+        "prov", agent_name="agent"
+    ),
+    "workflow": lambda handler: handler.workflow("flow"),
+    "fetch_response": lambda handler: handler.fetch_response(
+        "prov", response_id="resp-1"
+    ),
+}
+
+
+def _handler_with_metric_reader():
+    reader = InMemoryMetricReader()
+    handler = TelemetryHandler(
+        tracer_provider=TracerProvider(),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+    return handler, reader
+
+
+def _metric_names(reader):
+    data = reader.get_metrics_data()
+    if data is None:
+        return set()
+    return {
+        metric.name
+        for resource_metrics in data.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+    }
+
+
+class _AgentSyncWrapper(_TimingSyncWrapper):
+    """Keeps the invocation in ``_self_invocation`` without passing it to the base."""
+
+    def __init__(self, stream, invocation):
+        super().__init__(stream)
+        self._self_invocation = invocation
+
+    def _on_stream_end(self):
+        self._self_invocation.stop()
+
+
+class _AgentAsyncWrapper(_TimingAsyncWrapper):
+    def __init__(self, stream, invocation):
+        super().__init__(stream)
+        self._self_invocation = invocation
+
+    def _on_stream_end(self):
+        self._self_invocation.stop()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    _NON_INFERENCE_INVOCATIONS.values(),
+    ids=_NON_INFERENCE_INVOCATIONS.keys(),
+)
+def test_sync_wrapper_records_no_chunk_metrics_for_non_inference_invocation(
+    factory,
+):
+    handler, reader = _handler_with_metric_reader()
+    invocation = factory(handler)
+    wrapper = _TimingSyncWrapper(
+        _FakeSyncStream(chunks=["a", "b"]), invocation=invocation
+    )
+
+    assert list(wrapper) == ["a", "b"]
+    invocation.stop()
+
+    assert not _metric_names(reader) & _CHUNK_METRICS
+
+
+@pytest.mark.parametrize(
+    "factory",
+    _NON_INFERENCE_INVOCATIONS.values(),
+    ids=_NON_INFERENCE_INVOCATIONS.keys(),
+)
+def test_sync_wrapper_records_no_chunk_metrics_when_subclass_holds_invocation(
+    factory,
+):
+    handler, reader = _handler_with_metric_reader()
+    invocation = factory(handler)
+    wrapper = _AgentSyncWrapper(_FakeSyncStream(chunks=["a", "b"]), invocation)
+
+    assert list(wrapper) == ["a", "b"]
+
+    assert invocation._finished
+    assert not _metric_names(reader) & _CHUNK_METRICS
+
+
+@pytest.mark.parametrize(
+    "factory",
+    _NON_INFERENCE_INVOCATIONS.values(),
+    ids=_NON_INFERENCE_INVOCATIONS.keys(),
+)
+def test_async_wrapper_records_no_chunk_metrics_for_non_inference_invocation(
+    factory,
+):
+    async def exercise():
+        handler, reader = _handler_with_metric_reader()
+        invocation = factory(handler)
+        wrapper = _TimingAsyncWrapper(
+            _FakeAsyncStream(chunks=["a", "b"]), invocation=invocation
+        )
+
+        assert [chunk async for chunk in wrapper] == ["a", "b"]
+        invocation.stop()
+
+        assert not _metric_names(reader) & _CHUNK_METRICS
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "factory",
+    _NON_INFERENCE_INVOCATIONS.values(),
+    ids=_NON_INFERENCE_INVOCATIONS.keys(),
+)
+def test_async_wrapper_records_no_chunk_metrics_when_subclass_holds_invocation(
+    factory,
+):
+    async def exercise():
+        handler, reader = _handler_with_metric_reader()
+        invocation = factory(handler)
+        wrapper = _AgentAsyncWrapper(
+            _FakeAsyncStream(chunks=["a", "b"]), invocation
+        )
+
+        assert [chunk async for chunk in wrapper] == ["a", "b"]
+
+        assert invocation._finished
+        assert not _metric_names(reader) & _CHUNK_METRICS
+
+    asyncio.run(exercise())
+
+
+def test_sync_wrapper_records_chunk_metrics_for_inference_invocation():
+    handler, reader = _handler_with_metric_reader()
+    invocation = handler.inference("prov", request_model="model")
+    wrapper = _TimingSyncWrapper(
+        _FakeSyncStream(chunks=["a", "b"]), invocation=invocation
+    )
+
+    assert list(wrapper) == ["a", "b"]
+    invocation.stop()
+
+    assert _CHUNK_METRICS <= _metric_names(reader)
 
 
 def test_async_wrapper_without_invocation_skips_timing():
@@ -1084,6 +1242,8 @@ async def test_finalize_on_aclose_runs_inside_execution_context(close_error):
 
 
 class _FakeInvocation:
+    _records_stream_telemetry = True
+
     def __init__(self):
         self.stop_count = 0
         self.failures = []

@@ -1,1 +1,0 @@
-Capture one-shot message, content, system, and tool iterators lazily as the Anthropic SDK consumes them.

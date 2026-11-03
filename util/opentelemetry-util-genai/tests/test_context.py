@@ -219,15 +219,17 @@ class TestInferenceContext(BaseContextTest):
         logger_provider.add_log_record_processor(
             SimpleLogRecordProcessor(log_exporter)
         )
-        handler = TelemetryHandler(
-            tracer_provider=self.tracer_provider,
-            meter_provider=self.meter_provider,
-            logger_provider=logger_provider,
-        )
-
         with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"}
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY"
+            },
         ):
+            handler = TelemetryHandler(
+                tracer_provider=self.tracer_provider,
+                meter_provider=self.meter_provider,
+                logger_provider=logger_provider,
+            )
             with handler.inference(
                 "openai", request_model="gpt-4o"
             ) as root_inv:
@@ -2437,7 +2439,6 @@ class TestFetchResponseContext(BaseContextTest):
                 self.assertIsInstance(inner, SuppressedFetchResponseInvocation)
                 inner.record_stream_chunk()
                 inner.record_stream_chunk()
-                self.assertTrue(inner._data.request_stream)
         metrics = self._harvest_metrics()
         self.assertNotIn(
             "gen_ai.client.operation.time_to_first_chunk", metrics

@@ -20,6 +20,7 @@
 # factor, so they are NOT pinned here — pyproject.toml is the single source of truth. The
 # OpenTelemetry SDK and test utilities come transitively from opentelemetry-test-util-genai, which
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
-#
-# There is no test-only dependency to pin: portkey-ai has none that isn't already provided by a
-# declared bound or by the shared test fixtures.
+
+# portkey-ai 1.0.0 pins typing-extensions==4.7.1; without this, newer transitive deps (e.g.
+# anyio>=4.15) push resolution past the declared portkey-ai floor.
+typing-extensions==4.7.1

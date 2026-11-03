@@ -1,1 +1,0 @@
-Require `langchain >= 0.3.22`. Context propagation across LangGraph nodes requires LangGraph 0.3.18 or later.

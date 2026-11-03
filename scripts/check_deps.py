@@ -37,12 +37,8 @@ from __future__ import annotations
 
 import ast
 import sys
+import tomllib
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    import tomli as tomllib
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name

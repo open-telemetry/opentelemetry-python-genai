@@ -455,9 +455,10 @@ def _apply_response_attributes(
         invocation.thinking_tokens = thinking_tokens
         # candidates_token_count excludes thoughts; output_tokens must be the
         # full output count including reasoning tokens.
-        invocation.output_tokens = (
-            invocation.output_tokens or 0
-        ) + thinking_tokens
+        candidates_tokens = (
+            output_tokens if isinstance(output_tokens, int) else 0
+        )
+        invocation.output_tokens = candidates_tokens + thinking_tokens
     if response.usage_metadata is not None:
         invocation.set_input_tokens(
             _modality_tokens(response, "usage_metadata.prompt_tokens_details")
@@ -938,7 +939,6 @@ def instrument_generate_content(
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
 ) -> object:
-    os.environ["OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT"] = "true"
     snapshot = _MethodsSnapshot()
     wrapped = wrap_function_wrapper(
         "google.genai.models",

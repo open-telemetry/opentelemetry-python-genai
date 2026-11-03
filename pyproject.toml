@@ -2,7 +2,7 @@
 [project]
 name = "opentelemetry-python-genai"
 version = "0.0.0" # This is not used.
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "opentelemetry-api",
   "opentelemetry-sdk",
@@ -15,7 +15,8 @@ dependencies = [
   "opentelemetry-instrumentation-genai-anthropic[instruments]",
   "opentelemetry-instrumentation-genai-bedrock[instruments]",
   "opentelemetry-instrumentation-genai-claude-agent-sdk[instruments]",
-  "opentelemetry-instrumentation-genai-crewai[instruments]",
+  # crewai pulls in onnxruntime (via chromadb), which has no Python 3.15 wheels.
+  "opentelemetry-instrumentation-genai-crewai[instruments]; python_version < '3.15'",
   "opentelemetry-instrumentation-genai-dspy[instruments]",
   "opentelemetry-instrumentation-google-genai[instruments]",
   "opentelemetry-instrumentation-genai-langchain[instruments]",
@@ -35,12 +36,18 @@ package = false # https://docs.astral.sh/uv/reference/settings/#package
 required-version = ">=0.6.0"
 # crewai hard-pins the OpenTelemetry core stack to a narrow window
 # (opentelemetry-api/-sdk >=1.42,<1.43) that can't coexist with this
-# workspace's ~=1.43 floor. Override crewai's caps so the workspace lock
+# workspace's ~=1.45 floor. Override crewai's caps so the workspace lock
 # resolves against the versions the util packages require. This is the
 # lock-time analog of the conformance-only UV_OVERRIDE wired in tox.ini.
 override-dependencies = [
-  "opentelemetry-api ~= 1.43",
-  "opentelemetry-sdk ~= 1.43",
+  "opentelemetry-api ~= 1.45",
+  "opentelemetry-sdk ~= 1.45",
+  # qwenpaw caps anyio<4.13, which is affected by GHSA-82r6-8w77-94w6.
+  "anyio >= 4.14.2, < 5",
+  # qwenpaw caps onnxruntime<1.24, which has no cp314 wheels. As a constraint this
+  # breaks fresh resolves (`uv lock --upgrade`), so override it per Python version.
+  "onnxruntime >= 1.24; python_version >= '3.14'",
+  "onnxruntime < 1.24; python_version < '3.14'",
 ]
 
 # https://docs.astral.sh/uv/reference/settings/#sources
@@ -115,7 +122,7 @@ docstring-code-format = true
 typeCheckingMode = "strict"
 reportUnnecessaryTypeIgnoreComment = true
 reportMissingTypeStubs = false
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 reportPrivateUsage = false  # Ignore private attributes added by instrumentation packages.
 reportDeprecated = false  # Ignore deprecation on GenAI enums in opentelemetry.semconv 0.64b0 until semconv-genai python package is published.
 # Add progressively instrumentation packages here.
@@ -124,7 +131,6 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-anthropic",
   "instrumentation/opentelemetry-instrumentation-genai-bedrock",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk",
-  "instrumentation/opentelemetry-instrumentation-genai-crewai",
   "instrumentation/opentelemetry-instrumentation-genai-dspy",
   "instrumentation/opentelemetry-instrumentation-genai-langchain",
   "instrumentation/opentelemetry-instrumentation-genai-llama-index",
@@ -132,7 +138,6 @@ include = [
   "instrumentation/opentelemetry-instrumentation-genai-portkey",
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent",
   "instrumentation/opentelemetry-instrumentation-genai-qwenpaw",
-  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client",
   "util/opentelemetry-util-genai",
 ]
 # We should also add type hints to the test suite - It helps on finding bugs.
@@ -148,8 +153,6 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-bedrock/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-claude-agent-sdk/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-crewai/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-crewai/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-dspy/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-dspy/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-langchain/tests/**/*.py",
@@ -164,8 +167,6 @@ exclude = [
   "instrumentation/opentelemetry-instrumentation-genai-qwen-agent/examples/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/tests/**/*.py",
   "instrumentation/opentelemetry-instrumentation-genai-qwenpaw/examples/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/tests/**/*.py",
-  "instrumentation/opentelemetry-instrumentation-genai-weaviate-client/examples/**/*.py",
   "util/opentelemetry-util-genai/tests/**/*.py",
 ]
 

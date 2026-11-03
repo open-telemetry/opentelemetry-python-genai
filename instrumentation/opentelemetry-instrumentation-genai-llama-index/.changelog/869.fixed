@@ -1,1 +1,0 @@
-Preserve span handler state on LlamaIndexInstrumentor singleton re-instantiation.

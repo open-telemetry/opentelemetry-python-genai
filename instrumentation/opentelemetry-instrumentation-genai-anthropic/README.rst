@@ -59,6 +59,29 @@ The instrumentation supports synchronous and asynchronous calls for:
 Configuration
 -------------
 
+Anthropic SDK built-in tracing
+******************************
+
+``anthropic`` 2.x and newer ships its own
+`OpenTelemetry tracing <https://github.com/anthropics/anthropic-sdk-python#opentelemetry>`_,
+enabled by default. Using it together with this instrumentation produces duplicate spans for
+each call.
+
+On ``anthropic`` 2.x, prefer the SDK's built-in tracing and uninstall this package::
+
+    pip uninstall opentelemetry-instrumentation-genai-anthropic
+
+If the package is installed as a dependency of something else, disable it with
+``OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=anthropic`` instead.
+
+The built-in tracing doesn't emit metrics, log events and doesn't support upload hooks.
+To keep this instrumentation instead, disable the Anthropic SDK tracing by setting
+``ANTHROPIC_OPEN_TELEMETRY=false`` or passing ``open_telemetry=False`` to the client:
+
+.. code-block:: python
+
+    client = Anthropic(open_telemetry=False)
+
 Capture Message Content
 ***********************
 

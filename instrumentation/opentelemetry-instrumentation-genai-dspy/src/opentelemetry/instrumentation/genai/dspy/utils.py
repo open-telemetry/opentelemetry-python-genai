@@ -15,6 +15,7 @@ from typing import (
     cast,
     runtime_checkable,
 )
+from urllib.parse import urlsplit
 
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
@@ -85,12 +86,22 @@ _KNOWN_PROVIDERS: dict[str, str] = {
 }
 
 
-def _is_mapping(val: object) -> TypeGuard[Mapping[str, object]]:
+def is_mapping(val: object) -> TypeGuard[Mapping[str, object]]:
     return isinstance(val, Mapping)
 
 
-def _is_sequence(val: object) -> TypeGuard[Sequence[object]]:
+_is_mapping = is_mapping
+
+
+def is_sequence(val: object) -> TypeGuard[Sequence[object]]:
     return isinstance(val, Sequence) and not isinstance(val, (str, bytes))
+
+
+_is_sequence = is_sequence
+
+
+def is_tuple(val: object) -> TypeGuard[tuple[object, ...]]:
+    return isinstance(val, tuple)
 
 
 def safe_int(val: object) -> int | None:
@@ -130,7 +141,7 @@ def safe_stop_sequences(val: object) -> list[str] | None:
 def parse_provider_and_model(
     model_str: str | None,
 ) -> tuple[str | None, str | None]:
-    """Parse provider and model name from LiteLLM-style model string."""
+    """Parse provider and model name from a LiteLLM-style model string."""
     if not isinstance(model_str, str) or not model_str:
         return None, None
     model_str = model_str.strip().rstrip("/")
@@ -140,8 +151,82 @@ def parse_provider_and_model(
         model_name = model_name.strip()
         if "-" in provider:
             provider = provider.split("-")[-1]
-        return provider, model_name
-    return None, model_str.strip() if model_str else None
+        return provider, model_name or None
+    return None, model_str.strip() or None
+
+
+_MODEL_PREFIX_TO_PROVIDER: tuple[tuple[str, str], ...] = (
+    ("text-embedding-", GenAiProviderNameValues.OPENAI.value),
+    ("embed-", GenAiProviderNameValues.COHERE.value),
+    ("amazon.titan-embed", GenAiProviderNameValues.AWS_BEDROCK.value),
+    ("gemini-embedding", GenAiProviderNameValues.GCP_GEMINI.value),
+    ("mistral-embed", GenAiProviderNameValues.MISTRAL_AI.value),
+)
+
+
+def resolve_embedder_provider_and_model(
+    model_or_instance: Any,
+) -> tuple[str, str | None]:
+    """Resolve (gen_ai.provider.name, gen_ai.request.model) from a DSPy Embedder or model."""
+    model = model_or_instance
+    if isinstance(model, str):
+        provider_raw, model_name = parse_provider_and_model(model)
+        if provider_raw:
+            return (
+                _KNOWN_PROVIDERS.get(provider_raw) or provider_raw,
+                model_name,
+            )
+        model_lower = (model_name or "").lower()
+        for prefix, provider in _MODEL_PREFIX_TO_PROVIDER:
+            if model_lower.startswith(prefix):
+                return provider, model_name
+        return "unknown", model_name
+
+    if callable(model):
+        bound_self = getattr(model, "__self__", None)
+        model_name_attr = getattr(model, "model_name", None) or getattr(
+            bound_self, "model_name", None
+        )
+        return "unknown", str(model_name_attr) if model_name_attr else None
+
+    return "unknown", None
+
+
+def extract_server_address_and_port(
+    base_url: object,
+) -> tuple[str | None, int | None]:
+    """Extract server.address and server.port from an API base URL."""
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None, None
+    try:
+        parsed = urlsplit(base_url.strip())
+        return parsed.hostname, parsed.port
+    except ValueError:
+        return None, None
+
+
+def extract_embedding_dimension(result: object) -> int | None:
+    """Extract the embedding vector dimension count from an Embedder output."""
+    shape = getattr(result, "shape", None)
+    size = getattr(result, "size", None)
+    size_int = safe_int(size)
+    if (
+        is_tuple(shape)
+        and len(shape) >= 1
+        and size_int is not None
+        and size_int > 0
+    ):
+        dim = safe_int(shape[-1])
+        if dim is not None and dim > 0:
+            return dim
+
+    if is_sequence(result) and len(result) > 0:
+        first = result[0]
+        if is_sequence(first):
+            return len(first) if len(first) > 0 else None
+        if isinstance(first, (int, float)) and not isinstance(first, bool):
+            return len(result)
+    return None
 
 
 def resolve_provider(instance: BaseLM, model: str | None = None) -> str:

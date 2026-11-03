@@ -15,6 +15,20 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Changed
+
+- Record tool call arguments as compact JSON and non-string results as JSON.
+  Previously arguments were recorded as given and results through `str()`, e.g.
+  a result of `{"temp": 20}` was recorded as `{'temp': 20}`, now `{"temp":20}`.
+  ([#821](https://github.com/open-telemetry/opentelemetry-python-genai/pull/821))
+
+### Fixed
+
+- Capture qwen-agent messages and content parts provided as tuples.
+  ([#913](https://github.com/open-telemetry/opentelemetry-python-genai/pull/913))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Changed
