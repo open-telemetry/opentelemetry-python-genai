@@ -92,9 +92,9 @@ def test_instrument_with_disable_openai_trace_export_replaces_processors() -> (
 ):
     # Make sure the default processor is registered before we start,
     # so the "replace" behavior is observable.
-    agents.tracing.set_trace_processors([
-        agents.tracing.processors.default_processor()
-    ])
+    agents.tracing.set_trace_processors(
+        [agents.tracing.processors.default_processor()]
+    )
     instrumentor = OpenAIAgentsInstrumentor()
     try:
         instrumentor.instrument(disable_openai_trace_export=True)
