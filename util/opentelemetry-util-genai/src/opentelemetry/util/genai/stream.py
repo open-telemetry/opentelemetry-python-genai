@@ -621,13 +621,19 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
         self._self_tool_invocation.fail(error)
 
 
-def _content_to_text(content: object) -> str:
-    if isinstance(content, str):
+def _content_to_text(content: object) -> str | None:
+    if content is None or isinstance(content, str):
         return content
-    any_value = object_to_any_value(content)
-    if any_value is None:
-        return str(content)
-    return gen_ai_json_dumps(any_value, ensure_ascii=False)
+    try:
+        any_value = object_to_any_value(content)
+        if any_value is None:
+            return str(content)
+        return gen_ai_json_dumps(any_value, ensure_ascii=False)
+    except Exception:  # pylint: disable=broad-exception-caught
+        _logger.debug(
+            "GenAI agent stream output not serializable", exc_info=True
+        )
+        return None
 
 
 class _AgentStreamOutput:
@@ -649,21 +655,27 @@ class _AgentStreamOutput:
 
         Pieces are joined into a single assistant text part on finalization.
         Structured content (pydantic models, dataclasses, mappings) is
-        serialized to JSON. A no-op when content capture is disabled.
+        serialized to JSON; ``None`` and content that cannot be serialized are
+        skipped. A no-op when content capture is disabled or once output
+        messages have been set.
         """
-        if not self._self_agent_invocation.should_capture_content:
+        if not self._captures_text_output():
             return
-        self._self_output_parts.append(_content_to_text(content))
+        text = _content_to_text(content)
+        if text is not None:
+            self._self_output_parts.append(text)
 
     def _set_output(self, content: object) -> None:
         """Record the agent's complete output, replacing any streamed pieces.
 
         For libraries that report the final output in a closing chunk. A
-        no-op when content capture is disabled.
+        no-op when content capture is disabled or once output messages have
+        been set.
         """
-        if not self._self_agent_invocation.should_capture_content:
+        if not self._captures_text_output():
             return
-        self._self_output_parts = [_content_to_text(content)]
+        text = _content_to_text(content)
+        self._self_output_parts = [text] if text is not None else []
 
     def _set_output_messages(self, messages: Sequence[OutputMessage]) -> None:
         """Record fully converted output messages, taking precedence over text output.
@@ -674,6 +686,13 @@ class _AgentStreamOutput:
         if not self._self_agent_invocation.should_capture_content:
             return
         self._self_output_messages = list(messages)
+        self._self_output_parts = []
+
+    def _captures_text_output(self) -> bool:
+        return (
+            self._self_agent_invocation.should_capture_content
+            and self._self_output_messages is None
+        )
 
     def _apply_output(self) -> None:
         if not self._self_agent_invocation.should_capture_content:
@@ -727,7 +746,12 @@ class SyncAgentStreamWrapper(_AgentStreamOutput, SyncStreamWrapper[ChunkT]):
         stream: _SyncStream[ChunkT],
         invocation: AgentInvocation | WorkflowInvocation,
     ) -> None:
-        super().__init__(stream, invocation)
+        try:
+            super().__init__(stream, invocation)
+        except BaseException as error:
+            self._self_finalized = True
+            invocation.fail(error)
+            raise
         self._init_output(invocation)
         invocation.suspend()
 
@@ -744,7 +768,12 @@ class AsyncAgentStreamWrapper(_AgentStreamOutput, AsyncStreamWrapper[ChunkT]):
         stream: _AsyncStream[ChunkT],
         invocation: AgentInvocation | WorkflowInvocation,
     ) -> None:
-        super().__init__(stream, invocation)
+        try:
+            super().__init__(stream, invocation)
+        except BaseException as error:
+            self._self_finalized = True
+            invocation.fail(error)
+            raise
         self._init_output(invocation)
         invocation.suspend()
 

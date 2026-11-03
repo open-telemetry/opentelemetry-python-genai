@@ -453,3 +453,67 @@ def test_async_agent_stream_abandoned_does_not_parent_caller_work(telemetry):
     agent = telemetry.span("invoke_agent writer")
     assert telemetry.span("caller-work").parent is None
     assert (agent.attributes or {})[ERROR_TYPE] == "_OTHER"
+
+
+class _Unserializable:
+    def __str__(self) -> str:
+        raise RuntimeError("no str")
+
+
+def test_sync_agent_stream_skips_unserializable_and_none_output(telemetry):
+    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
+    chunks = ["a", _Unserializable(), None, "b"]
+    wrapper = _DeltaStream(_chunks(*chunks), invocation)
+
+    assert list(wrapper) == chunks
+
+    span = telemetry.span("invoke_agent writer")
+    assert span.status.status_code == StatusCode.UNSET
+    assert _output_messages(span) == _assistant_text("ab")
+
+
+def test_sync_agent_stream_stops_text_accumulation_after_messages(telemetry):
+    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
+    wrapper = _MessagesStream(_chunks("a", "b", "c"), invocation)
+    next(wrapper)
+
+    assert wrapper._self_output_parts == []
+    list(wrapper)
+    assert wrapper._self_output_parts == []
+
+
+class _UniterableStream:
+    def __iter__(self) -> Iterator[str]:
+        raise TypeError("not iterable")
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        raise TypeError("not iterable")
+
+    def close(self) -> None:
+        pass
+
+
+def test_sync_agent_stream_init_failure_fails_invocation(telemetry):
+    caller_span = get_current_span()
+    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
+
+    with pytest.raises(TypeError, match="not iterable"):
+        _DeltaStream(_UniterableStream(), invocation)
+    gc.collect()
+
+    span = telemetry.span("invoke_agent writer")
+    assert (span.attributes or {})[ERROR_TYPE] == "TypeError"
+    assert get_current_span() is caller_span
+
+
+def test_async_agent_stream_init_failure_fails_invocation(telemetry):
+    caller_span = get_current_span()
+    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
+
+    with pytest.raises(TypeError, match="not iterable"):
+        _AsyncDeltaStream(_UniterableStream(), invocation)
+    gc.collect()
+
+    span = telemetry.span("invoke_agent writer")
+    assert (span.attributes or {})[ERROR_TYPE] == "TypeError"
+    assert get_current_span() is caller_span
