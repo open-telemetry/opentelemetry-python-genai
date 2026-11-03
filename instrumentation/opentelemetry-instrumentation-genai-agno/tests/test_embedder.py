@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import array
 import asyncio
+import base64
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -42,6 +44,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
+    GEN_AI_REQUEST_ENCODING_FORMATS,
     GEN_AI_REQUEST_MODEL,
     GEN_AI_RESPONSE_MODEL,
     GEN_AI_USAGE_INPUT_TOKENS,
@@ -50,7 +53,7 @@ from opentelemetry.trace.status import StatusCode
 
 
 def _create_mock_response(
-    embedding: list[float], usage: dict[str, Any] | None = None
+    embedding: list[float] | str, usage: dict[str, Any] | None = None
 ) -> MagicMock:
     entry = MagicMock(embedding=embedding)
     resp = MagicMock(data=[entry])
@@ -638,3 +641,140 @@ def test_embedder_dual_instrumentation_suppressed_inner(
             spans[0].instrumentation_scope.name
             == "opentelemetry.instrumentation.genai.agno"
         )
+
+
+def test_embedder_base64_encoding_dimensions(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test base64-encoded embedding strings decode to the float32 dimension count."""
+    raw_floats = array.array("f", [0.1, 0.2, 0.3, 0.4])
+    b64_embedding = base64.b64encode(raw_floats.tobytes()).decode("ascii")
+
+    mock_client = MagicMock()
+    mock_client.embeddings.create.return_value = _create_mock_response(
+        b64_embedding, {"prompt_tokens": 3}
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="text-embedding-3-small",
+        encoding_format="base64",
+        dimensions=1536,
+        openai_client=mock_client,
+    )
+    res, usage = embedder.get_embedding_and_usage("test base64")
+    assert res == b64_embedding
+    assert usage == {"prompt_tokens": 3}
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get(GEN_AI_REQUEST_ENCODING_FORMATS) == ("base64",)
+    assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 4
+    assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 3
+
+
+@pytest.mark.parametrize("invalid_b64", ["AQID", "AQI"])
+def test_embedder_invalid_base64_falls_back_to_dimensions(
+    instrument_agno,
+    span_exporter,
+    invalid_b64: str,
+) -> None:
+    """Test invalid base64 embedding falls back to embedder.dimensions."""
+    mock_client = MagicMock()
+    mock_client.embeddings.create.return_value = _create_mock_response(
+        invalid_b64, {"prompt_tokens": 7}
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="text-embedding-3-small",
+        encoding_format="base64",
+        dimensions=256,
+        openai_client=mock_client,
+    )
+    res, usage = embedder.get_embedding_and_usage("test invalid base64")
+    assert res == invalid_b64
+    assert usage == {"prompt_tokens": 7}
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 256
+    assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 7
+
+
+def test_embedder_async_executor_delegation_suppression(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test async embedders that call sync methods via loop.run_in_executor emit only 1 span."""
+    import threading
+
+    mock_sync_client = MagicMock()
+    mock_sync_client.embeddings.create.return_value = _create_mock_response(
+        [0.1, 0.2, 0.3], {"input_tokens": 9}
+    )
+    mock_async_client = MagicMock()
+
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="executor-embedder",
+        openai_client=mock_sync_client,
+        async_client=mock_async_client,
+    )
+
+    in_executor_event = threading.Event()
+    direct_sync_done = threading.Event()
+
+    async def create_via_executor(*args: Any, **kwargs: Any) -> MagicMock:
+        loop = asyncio.get_running_loop()
+
+        # Bind embedder.get_embedding_and_usage on the event loop thread just like
+        # FastEmbedEmbedder / SentenceTransformerEmbedder:
+        # loop.run_in_executor(None, self.get_embedding_and_usage, text)
+        if kwargs.get("input") == "executor text":
+            vec = await loop.run_in_executor(
+                None, embedder.get_embedding, "executor text"
+            )
+            return _create_mock_response(vec)
+
+        # For the second call, also run a concurrent direct sync call on another thread
+        # while the async call is active to ensure the direct sync call is NOT suppressed.
+        def _concurrent_sync_caller() -> None:
+            in_executor_event.wait(timeout=5.0)
+            embedder.get_embedding("concurrent direct sync")
+            direct_sync_done.set()
+
+        t = threading.Thread(target=_concurrent_sync_caller)
+        t.start()
+        try:
+            in_executor_event.set()
+            direct_sync_done.wait(timeout=5.0)
+            vec, usage = await loop.run_in_executor(
+                None, embedder.get_embedding_and_usage, "executor text 2"
+            )
+            return _create_mock_response(vec, usage)
+        finally:
+            t.join(timeout=5.0)
+
+    mock_async_client.embeddings.create = AsyncMock(
+        side_effect=create_via_executor
+    )
+
+    async def _test() -> None:
+        vec = await embedder.async_get_embedding("executor text")
+        assert vec == [0.1, 0.2, 0.3]
+        vec2, usage = await embedder.async_get_embedding_and_usage(
+            "executor text 2"
+        )
+        assert vec2 == [0.1, 0.2, 0.3]
+        assert usage == {"input_tokens": 9}
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    # 2 async calls (their inner executor sync calls are suppressed) + 1 concurrent direct sync call = 3 spans
+    assert len(spans) == 3
+    for span in spans:
+        assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 3
+    assert spans[2].attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 9

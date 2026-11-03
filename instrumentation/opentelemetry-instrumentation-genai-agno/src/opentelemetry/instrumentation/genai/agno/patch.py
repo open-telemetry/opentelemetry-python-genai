@@ -7,9 +7,12 @@
 
 from __future__ import annotations
 
+import array
+import base64
 import functools
 import logging
 import sys
+import threading
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -29,8 +32,15 @@ if TYPE_CHECKING:
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
 
-from wrapt import register_post_import_hook, wrap_function_wrapper
+from wrapt import (
+    BoundFunctionWrapper,
+    FunctionWrapper,
+    register_post_import_hook,
+    wrap_function_wrapper,
+    wrap_object,
+)
 
+from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.agno.stream import (
     AgnoAgentStreamWrapper,
     AgnoWorkflowStreamWrapper,
@@ -129,11 +139,38 @@ _instrumentation_generation: int = 0
 _is_instrumented: bool = False
 
 
+class _ContextPreservingBoundWrapper(BoundFunctionWrapper):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._self_bind_thread = threading.get_ident()
+        self._self_bind_context = get_current()
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        # Local embedders (e.g. FastEmbedEmbedder, SentenceTransformerEmbedder,
+        # VLLMEmbedder) implement async_get_embedding by passing
+        # self.get_embedding to loop.run_in_executor, which binds the method on
+        # the event-loop thread and invokes it on a worker thread without
+        # propagating contextvars.
+        if threading.get_ident() != self._self_bind_thread:
+            token = attach(self._self_bind_context)
+            try:
+                return super().__call__(*args, **kwargs)
+            finally:
+                detach(token)
+        return super().__call__(*args, **kwargs)
+
+
+class _ContextPreservingFunctionWrapper(FunctionWrapper):
+    __bound_function_wrapper__ = _ContextPreservingBoundWrapper
+
+
 def _safe_wrap_function(
     target_module: str,
     target_name: str,
     wrapper: Callable[..., Any],
     generation: int,
+    *,
+    preserve_bind_context: bool = False,
 ) -> None:
     """Safely wrap a method if it exists, deferring if module is not yet imported."""
 
@@ -150,7 +187,15 @@ def _safe_wrap_function(
             return
         if hasattr(curr, "__wrapped__"):
             return
-        wrap_function_wrapper(mod, target_name, wrapper)
+        if preserve_bind_context:
+            wrap_object(
+                mod,
+                target_name,
+                _ContextPreservingFunctionWrapper,
+                (wrapper,),
+            )
+        else:
+            wrap_function_wrapper(mod, target_name, wrapper)
 
     if target_module in sys.modules:
         _apply(sys.modules[target_module])
@@ -295,6 +340,7 @@ def patch_agent(handler: TelemetryHandler) -> None:
                 f"{cls_name}.{method_name}",
                 wrapper_fn,
                 current_generation,
+                preserve_bind_context=True,
             )
 
 
@@ -403,9 +449,19 @@ def _start_embedding(
 def _set_embedding_attributes(
     invocation: EmbeddingInvocation,
     instance: Embedder,
-    embedding: Sequence[float] | None,
+    embedding: Sequence[float] | str | None,
     usage: Mapping[str, Any] | None = None,
 ) -> None:
+    if isinstance(embedding, str) and embedding:
+        try:
+            embedding = array.array("f", base64.b64decode(embedding))
+        except ValueError:
+            logger.debug(
+                "Failed to decode base64 embedding dimensions",
+                exc_info=True,
+            )
+            embedding = None
+
     if embedding:
         invocation.dimension_count = len(embedding)
     else:
@@ -419,11 +475,11 @@ def _embedder_get_embedding(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
     def traced_method(
-        wrapped: Callable[..., Sequence[float]],
+        wrapped: Callable[..., Sequence[float] | str],
         instance: Embedder,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Sequence[float]:
+    ) -> Sequence[float] | str:
         with _start_embedding(handler, instance) as invocation:
             result = wrapped(*args, **kwargs)
             _set_embedding_attributes(invocation, instance, result)
@@ -436,11 +492,13 @@ def _embedder_get_embedding_and_usage(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
     def traced_method(
-        wrapped: Callable[..., tuple[Sequence[float], dict[str, Any] | None]],
+        wrapped: Callable[
+            ..., tuple[Sequence[float] | str, dict[str, Any] | None]
+        ],
         instance: Embedder,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> tuple[Sequence[float], dict[str, Any] | None]:
+    ) -> tuple[Sequence[float] | str, dict[str, Any] | None]:
         with _start_embedding(handler, instance) as invocation:
             result = wrapped(*args, **kwargs)
             embedding, usage = result
@@ -454,11 +512,11 @@ def _embedder_async_get_embedding(
     handler: TelemetryHandler,
 ) -> Callable[..., Any]:
     async def traced_method(
-        wrapped: Callable[..., Awaitable[Sequence[float]]],
+        wrapped: Callable[..., Awaitable[Sequence[float] | str]],
         instance: Embedder,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Sequence[float]:
+    ) -> Sequence[float] | str:
         with _start_embedding(handler, instance) as invocation:
             result = await wrapped(*args, **kwargs)
             _set_embedding_attributes(invocation, instance, result)
@@ -472,12 +530,12 @@ def _embedder_async_get_embedding_and_usage(
 ) -> Callable[..., Any]:
     async def traced_method(
         wrapped: Callable[
-            ..., Awaitable[tuple[Sequence[float], dict[str, Any] | None]]
+            ..., Awaitable[tuple[Sequence[float] | str, dict[str, Any] | None]]
         ],
         instance: Embedder,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> tuple[Sequence[float], dict[str, Any] | None]:
+    ) -> tuple[Sequence[float] | str, dict[str, Any] | None]:
         with _start_embedding(handler, instance) as invocation:
             result = await wrapped(*args, **kwargs)
             embedding, usage = result
