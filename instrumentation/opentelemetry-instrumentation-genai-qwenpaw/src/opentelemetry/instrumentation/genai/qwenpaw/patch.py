@@ -15,9 +15,11 @@ from collections.abc import AsyncGenerator, Callable
 from typing import cast
 
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import LocalAgentInvocation
-from opentelemetry.util.genai.stream import AsyncStreamWrapper
-from opentelemetry.util.genai.types import OutputMessage
+from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
+    LocalAgentInvocation,
+)
+from opentelemetry.util.genai.stream import AsyncAgentStreamWrapper
 
 from .utils import (
     input_messages_from_msgs,
@@ -27,7 +29,7 @@ from .utils import (
 )
 
 
-class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
+class QueryHandlerStreamWrapper(AsyncAgentStreamWrapper[object]):
     """Proxy the ``query_handler`` async generator and finalize telemetry."""
 
     def __init__(
@@ -35,12 +37,8 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
         stream: AsyncGenerator[object, None],
         invocation: LocalAgentInvocation,
     ) -> None:
-        super().__init__(stream)
-        # INTERNAL agent invocations must not opt into the base wrapper's
-        # streamed inference timing metrics or gen_ai.request.stream handling.
-        self._self_agent_invocation = invocation
+        super().__init__(stream, invocation)
         self._self_output_complete = False
-        self._self_output_message: OutputMessage | None = None
 
     def _process_chunk(self, chunk: object) -> None:
         self._self_output_complete = False
@@ -52,27 +50,19 @@ class QueryHandlerStreamWrapper(AsyncStreamWrapper[object]):
             and getattr(item[0], "role", None) == "assistant"
             and item[1] is True
         )
-        if not self._self_agent_invocation.should_capture_content:
+        if not self._self_invocation.should_capture_content:
             return
         output_message = output_message_from_yield_item(item)
         if output_message is not None:
-            self._self_output_message = output_message
+            self._set_output_messages([output_message])
 
     def _on_stream_end(self) -> None:
-        self._apply_output_message()
-        if self._self_output_complete:
-            self._self_agent_invocation.finish_reasons = ["stop"]
-        self._self_agent_invocation.stop()
-
-    def _on_stream_error(self, error: BaseException) -> None:
-        self._apply_output_message()
-        self._self_agent_invocation.fail(error)
-
-    def _apply_output_message(self) -> None:
-        if self._self_output_message is not None:
-            self._self_agent_invocation.output_messages = [
-                self._self_output_message
-            ]
+        invocation = self._self_invocation
+        if self._self_output_complete and isinstance(
+            invocation, AgentInvocation
+        ):
+            invocation.finish_reasons = ["stop"]
+        super()._on_stream_end()
 
 
 def _build_invocation(
