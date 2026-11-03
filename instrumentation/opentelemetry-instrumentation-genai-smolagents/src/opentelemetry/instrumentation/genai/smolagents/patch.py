@@ -301,6 +301,7 @@ class _ModelStreamWrapper(SyncStreamWrapper["ChatMessageStreamDelta"]):
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_inference = invocation
+        invocation.suspend()
         self._self_capture_content = handler.should_capture_content()
         self._self_content: list[str] = []
         self._self_input_tokens = 0
@@ -309,7 +310,8 @@ class _ModelStreamWrapper(SyncStreamWrapper["ChatMessageStreamDelta"]):
 
     def __del__(self) -> None:
         try:
-            self._finalize_success()
+            with self._execution_context():
+                self._finalize_success()
         except BaseException:  # pylint: disable=broad-except
             pass
 
@@ -426,6 +428,20 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
         self._self_agent = agent
         self._self_final_output: object = None
         self._self_saw_final = False
+
+    def __del__(self) -> None:
+        # An abandoned run is treated as finished; close its generator inside
+        # the agent span so the run's own cleanup is parented under it.
+        if getattr(self, "_self_finalized", True):
+            return
+        try:
+            with self._execution_context():
+                try:
+                    self._self_stream.close()
+                finally:
+                    self._finalize_success()
+        except BaseException:  # pylint: disable=broad-except
+            pass
 
     def _process_chunk(self, chunk: _RunStreamChunk) -> None:
         # The run is over at the final answer even if the caller stops reading
