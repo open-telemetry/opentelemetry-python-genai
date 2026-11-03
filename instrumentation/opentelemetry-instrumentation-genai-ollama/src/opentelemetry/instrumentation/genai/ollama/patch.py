@@ -87,7 +87,9 @@ def _chat(handler: TelemetryHandler) -> Callable[..., Any]:
         messages_capture = IteratorCapture.from_property(
             kwargs, "messages", enabled=capture_content
         )
-        tools_capture = IteratorCapture.from_property(kwargs, "tools")
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", enabled=capture_content
+        )
         invocation = create_chat_invocation(handler, instance, args, kwargs)
         try:
             try:
@@ -125,7 +127,9 @@ def _async_chat(handler: TelemetryHandler) -> Callable[..., Any]:
         messages_capture = IteratorCapture.from_property(
             kwargs, "messages", enabled=capture_content
         )
-        tools_capture = IteratorCapture.from_property(kwargs, "tools")
+        tools_capture = IteratorCapture.from_property(
+            kwargs, "tools", enabled=capture_content
+        )
         invocation = create_chat_invocation(handler, instance, args, kwargs)
         try:
             try:
