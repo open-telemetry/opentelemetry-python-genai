@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -159,7 +159,7 @@ class CompactionPart:
     type: Literal["compaction"] = "compaction"
 
 
-class Modality(str, Enum):
+class Modality(StrEnum):
     """Well-known content and token modalities.
 
     Based on the `GenAI messages Python models - Modality
@@ -174,9 +174,6 @@ class Modality(str, Enum):
     VIDEO = "video"
     AUDIO = "audio"
     DOCUMENT = "document"
-
-    def __str__(self) -> str:
-        return self.value
 
 
 ModalityTokens: TypeAlias = Iterable[tuple[Modality | str, int | None]]
@@ -329,7 +326,7 @@ FinishReason = Literal[
 
 
 # Semconv schemas: model/gen-ai/gen-ai-{input,output}-messages.json (pinned by SEMCONV_GENAI_REF).
-class Role(str, Enum):
+class Role(StrEnum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
