@@ -328,10 +328,14 @@ def test_sync_agent_stream_scopes_context_to_agent_code(telemetry):
 def test_sync_agent_stream_abandoned_does_not_parent_caller_work(telemetry):
     def run() -> None:
         invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        for _ in _DeltaStream(_chunks("a", "b"), invocation):
+        # Keep the stream referenced so it outlives the loop, as a caller
+        # holding it would; otherwise it is finalized at ``break``.
+        stream = _DeltaStream(_chunks("a", "b"), invocation)
+        for _ in stream:
             break
         with telemetry.tracer.start_as_current_span("caller-work"):
             pass
+        del stream
 
     run()
     gc.collect()
@@ -438,10 +442,13 @@ def test_async_agent_stream_scopes_context_to_agent_code(telemetry):
 def test_async_agent_stream_abandoned_does_not_parent_caller_work(telemetry):
     async def exercise() -> None:
         invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        async for _ in _AsyncDeltaStream(_achunks("a", "b"), invocation):
+        # See test_sync_agent_stream_abandoned_does_not_parent_caller_work.
+        stream = _AsyncDeltaStream(_achunks("a", "b"), invocation)
+        async for _ in stream:
             break
         with telemetry.tracer.start_as_current_span("caller-work"):
             pass
+        del stream
 
     asyncio.run(exercise())
     gc.collect()
