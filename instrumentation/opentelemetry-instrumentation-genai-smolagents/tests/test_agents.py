@@ -7,6 +7,7 @@ import gc
 import inspect
 import json
 import pathlib
+import sys
 import tempfile
 import weakref
 from collections.abc import Generator
@@ -36,7 +37,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.semconv.attributes import error_attributes
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import INVALID_SPAN, StatusCode, get_current_span
 
 from .test_utils import (
     BrokenTool,
@@ -309,6 +310,18 @@ def test_abandoned_streaming_run_does_not_leak_context(
     assert unrelated.parent is None
 
 
+def test_abandoned_streaming_run_closes_the_run(
+    instrument_with_content, span_exporter, monkeypatch
+) -> None:
+    unraisable: list[Any] = []
+    monkeypatch.setattr(sys, "unraisablehook", unraisable.append)
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+    _first_step_only(agent)
+    gc.collect()
+
+    assert unraisable == []
+
+
 def test_code_agent_streaming_is_lazy_until_drained(
     instrument_with_content, span_exporter
 ) -> None:
@@ -328,6 +341,42 @@ def test_code_agent_streaming_is_lazy_until_drained(
     assert outputs[0]["parts"][0]["content"] == "Test result from CodeAgent"
     assert agent_span.status.status_code == StatusCode.UNSET
     assert attr(agent_span, error_attributes.ERROR_TYPE) is None
+
+
+class _SpanningCodeModel(FakeCodeModel):
+    def __init__(self, tracer: Any) -> None:
+        super().__init__()
+        self._tracer = tracer
+
+    def generate(self, *args: Any, **kwargs: Any) -> Any:
+        with self._tracer.start_as_current_span("model work"):
+            return super().generate(*args, **kwargs)
+
+
+def test_streaming_run_is_current_only_while_read(
+    instrument_with_content, span_exporter, tracer_provider
+) -> None:
+    tracer = tracer_provider.get_tracer("test")
+    agent = CodeAgent(tools=[], model=_SpanningCodeModel(tracer), max_steps=3)
+    stream = agent.run("Test question", stream=True)
+    assert get_current_span() is INVALID_SPAN
+
+    next(stream)
+    assert get_current_span() is INVALID_SPAN
+    with tracer.start_as_current_span("caller"):
+        pass
+    list(stream)
+
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = spans_by_operation(spans, "invoke_agent")
+    (caller,) = [span for span in spans if span.name == "caller"]
+    model_work = [span for span in spans if span.name == "model work"]
+    assert caller.parent is None
+    assert model_work
+    assert all(
+        span.parent.span_id == agent_span.context.span_id
+        for span in model_work
+    )
 
 
 def test_streaming_run_stays_a_generator(
