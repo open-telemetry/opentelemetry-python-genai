@@ -1,0 +1,1 @@
+Keep the ``invoke_agent`` span out of the caller's context while a streamed run is held unconsumed; a run abandoned before its final answer now records ``error.type`` ``_OTHER`` instead of succeeding.
