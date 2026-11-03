@@ -12,9 +12,10 @@ from collections.abc import (
     Awaitable,
     Callable,
     Iterable,
+    Iterator,
     Sequence,
 )
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from functools import wraps
 from types import TracebackType
 from typing import (
@@ -639,16 +640,26 @@ def _content_to_text(content: object) -> str | None:
 class _AgentStreamOutput:
     """Output accumulation and finalization shared by the agent stream wrappers."""
 
-    _self_agent_invocation: AgentInvocation | WorkflowInvocation
+    _self_invocation: AgentInvocation | WorkflowInvocation
+    _self_finalized: bool
     _self_output_parts: list[str]
     _self_output_messages: list[OutputMessage] | None
 
-    def _init_output(
+    @contextmanager
+    def _fail_on_init_error(
         self, invocation: AgentInvocation | WorkflowInvocation
-    ) -> None:
-        self._self_agent_invocation = invocation
+    ) -> Iterator[None]:
+        try:
+            yield
+        except BaseException as error:
+            self._self_finalized = True
+            invocation.fail(error)
+            raise
+
+    def _start_output(self) -> None:
         self._self_output_parts = []
         self._self_output_messages = None
+        self._self_invocation.suspend()
 
     def _add_output(self, content: object) -> None:
         """Append one streamed piece of the agent's output.
@@ -683,20 +694,18 @@ class _AgentStreamOutput:
         For libraries whose output needs a library-specific conversion. A
         no-op when content capture is disabled.
         """
-        if not self._self_agent_invocation.should_capture_content:
+        if not self._self_invocation.should_capture_content:
             return
         self._self_output_messages = list(messages)
         self._self_output_parts = []
 
     def _captures_text_output(self) -> bool:
         return (
-            self._self_agent_invocation.should_capture_content
+            self._self_invocation.should_capture_content
             and self._self_output_messages is None
         )
 
     def _apply_output(self) -> None:
-        if not self._self_agent_invocation.should_capture_content:
-            return
         if self._self_output_messages is not None:
             messages = self._self_output_messages
         else:
@@ -706,15 +715,15 @@ class _AgentStreamOutput:
             messages = [
                 OutputMessage(role="assistant", parts=[TextPart(content=text)])
             ]
-        self._self_agent_invocation.output_messages = messages
+        self._self_invocation.output_messages = messages
 
     def _on_stream_end(self) -> None:
         self._apply_output()
-        self._self_agent_invocation.stop()
+        self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._apply_output()
-        self._self_agent_invocation.fail(error)
+        self._self_invocation.fail(error)
 
 
 class SyncAgentStreamWrapper(_AgentStreamOutput, SyncStreamWrapper[ChunkT]):
@@ -746,14 +755,9 @@ class SyncAgentStreamWrapper(_AgentStreamOutput, SyncStreamWrapper[ChunkT]):
         stream: _SyncStream[ChunkT],
         invocation: AgentInvocation | WorkflowInvocation,
     ) -> None:
-        try:
+        with self._fail_on_init_error(invocation):
             super().__init__(stream, invocation)
-        except BaseException as error:
-            self._self_finalized = True
-            invocation.fail(error)
-            raise
-        self._init_output(invocation)
-        invocation.suspend()
+        self._start_output()
 
 
 class AsyncAgentStreamWrapper(_AgentStreamOutput, AsyncStreamWrapper[ChunkT]):
@@ -768,14 +772,9 @@ class AsyncAgentStreamWrapper(_AgentStreamOutput, AsyncStreamWrapper[ChunkT]):
         stream: _AsyncStream[ChunkT],
         invocation: AgentInvocation | WorkflowInvocation,
     ) -> None:
-        try:
+        with self._fail_on_init_error(invocation):
             super().__init__(stream, invocation)
-        except BaseException as error:
-            self._self_finalized = True
-            invocation.fail(error)
-            raise
-        self._init_output(invocation)
-        invocation.suspend()
+        self._start_output()
 
 
 _ExecutionContextFactory = Callable[[], AbstractContextManager[None]]

@@ -40,11 +40,6 @@ from opentelemetry.util.genai.types import (
     TextPart,
 )
 
-_INFERENCE_STREAM_METRICS = {
-    "gen_ai.client.operation.time_to_first_chunk",
-    "gen_ai.client.operation.time_per_output_chunk",
-}
-
 
 class _Telemetry:
     def __init__(self, mode: ContentCapturingMode) -> None:
@@ -158,7 +153,7 @@ class _UsageStream(SyncAgentStreamWrapper[str]):
         self._add_output(chunk)
 
     def _on_stream_end(self) -> None:
-        invocation = self._self_agent_invocation
+        invocation = self._self_invocation
         assert isinstance(invocation, AgentInvocation)
         invocation.finish_reasons = ["stop"]
         super()._on_stream_end()
@@ -367,7 +362,7 @@ def test_async_agent_stream_joins_streamed_output(telemetry):
     span = telemetry.span("invoke_agent writer")
     assert span.status.status_code == StatusCode.UNSET
     assert _output_messages(span) == _assistant_text("Hello world")
-    assert not telemetry.metric_names() & _INFERENCE_STREAM_METRICS
+    assert telemetry.metric_names() == {"gen_ai.invoke_agent.duration"}
 
 
 def test_async_agent_stream_aclose_finalizes_successfully(telemetry):
@@ -488,9 +483,6 @@ class _UniterableStream:
 
     def __aiter__(self) -> AsyncIterator[str]:
         raise TypeError("not iterable")
-
-    def close(self) -> None:
-        pass
 
 
 def test_sync_agent_stream_init_failure_fails_invocation(telemetry):
