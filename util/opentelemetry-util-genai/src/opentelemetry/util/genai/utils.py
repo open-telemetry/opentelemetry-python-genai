@@ -166,6 +166,26 @@ def object_to_any_value(value: object) -> AnyValue | None:
     return None if res is _OMIT else cast(AnyValue | None, res)
 
 
+def content_to_text(content: object) -> str | None:
+    """Convert message content into text, serializing structured objects to JSON.
+
+    Strings are returned unchanged. Models, dataclasses and mappings are
+    converted with ``object_to_any_value`` and serialized to JSON; other
+    objects fall back to ``str()``. Returns None for ``None`` and for content
+    that cannot be converted, without raising.
+    """
+    if content is None or isinstance(content, str):
+        return content
+    try:
+        any_value = object_to_any_value(content)
+        if any_value is None:
+            return str(content)
+        return gen_ai_json_dumps(any_value, ensure_ascii=False)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.debug("GenAI content not convertible to text", exc_info=True)
+        return None
+
+
 def tool_arguments_to_any_value(arguments: object) -> AnyValue | None:
     """Convert tool call arguments to AnyValue, parsing JSON strings.
 

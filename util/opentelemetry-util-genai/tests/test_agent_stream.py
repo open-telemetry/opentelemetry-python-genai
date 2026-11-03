@@ -39,6 +39,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     TextPart,
 )
+from opentelemetry.util.genai.utils import content_to_text
 
 
 class _Telemetry:
@@ -509,3 +510,20 @@ def test_async_agent_stream_init_failure_fails_invocation(telemetry):
     span = telemetry.span("invoke_agent writer")
     assert (span.attributes or {})[ERROR_TYPE] == "TypeError"
     assert get_current_span() is caller_span
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("text", "text"),
+        (None, None),
+        (
+            _Answer(city="Paris", temperature=21),
+            '{"city":"Paris","temperature":21}',
+        ),
+        ({"k": "é"}, '{"k":"é"}'),
+        (_Unserializable(), None),
+    ],
+)
+def test_content_to_text(content, expected):
+    assert content_to_text(content) == expected
