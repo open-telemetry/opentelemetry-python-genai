@@ -1,0 +1,41 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+# Generated for py311-test-instrumentation-genai-anthropic-oldest; Python 3.11, resolution lowest-direct.
+# Inputs SHA256: 5f6b3341468a232899a9567ae3ebba6d03754fe21074a300adc5de483dd19fe8
+-e ./instrumentation/opentelemetry-instrumentation-genai-anthropic
+-e ./util/opentelemetry-test-util-genai
+annotated-types==0.8.0
+anthropic==0.51.0
+anyio==4.16.0
+asgiref==3.13.0
+certifi==2026.10.23
+charset-normalizer==3.5.2
+colorama==0.4.6 ; sys_platform == 'win32'
+distro==1.9.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+iniconfig==2.3.1
+jiter==0.18.0
+opentelemetry-api==1.45.0
+opentelemetry-instrumentation==0.66b0
+opentelemetry-sdk==1.45.0
+opentelemetry-semantic-conventions==0.66b0
+opentelemetry-test-utils==0.66b0
+opentelemetry-util-genai==1.3b0
+packaging==26.3
+pluggy==1.7.0
+pydantic==2.14.2
+pydantic-core==2.50.2
+pytest==8.2.0
+pytest-asyncio==0.24.0
+pytest-vcr==1.0.2
+pyyaml==6.0.2
+requests==2.34.2
+sniffio==1.3.1
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+urllib3==2.8.0
+vcrpy==9.4.2
+wrapt==2.5.2

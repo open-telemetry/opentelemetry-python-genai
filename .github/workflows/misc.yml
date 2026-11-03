@@ -37,7 +37,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run spellcheck
         run: uvx --with tox-uv tox -e spellcheck
@@ -61,7 +61,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Build docs
         run: uvx --with tox-uv tox -e docs
@@ -82,7 +82,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run generate
         run: uvx --with tox-uv tox -e generate
@@ -106,7 +106,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check READMEs render on PyPI
         run: uvx --with tox-uv tox -e readme
@@ -127,7 +127,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run shellcheck
         run: uvx --with tox-uv tox -e shellcheck
@@ -148,7 +148,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run pre-commit
         run: uvx --with tox-uv tox -e precommit
@@ -169,7 +169,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run typecheck
         run: uvx --with tox-uv tox -e typecheck
@@ -191,7 +191,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run typecheck
         run: uvx --with tox-uv tox -e typecheck-py314
@@ -212,13 +212,19 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Run dependency check
         run: uv run --no-project --with packaging scripts/check_deps.py
 
       - name: Test requirements generator
         run: python -m unittest discover -s scripts/tests -v
+
+      - name: Check Anthropic lock inputs
+        run: |
+          for env in py311-test-instrumentation-genai-anthropic-oldest py311-test-instrumentation-genai-anthropic-latest py315-test-instrumentation-genai-anthropic-latest; do
+            uv run --no-project --with tox --with tox-uv python scripts/generate_requirements.py "$env" --check --output "instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/$env.txt"
+          done
 
   check-util-api:
     name: check-util-api
@@ -241,7 +247,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check util public API
         run: uvx --with tox-uv tox -e check-util-api
@@ -262,7 +268,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check license headers
         run: uvx --with tox-uv tox -e license-header-check
@@ -283,7 +289,7 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Check versions
         run: uvx --with tox-uv tox -e check-versions

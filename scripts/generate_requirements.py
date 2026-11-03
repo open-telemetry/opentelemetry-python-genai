@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -15,6 +16,12 @@ import tempfile
 from pathlib import Path
 
 _ENV_PATTERN = re.compile(r"^py(\d)(\d+)-test-.+-(oldest|latest)$")
+_ANTHROPIC_ENV = re.compile(
+    r"^py\d+-test-instrumentation-genai-anthropic-(oldest|latest)$"
+)
+_ANTHROPIC = Path(
+    "instrumentation/opentelemetry-instrumentation-genai-anthropic"
+)
 
 
 def environment_options(environment: str) -> tuple[str, str]:
@@ -22,7 +29,7 @@ def environment_options(environment: str) -> tuple[str, str]:
     match = _ENV_PATTERN.fullmatch(environment)
     if match is None:
         raise ValueError(
-            "Expected a py310-test-...-oldest or py314-test-...-latest "
+            "Expected a py311-test-...-oldest or py315-test-...-latest "
             "environment."
         )
     python_version = f"{match[1]}.{match[2]}"
@@ -30,35 +37,88 @@ def environment_options(environment: str) -> tuple[str, str]:
     return python_version, resolution
 
 
+def input_fingerprint(
+    repo_root: Path,
+    environment: str,
+    dependencies: list[str],
+    settings: dict[str, str] | None = None,
+) -> str:
+    """Fingerprint the Anthropic lock inputs without resolving dependencies."""
+    paths = [
+        _ANTHROPIC / "pyproject.toml",
+        _ANTHROPIC
+        / "src/opentelemetry/instrumentation/genai/anthropic/version.py",
+        Path("util/opentelemetry-test-util-genai/pyproject.toml"),
+    ]
+    if environment.endswith("-latest"):
+        paths.extend(
+            [
+                _ANTHROPIC / "tests/requirements.latest.txt",
+                Path("util/opentelemetry-util-genai/pyproject.toml"),
+                Path(
+                    "util/opentelemetry-util-genai/src/opentelemetry/util/genai/version.py"
+                ),
+            ]
+        )
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(
+            [environment, dependencies, settings or {}], sort_keys=True
+        ).encode("utf-8")
+    )
+    for path in paths:
+        digest.update(path.as_posix().encode("utf-8"))
+        digest.update((repo_root / path).read_bytes().replace(b"\r\n", b"\n"))
+    return digest.hexdigest()
+
+
+def tox_configuration(
+    repo_root: Path, environment: str, *, source: bool
+) -> dict:
+    """Read the selected tox dependencies, optionally before locking."""
+    command = [
+        sys.executable,
+        "-m",
+        "tox",
+        "config",
+        "-e",
+        environment,
+        "-k",
+        "deps",
+        "set_env",
+        "--format",
+        "json",
+        "--colored",
+        "no",
+    ]
+    pilot = _ANTHROPIC_ENV.fullmatch(environment)
+    if source and pilot:
+        command.extend(
+            [
+                "-x",
+                f"testenv:{environment}.deps={{[testenv]anthropic_{pilot[1]}_lock_inputs}}",
+            ]
+        )
+    result = subprocess.run(
+        command, cwd=repo_root, check=True, capture_output=True, text=True
+    )
+    return json.loads(result.stdout)["env"][environment]
+
+
+def portable(value: str, repo_root: Path) -> str:
+    """Make tox-expanded paths independent of the checkout location."""
+    return value.replace("\\", "/").replace(repo_root.as_posix() + "/", "./")
+
+
 def generate_requirements(
-    repo_root: Path, environment: str, output: Path
+    repo_root: Path, environment: str, output: Path, *, check: bool = False
 ) -> None:
     """Resolve the environment's complete tox dependency list with uv."""
     python_version, resolution = environment_options(environment)
     repo_root = repo_root.resolve()
     output = output.resolve()
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "tox",
-            "config",
-            "-e",
-            environment,
-            "-k",
-            "deps",
-            "set_env",
-            "--format",
-            "json",
-            "--colored",
-            "no",
-        ],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    configuration = json.loads(result.stdout)["env"][environment]
+    pilot = _ANTHROPIC_ENV.fullmatch(environment)
+    configuration = tox_configuration(repo_root, environment, source=True)
     dependencies = configuration["deps"]
     if not isinstance(dependencies, list) or not all(
         isinstance(dependency, str) for dependency in dependencies
@@ -67,40 +127,71 @@ def generate_requirements(
     if not dependencies:
         raise ValueError(f"No dependencies found for {environment}.")
 
-    # tox expands {toxinidir}; relative paths keep the lock portable.
-    roots = {
-        str(repo_root) + os.sep,
-        str(repo_root) + "/",
-        repo_root.as_posix() + "/",
-    }
-    for root in roots:
-        dependencies = [
-            dependency.replace(root, "./") for dependency in dependencies
-        ]
+    dependencies = [
+        portable(dependency, repo_root) for dependency in dependencies
+    ]
     requirements = "\n".join(dependencies) + "\n"
+    settings = {
+        name: portable(value, repo_root)
+        for name, value in configuration.get("set_env", {}).items()
+        if name.startswith("UV_") and name != "UV_CONFIG_FILE"
+    }
+    if pilot and (unsupported := settings.keys() - {"UV_RESOLUTION"}):
+        raise ValueError(
+            f"Unsupported Anthropic lock settings: {', '.join(sorted(unsupported))}"
+        )
+    fingerprint = (
+        input_fingerprint(repo_root, environment, dependencies, settings)
+        if pilot
+        else None
+    )
+    if check:
+        if fingerprint is None:
+            raise ValueError(
+                "Input checking is only supported for Anthropic locks."
+            )
+        installed = tox_configuration(repo_root, environment, source=False)[
+            "deps"
+        ]
+        if [portable(dependency, repo_root) for dependency in installed] != [
+            f"-r {portable(str(output), repo_root)}"
+        ]:
+            raise ValueError(f"{environment} must install only {output}.")
+        if (
+            not output.is_file()
+            or f"# Inputs SHA256: {fingerprint}\n"
+            not in output.read_text(encoding="utf-8")
+        ):
+            raise ValueError(
+                f"{output} is missing or out of date; regenerate it."
+            )
+        return
     process_env = os.environ.copy()
     process_env.update(configuration.get("set_env", {}))
     process_env.pop("UV_CONFIG_FILE", None)
 
     with tempfile.TemporaryDirectory() as temporary:
         compiled = Path(temporary) / "requirements.txt"
+        compile_command = [
+            "uv",
+            "pip",
+            "compile",
+            "-",
+            "--no-config",
+            "--no-sources",
+            "--no-header",
+            "--no-annotate",
+            "--python-version",
+            python_version,
+            "--resolution",
+            resolution,
+            "--output-file",
+            str(compiled),
+        ]
+        if pilot:
+            compile_command.append("--universal")
         subprocess.run(
-            [
-                "uv",
-                "pip",
-                "compile",
-                "-",
-                "--no-config",
-                "--no-sources",
-                "--no-header",
-                "--no-annotate",
-                "--python-version",
-                python_version,
-                "--resolution",
-                resolution,
-                "--output-file",
-                str(compiled),
-            ],
+            compile_command,
             cwd=repo_root,
             check=True,
             input=requirements,
@@ -109,15 +200,16 @@ def generate_requirements(
             stdout=subprocess.DEVNULL,
         )
         content = compiled.read_text(encoding="utf-8")
-        for root in roots:
-            content = content.replace(root, "./")
+        content = portable(content, repo_root)
         header = (
             "# Copyright The OpenTelemetry Authors\n"
             "# SPDX-License-Identifier: Apache-2.0\n"
             f"# Generated for {environment}; Python {python_version}, "
             f"resolution {resolution}.\n"
         )
-        output.write_text(header + content, encoding="utf-8")
+        if fingerprint:
+            header += f"# Inputs SHA256: {fingerprint}\n"
+        output.write_text(header + content, encoding="utf-8", newline="\n")
 
 
 def main() -> None:
@@ -129,12 +221,18 @@ def main() -> None:
         required=True,
         help="Destination requirements file",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check that lock inputs are unchanged",
+    )
     args = parser.parse_args()
     try:
         generate_requirements(
             Path(__file__).resolve().parent.parent,
             args.environment,
             args.output,
+            check=args.check,
         )
     except (ValueError, KeyError) as error:
         parser.error(str(error))

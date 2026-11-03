@@ -540,8 +540,10 @@ def main() -> int:
         # Check 1: instruments extra in pyproject.toml matches _instruments in package.py
         errors.extend(check_instruments_match(pkg_dir, pyproject))
 
-        # Check 2: oldest dependency coverage and redundancy
-        errors.extend(check_oldest_requirements(pkg_dir, pyproject))
+        # Anthropic's oldest environment installs a generated lock; its input
+        # freshness is checked by generate_requirements.py in CI.
+        if pkg_dir.name != "opentelemetry-instrumentation-genai-anthropic":
+            errors.extend(check_oldest_requirements(pkg_dir, pyproject))
 
         # Check 3: target dependencies in requirements.latest.txt are pinned / upper-bounded
         errors.extend(check_latest_requirements(pkg_dir, pyproject))

@@ -19,14 +19,25 @@ assert SPEC is not None and SPEC.loader is not None
 generator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(generator)
 
-OLDEST = "py310-test-instrumentation-genai-anthropic-oldest"
-LATEST = "py314-test-instrumentation-genai-anthropic-latest"
+OLDEST = "py311-test-instrumentation-genai-anthropic-oldest"
+LATEST = "py314-test-instrumentation-genai-qwenpaw-latest"
+
+
+def write_pilot_inputs(root: Path) -> None:
+    for path in (
+        generator._ANTHROPIC / "pyproject.toml",
+        generator._ANTHROPIC
+        / "src/opentelemetry/instrumentation/genai/anthropic/version.py",
+        Path("util/opentelemetry-test-util-genai/pyproject.toml"),
+    ):
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text("test input\n", encoding="utf-8")
 
 
 class GenerateRequirementsTest(unittest.TestCase):
     def test_environment_resolution_and_python_version(self) -> None:
         self.assertEqual(
-            generator.environment_options(OLDEST), ("3.10", "lowest-direct")
+            generator.environment_options(OLDEST), ("3.11", "lowest-direct")
         )
         self.assertEqual(
             generator.environment_options(LATEST), ("3.14", "highest")
@@ -43,7 +54,7 @@ class GenerateRequirementsTest(unittest.TestCase):
             for environment in (
                 "typecheck",
                 "py314-test-instrumentation-genai-anthropic-conformance",
-                "py310-test-instrumentation-genai-anthropic-oldest,precommit",
+                "py311-test-instrumentation-genai-anthropic-oldest,precommit",
             ):
                 with self.subTest(environment=environment):
                     with self.assertRaises(ValueError):
@@ -55,6 +66,7 @@ class GenerateRequirementsTest(unittest.TestCase):
     def test_export_preserves_dependencies_and_portable_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
+            write_pilot_inputs(root)
             output = root / "locked.txt"
             dependencies = [
                 "pytest>=8",
@@ -65,6 +77,10 @@ class GenerateRequirementsTest(unittest.TestCase):
 
             def run(command: list[str], **kwargs: object) -> object:
                 if command[0] != "uv":
+                    self.assertIn(
+                        f"testenv:{OLDEST}.deps={{[testenv]anthropic_oldest_lock_inputs}}",
+                        command,
+                    )
                     return subprocess.CompletedProcess(
                         command,
                         0,
@@ -74,7 +90,7 @@ class GenerateRequirementsTest(unittest.TestCase):
                                     OLDEST: {
                                         "deps": dependencies,
                                         "set_env": {
-                                            "UV_OVERRIDE": "overrides.txt",
+                                            "UV_RESOLUTION": "lowest-direct",
                                             "UV_CONFIG_FILE": "tox-uv.toml",
                                         },
                                     }
@@ -83,7 +99,9 @@ class GenerateRequirementsTest(unittest.TestCase):
                         ),
                     )
                 self.assertEqual(kwargs["cwd"], root)
-                self.assertEqual(kwargs["env"]["UV_OVERRIDE"], "overrides.txt")
+                self.assertEqual(
+                    kwargs["env"]["UV_RESOLUTION"], "lowest-direct"
+                )
                 self.assertNotIn("UV_CONFIG_FILE", kwargs["env"])
                 self.assertEqual(
                     kwargs["input"],
@@ -93,12 +111,13 @@ class GenerateRequirementsTest(unittest.TestCase):
                     "-r ./tests/requirements.oldest.txt\n",
                 )
                 self.assertEqual(
-                    command[command.index("--python-version") + 1], "3.10"
+                    command[command.index("--python-version") + 1], "3.11"
                 )
                 self.assertEqual(
                     command[command.index("--resolution") + 1], "lowest-direct"
                 )
-                Path(command[-1]).write_text(
+                self.assertIn("--universal", command)
+                Path(command[command.index("--output-file") + 1]).write_text(
                     f"-e {root.as_posix()}/instrumentation/example\n"
                     "pytest==8.0.0\n",
                     encoding="utf-8",
@@ -112,6 +131,95 @@ class GenerateRequirementsTest(unittest.TestCase):
             self.assertIn("-e ./instrumentation/example\n", content)
             self.assertIn("pytest==8.0.0\n", content)
             self.assertIn(OLDEST, content)
+
+    def test_check_rejects_changed_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            write_pilot_inputs(root)
+            output = root / "locked.txt"
+
+            def config(command: list[str], **kwargs: object) -> object:
+                dependencies = (
+                    ["pytest>=8"] if "-x" in command else [f"-r {output}"]
+                )
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"env": {OLDEST: {"deps": dependencies}}}),
+                )
+
+            fingerprint = generator.input_fingerprint(
+                root, OLDEST, ["pytest>=8"]
+            )
+            output.write_text(
+                f"# Inputs SHA256: {fingerprint}\n", encoding="utf-8"
+            )
+            with patch.object(generator.subprocess, "run", side_effect=config):
+                generator.generate_requirements(
+                    root, OLDEST, output, check=True
+                )
+                (root / generator._ANTHROPIC / "pyproject.toml").write_text(
+                    "changed\n", encoding="utf-8"
+                )
+                with self.assertRaisesRegex(ValueError, "out of date"):
+                    generator.generate_requirements(
+                        root, OLDEST, output, check=True
+                    )
+
+    def test_check_rejects_tox_bypassing_the_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            write_pilot_inputs(root)
+            output = root / "locked.txt"
+            fingerprint = generator.input_fingerprint(
+                root, OLDEST, ["pytest>=8"]
+            )
+            output.write_text(
+                f"# Inputs SHA256: {fingerprint}\n", encoding="utf-8"
+            )
+            config = subprocess.CompletedProcess(
+                [], 0, json.dumps({"env": {OLDEST: {"deps": ["pytest>=8"]}}})
+            )
+            with patch.object(
+                generator.subprocess, "run", return_value=config
+            ):
+                with self.assertRaisesRegex(ValueError, "must install only"):
+                    generator.generate_requirements(
+                        root, OLDEST, output, check=True
+                    )
+
+    def test_nonpilot_preserves_tox_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "locked.txt"
+
+            def run(command: list[str], **kwargs: object) -> object:
+                if command[0] != "uv":
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps(
+                            {
+                                "env": {
+                                    LATEST: {
+                                        "deps": ["pytest>=8"],
+                                        "set_env": {
+                                            "UV_OVERRIDE": "overrides.txt"
+                                        },
+                                    }
+                                }
+                            }
+                        ),
+                    )
+                self.assertEqual(kwargs["env"]["UV_OVERRIDE"], "overrides.txt")
+                self.assertNotIn("--universal", command)
+                Path(command[command.index("--output-file") + 1]).write_text(
+                    "pytest==8.0.0\n", encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(generator.subprocess, "run", side_effect=run):
+                generator.generate_requirements(root, LATEST, output)
 
     def test_failed_resolution_preserves_existing_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -137,9 +137,9 @@ For work on [hermetic test requirements (#418)](https://github.com/open-telemetr
 oldest/latest tox environment, including its package metadata and test helpers:
 
 ```sh
-uv run --with tox --with tox-uv python scripts/generate_requirements.py \
-  py310-test-instrumentation-genai-anthropic-oldest \
-  --output /tmp/anthropic-py310-oldest.txt
+uv run --no-project --with tox --with tox-uv python scripts/generate_requirements.py \
+  py311-test-instrumentation-genai-anthropic-oldest \
+  --output instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/py311-test-instrumentation-genai-anthropic-oldest.txt
 ```
 
 Use a tox version supporting `tox config --format json`. The output uses
@@ -148,15 +148,23 @@ It keeps explicitly selected local packages editable and disables implicit
 workspace source substitutions. Tox environment overrides, including CrewAI's
 compatibility override, are preserved.
 
-The generated file pins external runtime and test dependencies for the selected
-Python version and the platform running the command. Install it from the
-repository root with `uv pip sync /tmp/anthropic-py310-oldest.txt`. Use separate
-outputs for different Python versions and platforms, and a destination different
-from the handwritten input requirements.
+The Anthropic oldest and latest tox environments install the committed locks
+under `instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/`.
+Generate one lock for each of the Python 3.11 oldest, Python 3.11 latest, and
+Python 3.15 latest environments. These locks include platform markers and keep
+local packages editable. Their source dependencies are defined separately in
+`tox.ini`, so regeneration does not use the existing lock as input. The latest
+source requirements are also used by the unchanged conformance environment.
 
-This helper is an initial step toward #418. Existing tox environments still use
-their current inputs; generating, reviewing and checking in locks, then switching
-the test matrix to consume them, remains separate work.
+CI checks each lock's input fingerprint without resolving new packages. When an
+input changes, regenerate and review all affected locks. Pass `--check` with the
+same environment and output arguments to verify a lock's inputs locally. For
+Anthropic, this replaces the handwritten-oldest-file coverage and redundancy
+check; the instrumentation metadata, latest bounds, and workspace dependency
+checks still run. Other packages retain their existing checks and tox inputs;
+their exported files target the platform running the command. Locks pin the
+test and runtime dependency graph; editable project build dependencies and
+package downloads are not vendored.
 
 The helper's regression tests need only the standard library:
 
