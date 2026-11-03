@@ -1,0 +1,1 @@
+Use `enum.StrEnum` for `Modality` and `Role`. `str(Role.X)` now returns the value.
