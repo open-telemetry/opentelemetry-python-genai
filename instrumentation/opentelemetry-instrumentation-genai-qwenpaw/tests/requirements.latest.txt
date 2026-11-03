@@ -17,6 +17,6 @@
 qwenpaw==1.1.12.post3
 # AgentScope 1.0.x imports streamablehttp_client, removed in MCP 2.
 mcp<2
-wrapt>=2.5.1
+wrapt>=2.5.2
 -e util/opentelemetry-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-qwenpaw
