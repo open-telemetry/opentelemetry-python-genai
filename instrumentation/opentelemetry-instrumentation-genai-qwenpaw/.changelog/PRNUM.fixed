@@ -1,1 +1,0 @@
-Keep the invoke_agent span out of the caller's context while a ``query_handler`` stream is held unconsumed.
