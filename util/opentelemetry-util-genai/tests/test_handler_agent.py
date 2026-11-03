@@ -466,7 +466,14 @@ class TestAgentInvocationContent(unittest.TestCase):
         invocation.stop()
 
         attrs = self.span_exporter.get_finished_spans()[0].attributes
-        assert GenAI.GEN_AI_TOOL_DEFINITIONS in attrs
+        assert attrs[GenAI.GEN_AI_TOOL_DEFINITIONS] == (
+            {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {}},
+                "type": "function",
+            },
+        )
 
     @patch(
         "opentelemetry.util.genai.handler.get_content_capturing_mode",

@@ -95,9 +95,11 @@ def multimodal_input_message():
 
 
 def assert_multimodal_input(span: ReadableSpan) -> None:
-    messages = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    assert messages is not None
-    assert isinstance(messages, tuple)
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
 

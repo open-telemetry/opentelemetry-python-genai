@@ -41,7 +41,7 @@ from __future__ import annotations
 import functools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -289,6 +289,19 @@ def _validate_content_attribute(
     live_check["all_advice"] = all_advice
 
 
+def _enrich_attributes(
+    sample_attrs: list[dict[str, Any]], attrs: Mapping[str, Any]
+) -> None:
+    for attr_entry in sample_attrs:
+        name = attr_entry.get("name")
+        if name not in attrs:
+            continue
+        val = _normalize_sample_value(attrs[name])
+        attr_entry["value"] = val
+        if name in _CONTENT_SCHEMA_FILES:
+            _validate_content_attribute(attr_entry, name, val)
+
+
 def _enrich_report_samples(
     report: LiveCheckReport,
     finished_spans: Sequence[ReadableSpan],
@@ -306,34 +319,16 @@ def _enrich_report_samples(
             span = finished_spans[span_idx]
             span_idx += 1
             if span.attributes:
-                for attr_entry in entry["span"].get("attributes", []):
-                    name = attr_entry.get("name")
-                    if name in span.attributes:
-                        orig = span.attributes[name]
-                        if isinstance(orig, (dict, list, tuple)):
-                            val = _normalize_sample_value(orig)
-                            attr_entry["value"] = val
-                            if name in _CONTENT_SCHEMA_FILES:
-                                _validate_content_attribute(
-                                    attr_entry, name, val
-                                )
+                _enrich_attributes(
+                    entry["span"].get("attributes", []), span.attributes
+                )
         elif "log" in entry and log_idx < len(finished_logs):
             log = finished_logs[log_idx]
             log_idx += 1
             log_record = getattr(log, "log_record", log)
             attrs = getattr(log_record, "attributes", None)
             if attrs:
-                for attr_entry in entry["log"].get("attributes", []):
-                    name = attr_entry.get("name")
-                    if name in attrs:
-                        orig = attrs[name]
-                        if isinstance(orig, (dict, list, tuple)):
-                            val = _normalize_sample_value(orig)
-                            attr_entry["value"] = val
-                            if name in _CONTENT_SCHEMA_FILES:
-                                _validate_content_attribute(
-                                    attr_entry, name, val
-                                )
+                _enrich_attributes(entry["log"].get("attributes", []), attrs)
 
 
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:

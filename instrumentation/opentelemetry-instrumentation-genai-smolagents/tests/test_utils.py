@@ -302,17 +302,11 @@ def attr(span: ReadableSpan, name: str) -> Any:
     return (span.attributes or {}).get(name)
 
 
-def _normalize_span_value(value: Any) -> Any:
-    if isinstance(value, (tuple, list)):
-        return [_normalize_span_value(item) for item in value]
-    if isinstance(value, dict):
-        return {k: _normalize_span_value(v) for k, v in value.items()}
-    return value
-
-
 def parse_messages(span: ReadableSpan, name: str) -> list[dict[str, Any]]:
-    raw = attr(span, name)
-    return _normalize_span_value(raw) if raw is not None else []
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    attrs = span.attributes or {}
+    return get_content_attribute(attrs, name) if name in attrs else []
 
 
 def part_types(messages: list[dict[str, Any]]) -> list[str]:

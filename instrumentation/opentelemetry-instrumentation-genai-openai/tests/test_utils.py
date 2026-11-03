@@ -110,8 +110,6 @@ USER_ONLY_EXPECTED_INPUT_MESSAGES = [
         "name": None,
     }
 ]
-# Canonical base64, so the payloads round-trip unchanged through the span
-# attribute (the GenAI JSON encoder re-encodes blob bytes).
 _WAV_B64 = "ZmFrZSB3YXYgYnl0ZXM="  # b"fake wav bytes"
 _WAV_BYTES = base64.b64decode(_WAV_B64)
 _PDF_B64 = "JVBERi0xLjQK"  # b"%PDF-1.4\n"
@@ -782,16 +780,11 @@ def assert_completion_attributes(
     )
 
 
-def normalize_span_value(value: Any) -> Any:
-    if isinstance(value, (tuple, list)):
-        return [normalize_span_value(item) for item in value]
-    if isinstance(value, dict):
-        return {k: normalize_span_value(v) for k, v in value.items()}
-    return value
-
-
 def assert_messages_attribute(actual, expected):
-    assert normalize_span_value(actual) == expected
+    from opentelemetry.test_util_genai.content import _to_json_like
+
+    assert isinstance(actual, tuple)
+    assert _to_json_like(actual, "messages") == expected
 
 
 def format_simple_expected_output_message(

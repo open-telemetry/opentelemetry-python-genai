@@ -1,1 +1,1 @@
-Record structured GenAI content attributes (messages, system instructions, and tool definitions) on spans as collections rather than JSON strings.
+BREAKING: Record structured GenAI content attributes (input/output messages, system instructions, tool definitions, tool call arguments and result, retrieval documents) as structured values instead of JSON strings.

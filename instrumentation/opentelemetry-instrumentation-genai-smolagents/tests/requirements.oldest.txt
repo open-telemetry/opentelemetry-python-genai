@@ -27,6 +27,4 @@
 # declares in its openai extra.
 openai>=1.58.1
 
-# Drop this once opentelemetry-util-genai 1.4b0 is published.
 -e util/opentelemetry-util-genai
-

@@ -523,28 +523,33 @@ def get_content_attributes(
         )
     )
 
-    def serialize(items: Sequence[object]) -> AttributeValue | None:
-        return object_to_any_value(list(items))
-
     if mode not in allowed_modes:
         return {}
 
     optional_attrs = (
         (
             GenAI.GEN_AI_INPUT_MESSAGES,
-            serialize(input_messages) if input_messages else None,
+            object_to_any_value(list(input_messages))
+            if input_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            serialize(output_messages) if output_messages else None,
+            object_to_any_value(list(output_messages))
+            if output_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-            serialize(system_instruction) if system_instruction else None,
+            object_to_any_value(list(system_instruction))
+            if system_instruction
+            else None,
         ),
         (
             GenAI.GEN_AI_TOOL_DEFINITIONS,
-            serialize(tool_definitions) if tool_definitions else None,
+            object_to_any_value(list(tool_definitions))
+            if tool_definitions
+            else None,
         ),
     )
     result: dict[str, AttributeValue] = {

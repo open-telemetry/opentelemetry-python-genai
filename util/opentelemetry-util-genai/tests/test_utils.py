@@ -125,7 +125,7 @@ def _get_messages_from_attr(
 ) -> list[dict[str, Any]]:
     payload = span_attrs.get(attribute_name)
     assert payload is not None
-    assert isinstance(payload, (list, tuple))
+    assert isinstance(payload, tuple)
     return list(payload)
 
 

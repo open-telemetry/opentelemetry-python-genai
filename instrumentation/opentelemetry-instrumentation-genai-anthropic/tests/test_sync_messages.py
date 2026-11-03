@@ -167,19 +167,10 @@ def assert_span_attributes(  # pylint: disable=too-many-arguments
         )
 
 
-def _to_lists(obj):
-    if isinstance(obj, tuple):
-        return [_to_lists(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _to_lists(v) for k, v in obj.items()}
-    return obj
-
-
 def _load_span_messages(span, attribute):
-    value = span.attributes.get(attribute)
-    assert value is not None
-    assert isinstance(value, tuple)
-    return _to_lists(value)
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    return get_content_attribute(span.attributes, attribute)
 
 
 _WEATHER_TOOL = {
