@@ -87,6 +87,7 @@ def create_mock_interaction(
     input_tokens_by_modality: list[Any] | None = None,
     output_tokens_by_modality: list[Any] | None = None,
     cached_tokens_by_modality: list[Any] | None = None,
+    status: str = "completed",
 ) -> Any:
     mock_usage = unittest.mock.MagicMock()
     mock_usage.total_input_tokens = input_tokens
@@ -115,6 +116,12 @@ def create_mock_interaction(
     mock_interaction.usage = mock_usage
     mock_interaction.steps = [mock_user_step, mock_model_step]
     mock_interaction.output_text = output_text
+    mock_interaction.status = status
+    # google-genai >= 2.34 merges continuation hops with `model_copy` when the
+    # object has one, and sets attributes in place otherwise. MagicMock
+    # auto-creates `model_copy`, so the caller would get a different mock.
+    del mock_usage.model_copy
+    del mock_interaction.model_copy
 
     return mock_interaction
 
