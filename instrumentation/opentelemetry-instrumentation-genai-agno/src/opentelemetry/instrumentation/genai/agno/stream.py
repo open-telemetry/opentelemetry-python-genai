@@ -6,302 +6,253 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
-    format_content,
 )
 from opentelemetry.util.genai.invocation import (
+    AgentInvocation,
     LocalAgentInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.stream import (
-    AsyncStreamWrapper,
-    SyncStreamWrapper,
+    AsyncAgentStreamWrapper,
+    SyncAgentStreamWrapper,
 )
-from opentelemetry.util.genai.types import (
-    OutputMessage,
-    TextPart,
+
+_AGENT_COMPLETED_EVENTS = frozenset(
+    {
+        "RunCompleted",
+        "TeamRunCompleted",
+        "RunCompletedEvent",
+        "TeamRunCompletedEvent",
+    }
+)
+_AGENT_COMPLETED_TYPES = frozenset(
+    {
+        "RunOutput",
+        "TeamRunOutput",
+        "RunCompletedEvent",
+        "TeamRunCompletedEvent",
+        "RunCompleted",
+        "TeamRunCompleted",
+    }
+)
+_AGENT_ERROR_NAMES = frozenset(
+    {"RunError", "RunErrorEvent", "TeamRunError", "TeamRunErrorEvent"}
+)
+_AGENT_CONTENT_EVENTS = frozenset(
+    {
+        "RunContent",
+        "IntermediateRunContent",
+        "RunContentCompleted",
+        "TeamRunContent",
+        "TeamRunIntermediateContent",
+        "TeamRunContentCompleted",
+    }
+)
+_AGENT_CONTENT_TYPES = frozenset(
+    {
+        "RunContentEvent",
+        "IntermediateRunContentEvent",
+        "RunContentCompletedEvent",
+    }
+)
+_WORKFLOW_COMPLETED_EVENTS = frozenset(
+    {"WorkflowCompleted", "WorkflowCompletedEvent"}
+)
+_WORKFLOW_COMPLETED_TYPES = frozenset(
+    {"WorkflowRunOutput", "WorkflowCompletedEvent", "WorkflowCompleted"}
+)
+_WORKFLOW_CONTENT_EVENTS = frozenset(
+    {
+        "StepOutput",
+        "StepOutputEvent",
+        "StepCompleted",
+        "StepCompletedEvent",
+        "RunContent",
+        "RunContentEvent",
+    }
 )
 
 
-def _extract_chunk_content(chunk: Any) -> str | None:
-    if chunk is None:
-        return None
+def _chunk_content(chunk: Any) -> Any:
     if isinstance(chunk, str):
         return chunk
-    content = _get_property_value(chunk, "content")
-    if content is not None:
-        return format_content(content)
-    return None
+    return _get_property_value(chunk, "content")
 
 
-class _AgentStreamMixin:
-    _self_agent_invocation: LocalAgentInvocation
-    _self_capture_content: bool
-    _self_content_parts: list[str]
-    _self_completed_content: str | None
+def _set_conversation_id(
+    invocation: AgentInvocation | WorkflowInvocation, chunk: Any
+) -> None:
+    session_id = getattr(chunk, "session_id", None)
+    if session_id and not invocation.conversation_id:
+        invocation.conversation_id = str(session_id)
+
+
+class _OutputHooks:
+    if TYPE_CHECKING:
+        _self_invocation: AgentInvocation | WorkflowInvocation
+
+        def _add_output(self, content: object) -> None: ...
+
+        def _set_output(self, content: object) -> None: ...
+
+        def _on_stream_end(self) -> None: ...
+
+        def _on_stream_error(self, error: BaseException) -> None: ...
+
+
+class _AgentStreamMixin(_OutputHooks):
+    _self_completed: bool
     _self_finish_reason: str
 
+    def _init_agent_state(self) -> None:
+        self._self_completed = False
+        self._self_finish_reason = "stop"
+
     def _process_chunk(self, chunk: Any) -> None:
-        session_id = getattr(chunk, "session_id", None)
-        if session_id and not self._self_agent_invocation.conversation_id:
-            self._self_agent_invocation.conversation_id = str(session_id)
+        invocation = self._self_invocation
+        _set_conversation_id(invocation, chunk)
 
         metrics = getattr(chunk, "metrics", None)
-        if metrics is not None:
+        if metrics is not None and isinstance(invocation, AgentInvocation):
             if getattr(metrics, "input_tokens", None) is not None:
-                self._self_agent_invocation.input_tokens = metrics.input_tokens
+                invocation.input_tokens = metrics.input_tokens
             if getattr(metrics, "output_tokens", None) is not None:
-                self._self_agent_invocation.output_tokens = (
-                    metrics.output_tokens
-                )
+                invocation.output_tokens = metrics.output_tokens
 
         event_name = str(getattr(chunk, "event", ""))
         chunk_type = type(chunk).__name__
-        is_completed = event_name in (
-            "RunCompleted",
-            "TeamRunCompleted",
-            "RunCompletedEvent",
-            "TeamRunCompletedEvent",
-        ) or chunk_type in (
-            "RunOutput",
-            "TeamRunOutput",
-            "RunCompletedEvent",
-            "TeamRunCompletedEvent",
-            "RunCompleted",
-            "TeamRunCompleted",
-        )
-        is_error = event_name in (
-            "RunError",
-            "RunErrorEvent",
-            "TeamRunError",
-            "TeamRunErrorEvent",
-        ) or chunk_type in (
-            "RunErrorEvent",
-            "TeamRunErrorEvent",
-            "RunError",
-            "TeamRunError",
-        )
-        if is_error:
+        if (
+            event_name in _AGENT_ERROR_NAMES
+            or chunk_type in _AGENT_ERROR_NAMES
+        ):
             self._self_finish_reason = "error"
 
-        if is_completed:
-            content = _extract_chunk_content(chunk)
+        if (
+            event_name in _AGENT_COMPLETED_EVENTS
+            or chunk_type in _AGENT_COMPLETED_TYPES
+        ):
+            content = _chunk_content(chunk)
             if content is not None:
-                self._self_completed_content = content
-        elif self._self_capture_content:
-            is_content_chunk = (
-                not event_name
-                or event_name
-                in (
-                    "RunContent",
-                    "IntermediateRunContent",
-                    "RunContentCompleted",
-                    "TeamRunContent",
-                    "TeamRunIntermediateContent",
-                    "TeamRunContentCompleted",
-                )
-                or chunk_type
-                in (
-                    "RunContentEvent",
-                    "IntermediateRunContentEvent",
-                    "RunContentCompletedEvent",
-                )
-            )
-            if is_content_chunk:
-                content = _extract_chunk_content(chunk)
-                if content is not None:
-                    self._self_content_parts.append(content)
+                self._set_output(content)
+                self._self_completed = True
+        elif not self._self_completed and (
+            not event_name
+            or event_name in _AGENT_CONTENT_EVENTS
+            or chunk_type in _AGENT_CONTENT_TYPES
+        ):
+            content = _chunk_content(chunk)
+            if content is not None:
+                self._add_output(content)
 
-    def _finalize(self, error: BaseException | None = None) -> None:
-        if self._self_capture_content:
-            if self._self_completed_content is not None:
-                final_content = self._self_completed_content
-            else:
-                final_content = "".join(self._self_content_parts)
-
-            if final_content:
-                finish_reason = (
-                    "error" if error is not None else self._self_finish_reason
-                )
-                self._self_agent_invocation.output_messages = [
-                    OutputMessage(
-                        role="assistant",
-                        parts=[TextPart(content=final_content)],
-                        finish_reason=finish_reason,
-                    )
-                ]
-
-        if error is not None:
-            self._self_agent_invocation.fail(error)
-        else:
-            self._self_agent_invocation.stop()
+    def _set_finish_reason(self, reason: str) -> None:
+        if isinstance(self._self_invocation, AgentInvocation):
+            self._self_invocation.finish_reasons = [reason]
 
     def _on_stream_end(self) -> None:
-        self._finalize()
+        self._set_finish_reason(self._self_finish_reason)
+        super()._on_stream_end()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._finalize(error)
+        self._set_finish_reason("error")
+        super()._on_stream_error(error)
 
 
-class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
+class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncAgentStreamWrapper[Any]):
     """Synchronous stream wrapper for Agno Agent and Team runs."""
 
-    def __init__(
-        self,
-        stream: Any,
-        invocation: LocalAgentInvocation,
-        capture_content: bool,
-    ) -> None:
-        super().__init__(stream)
-        self._self_agent_invocation = invocation
-        self._self_capture_content = capture_content
-        self._self_content_parts = []
-        self._self_completed_content = None
-        self._self_finish_reason = "stop"
+    def __init__(self, stream: Any, invocation: LocalAgentInvocation) -> None:
+        super().__init__(stream, invocation)
+        self._init_agent_state()
 
 
-class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
+class AsyncAgnoAgentStreamWrapper(
+    _AgentStreamMixin, AsyncAgentStreamWrapper[Any]
+):
     """Asynchronous stream wrapper for Agno Agent and Team runs."""
 
-    def __init__(
-        self,
-        stream: Any,
-        invocation: LocalAgentInvocation,
-        capture_content: bool,
-    ) -> None:
-        super().__init__(stream)
-        self._self_agent_invocation = invocation
-        self._self_capture_content = capture_content
-        self._self_content_parts = []
-        self._self_completed_content = None
-        self._self_finish_reason = "stop"
+    def __init__(self, stream: Any, invocation: LocalAgentInvocation) -> None:
+        super().__init__(stream, invocation)
+        self._init_agent_state()
 
 
-class _WorkflowStreamMixin:
-    _self_workflow_invocation: WorkflowInvocation
-    _self_capture_content: bool
-    _self_content_parts: list[str]
-    _self_completed_content: str | None
-    _self_finish_reason: str
+class _WorkflowStreamMixin(_OutputHooks):
+    _self_completed: bool
     _self_on_close: Callable[[], None] | None
 
+    def _init_workflow_state(
+        self, on_close: Callable[[], None] | None
+    ) -> None:
+        self._self_completed = False
+        self._self_on_close = on_close
+
     def _process_chunk(self, chunk: Any) -> None:
-        session_id = getattr(chunk, "session_id", None)
-        if session_id and not self._self_workflow_invocation.conversation_id:
-            self._self_workflow_invocation.conversation_id = str(session_id)
+        _set_conversation_id(self._self_invocation, chunk)
 
         event_name = str(getattr(chunk, "event", ""))
         chunk_type = type(chunk).__name__
-        is_completed = event_name in (
-            "WorkflowCompleted",
-            "WorkflowCompletedEvent",
-        ) or chunk_type in (
-            "WorkflowRunOutput",
-            "WorkflowCompletedEvent",
-            "WorkflowCompleted",
-        )
-        is_error = event_name in (
-            "WorkflowError",
-            "WorkflowErrorEvent",
-        ) or chunk_type in ("WorkflowErrorEvent", "WorkflowError")
-        if is_error:
-            self._self_finish_reason = "error"
-
-        if is_completed:
-            content = _extract_chunk_content(chunk)
-            if content is not None:
-                self._self_completed_content = content
-        elif (
-            hasattr(chunk, "step_output")
-            and getattr(chunk, "step_output") is not None
+        if (
+            event_name in _WORKFLOW_COMPLETED_EVENTS
+            or chunk_type in _WORKFLOW_COMPLETED_TYPES
         ):
-            step_output = getattr(chunk, "step_output")
-            step_content = _get_property_value(step_output, "content")
-            if step_content is not None and self._self_capture_content:
-                self._self_content_parts.append(format_content(step_content))
-        elif self._self_capture_content:
-            is_content_chunk = not event_name or event_name in (
-                "StepOutput",
-                "StepOutputEvent",
-                "StepCompleted",
-                "StepCompletedEvent",
-                "RunContent",
-                "RunContentEvent",
-            )
-            if is_content_chunk:
-                content = _extract_chunk_content(chunk)
-                if content is not None:
-                    self._self_content_parts.append(content)
+            content = _chunk_content(chunk)
+            if content is not None:
+                self._set_output(content)
+                self._self_completed = True
+            return
+        if self._self_completed:
+            return
 
-    def _finalize(self, error: BaseException | None = None) -> None:
-        try:
-            if self._self_capture_content:
-                if self._self_completed_content is not None:
-                    final_content = self._self_completed_content
-                elif self._self_content_parts:
-                    final_content = self._self_content_parts[-1]
-                else:
-                    final_content = ""
+        # Each step's output supersedes the previous one; the workflow's
+        # output is the last step's.
+        step_output = getattr(chunk, "step_output", None)
+        if step_output is not None:
+            content = _get_property_value(step_output, "content")
+        elif not event_name or event_name in _WORKFLOW_CONTENT_EVENTS:
+            content = _chunk_content(chunk)
+        else:
+            return
+        if content is not None:
+            self._set_output(content)
 
-                if final_content:
-                    finish_reason = (
-                        "error"
-                        if error is not None
-                        else self._self_finish_reason
-                    )
-                    self._self_workflow_invocation.output_messages = [
-                        OutputMessage(
-                            role="assistant",
-                            parts=[TextPart(content=final_content)],
-                            finish_reason=finish_reason,
-                        )
-                    ]
-
-            if error is not None:
-                self._self_workflow_invocation.fail(error)
-            else:
-                self._self_workflow_invocation.stop()
-        finally:
-            if (
-                hasattr(self, "_self_on_close")
-                and self._self_on_close is not None
-            ):
-                try:
-                    self._self_on_close()
-                finally:
-                    self._self_on_close = None
+    def _release(self) -> None:
+        on_close, self._self_on_close = self._self_on_close, None
+        if on_close is not None:
+            on_close()
 
     def _on_stream_end(self) -> None:
-        self._finalize()
+        try:
+            super()._on_stream_end()
+        finally:
+            self._release()
 
     def _on_stream_error(self, error: BaseException) -> None:
-        self._finalize(error)
+        try:
+            super()._on_stream_error(error)
+        finally:
+            self._release()
 
 
-class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
+class AgnoWorkflowStreamWrapper(
+    _WorkflowStreamMixin, SyncAgentStreamWrapper[Any]
+):
     """Synchronous stream wrapper for Agno Workflow runs."""
 
     def __init__(
         self,
         stream: Any,
         invocation: WorkflowInvocation,
-        capture_content: bool,
         on_close: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(stream)
-        self._self_workflow_invocation = invocation
-        self._self_capture_content = capture_content
-        self._self_content_parts = []
-        self._self_completed_content = None
-        self._self_finish_reason = "stop"
-        self._self_on_close = on_close
+        super().__init__(stream, invocation)
+        self._init_workflow_state(on_close)
 
 
 class AsyncAgnoWorkflowStreamWrapper(
-    _WorkflowStreamMixin, AsyncStreamWrapper[Any]
+    _WorkflowStreamMixin, AsyncAgentStreamWrapper[Any]
 ):
     """Asynchronous stream wrapper for Agno Workflow runs."""
 
@@ -309,13 +260,7 @@ class AsyncAgnoWorkflowStreamWrapper(
         self,
         stream: Any,
         invocation: WorkflowInvocation,
-        capture_content: bool,
         on_close: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(stream)
-        self._self_workflow_invocation = invocation
-        self._self_capture_content = capture_content
-        self._self_content_parts = []
-        self._self_completed_content = None
-        self._self_finish_reason = "stop"
-        self._self_on_close = on_close
+        super().__init__(stream, invocation)
+        self._init_workflow_state(on_close)

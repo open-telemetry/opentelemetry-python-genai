@@ -687,13 +687,13 @@ def test_workflow_session_id_sets_conversation_id(
     assert invocation.conversation_id == "wf-session-456"
 
 
-def test_format_content_structured_types() -> None:
+def test_content_to_text_structured_types() -> None:
     import json
     from dataclasses import dataclass
 
     from pydantic import BaseModel
 
-    from opentelemetry.instrumentation.genai.agno.utils import format_content
+    from opentelemetry.util.genai.utils import content_to_text
 
     class MyModel(BaseModel):
         name: str
@@ -703,19 +703,22 @@ def test_format_content_structured_types() -> None:
     class MyDataClass:
         item: str
 
-    assert format_content("plain text") == "plain text"
-    assert format_content(42) == "42"
-    assert json.loads(format_content(MyModel(name="test", count=5))) == {
+    assert content_to_text("plain text") == "plain text"
+    assert content_to_text(42) == "42"
+    assert json.loads(content_to_text(MyModel(name="test", count=5))) == {
         "name": "test",
         "count": 5,
     }
-    assert json.loads(format_content(MyDataClass(item="val"))) == {
+    assert json.loads(content_to_text(MyDataClass(item="val"))) == {
         "item": "val"
     }
-    assert json.loads(format_content({"a": 1, "b": "c"})) == {"a": 1, "b": "c"}
-    assert json.loads(format_content([1, "x"])) == [1, "x"]
+    assert json.loads(content_to_text({"a": 1, "b": "c"})) == {
+        "a": 1,
+        "b": "c",
+    }
+    assert json.loads(content_to_text([1, "x"])) == [1, "x"]
     assert json.loads(
-        format_content({"nested": MyModel(name="sub", count=1)})
+        content_to_text({"nested": MyModel(name="sub", count=1)})
     ) == {"nested": {"name": "sub", "count": 1}}
 
     class MockV1Model:
@@ -725,14 +728,14 @@ def test_format_content_structured_types() -> None:
         def dict(self) -> dict[str, Any]:
             return {"key": self.key}
 
-    assert json.loads(format_content(MockV1Model("v1"))) == {"key": "v1"}
+    assert json.loads(content_to_text(MockV1Model("v1"))) == {"key": "v1"}
     assert json.loads(
-        format_content({"nested_v1": MockV1Model("v1_nested")})
+        content_to_text({"nested_v1": MockV1Model("v1_nested")})
     ) == {"nested_v1": {"key": "v1_nested"}}
-    assert json.loads(format_content([MockV1Model("v1_list")])) == [
+    assert json.loads(content_to_text([MockV1Model("v1_list")])) == [
         {"key": "v1_list"}
     ]
-    assert format_content(MockV1Model) == str(MockV1Model)
+    assert content_to_text(MockV1Model) == str(MockV1Model)
 
 
 def test_set_invocation_output_pydantic_structured_content(
