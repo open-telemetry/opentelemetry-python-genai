@@ -31,10 +31,19 @@ if TYPE_CHECKING:
     from agno.knowledge.knowledge import Knowledge
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
+    from wrapt import BoundFunctionWrapper, FunctionWrapper
+
+    _BoundFunctionWrapperBase = BoundFunctionWrapper[..., Any]
+    _FunctionWrapperBase = FunctionWrapper[..., Any]
+else:
+    from wrapt import (
+        BoundFunctionWrapper as _BoundFunctionWrapperBase,
+    )
+    from wrapt import (
+        FunctionWrapper as _FunctionWrapperBase,
+    )
 
 from wrapt import (
-    BoundFunctionWrapper,
-    FunctionWrapper,
     register_post_import_hook,
     wrap_function_wrapper,
     wrap_object,
@@ -139,7 +148,7 @@ _instrumentation_generation: int = 0
 _is_instrumented: bool = False
 
 
-class _ContextPreservingBoundWrapper(BoundFunctionWrapper):
+class _ContextPreservingBoundWrapper(_BoundFunctionWrapperBase):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._self_bind_thread = threading.get_ident()
@@ -160,7 +169,7 @@ class _ContextPreservingBoundWrapper(BoundFunctionWrapper):
         return super().__call__(*args, **kwargs)
 
 
-class _ContextPreservingFunctionWrapper(FunctionWrapper):
+class _ContextPreservingFunctionWrapper(_FunctionWrapperBase):
     __bound_function_wrapper__ = _ContextPreservingBoundWrapper
 
 
