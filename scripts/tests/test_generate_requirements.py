@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,6 +36,78 @@ def write_pilot_inputs(root: Path) -> None:
 
 
 class GenerateRequirementsTest(unittest.TestCase):
+    @unittest.skipUnless(
+        importlib.util.find_spec("tox"), "tox is not installed"
+    )
+    def test_anthropic_tox_environments_use_available_inputs(self) -> None:
+        root = SCRIPT.parents[1]
+        locked = (
+            "py311-test-instrumentation-genai-anthropic-oldest",
+            "py311-test-instrumentation-genai-anthropic-latest",
+            "py315-test-instrumentation-genai-anthropic-latest",
+        )
+        other = (
+            "py312-test-instrumentation-genai-anthropic-oldest",
+            "py314-test-instrumentation-genai-anthropic-latest",
+        )
+        coverage = "py311-test-instrumentation-genai-anthropic-latest-coverage"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "tox",
+                "config",
+                "-e",
+                ",".join((*locked, *other, coverage)),
+                "-k",
+                "deps",
+                "--format",
+                "json",
+                "--colored",
+                "no",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        configurations = json.loads(result.stdout)["env"]
+        lock_dir = "./instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks"
+        for environment in locked:
+            dependencies = [
+                generator.portable(dependency, root)
+                for dependency in configurations[environment]["deps"]
+            ]
+            self.assertEqual(
+                dependencies, [f"-r {lock_dir}/{environment}.txt"]
+            )
+        for environment in other:
+            dependencies = [
+                generator.portable(dependency, root)
+                for dependency in configurations[environment]["deps"]
+            ]
+            self.assertTrue(dependencies)
+            self.assertFalse(
+                any("/tests/locks/" in dep for dep in dependencies)
+            )
+        self.assertTrue(
+            any(
+                dependency.endswith("anthropic[instruments]")
+                for dependency in configurations[other[0]]["deps"]
+            )
+        )
+        self.assertTrue(
+            any(
+                dependency.endswith("/tests/requirements.latest.txt")
+                for dependency in configurations[other[1]]["deps"]
+            )
+        )
+        coverage_dependencies = [
+            generator.portable(dependency, root)
+            for dependency in configurations[coverage]["deps"]
+        ]
+        self.assertIn(f"-r {lock_dir}/{locked[1]}.txt", coverage_dependencies)
+
     def test_environment_resolution_and_python_version(self) -> None:
         self.assertEqual(
             generator.environment_options(OLDEST), ("3.11", "lowest-direct")

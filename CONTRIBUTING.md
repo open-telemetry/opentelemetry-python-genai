@@ -148,13 +148,14 @@ It keeps explicitly selected local packages editable and disables implicit
 workspace source substitutions. Tox environment overrides, including CrewAI's
 compatibility override, are preserved.
 
-The Anthropic oldest and latest tox environments install the committed locks
+The Anthropic oldest and latest test matrix installs the committed locks
 under `instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/`.
 Generate one lock for each of the Python 3.11 oldest, Python 3.11 latest, and
 Python 3.15 latest environments. These locks include platform markers and keep
 local packages editable. Their source dependencies are defined separately in
 `tox.ini`, so regeneration does not use the existing lock as input. The latest
 source requirements are also used by the unchanged conformance environment.
+Other Python versions continue to use the source dependencies directly.
 
 CI checks each lock's input fingerprint without resolving new packages. When an
 input changes, regenerate and review all affected locks. Pass `--check` with the
@@ -166,7 +167,8 @@ their exported files target the platform running the command. Locks pin the
 test and runtime dependency graph; editable project build dependencies and
 package downloads are not vendored.
 
-The helper's regression tests need only the standard library:
+The helper's regression tests use the standard library. With tox installed,
+they also check the test environment configuration:
 
 ```sh
 python -m unittest discover -s scripts/tests -v
