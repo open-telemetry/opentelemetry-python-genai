@@ -1,0 +1,1 @@
+Add ``SyncAgentStreamWrapper`` and ``AsyncAgentStreamWrapper`` for streamed agent and workflow invocations, sharing output accumulation, structured content serialization and finalization.
