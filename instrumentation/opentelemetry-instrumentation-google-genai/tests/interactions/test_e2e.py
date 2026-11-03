@@ -388,7 +388,9 @@ def _assert_streamed_create_output(
         and getattr(event.delta, "type", None) == "text"
     )
     assert expected_output
-    [message] = get_content_attribute(span.attributes, "gen_ai.output.messages")
+    [message] = get_content_attribute(
+        span.attributes, "gen_ai.output.messages"
+    )
     assert message["role"] == "assistant"
     assert message["parts"] == [{"type": "text", "content": expected_output}]
     assert message["finish_reason"] is None
@@ -461,7 +463,9 @@ def _assert_streamed_tool_call(
     if content_mode == "no_content_capture":
         assert "gen_ai.output.messages" not in span.attributes
         return
-    [message] = get_content_attribute(span.attributes, "gen_ai.output.messages")
+    [message] = get_content_attribute(
+        span.attributes, "gen_ai.output.messages"
+    )
     assert message["finish_reason"] is None
     assert message["parts"] == [
         {
@@ -710,7 +714,9 @@ def _assert_closed_early_span(
     if content_mode == "no_content_capture":
         assert "gen_ai.output.messages" not in span.attributes
         return
-    [message] = get_content_attribute(span.attributes, "gen_ai.output.messages")
+    [message] = get_content_attribute(
+        span.attributes, "gen_ai.output.messages"
+    )
     assert message["parts"] == [{"type": "text", "content": received_text}]
     assert message["finish_reason"] is None
 

@@ -627,9 +627,7 @@ class TestCase(CommonTestCaseBase):
             (
                 {
                     "role": "assistant",
-                    "parts": (
-                        {"content": "Partial answer.", "type": "text"},
-                    ),
+                    "parts": ({"content": "Partial answer.", "type": "text"},),
                     "finish_reason": None,
                     "name": None,
                 },
