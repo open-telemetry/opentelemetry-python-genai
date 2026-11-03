@@ -77,6 +77,8 @@ class OrchestrationScenario(Scenario):
     }
     expected_metrics = (
         "gen_ai.invoke_agent.duration",
+        "gen_ai.invoke_agent.inference_calls",
+        "gen_ai.invoke_agent.tool_calls",
         "gen_ai.execute_tool.duration",
         "gen_ai.invoke_workflow.duration",
     )
@@ -135,3 +137,26 @@ class OrchestrationScenario(Scenario):
             "Triage and specialist must each surface their own gen_ai.agent.name; "
             f"saw {sorted(agent_names)}"
         )
+        metrics = {
+            entry["metric"]["name"]: entry["metric"]
+            for entry in report["samples"]
+            if "metric" in entry
+        }
+        for name, expected in {
+            "gen_ai.invoke_agent.inference_calls": {
+                "triage": (1, 1),
+                "weather_specialist": (1, 2),
+            },
+            "gen_ai.invoke_agent.tool_calls": {
+                "triage": (1, 0),
+                "weather_specialist": (1, 1),
+            },
+        }.items():
+            assert {
+                next(
+                    attr["value"]
+                    for attr in point["attributes"]
+                    if attr["name"] == "gen_ai.agent.name"
+                ): (point["count"], point["sum"])
+                for point in metrics[name]["data_points"]
+            } == expected
