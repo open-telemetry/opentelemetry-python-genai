@@ -388,7 +388,25 @@ def _resolve_provider(
         else GenAiProviderNameValues.GCP_GEMINI.value
     )
 
-    # 1. Explicit provider attribute on the instance
+    # 1. Check the class hierarchy (most derived first)
+    for cls in type(instance).__mro__:
+        cls_name = cls.__name__
+        cls_mod = getattr(cls, "__module__", "")
+        if cls_name == "Claude":
+            if cls_mod == "agno.models.aws.claude":
+                return GenAiProviderNameValues.AWS_BEDROCK.value
+            if cls_mod == "agno.models.vertexai.claude":
+                return GenAiProviderNameValues.GCP_VERTEX_AI.value
+            if cls_mod == "agno.models.azure.claude":
+                return GenAiProviderNameValues.AZURE_AI_INFERENCE.value
+        if cls_name in google_classes:
+            return google_provider
+        if cls_name in stop_classes:
+            break
+        if cls_name in class_name_to_provider:
+            return class_name_to_provider[cls_name]
+
+    # 2. Explicit provider attribute on the instance
     provider_attr = getattr(instance, "provider", None)
     if provider_attr is not None:
         if isinstance(provider_attr, str):
@@ -412,16 +430,6 @@ def _resolve_provider(
                     return _KNOWN_PROVIDERS[p_name]
                 if p_name:
                     return p_name
-
-    # 2. Check the class hierarchy (most derived first)
-    for cls in type(instance).__mro__:
-        cls_name = cls.__name__
-        if cls_name in google_classes:
-            return google_provider
-        if cls_name in stop_classes:
-            break
-        if cls_name in class_name_to_provider:
-            return class_name_to_provider[cls_name]
 
     # 3. Check module name if in <module_prefix><submodule>
     module = getattr(instance, "__module__", "")
@@ -464,6 +472,7 @@ _MODEL_CLASS_NAME_TO_PROVIDER: dict[str, str] = {
     "AwsBedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
     "Bedrock": GenAiProviderNameValues.AWS_BEDROCK.value,
     "AzureOpenAI": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
+    "AzureOpenAIResponses": GenAiProviderNameValues.AZURE_AI_OPENAI.value,
     "AzureAIFoundry": GenAiProviderNameValues.AZURE_AI_INFERENCE.value,
     "MistralChat": GenAiProviderNameValues.MISTRAL_AI.value,
     "Mistral": GenAiProviderNameValues.MISTRAL_AI.value,
@@ -507,7 +516,7 @@ def resolve_model_provider(model: Model) -> str:
         model,
         class_name_to_provider=_MODEL_CLASS_NAME_TO_PROVIDER,
         google_classes=("Gemini", "Google", "GeminiInteractions"),
-        stop_classes=("OpenAILike", "Model"),
+        stop_classes=("OpenAILike", "OpenResponses", "Model"),
         module_prefix="agno.models.",
         ignored_submodules=(
             "base",
@@ -522,14 +531,14 @@ def resolve_model_provider(model: Model) -> str:
 
 def extract_model_finish_reasons(
     assistant_message: Message | None = None,
-    model_response: ModelResponse | MessageData | None = None,
+    stream_data: MessageData | None = None,
 ) -> list[str]:
-    """Derive gen_ai.response.finish_reasons from assistant message or model response."""
+    """Derive gen_ai.response.finish_reasons from assistant message or stream data."""
     provider_data: Any = None
     if assistant_message is not None:
         provider_data = _get_property_value(assistant_message, "provider_data")
-    if not provider_data and model_response is not None:
-        provider_data = _get_property_value(model_response, "provider_data")
+    if not provider_data and stream_data is not None:
+        provider_data = _get_property_value(stream_data, "provider_data")
 
     if isinstance(provider_data, dict):
         raw_reason = _get_property_value(
@@ -540,7 +549,7 @@ def extract_model_finish_reasons(
             if r in ("stop", "end_turn"):
                 return ["stop"]
             if r in ("tool_calls", "tool_use", "function_call"):
-                return ["tool_calls"]
+                return ["tool_call"]
             if r in ("length", "max_tokens"):
                 return ["length"]
             if r in ("content_filter", "safety"):
@@ -551,9 +560,13 @@ def extract_model_finish_reasons(
         _get_property_value(assistant_message, "tool_calls")
         if assistant_message is not None
         else None
+    ) or (
+        _get_property_value(stream_data, "response_tool_calls")
+        if stream_data is not None
+        else None
     )
     if tool_calls:
-        return ["tool_calls"]
+        return ["tool_call"]
     return ["stop"]
 
 
