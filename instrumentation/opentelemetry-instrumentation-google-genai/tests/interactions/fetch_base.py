@@ -773,6 +773,24 @@ class TestCase(CommonTestCaseBase):
         "os.environ",
         {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
     )
+    def test_streaming_content_rebuild_error_records_no_output(self) -> None:
+        self.configure_valid_fetch()
+        self.configure_delta_events()
+        with patch(
+            "opentelemetry.instrumentation.google_genai.interactions._StreamedContent.parts",
+            side_effect=RecursionError("maximum recursion depth exceeded"),
+        ):
+            self.run_streaming_fetch("abc-123", stream=True)
+        span = self.otel.get_span_named(_SPAN_NAME)
+        self.assertNotIn("error.type", span.attributes)
+        self.assertNotIn(
+            GenAIAttributes.GEN_AI_OUTPUT_MESSAGES, span.attributes
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
     def test_resumed_stream_captures_deltas_without_step_start(self) -> None:
         self.configure_valid_fetch()
         self.configure_resumed_delta_events()
