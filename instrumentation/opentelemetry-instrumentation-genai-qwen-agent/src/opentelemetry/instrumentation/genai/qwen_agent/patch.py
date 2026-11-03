@@ -28,7 +28,7 @@ from opentelemetry.instrumentation.genai.qwen_agent.utils import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
-from opentelemetry.util.genai.stream import SyncStreamWrapper
+from opentelemetry.util.genai.stream import SyncAgentStreamWrapper
 from opentelemetry.util.genai.utils import (
     bind_arguments,
     get_argument,
@@ -37,39 +37,26 @@ from opentelemetry.util.genai.utils import (
 )
 
 
-class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
+class _AgentRunStreamWrapper(SyncAgentStreamWrapper[Any]):
     """Wraps the generator returned by ``Agent.run()``.
 
     Each yielded item is the (growing) response message list; the last item
     contains the full run output.
     """
 
-    def __init__(
-        self,
-        stream: Any,
-        invocation: LocalAgentInvocation,
-        capture_content: bool,
-    ) -> None:
-        super().__init__(stream)
-        # Deliberately not passed to super().__init__: the base class would
-        # mark the invocation as streamed and record per-chunk LLM streaming
-        # metrics, which don't apply to a local invoke_agent invocation.
-        self._self_agent_invocation = invocation
-        self._self_capture_content = capture_content
+    def __init__(self, stream: Any, invocation: LocalAgentInvocation) -> None:
+        super().__init__(stream, invocation)
         self._self_last_response: Any = None
 
     def _process_chunk(self, chunk: Any) -> None:
         self._self_last_response = chunk
 
     def _on_stream_end(self) -> None:
-        if self._self_capture_content and self._self_last_response:
-            self._self_agent_invocation.output_messages = (
+        if self._self_last_response:
+            self._set_output_messages(
                 convert_to_final_output_messages(self._self_last_response)
             )
-        self._self_agent_invocation.stop()
-
-    def _on_stream_error(self, error: BaseException) -> None:
-        self._self_agent_invocation.fail(error)
+        super()._on_stream_end()
 
 
 def wrap_agent_run(
@@ -84,9 +71,7 @@ def wrap_agent_run(
     result = wrapped(*args, **kwargs)
     messages: Any = get_argument("messages", wrapped, args, kwargs, default=[])
     invocation = create_agent_invocation(handler, instance, messages)
-    return _AgentRunStreamWrapper(
-        result, invocation, handler.should_capture_content()
-    )
+    return _AgentRunStreamWrapper(result, invocation)
 
 
 def wrap_agent_call_tool(
