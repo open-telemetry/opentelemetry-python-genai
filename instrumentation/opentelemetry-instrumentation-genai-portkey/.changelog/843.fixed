@@ -1,0 +1,1 @@
+Do not consume generator ``messages``, ``tools``, ``tool_calls`` or message ``content`` before the SDK call, and capture ``image_url``, ``input_audio``, ``file`` and ``refusal`` content parts.
