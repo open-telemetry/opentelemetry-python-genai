@@ -19,8 +19,7 @@
       "/(^|/)requirements\\.txt$/",
       "/(^|/)requirements\\.latest\\.txt$/",
       "/(^|/)requirements\\.v\\d+\\.txt$/",
-      "/(^|/)requirements\\.[\\w-]+-v\\d+\\.txt$/",
-      "/(^|/)py3(11|15)-test-instrumentation-genai-anthropic-latest\\.txt$/"
+      "/(^|/)requirements\\.[\\w-]+-v\\d+\\.txt$/"
     ]
   },
   // Manage WEAVER_VERSION and SEMCONV_GENAI_REF in versions.env via their
@@ -83,18 +82,6 @@
       ],
       "matchPackageNames": ["google-genai"],
       "allowedVersions": "<2.9"
-    },
-    {
-      // The latest Anthropic lock must respect the SDK's supported major range.
-      "matchFileNames": ["instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/*-latest.txt"],
-      "matchPackageNames": ["anthropic"],
-      "allowedVersions": "<3"
-    },
-    {
-      // This pin is controlled by the latest source requirements.
-      "matchFileNames": ["instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/*-latest.txt"],
-      "matchPackageNames": ["wrapt"],
-      "enabled": false
     },
     {
       "matchUpdateTypes": ["minor", "major"],

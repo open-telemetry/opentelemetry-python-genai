@@ -540,8 +540,7 @@ def main() -> int:
         # Check 1: instruments extra in pyproject.toml matches _instruments in package.py
         errors.extend(check_instruments_match(pkg_dir, pyproject))
 
-        # Anthropic's oldest environment installs a generated lock; its input
-        # freshness is checked by generate_requirements.py in CI.
+        # Anthropic installs a generated lock instead of handwritten floors.
         if pkg_dir.name != "opentelemetry-instrumentation-genai-anthropic":
             errors.extend(check_oldest_requirements(pkg_dir, pyproject))
 

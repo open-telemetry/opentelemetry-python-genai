@@ -1,8 +1,6 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 # Generated for py315-test-instrumentation-genai-anthropic-latest; Python 3.15, resolution highest.
-# Inputs SHA256: 24463a61811333bd1f764d0f940424df2238596a6f436c893a210b23c82e35a0
-# Packages SHA256: af4fea58e64545d794a0f6fa497c4573bd92c00ae832f143a42daf1f00a3d63b
 -e ./util/opentelemetry-test-util-genai
 -e instrumentation/opentelemetry-instrumentation-genai-anthropic
 -e util/opentelemetry-util-genai
