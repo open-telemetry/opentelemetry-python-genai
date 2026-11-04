@@ -297,22 +297,14 @@ class FetchResponseInvocation(GenAIInvocation):
         system_instructions = self._data.system_instructions
         tool_definitions = self._data.tool_definitions
 
-        outer_content_keys = get_content_attributes(
-            input_messages=(),
-            output_messages=self.output_messages,
-            system_instruction=self.system_instruction,
-            tool_definitions=self.tool_definitions,
-            for_span=True,
-            content_capturing_mode=self._content_capturing_mode,
-        ).keys()
-        self._data.merge(
-            data,
-            overwrite=False,
-            exclude_attributes=self._start_attributes.keys()
-            | self._get_attributes().keys()
-            | outer_content_keys,
-            exclude_metric_attributes=self._get_metric_attributes().keys(),
-        )
+        for k, v in (
+            *self._start_attributes.items(),
+            *self._get_attributes().items(),
+        ):
+            self.attributes.setdefault(k, v)
+        for k, v in self._get_metric_attributes().items():
+            self.metric_attributes.setdefault(k, v)
+        self._data.merge(data, overwrite=False)
 
         if data.capture_content:
             self._data.output_messages = (

@@ -199,14 +199,14 @@ class RetrievalInvocation(GenAIInvocation):
         retrieval_query_text = self._data.retrieval_query_text
         retrieval_documents = self._data.retrieval_documents
 
-        self._data.merge(
-            data,
-            overwrite=False,
-            exclude_attributes=self._start_attributes.keys()
-            | self._get_attributes().keys()
-            | self._get_content_attributes_for_span().keys(),
-            exclude_metric_attributes=self._get_metric_attributes().keys(),
-        )
+        for k, v in (
+            *self._start_attributes.items(),
+            *self._get_attributes().items(),
+        ):
+            self.attributes.setdefault(k, v)
+        for k, v in self._get_metric_attributes().items():
+            self.metric_attributes.setdefault(k, v)
+        self._data.merge(data, overwrite=False)
 
         if data.capture_content:
             self._data.retrieval_query_text = (

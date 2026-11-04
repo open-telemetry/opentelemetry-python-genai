@@ -5,15 +5,7 @@ from __future__ import annotations
 
 import timeit
 from abc import abstractmethod
-from collections.abc import (
-    Callable,
-    Iterator,
-    Mapping,
-    Sequence,
-)
-from collections.abc import (
-    Set as AbstractSet,
-)
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import asdict, dataclass, field, fields
@@ -94,14 +86,7 @@ class _ContextData:
         default_factory=dict[str, AttributeValue]
     )
 
-    def merge(
-        self: Self,
-        other: Self,
-        *,
-        overwrite: bool = True,
-        exclude_attributes: AbstractSet[str] = frozenset(),
-        exclude_metric_attributes: AbstractSet[str] = frozenset(),
-    ) -> None:
+    def merge(self: Self, other: Self, *, overwrite: bool = True) -> None:
         """Merge another context data instance into this one.
 
         Args:
@@ -110,10 +95,6 @@ class _ContextData:
                 (used when inner invocations publish to context). If False,
                 existing non-None values in ``self`` are preserved (used when
                 the root invocation enriches from context).
-            exclude_attributes: Keys to skip when merging ``other.attributes``
-                with ``overwrite=False`` (e.g., keys already set via outer typed fields).
-            exclude_metric_attributes: Keys to skip when merging
-                ``other.metric_attributes`` with ``overwrite=False``.
         """
         for f in fields(cast(Any, self)):
             if f.name in (
@@ -134,11 +115,9 @@ class _ContextData:
             self.metric_attributes.update(other.metric_attributes)
         else:
             for k, v in other.attributes.items():
-                if k not in exclude_attributes:
-                    self.attributes.setdefault(k, v)
+                self.attributes.setdefault(k, v)
             for k, v in other.metric_attributes.items():
-                if k not in exclude_metric_attributes:
-                    self.metric_attributes.setdefault(k, v)
+                self.metric_attributes.setdefault(k, v)
 
 
 def _is_active_completion_hook(hook: CompletionHook | None) -> bool:

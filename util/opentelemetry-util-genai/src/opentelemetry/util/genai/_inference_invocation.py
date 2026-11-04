@@ -863,19 +863,14 @@ class InferenceInvocation(GenAIInvocation):
         prompt_variable = self.data.prompt_variable
         tool_definitions = self.data.tool_definitions
 
-        outer_span_keys = (
-            self._start_attributes.keys()
-            | self._get_attributes().keys()
-            | self._get_message_attributes(for_span=True).keys()
-            | self._get_message_attributes(for_span=False).keys()
-        )
-        outer_metric_keys = self._get_metric_attributes().keys()
-        self.data.merge(
-            data,
-            overwrite=False,
-            exclude_attributes=outer_span_keys,
-            exclude_metric_attributes=outer_metric_keys,
-        )
+        for k, v in (
+            *self._start_attributes.items(),
+            *self._get_attributes().items(),
+        ):
+            self.attributes.setdefault(k, v)
+        for k, v in self._get_metric_attributes().items():
+            self.metric_attributes.setdefault(k, v)
+        self.data.merge(data, overwrite=False)
 
         if data.capture_content:
             self.data.input_messages = (
