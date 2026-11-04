@@ -1106,11 +1106,14 @@ class TestInferenceContext(BaseContextTest):
             request_model="outer-model",
         ) as root_inv:
             root_inv.temperature = 0.2
+            root_inv.attributes[GenAI.GEN_AI_PROMPT_NAME] = "outer-prompt"
 
             # Simulate an inner instrumentation (e.g. LiteLLM) publishing directly
-            # to ctx_data.attributes and ctx_data.metric_attributes.
+            # to ctx_data.attributes and ctx_data.metric_attributes, or setting a
+            # typed field that collides with an outer raw attribute.
             ctx_data = get_inference_context_data()
             assert ctx_data is not None
+            ctx_data.prompt_name = "inner-prompt"
             ctx_data.attributes.update(
                 {
                     GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
@@ -1146,6 +1149,10 @@ class TestInferenceContext(BaseContextTest):
             span_attrs.get(GenAI.GEN_AI_REQUEST_MODEL), "outer-model"
         )
         self.assertEqual(span_attrs.get(GenAI.GEN_AI_REQUEST_TEMPERATURE), 0.2)
+        # Outer raw attributes win over inner typed fields
+        self.assertEqual(
+            span_attrs.get(GenAI.GEN_AI_PROMPT_NAME), "outer-prompt"
+        )
         # Missing fields on outer are enriched from inner raw dict
         self.assertEqual(
             span_attrs.get(GenAI.GEN_AI_RESPONSE_MODEL), "inner-resp-model"
@@ -1172,6 +1179,9 @@ class TestInferenceContext(BaseContextTest):
         )
         self.assertEqual(
             event_attrs.get(GenAI.GEN_AI_REQUEST_TEMPERATURE), 0.2
+        )
+        self.assertEqual(
+            event_attrs.get(GenAI.GEN_AI_PROMPT_NAME), "outer-prompt"
         )
         self.assertEqual(
             event_attrs.get(GenAI.GEN_AI_RESPONSE_MODEL), "inner-resp-model"

@@ -199,7 +199,14 @@ class RetrievalInvocation(GenAIInvocation):
         retrieval_query_text = self._data.retrieval_query_text
         retrieval_documents = self._data.retrieval_documents
 
-        self._data.merge(data, overwrite=False)
+        self._data.merge(
+            data,
+            overwrite=False,
+            exclude_attributes=self._start_attributes.keys()
+            | self._get_attributes().keys()
+            | self._get_content_attributes_for_span().keys(),
+            exclude_metric_attributes=self._get_metric_attributes().keys(),
+        )
 
         if data.capture_content:
             self._data.retrieval_query_text = (
@@ -224,10 +231,28 @@ class RetrievalInvocation(GenAIInvocation):
             (server_attributes.SERVER_ADDRESS, self._data.server_address),
             (server_attributes.SERVER_PORT, self._data.server_port),
         )
-        attrs: dict[str, AttributeValue] = dict(self.metric_attributes)
-        attrs[GenAI.GEN_AI_OPERATION_NAME] = self._operation_name
-        attrs.update({k: v for k, v in optional_attrs if v is not None})
+        attrs: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+            **{k: v for k, v in optional_attrs if v is not None},
+        }
+        attrs.update(self.metric_attributes)
         return attrs
+
+    def _get_attributes(self) -> dict[str, AttributeValue]:
+        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
+            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data.data_source_id),
+            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
+            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
+            (server_attributes.SERVER_ADDRESS, self._data.server_address),
+            (server_attributes.SERVER_PORT, self._data.server_port),
+            (
+                _GEN_AI_RETRIEVAL_TOP_K,
+                int(self._data.retrieval_top_k)
+                if self._data.retrieval_top_k is not None
+                else None,
+            ),
+        )
+        return {k: v for k, v in optional_attrs if v is not None}
 
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
         if (
@@ -259,22 +284,9 @@ class RetrievalInvocation(GenAIInvocation):
             self.enrich_from_context(ctx_data)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
-        optional_attrs: tuple[tuple[str, AttributeValue | None], ...] = (
-            (GenAI.GEN_AI_DATA_SOURCE_ID, self._data.data_source_id),
-            (GenAI.GEN_AI_PROVIDER_NAME, self._data.provider_name),
-            (GenAI.GEN_AI_REQUEST_MODEL, self._data.request_model),
-            (server_attributes.SERVER_ADDRESS, self._data.server_address),
-            (server_attributes.SERVER_PORT, self._data.server_port),
-            (
-                _GEN_AI_RETRIEVAL_TOP_K,
-                int(self._data.retrieval_top_k)
-                if self._data.retrieval_top_k is not None
-                else None,
-            ),
-        )
-        attributes: dict[str, AttributeValue] = dict(self.attributes)
-        attributes.update({k: v for k, v in optional_attrs if v is not None})
+        attributes = self._get_attributes()
         attributes.update(self._get_content_attributes_for_span())
+        attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._record_client_metrics()
 

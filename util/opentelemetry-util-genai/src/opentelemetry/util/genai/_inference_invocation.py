@@ -863,7 +863,19 @@ class InferenceInvocation(GenAIInvocation):
         prompt_variable = self.data.prompt_variable
         tool_definitions = self.data.tool_definitions
 
-        self.data.merge(data, overwrite=False)
+        outer_span_keys = (
+            self._start_attributes.keys()
+            | self._get_attributes().keys()
+            | self._get_message_attributes(for_span=True).keys()
+            | self._get_message_attributes(for_span=False).keys()
+        )
+        outer_metric_keys = self._get_metric_attributes().keys()
+        self.data.merge(
+            data,
+            overwrite=False,
+            exclude_attributes=outer_span_keys,
+            exclude_metric_attributes=outer_metric_keys,
+        )
 
         if data.capture_content:
             self.data.input_messages = (
@@ -891,8 +903,7 @@ class InferenceInvocation(GenAIInvocation):
             self.data.tool_definitions = tool_definitions
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs = dict(self.metric_attributes)
-        attrs.update(self._start_attributes)
+        attrs = dict(self._start_attributes)
         if self.data.provider_name is not None:
             attrs[GenAI.GEN_AI_PROVIDER_NAME] = self.data.provider_name
         if self.data.request_model is not None:
@@ -903,6 +914,7 @@ class InferenceInvocation(GenAIInvocation):
             attrs[server_attributes.SERVER_ADDRESS] = self.data.server_address
         if self.data.server_port is not None:
             attrs[server_attributes.SERVER_PORT] = self.data.server_port
+        attrs.update(self.metric_attributes)
         return attrs
 
     def _get_metric_token_counts(self) -> dict[str, int]:
@@ -938,9 +950,10 @@ class InferenceInvocation(GenAIInvocation):
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:
             self.data.request_stream = self._request_stream
-        attributes: dict[str, AttributeValue] = dict(self.attributes)
+        attributes: dict[str, AttributeValue] = {}
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=True))
+        attributes.update(self.attributes)
         start_keys = set(self._start_attributes)
         span_attributes = {
             k: v for k, v in attributes.items() if k not in start_keys
@@ -967,10 +980,11 @@ class InferenceInvocation(GenAIInvocation):
         if not self._emit_event:
             return None
 
-        attributes: dict[str, AttributeValue] = dict(self.attributes)
+        attributes: dict[str, AttributeValue] = {}
         attributes.update(self._start_attributes)
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
+        attributes.update(self.attributes)
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,

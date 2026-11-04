@@ -297,7 +297,22 @@ class FetchResponseInvocation(GenAIInvocation):
         system_instructions = self._data.system_instructions
         tool_definitions = self._data.tool_definitions
 
-        self._data.merge(data, overwrite=False)
+        outer_content_keys = get_content_attributes(
+            input_messages=(),
+            output_messages=self.output_messages,
+            system_instruction=self.system_instruction,
+            tool_definitions=self.tool_definitions,
+            for_span=True,
+            content_capturing_mode=self._content_capturing_mode,
+        ).keys()
+        self._data.merge(
+            data,
+            overwrite=False,
+            exclude_attributes=self._start_attributes.keys()
+            | self._get_attributes().keys()
+            | outer_content_keys,
+            exclude_metric_attributes=self._get_metric_attributes().keys(),
+        )
 
         if data.capture_content:
             self._data.output_messages = (
@@ -323,12 +338,13 @@ class FetchResponseInvocation(GenAIInvocation):
             (server_attributes.SERVER_ADDRESS, self._data.server_address),
             (server_attributes.SERVER_PORT, self._data.server_port),
         )
-        attrs: dict[str, AttributeValue] = dict(self.metric_attributes)
-        attrs[GenAI.GEN_AI_OPERATION_NAME] = self._operation_name
-        attrs[GenAI.GEN_AI_PROVIDER_NAME] = (
-            self._data.provider_name or self._provider
-        )
-        attrs.update({k: v for k, v in optional_attrs if v is not None})
+        attrs: dict[str, AttributeValue] = {
+            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
+            GenAI.GEN_AI_PROVIDER_NAME: self._data.provider_name
+            or self._provider,
+            **{k: v for k, v in optional_attrs if v is not None},
+        }
+        attrs.update(self.metric_attributes)
         return attrs
 
     def _get_attributes(self) -> dict[str, AttributeValue]:
@@ -359,8 +375,7 @@ class FetchResponseInvocation(GenAIInvocation):
             self.enrich_from_context(ctx_data)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
-        attributes: dict[str, AttributeValue] = dict(self.attributes)
-        attributes.update(self._get_attributes())
+        attributes = self._get_attributes()
         attributes.update(
             get_content_attributes(
                 # A fetched response does not carry the original request's
@@ -373,6 +388,7 @@ class FetchResponseInvocation(GenAIInvocation):
                 content_capturing_mode=self._content_capturing_mode,
             )
         )
+        attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._record_client_metrics()
         self._call_completion_hook(
