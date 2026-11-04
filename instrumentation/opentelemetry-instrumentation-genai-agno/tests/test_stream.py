@@ -1312,3 +1312,32 @@ def test_agent_run_stream_closed_early_has_no_finish_reason(
     assert GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS not in (
         span.attributes or {}
     )
+
+
+def test_agent_stream_closed_after_contentless_completion_reports_stop(
+    instrument_agno_content_capture, span_exporter
+) -> None:
+    from agno.agent import RunCompletedEvent, RunContentEvent
+
+    agent = Agent(name="completed-agent", model=MockModel(id="mock-model"))
+
+    def fake_stream(*args, **kwargs):
+        yield RunContentEvent(content="final answer")
+        yield RunCompletedEvent()
+        yield RunContentEvent(content="trailing")
+
+    with _patch_agent_stream(fake_stream):
+        stream = agent.run("hello", stream=True)
+        for event in stream:
+            if isinstance(event, RunCompletedEvent):
+                break
+        stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("stop",)
+    output_messages = span.attributes.get(
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert "final answer" in output_messages

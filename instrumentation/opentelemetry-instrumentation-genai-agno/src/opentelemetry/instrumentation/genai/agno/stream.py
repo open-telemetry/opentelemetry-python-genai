@@ -136,6 +136,8 @@ class _AgentStreamMixin(_OutputHooks):
             event_name in _AGENT_COMPLETED_EVENTS
             or chunk_type in _AGENT_COMPLETED_TYPES
         ):
+            if self._self_finish_reason is None:
+                self._self_finish_reason = "stop"
             content = _chunk_content(chunk)
             if content is not None:
                 self._set_output(content)
