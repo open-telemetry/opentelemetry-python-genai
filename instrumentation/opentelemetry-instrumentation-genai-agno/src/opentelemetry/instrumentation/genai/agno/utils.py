@@ -16,11 +16,7 @@ from opentelemetry.util.genai.types import (
     RetrievalDocument,
     ToolDefinition,
 )
-from opentelemetry.util.genai.utils import (
-    gen_ai_json_dumps,
-    get_argument,
-    object_to_any_value,
-)
+from opentelemetry.util.genai.utils import get_argument
 
 
 def format_retrieval_document(doc: Document) -> RetrievalDocument:
@@ -35,16 +31,6 @@ def format_retrieval_document(doc: Document) -> RetrievalDocument:
         id=str(doc.id) if doc.id is not None else None,
         score=score,
     )
-
-
-def format_content(val: object) -> str:
-    """Format content into a string, converting structured objects to JSON."""
-    if isinstance(val, str):
-        return val
-    any_value = object_to_any_value(val)
-    if any_value is None:
-        return str(val)
-    return gen_ai_json_dumps(any_value, ensure_ascii=False)
 
 
 def _get_property_value(obj: Any, property_name: str) -> Any:

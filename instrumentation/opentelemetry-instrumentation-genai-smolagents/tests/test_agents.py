@@ -949,3 +949,63 @@ def test_a_tool_error_the_agent_recovers_from_leaves_the_run_successful(
     assert attr(agent_span, GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
     outputs = parse_messages(agent_span, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert outputs[0]["parts"][0]["content"] == "recovered"
+
+
+def test_held_streaming_run_does_not_parent_caller_work(
+    instrument_with_content, span_exporter, tracer_provider
+) -> None:
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+    stream = agent.run("Test question", stream=True)
+    next(stream)
+    # The caller still holds the partially read run.
+    with tracer_provider.get_tracer("test").start_as_current_span("caller"):
+        pass
+    list(stream)
+
+    (caller,) = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name == "caller"
+    ]
+    assert caller.parent is None
+
+
+def test_break_on_final_answer_closes_the_held_generator(
+    instrument_with_content, span_exporter
+) -> None:
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+    stream = agent.run("Test question", stream=True)
+    underlying = stream.__wrapped__
+    for step in stream:
+        if isinstance(step, FinalAnswerStep):
+            break
+    del stream
+    gc.collect()
+
+    assert underlying.gi_frame is None
+
+
+def test_final_answer_recording_failure_still_ends_the_span(
+    instrument_with_content, span_exporter, monkeypatch
+) -> None:
+    from opentelemetry.instrumentation.genai.smolagents import (
+        patch as patch_module,
+    )
+
+    def failing_record(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("unconvertible answer")
+
+    monkeypatch.setattr(patch_module, "_record_run_answer", failing_record)
+    agent = CodeAgent(tools=[], model=FakeCodeModel(), max_steps=3)
+
+    steps = list(agent.run("Test question", stream=True))
+
+    assert any(isinstance(step, FinalAnswerStep) for step in steps)
+    assert (
+        len(
+            spans_by_operation(
+                span_exporter.get_finished_spans(), "invoke_agent"
+            )
+        )
+        == 1
+    )

@@ -7,8 +7,15 @@ import inspect
 import logging
 import timeit
 from abc import ABCMeta, abstractmethod
-from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import (
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Sequence,
+)
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from functools import wraps
 from types import TracebackType
 from typing import (
@@ -22,8 +29,14 @@ from typing import (
 )
 
 from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
+from opentelemetry.util.genai._agent_invocation import AgentInvocation
 from opentelemetry.util.genai._tool_invocation import ToolInvocation
-from opentelemetry.util.genai.utils import object_to_any_value
+from opentelemetry.util.genai._workflow_invocation import WorkflowInvocation
+from opentelemetry.util.genai.types import OutputMessage, TextPart
+from opentelemetry.util.genai.utils import (
+    content_to_text,
+    object_to_any_value,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.util.genai.types import Error
@@ -101,6 +114,9 @@ class _StreamTelemetry(Generic[ChunkT], metaclass=ABCMeta):
     """Finalize-once bookkeeping and telemetry hooks shared by both wrappers."""
 
     _self_finalized: bool
+    # True once iteration ran to the end; ``_on_stream_end`` also runs when the
+    # caller closes a partially read stream, and this tells the two apart.
+    _self_exhausted: bool
 
     def _execution_context(self) -> AbstractContextManager[None]:
         """Scope stream reads and cleanup, restoring context before returning a chunk.
@@ -190,6 +206,7 @@ class SyncStreamWrapper(
     ):
         super().__init__(stream)
         self._self_finalized = False
+        self._self_exhausted = False
         self._self_invocation = invocation
         if _records_stream_telemetry(invocation):
             setattr(invocation, "_request_stream", True)
@@ -273,6 +290,7 @@ class SyncStreamWrapper(
             try:
                 chunk = read()
             except StopIteration:
+                self._self_exhausted = True
                 self._finalize_success()
                 raise
             except BaseException as error:
@@ -322,6 +340,7 @@ class AsyncStreamWrapper(
     ):
         super().__init__(stream)
         self._self_finalized = False
+        self._self_exhausted = False
         self._self_invocation = invocation
         if _records_stream_telemetry(invocation):
             setattr(invocation, "_request_stream", True)
@@ -490,6 +509,7 @@ class AsyncStreamWrapper(
             try:
                 chunk = await read()
             except StopAsyncIteration:
+                self._self_exhausted = True
                 self._finalize_success()
                 raise
             except BaseException as error:
@@ -607,6 +627,148 @@ class AsyncToolStreamWrapper(AsyncStreamWrapper[ChunkT]):
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._self_tool_invocation.fail(error)
+
+
+class _AgentStreamOutput:
+    """Output accumulation and finalization shared by the agent stream wrappers."""
+
+    _self_invocation: AgentInvocation | WorkflowInvocation
+    _self_finalized: bool
+    _self_output_parts: list[str]
+    _self_output_messages: list[OutputMessage] | None
+
+    @contextmanager
+    def _fail_on_init_error(
+        self, invocation: AgentInvocation | WorkflowInvocation
+    ) -> Iterator[None]:
+        try:
+            yield
+        except BaseException as error:
+            self._self_finalized = True
+            invocation.fail(error)
+            raise
+
+    def _start_output(self) -> None:
+        self._self_output_parts = []
+        self._self_output_messages = None
+        self._self_invocation.suspend()
+
+    def _add_output(self, content: object) -> None:
+        """Append one streamed piece of the agent's output.
+
+        Pieces are joined into a single assistant text part on finalization.
+        Structured content (pydantic models, dataclasses, mappings) is
+        serialized to JSON; ``None`` and content that cannot be serialized are
+        skipped. A no-op when content capture is disabled or once output
+        messages have been set.
+        """
+        if not self._captures_text_output():
+            return
+        text = content_to_text(content)
+        if text is not None:
+            self._self_output_parts.append(text)
+
+    def _set_output(self, content: object) -> None:
+        """Record the agent's complete output, replacing any streamed pieces.
+
+        For libraries that report the final output in a closing chunk. A
+        no-op when content capture is disabled or once output messages have
+        been set.
+        """
+        if not self._captures_text_output():
+            return
+        text = content_to_text(content)
+        self._self_output_parts = [text] if text is not None else []
+
+    def _set_output_messages(self, messages: Sequence[OutputMessage]) -> None:
+        """Record fully converted output messages, taking precedence over text output.
+
+        For libraries whose output needs a library-specific conversion. A
+        no-op when content capture is disabled.
+        """
+        if not self._self_invocation.should_capture_content:
+            return
+        self._self_output_messages = list(messages)
+        self._self_output_parts = []
+
+    def _captures_text_output(self) -> bool:
+        return (
+            self._self_invocation.should_capture_content
+            and self._self_output_messages is None
+        )
+
+    def _apply_output(self) -> None:
+        if self._self_output_messages is not None:
+            messages = self._self_output_messages
+        else:
+            text = "".join(self._self_output_parts)
+            if not text:
+                return
+            messages = [
+                OutputMessage(role="assistant", parts=[TextPart(content=text)])
+            ]
+        self._self_invocation.output_messages = messages
+
+    def _on_stream_end(self) -> None:
+        self._apply_output()
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._apply_output()
+        self._self_invocation.fail(error)
+
+
+class SyncAgentStreamWrapper(_AgentStreamOutput, SyncStreamWrapper[ChunkT]):
+    """Stream wrapper for synchronous agent and workflow runs that stream their output.
+
+    For ``invoke_agent`` and ``invoke_workflow`` invocations whose library
+    returns a stream or generator before the run completes. The wrapper
+    restores the caller's context before returning and makes the invocation
+    current only while the run's own code executes -- producing a chunk,
+    closing, or finalizing.
+
+    Subclasses implement ``_process_chunk`` and report output through
+    ``_add_output`` (streamed pieces), ``_set_output`` (complete output) or
+    ``_set_output_messages`` (already converted messages). On completion,
+    failure, or abandonment the accumulated output is set on
+    ``invocation.output_messages`` when content capture is enabled, and the
+    invocation is stopped or failed. Subclasses overriding ``_on_stream_end``
+    or ``_on_stream_error`` to set more attributes should call ``super()``;
+    ``_self_exhausted`` tells a fully read stream from one the caller closed
+    early.
+
+    No streaming timing metrics are recorded: semconv defines them for
+    inference only.
+
+    Reference:
+        Agent span: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-internal-span
+    """
+
+    def __init__(
+        self,
+        stream: _SyncStream[ChunkT],
+        invocation: AgentInvocation | WorkflowInvocation,
+    ) -> None:
+        with self._fail_on_init_error(invocation):
+            super().__init__(stream, invocation)
+        self._start_output()
+
+
+class AsyncAgentStreamWrapper(_AgentStreamOutput, AsyncStreamWrapper[ChunkT]):
+    """Stream wrapper for asynchronous agent and workflow runs that stream their output.
+
+    Async counterpart of ``SyncAgentStreamWrapper``; the same context scoping
+    and output handling apply.
+    """
+
+    def __init__(
+        self,
+        stream: _AsyncStream[ChunkT],
+        invocation: AgentInvocation | WorkflowInvocation,
+    ) -> None:
+        with self._fail_on_init_error(invocation):
+            super().__init__(stream, invocation)
+        self._start_output()
 
 
 _ExecutionContextFactory = Callable[[], AbstractContextManager[None]]
@@ -844,9 +1006,11 @@ class AsyncStreamManagerWrapper(
 
 __all__ = [
     "AbandonedStreamError",
+    "AsyncAgentStreamWrapper",
     "AsyncStreamManagerWrapper",
     "AsyncStreamWrapper",
     "AsyncToolStreamWrapper",
+    "SyncAgentStreamWrapper",
     "SyncStreamManagerWrapper",
     "SyncStreamWrapper",
     "SyncToolStreamWrapper",

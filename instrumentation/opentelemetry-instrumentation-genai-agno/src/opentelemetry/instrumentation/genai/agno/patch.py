@@ -39,7 +39,6 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     extract_session_id,
-    format_content,
     format_retrieval_document,
     prepare_tool_definitions,
 )
@@ -69,6 +68,7 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     bind_arguments,
+    content_to_text,
     get_argument,
     object_to_any_value,
 )
@@ -324,14 +324,14 @@ def _extract_input_content(input_val: Any) -> str:
         return ""
     content = _get_property_value(input_val, "content")
     if content is not None:
-        return format_content(content)
-    return format_content(input_val)
+        return content_to_text(content) or ""
+    return content_to_text(input_val) or ""
 
 
 def _extract_output_content(result: Any) -> str:
     if result is None:
         return ""
-    return format_content(_extract_output_value(result))
+    return content_to_text(_extract_output_value(result)) or ""
 
 
 def _extract_output_value(result: Any) -> Any:
@@ -707,7 +707,6 @@ def _agent_run(
                 return AgnoAgentStreamWrapper(
                     result,
                     invocation,
-                    capture_content,
                 )
 
             _set_invocation_output(invocation, result, capture_content)
@@ -761,7 +760,6 @@ def _agent_arun(
             return AsyncAgnoAgentStreamWrapper(
                 result,
                 invocation,
-                capture_content,
             )
 
         if isinstance(result, Awaitable):
@@ -784,7 +782,6 @@ def _agent_arun(
                         return AsyncAgnoAgentStreamWrapper(
                             response,
                             invocation,
-                            capture_content,
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
@@ -937,7 +934,6 @@ def _workflow_run(
                 return AgnoWorkflowStreamWrapper(
                     result,
                     invocation,
-                    capture_content,
                 )
 
             _set_invocation_output(invocation, result, capture_content)
@@ -1040,7 +1036,6 @@ def _workflow_arun(
             return AsyncAgnoWorkflowStreamWrapper(
                 result,
                 invocation,
-                capture_content,
                 on_close=functools.partial(_release_run_id, run_id),
             )
 
@@ -1066,7 +1061,6 @@ def _workflow_arun(
                         return AsyncAgnoWorkflowStreamWrapper(
                             response,
                             invocation,
-                            capture_content,
                             on_close=functools.partial(
                                 _release_run_id, run_id
                             ),
@@ -1209,7 +1203,6 @@ def _workflow_aexecute_stream(
                 return AsyncAgnoWorkflowStreamWrapper(
                     result,
                     invocation,
-                    capture_content,
                     on_close=functools.partial(_release_run_id, run_id),
                 )
             _release_run_id(run_id)
@@ -1278,7 +1271,6 @@ def _workflow_aexecute_workflow_agent(
             return AsyncAgnoWorkflowStreamWrapper(
                 result,
                 invocation,
-                capture_content,
                 on_close=functools.partial(_release_run_id, run_id),
             )
 
@@ -1295,7 +1287,6 @@ def _workflow_aexecute_workflow_agent(
                         return AsyncAgnoWorkflowStreamWrapper(
                             response,
                             invocation,
-                            capture_content,
                             on_close=functools.partial(
                                 _release_run_id, run_id
                             ),

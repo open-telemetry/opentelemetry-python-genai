@@ -128,6 +128,32 @@ current during reads, cleanup and finalization of an abandoned stream, so no
 Keep finalization in the existing ``_on_stream_end`` and ``_on_stream_error`` hooks.
 
 
+Agent and workflow streams
+--------------------------
+
+``SyncAgentStreamWrapper`` and ``AsyncAgentStreamWrapper`` wrap the stream of an
+``invoke_agent`` or ``invoke_workflow`` run. They suspend the invocation, record no
+inference streaming metrics, and own finalization. Subclasses implement only
+``_process_chunk`` and report output with ``_add_output`` (streamed pieces, joined),
+``_set_output`` (complete output, replacing the pieces) or ``_set_output_messages``
+(already converted ``OutputMessage`` objects). Structured content is serialized to
+JSON. When content capture is enabled, the output is set on
+``invocation.output_messages`` on success, failure and abandonment.
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.stream import SyncAgentStreamWrapper
+
+    class RunStreamWrapper(SyncAgentStreamWrapper[RunEvent]):
+        def _process_chunk(self, chunk: RunEvent) -> None:
+            if chunk.is_final:
+                self._set_output(chunk.content)
+            else:
+                self._add_output(chunk.delta)
+
+    stream = RunStreamWrapper(agent.run(stream=True), invocation)
+
+
 Modalities
 ----------
 
