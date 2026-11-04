@@ -12,7 +12,6 @@ import base64
 import functools
 import logging
 import sys
-import threading
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -22,6 +21,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -146,21 +146,26 @@ def _release_run_id(run_id: str | None) -> None:
 # invalidate deferred hooks registered during prior instrumentation cycles.
 _instrumentation_generation: int = 0
 _is_instrumented: bool = False
+_in_async_embedding: ContextVar[bool] = ContextVar(
+    "_in_async_embedding", default=False
+)
 
 
 class _ContextPreservingBoundWrapper(_BoundFunctionWrapperBase):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._self_bind_thread = threading.get_ident()
-        self._self_bind_context = get_current()
+        self._self_bind_context = (
+            get_current() if _in_async_embedding.get() else None
+        )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         # Local embedders (e.g. FastEmbedEmbedder, SentenceTransformerEmbedder,
         # VLLMEmbedder) implement async_get_embedding by passing
         # self.get_embedding to loop.run_in_executor, which binds the method on
         # the event-loop thread and invokes it on a worker thread without
-        # propagating contextvars.
-        if threading.get_ident() != self._self_bind_thread:
+        # propagating contextvars. Only attach when bound inside an async
+        # embedder call and the worker thread has no active context of its own.
+        if self._self_bind_context is not None and not get_current():
             token = attach(self._self_bind_context)
             try:
                 return super().__call__(*args, **kwargs)
@@ -349,7 +354,7 @@ def patch_agent(handler: TelemetryHandler) -> None:
                 f"{cls_name}.{method_name}",
                 wrapper_fn,
                 current_generation,
-                preserve_bind_context=True,
+                preserve_bind_context=not method_name.startswith("async_"),
             )
 
 
@@ -527,7 +532,11 @@ def _embedder_async_get_embedding(
         kwargs: dict[str, Any],
     ) -> Sequence[float] | str:
         with _start_embedding(handler, instance) as invocation:
-            result = await wrapped(*args, **kwargs)
+            token = _in_async_embedding.set(True)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _in_async_embedding.reset(token)
             _set_embedding_attributes(invocation, instance, result)
             return result
 
@@ -546,7 +555,11 @@ def _embedder_async_get_embedding_and_usage(
         kwargs: dict[str, Any],
     ) -> tuple[Sequence[float] | str, dict[str, Any] | None]:
         with _start_embedding(handler, instance) as invocation:
-            result = await wrapped(*args, **kwargs)
+            token = _in_async_embedding.set(True)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _in_async_embedding.reset(token)
             embedding, usage = result
             _set_embedding_attributes(invocation, instance, embedding, usage)
             return result

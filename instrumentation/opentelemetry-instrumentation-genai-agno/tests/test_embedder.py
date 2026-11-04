@@ -778,3 +778,26 @@ def test_embedder_async_executor_delegation_suppression(
     for span in spans:
         assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 3
     assert spans[2].attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 9
+
+
+def test_cached_embedding_preserves_worker_context(
+    instrument_agno, span_exporter, tracer_provider
+) -> None:
+    client = MagicMock()
+    client.embeddings.create.return_value = MagicMock(
+        data=[MagicMock(embedding=[0.1, 0.2])], usage=None
+    )
+    embedder = OpenAIEmbedder(api_key="fake", openai_client=client)
+    embed = embedder.get_embedding
+    tracer = tracer_provider.get_tracer(__name__)
+
+    async def run() -> None:
+        with tracer.start_as_current_span("request"):
+            await asyncio.to_thread(embed, "text")
+
+    asyncio.run(run())
+    spans = span_exporter.get_finished_spans()
+    parent = next(s for s in spans if s.name == "request")
+    embedding = next(s for s in spans if s.name.startswith("embeddings "))
+    assert embedding.parent is not None
+    assert embedding.parent.span_id == parent.context.span_id
