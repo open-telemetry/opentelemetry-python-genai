@@ -415,7 +415,7 @@ def test_stream_wrapper_no_content(tracer_provider) -> None:
     assert invocation.input_tokens == 22
     assert invocation.output_tokens == 5
     assert invocation.cache_read_input_tokens == 4
-    assert invocation.cache_creation_input_tokens == 8
+    assert invocation.cache_write_input_tokens == 8
 
 
 def test_stream_wrapper_with_reasoning(tracer_provider) -> None:

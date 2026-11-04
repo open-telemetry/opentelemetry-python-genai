@@ -443,13 +443,13 @@ def extract_converse_response(
         invocation.cache_read_input_tokens = _safe_int(
             usage.get("cacheReadInputTokens")
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             usage.get("cacheWriteInputTokens")
         )
         invocation.input_tokens = _total_input_tokens(
             _safe_int(usage.get("inputTokens")),
             invocation.cache_read_input_tokens,
-            invocation.cache_creation_input_tokens,
+            invocation.cache_write_input_tokens,
         )
 
 
@@ -662,7 +662,7 @@ def extract_invoke_model_response(
                 usage.get("cacheReadInputTokens"),
             )
         )
-        invocation.cache_creation_input_tokens = _safe_int(
+        invocation.cache_write_input_tokens = _safe_int(
             _first_not_none(
                 usage.get("cache_creation_input_tokens"),
                 usage.get("cacheWriteInputTokens"),
