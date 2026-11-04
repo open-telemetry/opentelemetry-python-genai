@@ -213,12 +213,40 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.1"
 
       - name: Run dependency check
         run: uv run --no-project --with packaging scripts/check_deps.py
 
-      - name: Test requirements generator
-        run: uv run --no-project --with tox --with tox-uv python -m unittest discover -s scripts/tests -v
+      - name: Test workspace dependency validation
+        run: uv run --no-project --with packaging python -m unittest discover -s scripts/tests -v
+
+      - name: Check generated Anthropic requirements
+        id: anthropic-locks
+        run: |
+          uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.11 --resolution=lowest-direct \
+            instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.oldest.in \
+            instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+            --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/requirements.oldest.txt
+          uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.11 \
+            instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.latest.in \
+            instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+            --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/requirements.latest.txt
+          uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.15 \
+            instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.latest.in \
+            instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+            --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/py315/requirements.latest.txt
+          git diff --binary --output="$RUNNER_TEMP/anthropic-locks.patch" -- instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks
+          git diff --exit-code -- instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks
+
+      - name: Upload regenerated requirements patch
+        if: failure() && steps.anthropic-locks.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: anthropic-locks
+          path: ${{ runner.temp }}/anthropic-locks.patch
+          if-no-files-found: ignore
 
   check-util-api:
     name: check-util-api

@@ -1,0 +1,9 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+-r requirements.latest.txt
+opentelemetry-api
+opentelemetry-semantic-conventions
+opentelemetry-sdk
+opentelemetry-instrumentation
+opentelemetry-test-utils

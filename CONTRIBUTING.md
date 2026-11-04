@@ -130,44 +130,48 @@ uv run tox -e changelog-preview
 If your change doesn't need an entry (pure docs/tooling), add the
 `Skip Changelog` label to the PR.
 
-### Export pinned test requirements
+### Anthropic test requirements
 
-For work on [hermetic test requirements (#418)](https://github.com/open-telemetry/opentelemetry-python-genai/issues/418),
-`scripts/generate_requirements.py` compiles the complete dependency list of an
-oldest/latest tox environment, including its package metadata and test helpers:
+The Anthropic test matrix installs generated requirements for Python 3.11
+oldest and latest, and Python 3.15 latest. Its declared runtime floors come
+from `pyproject.toml`. `tests/requirements.oldest.in` holds only local runtime
+workspace overrides needed for unreleased floors; the test harness is separate
+in `tests/requirements.test.in`. Latest inputs include the existing
+`tests/requirements.latest.txt` through `tests/requirements.latest.in`.
+
+Regenerate the locks from the repository root with uv 0.12.1:
 
 ```sh
-uv run --no-project --with tox --with tox-uv python scripts/generate_requirements.py \
-  py311-test-instrumentation-genai-anthropic-oldest \
-  --output instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/py311-test-instrumentation-genai-anthropic-oldest.txt
+uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.11 --resolution=lowest-direct \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.oldest.in \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+  --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/requirements.oldest.txt
+uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.11 \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.latest.in \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+  --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/requirements.latest.txt
+uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.15 \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.latest.in \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+  --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/py315/requirements.latest.txt
 ```
 
-Use a tox version supporting `tox config --format json`. The output uses
-`lowest-direct` for oldest environments and `highest` for latest environments.
-It keeps explicitly selected local packages editable and disables implicit
-workspace source substitutions. Tox environment overrides, including CrewAI's
-compatibility override, are preserved.
+Existing pins are retained when compatible with the inputs. Add `--upgrade`
+to deliberately refresh all pins, retaining `--resolution=lowest-direct` for
+the oldest lock. Review the resulting diff.
 
-The Anthropic oldest and latest test matrix installs the committed locks
-under `instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/`.
-Generate one lock for each of the Python 3.11 oldest, Python 3.11 latest, and
-Python 3.15 latest environments. These locks include platform markers and keep
-local packages editable. Their source dependencies are defined separately in
-`tox.ini`, so regeneration does not use the existing lock as input. The latest
-source requirements are also used by the unchanged conformance environment.
-Other Python versions continue to use the source dependencies directly.
+Renovate updates the latest requirements and locks together; the oldest lock
+is excluded by the existing `requirements.oldest.txt` ignore rule. Dependency
+CI runs these compile commands and fails if the committed locks need changes.
+Its `anthropic-locks` artifact contains the regenerated patch for review.
+Workspace dependency validation and release cleanup read the oldest runtime
+inputs, so required editable installs remain checked independently of test
+helpers.
 
-When dependency inputs change, regenerate and review the affected locks with
-the same command and the corresponding environment and output path. Anthropic
-no longer uses the handwritten-oldest-file coverage and redundancy check;
-its instrumentation metadata, latest bounds, and workspace dependency checks
-still run. Other packages retain their existing tox inputs and checks.
-
-The helper's regression tests use the standard library. With tox installed,
-they also check the test environment configuration:
+Run the workspace-check regression tests with:
 
 ```sh
-python -m unittest discover -s scripts/tests -v
+uv run --no-project --with packaging python -m unittest discover -s scripts/tests -v
 ```
 
 ## Skills

@@ -156,6 +156,16 @@ def parse_local_workspace_lines(
     return local_pkgs
 
 
+def oldest_requirements_path(pkg_dir: Path) -> Path:
+    """Select runtime inputs for generated locks, or legacy oldest pins."""
+    inputs = pkg_dir / "tests" / "requirements.oldest.in"
+    return (
+        inputs
+        if inputs.is_file()
+        else pkg_dir / "tests" / "requirements.oldest.txt"
+    )
+
+
 def check_workspace_dependencies(
     pkg_dir: Path,
     pyproject: dict,
@@ -165,6 +175,12 @@ def check_workspace_dependencies(
 ) -> list[str]:
     """Verify declared workspace dependency floors match PyPI release state or current .dev version."""
     errors: list[str] = []
+
+    oldest_label = (
+        f"tests/{oldest_path.name}"
+        if oldest_path
+        else "tests/requirements.oldest.txt"
+    )
 
     local_pkgs = (
         parse_local_workspace_lines(oldest_path, repo_root, workspace_packages)
@@ -220,7 +236,7 @@ def check_workspace_dependencies(
                 reported_locals.add(canonical_name)
                 errors.append(
                     f"{pkg_dir.name}: '{req.name}' declared floor is '{lower_bound_str}' (released version on PyPI), "
-                    f"but tests/requirements.oldest.txt installs it locally with '{local_pkgs[canonical_name]}'. "
+                    f"but {oldest_label} installs it locally with '{local_pkgs[canonical_name]}'. "
                     f"Remove the local/editable install so tests run against the declared floor from PyPI."
                 )
         # Floor targets the current unreleased workspace cycle (e.g. 1.2b0.dev or 1.2b0)
@@ -228,8 +244,8 @@ def check_workspace_dependencies(
             if canonical_name not in local_pkgs:
                 errors.append(
                     f"{pkg_dir.name}: declared floor for '{req.name}' is unreleased '{lower_bound_str}', "
-                    f"but tests/requirements.oldest.txt is missing a local/editable install (-e). "
-                    f"Add local/editable install to tests/requirements.oldest.txt while under development."
+                    f"but {oldest_label} is missing a local/editable install (-e). "
+                    f"Add local/editable install to {oldest_label} while under development."
                 )
             else:
                 valid_locals.add(canonical_name)
@@ -243,7 +259,7 @@ def check_workspace_dependencies(
     for name, line in local_pkgs.items():
         if name not in valid_locals and name not in reported_locals:
             errors.append(
-                f"{pkg_dir.name}: '{line}' in tests/requirements.oldest.txt is not permitted. "
+                f"{pkg_dir.name}: '{line}' in {oldest_label} is not permitted. "
                 f"Local/editable installs in oldest requirements are only allowed for workspace dependencies whose floor targets the current unreleased version."
             )
 
@@ -264,7 +280,7 @@ def strip_released_local_installs(repo_root: Path) -> list[Path]:
     modified: list[Path] = []
 
     for pkg_dir, _ in workspace_packages.values():
-        oldest_path = pkg_dir / "tests" / "requirements.oldest.txt"
+        oldest_path = oldest_requirements_path(pkg_dir)
         if not oldest_path.is_file():
             continue
 
@@ -467,7 +483,9 @@ def check_instruments_match(pkg_dir: Path, pyproject: dict) -> list[str]:
 def check_oldest_requirements(pkg_dir: Path, pyproject: dict) -> list[str]:
     """Check oldest requirements coverage and redundancy."""
     errors: list[str] = []
-    oldest = pkg_dir / "tests" / "requirements.oldest.txt"
+    oldest = oldest_requirements_path(pkg_dir)
+    if oldest.suffix == ".in":
+        return errors
     latest = pkg_dir / "tests" / "requirements.latest.txt"
 
     if not oldest.exists():
@@ -540,15 +558,14 @@ def main() -> int:
         # Check 1: instruments extra in pyproject.toml matches _instruments in package.py
         errors.extend(check_instruments_match(pkg_dir, pyproject))
 
-        # Anthropic installs a generated lock instead of handwritten floors.
-        if pkg_dir.name != "opentelemetry-instrumentation-genai-anthropic":
-            errors.extend(check_oldest_requirements(pkg_dir, pyproject))
+        # Check 2: oldest dependency coverage and redundancy
+        errors.extend(check_oldest_requirements(pkg_dir, pyproject))
 
         # Check 3: target dependencies in requirements.latest.txt are pinned / upper-bounded
         errors.extend(check_latest_requirements(pkg_dir, pyproject))
 
         # Check 4: workspace dependencies floor and editable install validation
-        oldest = pkg_dir / "tests" / "requirements.oldest.txt"
+        oldest = oldest_requirements_path(pkg_dir)
         errors.extend(
             check_workspace_dependencies(
                 pkg_dir,

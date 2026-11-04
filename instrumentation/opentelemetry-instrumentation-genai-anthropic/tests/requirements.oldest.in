@@ -1,0 +1,6 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Runtime workspace overrides for unreleased dependency floors belong here.
+# Declared runtime floors come from the instrumentation's pyproject.toml;
+# the editable instrumentation and test harness are in requirements.test.in.
