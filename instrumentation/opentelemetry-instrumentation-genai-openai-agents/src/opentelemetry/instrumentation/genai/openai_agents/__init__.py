@@ -1,29 +1,30 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""OpenAI Agents instrumentation for OpenTelemetry.
+"""OpenTelemetry instrumentation for the ``openai-agents`` SDK.
 
-Registers a :class:`GenAITracingProcessor` with the agents library's
-public ``add_trace_processor`` extension API. The processor reacts
-synchronously to the agents library's own ``Trace`` / ``AgentSpan`` /
-``FunctionSpan`` start/end callbacks and turns them
-into ``invoke_workflow`` / ``invoke_agent`` / ``execute_tool`` spans via
-``opentelemetry-util-genai``.
+Target library:
+    https://pypi.org/project/openai-agents/
 
-LLM-level spans (``chat`` / ``embeddings``) are produced
-by ``opentelemetry-instrumentation-genai-openai`` when both packages are
-installed; this instrumentation does not emit them.
+The agents library provides high-level workflow, agent, and tool orchestration
+layered on top of the OpenAI API. It ships its own tracing subsystem
+(``agents.tracing``) that emits tree-structured traces of spans
+(``AgentSpanData``, ``FunctionSpanData``, etc.).
 
-SDK lifecycle hooks populate each agent invocation's inference and client-side
-tool call counters. Inference counters represent logical model calls, not
-individual retry attempts. ``opentelemetry-util-genai`` records these as histogram
-metrics, not span attributes. Counters remain unset for SDK spans that end
-before any agent-start or call-start hook is observed.
+This instrumentation registers a custom ``TracingProcessor`` with that
+subsystem and maps the agents library's lifecycle events to semantic-conventions
+spans via ``opentelemetry-util-genai``:
 
-Usage
------
+* Top-level ``Trace`` objects map to ``invoke_workflow`` spans.
+* ``AgentSpanData`` spans map to ``invoke_agent`` (INTERNAL) spans.
+* ``FunctionSpanData`` spans map to ``execute_tool`` spans.
 
-.. code:: python
+LLM calls (e.g. ``GenerationSpanData`` / ``ResponseSpanData``) are intentionally
+NOT mapped here — users instrument the underlying client (typically
+``opentelemetry-instrumentation-genai-openai``) to capture chat-completions
+and embeddings calls.
+
+Usage::
 
     from opentelemetry.instrumentation.genai.openai_agents import (
         OpenAIAgentsInstrumentor,
@@ -62,7 +63,12 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 from .package import _instruments
-from .patch import patch, unpatch
+from .patch import (
+    _current_conversation_id,
+    _current_session,
+    _extract_conversation_id,
+    _extract_session,
+)
 from .processor import GenAIRunHooks, GenAITracingProcessor
 
 __all__ = ["OpenAIAgentsInstrumentor"]
@@ -116,7 +122,6 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         )
         provider = GenAI.GenAiProviderNameValues.OPENAI.value
         self._processor = GenAITracingProcessor(handler, provider)
-        patch()
 
         if kwargs.get("disable_openai_trace_export"):
             trace_provider = get_trace_provider()
@@ -151,13 +156,35 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
         hooks = bound.arguments.get("hooks")
         if processor is not None and not isinstance(hooks, GenAIRunHooks):
             bound.arguments["hooks"] = GenAIRunHooks(hooks, processor)
-        return wrapped(*bound.args, **bound.kwargs)
+
+        conv_id = _extract_conversation_id(args, kwargs)
+        session = _extract_session(args, kwargs)
+
+        if inspect.iscoroutinefunction(wrapped):
+
+            async def _run_async() -> Any:
+                token_conv = _current_conversation_id.set(conv_id)
+                token_sess = _current_session.set(session)
+                try:
+                    return await wrapped(*bound.args, **bound.kwargs)
+                finally:
+                    _current_conversation_id.reset(token_conv)
+                    _current_session.reset(token_sess)
+
+            return _run_async()
+
+        token_conv = _current_conversation_id.set(conv_id)
+        token_sess = _current_session.set(session)
+        try:
+            return wrapped(*bound.args, **bound.kwargs)
+        finally:
+            _current_conversation_id.reset(token_conv)
+            _current_session.reset(token_sess)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._processor is None:
             return
 
-        unpatch()
         if self._previous_processors is not None:
             set_trace_processors(list(self._previous_processors))
         else:
