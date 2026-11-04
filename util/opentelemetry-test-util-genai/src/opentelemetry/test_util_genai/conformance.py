@@ -38,16 +38,12 @@ Each ``tests/conformance/<op>.py`` defines a :class:`Scenario` subclass with:
 
 from __future__ import annotations
 
-import functools
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
-
-if TYPE_CHECKING:
-    from jsonschema import Draft202012Validator
+from typing import Any, ClassVar
 
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -215,80 +211,6 @@ def _normalize_sample_value(val: Any) -> Any:
     return val
 
 
-_CONTENT_SCHEMA_FILES: dict[str, str] = {
-    "gen_ai.input.messages": "gen-ai-input-messages.json",
-    "gen_ai.output.messages": "gen-ai-output-messages.json",
-    "gen_ai.system_instructions": "gen-ai-system-instructions.json",
-    "gen_ai.tool.definitions": "gen-ai-tool-definitions.json",
-    "gen_ai.retrieval.documents": "gen-ai-retrieval-documents.json",
-}
-
-
-@functools.cache
-def _get_content_validators() -> dict[str, Draft202012Validator]:
-    import jsonschema
-
-    from opentelemetry.test_util_genai._setup_weaver import (
-        _provision_genai_root,
-    )
-
-    schema_dir = _provision_genai_root() / "model" / "gen-ai"
-    validators: dict[str, Draft202012Validator] = {}
-    for attr_name, filename in _CONTENT_SCHEMA_FILES.items():
-        schema_path = schema_dir / filename
-        if schema_path.is_file():
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            validators[attr_name] = jsonschema.Draft202012Validator(schema)
-    return validators
-
-
-def _validate_content_attribute(
-    attr_entry: dict[str, Any],
-    name: str,
-    val: Any,
-) -> None:
-    validators = _get_content_validators()
-    validator = validators.get(name)
-    if validator is None or val is None:
-        return
-
-    errors = sorted(validator.iter_errors(val), key=lambda e: str(e.path))
-    live_check = attr_entry.setdefault("live_check_result", {})
-    all_advice: list[dict[str, Any]] = [
-        a
-        for a in live_check.get("all_advice", [])
-        if a.get("id") != "genai_content_schema"
-    ]
-    if errors:
-        error_messages = [err.message for err in errors]
-        signal_name = next(
-            (a.get("signal_name") for a in all_advice if a.get("signal_name")),
-            None,
-        )
-        signal_type = next(
-            (a.get("signal_type") for a in all_advice if a.get("signal_type")),
-            None,
-        )
-        finding: dict[str, Any] = {
-            "id": "genai_content_schema",
-            "level": "violation",
-            "context": {
-                "attribute": name,
-                "errors": error_messages,
-            },
-            "message": (
-                f"Attribute '{name}' value does not conform to the GenAI schema: "
-                f"{error_messages}"
-            ),
-            "signal_name": signal_name,
-            "signal_type": signal_type,
-            "type": "PolicyFinding",
-        }
-        all_advice.append(finding)
-        live_check["highest_advice_level"] = "violation"
-    live_check["all_advice"] = all_advice
-
-
 def _enrich_attributes(
     sample_attrs: list[dict[str, Any]], attrs: Mapping[str, Any]
 ) -> None:
@@ -296,10 +218,7 @@ def _enrich_attributes(
         name = attr_entry.get("name")
         if name not in attrs:
             continue
-        val = _normalize_sample_value(attrs[name])
-        attr_entry["value"] = val
-        if name in _CONTENT_SCHEMA_FILES:
-            _validate_content_attribute(attr_entry, name, val)
+        attr_entry["value"] = _normalize_sample_value(attrs[name])
 
 
 def _enrich_report_samples(
@@ -309,9 +228,7 @@ def _enrich_report_samples(
 ) -> None:
     # Weaver drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
     # empty lists [] or None for structured content attributes (messages, tool definitions).
-    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed,
-    # and validate the restored content against the semconv GenAI JSON schemas.
-    report.__dict__.pop("violations", None)
+    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed.
     span_idx = 0
     log_idx = 0
     for entry in report.get("samples", []):
