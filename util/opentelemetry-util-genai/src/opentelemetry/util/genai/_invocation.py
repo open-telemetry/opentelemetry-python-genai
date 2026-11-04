@@ -10,9 +10,7 @@ from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import asdict, dataclass, field, fields
 from types import TracebackType
-from typing import Any, ClassVar, TypeAlias, cast
-
-from typing_extensions import Self
+from typing import Any, ClassVar, Self, TypeAlias, cast
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import (

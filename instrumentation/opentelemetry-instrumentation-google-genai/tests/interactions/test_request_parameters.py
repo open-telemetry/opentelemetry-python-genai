@@ -113,12 +113,10 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> _SDK:
 @pytest.fixture
 def instrumented(
     sdk: _SDK,
-    monkeypatch: pytest.MonkeyPatch,
     tracer_provider: TracerProvider,
     meter_provider: MeterProvider,
     logger_provider: LoggerProvider,
 ) -> Iterator[None]:
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT", "true")
     with instrument(
         GoogleGenAiSdkInstrumentor(),
         tracer_provider=tracer_provider,
@@ -552,23 +550,36 @@ async def test_request_errors_keep_configuration(
     assert span.attributes["error.type"] == "ValueError"
 
 
-def test_configuration_is_recorded_on_events_without_content_capture(
-    instrumented: None, log_exporter: InMemoryLogRecordExporter
+def test_configuration_is_recorded_on_events(
+    sdk: _SDK,
+    tracer_provider: TracerProvider,
+    meter_provider: MeterProvider,
+    logger_provider: LoggerProvider,
+    span_exporter: InMemorySpanExporter,
+    log_exporter: InMemoryLogRecordExporter,
 ) -> None:
-    Client(api_key="test-key", vertexai=False).interactions.create(
-        model="gemini-2.5-flash",
-        input="hello",
-        generation_config={"seed": 0, "max_output_tokens": 64},
-        response_mime_type="application/json",
-    )
+    with instrument(
+        GoogleGenAiSdkInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="EVENT_ONLY",
+    ):
+        Client(api_key="test-key", vertexai=False).interactions.create(
+            model="gemini-2.5-flash",
+            input="hello",
+            generation_config={"seed": 0, "max_output_tokens": 64},
+            response_mime_type="application/json",
+        )
     (event,) = log_exporter.get_finished_logs()
     attributes = event.log_record.attributes
     assert attributes["gen_ai.request.seed"] == 0
     assert type(attributes["gen_ai.request.seed"]) is int
     assert attributes["gen_ai.request.max_tokens"] == 64
     assert attributes["gen_ai.output.type"] == "json"
-    assert "gen_ai.input.messages" not in attributes
-    assert "gen_ai.output.messages" not in attributes
+    (span,) = span_exporter.get_finished_spans()
+    assert "gen_ai.input.messages" not in span.attributes
+    assert "gen_ai.output.messages" not in span.attributes
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

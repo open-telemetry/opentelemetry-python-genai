@@ -66,7 +66,7 @@ except ImportError:
     HAS_RESPONSES_TYPES = False
     _has_tool_search_types = False
 
-_UTC_2026 = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+_UTC_2026 = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
 pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_TYPES,

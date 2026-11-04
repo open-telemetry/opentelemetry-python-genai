@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import sys
 from typing import Any, TypedDict
 
 import pytest
@@ -51,10 +50,6 @@ def test_invoke_interrupt_and_resume_do_not_log_callback_warnings(
     assert resumed == {"answer": "yes"}
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="LangGraph async context propagation requires Python 3.11+",
-)
 @pytest.mark.asyncio
 async def test_ainvoke_interrupt_and_resume_do_not_log_callback_warnings(
     caplog: pytest.LogCaptureFixture, start_instrumentation
