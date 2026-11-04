@@ -1,0 +1,1 @@
+Set ``gen_ai.tool.type`` to ``function`` on ``execute_tool`` spans for automatic function calling.
