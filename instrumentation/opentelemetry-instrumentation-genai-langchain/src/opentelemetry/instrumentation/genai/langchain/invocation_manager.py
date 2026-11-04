@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 from uuid import UUID
@@ -14,7 +15,7 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 
-__all__ = ["_InvocationManager"]
+__all__ = ["_InvocationManager", "_PromptContext"]
 
 _AnyInvocation: TypeAlias = (
     InferenceInvocation
@@ -25,6 +26,12 @@ _AnyInvocation: TypeAlias = (
 )
 
 
+@dataclass(frozen=True)
+class _PromptContext:
+    name: str | None
+    variables: Mapping[str, object]
+
+
 @dataclass
 class _InvocationState:
     invocation: _AnyInvocation | None
@@ -33,6 +40,10 @@ class _InvocationState:
     ended: bool = False
     is_langgraph_node: bool = False
     agent_name: str | None = None
+    prompt_context: _PromptContext | None = None
+    pending_prompt_contexts: list[_PromptContext] = field(
+        default_factory=lambda: list[_PromptContext]()
+    )
 
 
 class _InvocationManager:
@@ -49,11 +60,16 @@ class _InvocationManager:
         agent_name: str | None = None,
         *,
         metadata: dict[str, Any] | None = None,
+        tags: Sequence[str] | None = None,
     ) -> None:
         is_langgraph_node = bool(
             metadata
-            and metadata.get("ls_integration") == "langgraph"
+            and metadata.get("ls_integration") in (None, "langgraph")
             and metadata.get("langgraph_node")
+            and metadata.get("langgraph_node") not in ("__start__", "__end__")
+            # LangGraph assigns this local tag to the node boundary. Nested
+            # runnables inherit its metadata, but not this tag.
+            and any(tag.startswith("graph:step:") for tag in tags or ())
         )
         invocation_state = _InvocationState(
             invocation=invocation,
@@ -91,6 +107,44 @@ class _InvocationManager:
             if invocation is not None:
                 return invocation.context
             current = self.get_parent_run_id(current)
+        return None
+
+    def set_prompt_context(
+        self, run_id: UUID, prompt_context: _PromptContext
+    ) -> None:
+        invocation_state = self._invocations.get(run_id)
+        if invocation_state is not None:
+            invocation_state.prompt_context = prompt_context
+
+    def publish_prompt_context(self, run_id: UUID) -> None:
+        invocation_state = self._invocations.get(run_id)
+        if invocation_state is None or invocation_state.prompt_context is None:
+            return
+        parent_run_id = invocation_state.parent_run_id
+        parent_state = (
+            self._invocations.get(parent_run_id)
+            if parent_run_id is not None
+            else None
+        )
+        if parent_state is not None:
+            parent_state.pending_prompt_contexts.append(
+                invocation_state.prompt_context
+            )
+        invocation_state.prompt_context = None
+
+    def consume_prompt_context(
+        self, parent_run_id: UUID | None
+    ) -> _PromptContext | None:
+        current_run_id = parent_run_id
+        while current_run_id is not None:
+            invocation_state = self._invocations.get(current_run_id)
+            if invocation_state is None:
+                return None
+            if invocation_state.pending_prompt_contexts:
+                prompt_context = invocation_state.pending_prompt_contexts[-1]
+                invocation_state.pending_prompt_contexts.clear()
+                return prompt_context
+            current_run_id = invocation_state.parent_run_id
         return None
 
     def delete_invocation_state(self, run_id: UUID) -> None:

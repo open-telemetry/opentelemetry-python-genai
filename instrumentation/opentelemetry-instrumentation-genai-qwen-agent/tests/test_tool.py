@@ -78,7 +78,7 @@ def test_call_tool_span_attributes(span_exporter, instrument_with_content):
     )
     assert (
         attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS]
-        == '{"city": "Beijing"}'
+        == '{"city":"Beijing"}'
     )
     assert (
         attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT] == "Sunny, 25 degrees"

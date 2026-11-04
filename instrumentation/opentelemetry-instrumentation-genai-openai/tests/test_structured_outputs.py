@@ -4,15 +4,18 @@
 """Tests for OpenAI structured outputs (chat.completions.parse) instrumentation."""
 
 import pytest
+import wrapt
 from openai import NotFoundError
-from openai.resources.chat.completions import Completions
+from openai.resources.chat.completions import AsyncCompletions, Completions
 
+from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.util.genai.utils import is_experimental_mode
 
 from .structured_outputs_utils import (
@@ -23,6 +26,7 @@ from .structured_outputs_utils import (
 from .test_utils import (
     DEFAULT_MODEL,
     assert_all_attributes,
+    assert_inference_event_without_content,
     assert_message_in_logs,
     assert_messages_attribute,
     format_simple_expected_output_message,
@@ -139,7 +143,7 @@ def test_structured_output_no_content(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
         assert "gen_ai.input.messages" not in spans[0].attributes
         assert "gen_ai.output.messages" not in spans[0].attributes
     else:
@@ -180,3 +184,21 @@ def test_structured_output_404(
         "openai.NotFoundError"
         == spans[0].attributes[ErrorAttributes.ERROR_TYPE]
     )
+
+
+def test_uninstrument_from_a_new_instrumentor_call_unwraps_parse(
+    tracer_provider, logger_provider, meter_provider
+):
+    with instrument(
+        OpenAIInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        for cls in (Completions, AsyncCompletions):
+            assert isinstance(cls.__dict__["parse"], wrapt.FunctionWrapper)
+        # OpenAIInstrumentor() returns the same instance but runs __init__ again.
+        OpenAIInstrumentor().uninstrument()
+
+        for cls in (Completions, AsyncCompletions):
+            assert not isinstance(cls.__dict__["parse"], wrapt.FunctionWrapper)

@@ -169,3 +169,10 @@ def test_choicebuffer_append_tool_call_with_none_function():
 
     result = "".join(buf.tool_calls_buffers[0].arguments)
     assert result == '{"city": "NYC"}'
+
+
+def test_choicebuffer_append_refusal():
+    buf = ChoiceBuffer(0)
+    buf.append_refusal("I can't ")
+    buf.append_refusal("help with that.")
+    assert "".join(buf.refusal) == "I can't help with that."

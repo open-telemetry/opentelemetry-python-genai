@@ -79,7 +79,7 @@ def test_sync_tool_execution(
     args_attr = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
     assert args_attr is not None
     assert json.loads(str(args_attr)) == {"x": 3, "y": 4}
-    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == 7
+    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == "7"
 
 
 def test_sync_tool_positional_and_mixed_args_extraction(
@@ -169,7 +169,7 @@ async def test_async_tool_execution(
     args_attr = attrs.get(GenAI.GEN_AI_TOOL_CALL_ARGUMENTS)
     assert args_attr is not None
     assert json.loads(str(args_attr)) == {"a": 5, "b": 6}
-    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == 30
+    assert attrs.get(GenAI.GEN_AI_TOOL_CALL_RESULT) == "30"
 
 
 def test_sync_tool_error(

@@ -20,6 +20,7 @@ from langchain_core.messages import (
     SystemMessageChunk,
 )
 from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from openai import AuthenticationError
@@ -71,6 +72,9 @@ def _langchain_openai_version() -> tuple:
 # cannot hold on those versions.
 _supports_reasoning_token_details = _langchain_openai_version() >= (0, 2, 1)
 _supports_responses_api = _langchain_openai_version() >= (1, 3, 0)
+# langchain-openai prefixes token detail keys with the service tier (e.g.
+# ``flex_reasoning``) from 1.0.0 onward.
+_supports_service_tier_token_details = _langchain_openai_version() >= (1, 0, 0)
 
 _REAL_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3X"
@@ -80,6 +84,225 @@ _REAL_PNG_B64 = (
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
 _ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
+
+
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
+@pytest.mark.vcr()
+def test_chat_openai_prompt_template(
+    span_exporter, tracer_provider, meter_provider, logger_provider, vcr
+):
+    model = ChatOpenAI(model="gpt-4.1", max_tokens=100)
+    prompt = PromptTemplate.from_template(
+        "Answer this weather question briefly: {question}"
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with vcr.use_cassette("test_chat_openai_prompt_template.yaml"):
+            response = (prompt | model).invoke(
+                {"question": "What's the weather like in Seattle?"},
+                config={"metadata": {"prompt_name": "weather_prompt"}},
+            )
+
+    assert response.content
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_prompt"
+    )
+    assert (
+        chat_span.attributes["gen_ai.prompt.variable.question"]
+        == "What's the weather like in Seattle?"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_content", ["SPAN_ONLY", "NO_CONTENT"])
+async def test_async_prompt_template_propagates_prompt_context(
+    span_exporter,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    capture_content,
+):
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="It is raining.")]
+    )
+    prompt = PromptTemplate.from_template(
+        "Answer this weather question briefly: {question}",
+        name="weather_prompt",
+    )
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture=capture_content,
+    ):
+        response = await (prompt | model).ainvoke(
+            {"question": "What's the weather like in Seattle?"},
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+    assert response.content == "It is raining."
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_prompt"
+    )
+    if capture_content == "SPAN_ONLY":
+        assert (
+            chat_span.attributes["gen_ai.prompt.variable.question"]
+            == "What's the weather like in Seattle?"
+        )
+    else:
+        assert "gen_ai.prompt.variable.question" not in chat_span.attributes
+
+
+def test_prompt_template_accepts_scalar_input(
+    span_exporter, tracer_provider, meter_provider, logger_provider
+):
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="Hello!")])
+    prompt = PromptTemplate.from_template("Hello {name}")
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        response = (prompt | model).invoke(
+            "Ada",
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+
+    assert response.content == "Hello!"
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert chat_span.attributes["gen_ai.prompt.variable.name"] == "Ada"
+
+
+def test_prompt_template_with_non_serializable_partial_finishes_telemetry(
+    span_exporter,
+    metric_reader,
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+):
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="It is raining.")]
+    )
+    prompt = PromptTemplate.from_template("Input: {value}").partial(
+        value=object()
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        response = (prompt | model).invoke(
+            {},
+            config={"metadata": {"ls_model_name": "test-chat-model"}},
+        )
+
+    assert response.content == "It is raining."
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES in chat_span.attributes
+    assert "gen_ai.prompt.variable.value" not in chat_span.attributes
+    assert (
+        gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
+        in chat_span.attributes
+    )
+
+    metrics_data = metric_reader.get_metrics_data()
+    assert metrics_data is not None
+    metric_names = {
+        metric.name
+        for resource_metrics in metrics_data.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+    }
+    assert gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION in metric_names
+
+
+@pytest.mark.skipif(
+    _langchain_openai_version() < (1, 0, 0),
+    reason="cassettes were recorded with langchain-openai 1.x",
+)
+@pytest.mark.vcr()
+def test_chat_openai_chat_prompt_template(
+    span_exporter, tracer_provider, meter_provider, logger_provider, vcr
+):
+    model = ChatOpenAI(model="gpt-4.1", max_tokens=100)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "Answer weather questions in a {style} style."),
+            ("human", "{question}"),
+        ]
+    )
+
+    with instrument(
+        LangChainInstrumentor(),
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+        content_capture="SPAN_ONLY",
+    ):
+        with vcr.use_cassette("test_chat_openai_chat_prompt_template.yaml"):
+            response = (prompt | model).invoke(
+                {
+                    "question": "What's the weather like in Seattle?",
+                    "style": "concise",
+                },
+                config={"metadata": {"prompt_name": "weather_chat_prompt"}},
+            )
+
+    assert response.content
+    chat_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get(gen_ai_attributes.GEN_AI_OPERATION_NAME)
+        == "chat"
+    )
+    assert (
+        chat_span.attributes[gen_ai_attributes.GEN_AI_PROMPT_NAME]
+        == "weather_chat_prompt"
+    )
+    assert (
+        chat_span.attributes["gen_ai.prompt.variable.question"]
+        == "What's the weather like in Seattle?"
+    )
+    assert chat_span.attributes["gen_ai.prompt.variable.style"] == "concise"
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -153,7 +376,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call(
         log_record = logs[0].log_record
         assert_log_record(log_record, spans[0], response)
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 # span_exporter, metric_reader, log_exporter, start_instrumentation, chat_openai_gpt_3_5_turbo_model are coming from fixtures defined in conftest.py
@@ -230,7 +460,14 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
         log_record = logs[0].log_record
         assert_log_record_when_error(log_record, spans[0])
     elif capture_content in ("SPAN_ONLY", "NO_CONTENT"):
-        assert len(logs) == 0
+        (log,) = logs
+        assert (
+            log.log_record.event_name
+            == "gen_ai.client.inference.operation.details"
+        )
+        attributes = log.log_record.attributes or {}
+        assert gen_ai_attributes.GEN_AI_INPUT_MESSAGES not in attributes
+        assert gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES not in attributes
 
 
 def test_chat_openai_multimodal_image_llm_call(
@@ -1512,33 +1749,99 @@ def test_chat_openai_reasoning_token_details(
     )
 
 
+@pytest.mark.skipif(
+    not _supports_service_tier_token_details,
+    reason="langchain-openai does not prefix token details with the service tier",
+)
 @pytest.mark.vcr()
-def test_chat_anthropic_claude_sonnet_cache_token_details(
-    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+def test_chat_openai_flex_tier_token_details(
+    span_exporter, start_instrumentation, chat_openai_reasoning
 ):
+    # OpenAI only caches prompts of at least 1024 tokens.
+    llm = chat_openai_reasoning.model_copy(update={"service_tier": "flex"})
     messages = [
-        SystemMessage(content="You are a helpful assistant!"),
-        HumanMessage(content="What is the capital of France?"),
+        SystemMessage(
+            content="You are a careful mathematical reasoner. " * 200
+        ),
+        HumanMessage(
+            content=(
+                "A snail climbs a 12 meter well. Each day it climbs up 3 "
+                "meters, and each night it slides back 2 meters. On which day "
+                "does it first reach the top?"
+            )
+        ),
     ]
 
-    chat_anthropic_claude_sonnet.invoke(messages)
+    llm.invoke(messages)
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
 
-    assert span.attributes.get("gen_ai.usage.cache_write.input_tokens") == 5
-
     assert (
         span.attributes.get(
             gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
         )
-        == 4
+        == 1536
+    )
+    assert (
+        span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS
+        )
+        == 512
+    )
+
+
+@pytest.mark.vcr()
+def test_chat_anthropic_claude_sonnet_cache_token_details(
+    span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
+):
+    # Anthropic only caches prompts above a minimum length.
+    llm = chat_anthropic_claude_sonnet.model_copy(
+        update={"model": "claude-sonnet-5-5", "temperature": None}
+    )
+    messages = [
+        SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant! " * 500,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        ),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    llm.invoke(messages)
+    llm.invoke(messages)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    write_span, read_span = spans
+
+    assert (
+        write_span.attributes.get("gen_ai.usage.cache_write.input_tokens")
+        == 5003
+    )
+    assert (
+        gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        not in write_span.attributes
     )
 
     assert (
-        span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS) == 22
+        read_span.attributes.get(
+            gen_ai_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS
+        )
+        == 5003
     )
+    assert "gen_ai.usage.cache_write.input_tokens" not in read_span.attributes
+
+    for span in spans:
+        assert (
+            span.attributes.get(gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS)
+            == 5017
+        )
 
 
 def test_chat_openai_streamed_response_model(

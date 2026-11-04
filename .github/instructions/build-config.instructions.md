@@ -15,8 +15,8 @@ exercised, a gate that silently stops covering ground. All of them pass CI while
 A new package under `instrumentation/<pkg>/` must be wired into `tox.ini` in full. Check each of
 these, not just the first:
 
-- `envlist`: `py3{10,14}-test-instrumentation-genai-<lib>-latest`,
-  `py310-test-instrumentation-genai-<lib>-oldest`, and the matching
+- `envlist`: `py3{11,15}-test-instrumentation-genai-<lib>-latest`,
+  `py311-test-instrumentation-genai-<lib>-oldest`, and the matching
   `py314-test-instrumentation-genai-<lib>-conformance` entry.
 - `[testenv] deps`: the factor-conditional `-r …/tests/requirements.<factor>.txt` lines plus
   `{[testenv]test_deps}` / `{[testenv]pytest_deps}`. Requirements install here, **not** in

@@ -1,364 +1,262 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""gen_ai.conversation.id across a multi-span LangChain run.
-
-LangChain merges a run's config metadata into every descendant run, so each
-callback below the one the application configured receives the conversation
-key in its own ``metadata``. These tests build real multi-span trees the way
-LangChain delivers them and also omit selected child metadata to verify OTel
-context inheritance.
-
-semconv defines ``gen_ai.conversation.id`` on chat, invoke_agent, and
-invoke_workflow spans only, so execute_tool and retrieval spans must not carry
-it even when their own metadata does.
-"""
+"""Conversation IDs across real LangChain run trees, without provider calls."""
 
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
+import langchain.agents
+import pytest
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langchain_core.tools import tool
+from tests._api import FakeChatModel, FakeRetriever, finished_chat, invoke
 
-from opentelemetry.instrumentation.genai.langchain import agent_context
-from opentelemetry.instrumentation.genai.langchain.callback_handler import (
-    OpenTelemetryLangChainCallbackHandler,
-)
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.trace import StatusCode
 
-_CONVERSATION_ID = GenAI.GEN_AI_CONVERSATION_ID
-
-# LangChain merges config metadata into every descendant run, so every
-# callback in a tree sees these keys.
-_MERGED: dict[str, Any] = {"thread_id": "t1"}
-
-_OPENAI_SERIALIZED: dict[str, Any] = {"name": "ChatOpenAI"}
-_OPENAI_INVOCATION_PARAMS: dict[str, Any] = {"model_name": "gpt-4"}
-_LANGGRAPH_SERIALIZED: dict[str, Any] = {
-    "name": "LangGraph",
-    "id": ["langgraph"],
-}
+_CREATE_AGENT = getattr(langchain.agents, "create_agent", None)
 
 
-def _make_handler() -> tuple[
-    OpenTelemetryLangChainCallbackHandler, InMemorySpanExporter
-]:
-    span_exporter = InMemorySpanExporter()
-    tracer_provider = TracerProvider()
-    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    return (
-        OpenTelemetryLangChainCallbackHandler(
-            TelemetryHandler(tracer_provider=tracer_provider)
+def _spans_by_operation(
+    exporter: InMemorySpanExporter,
+) -> dict[str, ReadableSpan]:
+    spans = exporter.get_finished_spans()
+    assert all(s.status.status_code == StatusCode.UNSET for s in spans)
+    assert all(s.end_time is not None for s in spans)
+    result = {s.attributes[GenAI.GEN_AI_OPERATION_NAME]: s for s in spans}
+    assert len(result) == len(spans)
+    finished_chat(exporter)
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("agent", [False, True], ids=["workflow", "agent"])
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        (
+            {"thread_id": "t1", "session_id": "s1", "conversation_id": "c1"},
+            "t1",
         ),
-        span_exporter,
-    )
-
-
-def _spans_by_operation(span_exporter: InMemorySpanExporter) -> dict[str, Any]:
-    """Map gen_ai.operation.name to the span carrying it."""
-    return {
-        span.attributes[GenAI.GEN_AI_OPERATION_NAME]: span
-        for span in span_exporter.get_finished_spans()
-        if span.attributes and GenAI.GEN_AI_OPERATION_NAME in span.attributes
-    }
-
-
-def _run_chat(
-    handler: OpenTelemetryLangChainCallbackHandler,
-    *,
-    run_id: Any,
-    parent_run_id: Any = None,
-    metadata: dict[str, Any] | None = None,
+        ({"session_id": "s1", "conversation_id": "c1"}, "s1"),
+        ({"conversation_id": "c1"}, "c1"),
+        ({}, None),
+    ],
+)
+async def test_conversation_id_metadata_and_precedence(
+    asynchronous: bool,
+    agent: bool,
+    metadata: dict[str, str],
+    expected: str | None,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
 ) -> None:
-    """Drive a complete chat model call through the callbacks."""
-    handler.on_chat_model_start(
-        serialized=_OPENAI_SERIALIZED,
-        messages=[[HumanMessage(content="What is 3 * 4?")]],
-        run_id=run_id,
-        parent_run_id=parent_run_id,
-        metadata={"ls_provider": "openai", **(metadata or {})},
-        invocation_params=_OPENAI_INVOCATION_PARAMS,
+    model = FakeChatModel(responses=[AIMessage(content="12")])
+
+    def run(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {"messages": [model.invoke("What is 3 * 4?", config=config)]}
+
+    async def arun(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {
+            "messages": [await model.ainvoke("What is 3 * 4?", config=config)]
+        }
+
+    root = RunnableLambda(run, afunc=arun).with_config(
+        run_name="math_agent" if agent else "MyLangGraph",
+        metadata=metadata,
     )
-    message = AIMessage(content="12")
-    generation = ChatGeneration(message=message, text="12")
-    generation.generation_info = {"finish_reason": "stop"}
-    handler.on_llm_end(
-        response=LLMResult(generations=[[generation]]),
-        run_id=run_id,
-        parent_run_id=parent_run_id,
+    assert (await invoke(root, {}, asynchronous))["messages"][
+        0
+    ].content == "12"
+    spans = _spans_by_operation(span_exporter)
+    operation = "invoke_agent" if agent else "invoke_workflow"
+    assert set(spans) == {operation, "chat"}
+    for span in spans.values():
+        assert span.attributes.get(GenAI.GEN_AI_CONVERSATION_ID) == expected
+    assert spans["chat"].parent is not None
+    assert spans["chat"].parent.span_id == spans[operation].context.span_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("agent", [False, True], ids=["workflow", "agent"])
+@pytest.mark.parametrize(
+    "child_id", [None, "inner"], ids=["context-inheritance", "child-override"]
+)
+async def test_child_conversation_id_resolution(
+    asynchronous: bool,
+    agent: bool,
+    child_id: str | None,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(responses=[AIMessage(content="12")])
+
+    def child_config(config: RunnableConfig) -> RunnableConfig:
+        # Invocation config overrides LangChain's inherited metadata; a null
+        # value leaves conversation resolution to the invocation's OTel context.
+        return {
+            **config,
+            "metadata": {**config.get("metadata", {}), "thread_id": child_id},
+        }
+
+    def run(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {
+            "messages": [
+                model.invoke("Calculate", config=child_config(config))
+            ]
+        }
+
+    async def arun(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {
+            "messages": [
+                await model.ainvoke("Calculate", config=child_config(config))
+            ]
+        }
+
+    root = RunnableLambda(run, afunc=arun).with_config(
+        run_name="math_agent" if agent else "MyLangGraph",
+        metadata={"thread_id": "outer"},
+    )
+    assert (await invoke(root, {}, asynchronous))["messages"][
+        0
+    ].content == "12"
+    spans = _spans_by_operation(span_exporter)
+    root_span = spans["invoke_agent" if agent else "invoke_workflow"]
+    assert root_span.attributes[GenAI.GEN_AI_CONVERSATION_ID] == "outer"
+    assert spans["chat"].attributes[GenAI.GEN_AI_CONVERSATION_ID] == (
+        child_id or "outer"
     )
 
 
-class TestWorkflowTree:
-    def test_workflow_and_nested_chat_both_carry_id(self):
-        handler, span_exporter = _make_handler()
-        workflow_run_id, chat_run_id = uuid4(), uuid4()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("layer", ["tool", "retrieval", "internal-chain"])
+async def test_intermediate_operations_do_not_lose_conversation_id(
+    asynchronous: bool,
+    layer: str,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    model = FakeChatModel(responses=[AIMessage(content="12")])
 
-        handler.on_chain_start(
-            serialized=_LANGGRAPH_SERIALIZED,
-            inputs={},
-            run_id=workflow_run_id,
-            parent_run_id=None,
-            metadata=dict(_MERGED),
-        )
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=workflow_run_id,
-            metadata=dict(_MERGED),
-        )
-        handler.on_chain_end(outputs={}, run_id=workflow_run_id)
+    @tool
+    def calculate(question: str) -> str:
+        """Calculate using a local model."""
+        return str(model.invoke(question).content)
 
-        spans = _spans_by_operation(span_exporter)
-        assert spans["invoke_workflow"].attributes[_CONVERSATION_ID] == "t1"
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
+    retriever = FakeRetriever(
+        documents=[Document(page_content="12")], model=model
+    )
 
-    def test_workflow_passes_id_to_child_through_context(self):
-        """A child that does not read LangChain metadata still inherits the id."""
-        handler, span_exporter = _make_handler()
-        workflow_run_id, chat_run_id = uuid4(), uuid4()
+    def chat(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {"messages": [model.invoke("Calculate", config=config)]}
 
-        handler.on_chain_start(
-            serialized=_LANGGRAPH_SERIALIZED,
-            inputs={},
-            run_id=workflow_run_id,
-            parent_run_id=None,
-            metadata=dict(_MERGED),
-        )
-        _run_chat(handler, run_id=chat_run_id, parent_run_id=workflow_run_id)
-        handler.on_chain_end(outputs={}, run_id=workflow_run_id)
+    async def achat(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        return {"messages": [await model.ainvoke("Calculate", config=config)]}
 
-        spans = _spans_by_operation(span_exporter)
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
+    internal = RunnableLambda(chat, afunc=achat).with_config(
+        run_name="internal"
+    )
 
+    def run(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        if layer == "tool":
+            result = calculate.invoke({"question": "Calculate"}, config=config)
+        elif layer == "retrieval":
+            result = retriever.invoke("Calculate", config=config)
+        else:
+            return internal.invoke(state, config=config)
+        return {"result": result}
 
-class TestAgentTree:
-    def test_agent_and_nested_chat_both_carry_id(self):
-        handler, span_exporter = _make_handler()
-        agent_run_id, chat_run_id = uuid4(), uuid4()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=agent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent", **_MERGED},
-        )
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=agent_run_id,
-            metadata=dict(_MERGED),
-        )
-        handler.on_chain_end(outputs={}, run_id=agent_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert spans["invoke_agent"].attributes[_CONVERSATION_ID] == "t1"
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
-
-    def test_agent_passes_id_to_child_through_context(self):
-        """A child that does not read LangChain metadata still inherits the id."""
-        handler, span_exporter = _make_handler()
-        agent_run_id, chat_run_id = uuid4(), uuid4()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=agent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent", **_MERGED},
-        )
-        _run_chat(handler, run_id=chat_run_id, parent_run_id=agent_run_id)
-        handler.on_chain_end(outputs={}, run_id=agent_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
-
-    def test_unnamed_announced_agent_carries_id(self):
-        """An unnamed create_agent propagates its id through OTel context."""
-        handler, span_exporter = _make_handler()
-        agent_run_id, chat_run_id = uuid4(), uuid4()
-
-        token = agent_context._pending.set(
-            (agent_context._PendingAgent(name=None),)
-        )
-        try:
-            handler.on_chain_start(
-                serialized=_LANGGRAPH_SERIALIZED,
-                inputs={},
-                run_id=agent_run_id,
-                parent_run_id=None,
-                metadata=dict(_MERGED),
+    async def arun(
+        state: dict[str, object], config: RunnableConfig
+    ) -> dict[str, object]:
+        if layer == "tool":
+            result = await calculate.ainvoke(
+                {"question": "Calculate"}, config=config
             )
-        finally:
-            agent_context._pending.reset(token)
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=agent_run_id,
-        )
-        handler.on_chain_end(outputs={}, run_id=agent_run_id)
+        elif layer == "retrieval":
+            result = await retriever.ainvoke("Calculate", config=config)
+        else:
+            return await internal.ainvoke(state, config=config)
+        return {"result": result}
 
-        spans = _spans_by_operation(span_exporter)
-        assert spans["invoke_agent"].attributes[_CONVERSATION_ID] == "t1"
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
-
-    def test_tool_omits_id_while_its_nested_chat_carries_it(self):
-        handler, span_exporter = _make_handler()
-        agent_run_id, tool_run_id, chat_run_id = uuid4(), uuid4(), uuid4()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=agent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent", **_MERGED},
-        )
-        handler.on_tool_start(
-            serialized={"name": "multiply"},
-            input_str="",
-            run_id=tool_run_id,
-            parent_run_id=agent_run_id,
-            inputs={"a": 3, "b": 4},
-            metadata=dict(_MERGED),
-        )
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=tool_run_id,
-        )
-        handler.on_tool_end(
-            output=AIMessage(content="12"),
-            run_id=tool_run_id,
-            parent_run_id=agent_run_id,
-        )
-        handler.on_chain_end(outputs={}, run_id=agent_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert _CONVERSATION_ID not in spans["execute_tool"].attributes
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
-
-    def test_retrieval_omits_id_while_its_nested_chat_carries_it(self):
-        handler, span_exporter = _make_handler()
-        agent_run_id, retriever_run_id, chat_run_id = (
-            uuid4(),
-            uuid4(),
-            uuid4(),
-        )
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=agent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent", **_MERGED},
-        )
-        handler.on_retriever_start(
-            serialized={"name": "my_retriever"},
-            query="what is 3 * 4",
-            run_id=retriever_run_id,
-            parent_run_id=agent_run_id,
-            metadata=dict(_MERGED),
-        )
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=retriever_run_id,
-        )
-        handler.on_retriever_end(
-            documents=[Document(page_content="12")],
-            run_id=retriever_run_id,
-            parent_run_id=agent_run_id,
-        )
-        handler.on_chain_end(outputs={}, run_id=agent_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert _CONVERSATION_ID not in spans["retrieval"].attributes
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
-
-    def test_chat_under_an_unclassified_chain_carries_id(self):
-        """Chains that emit no span are transparent to the attribute."""
-        handler, span_exporter = _make_handler()
-        agent_run_id, chain_run_id, chat_run_id = uuid4(), uuid4(), uuid4()
-
-        handler.on_chain_start(
-            serialized={"name": "math_agent"},
-            inputs={},
-            run_id=agent_run_id,
-            parent_run_id=None,
-            metadata={"agent_name": "math_agent", **_MERGED},
-        )
-        handler.on_chain_start(
-            serialized={"name": "RunnableSequence"},
-            inputs={},
-            run_id=chain_run_id,
-            parent_run_id=agent_run_id,
-            metadata=dict(_MERGED),
-        )
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=chain_run_id,
-            metadata=dict(_MERGED),
-        )
-        handler.on_chain_end(outputs={}, run_id=chain_run_id)
-        handler.on_chain_end(outputs={}, run_id=agent_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "t1"
+    root = RunnableLambda(run, afunc=arun).with_config(
+        run_name="math_agent",
+        metadata={"agent_name": "math_agent", "thread_id": "t1"},
+    )
+    result = await invoke(root, {}, asynchronous)
+    assert result
+    spans = _spans_by_operation(span_exporter)
+    assert (
+        spans["invoke_agent"].attributes[GenAI.GEN_AI_CONVERSATION_ID] == "t1"
+    )
+    assert spans["chat"].attributes[GenAI.GEN_AI_CONVERSATION_ID] == "t1"
+    if layer == "internal-chain":
+        assert set(spans) == {"invoke_agent", "chat"}
+        parent = spans["invoke_agent"]
+    else:
+        operation = "execute_tool" if layer == "tool" else "retrieval"
+        assert set(spans) == {"invoke_agent", "chat", operation}
+        parent = spans[operation]
+        assert GenAI.GEN_AI_CONVERSATION_ID not in parent.attributes
+        assert parent.parent is not None
+        assert parent.parent.span_id == spans["invoke_agent"].context.span_id
+    assert spans["chat"].parent is not None
+    assert spans["chat"].parent.span_id == parent.context.span_id
 
 
-class TestPerRunResolution:
-    def test_each_run_resolves_its_own_metadata(self):
-        """A child with a different id reports its own, not the root's."""
-        handler, span_exporter = _make_handler()
-        workflow_run_id, chat_run_id = uuid4(), uuid4()
-
-        handler.on_chain_start(
-            serialized=_LANGGRAPH_SERIALIZED,
-            inputs={},
-            run_id=workflow_run_id,
-            parent_run_id=None,
-            metadata={"thread_id": "outer"},
-        )
-        _run_chat(
-            handler,
-            run_id=chat_run_id,
-            parent_run_id=workflow_run_id,
-            metadata={"thread_id": "inner"},
-        )
-        handler.on_chain_end(outputs={}, run_id=workflow_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert spans["invoke_workflow"].attributes[_CONVERSATION_ID] == "outer"
-        assert spans["chat"].attributes[_CONVERSATION_ID] == "inner"
-
-
-class TestNoConversationId:
-    def test_no_id_anywhere_omits_the_attribute(self):
-        handler, span_exporter = _make_handler()
-        workflow_run_id, chat_run_id = uuid4(), uuid4()
-
-        handler.on_chain_start(
-            serialized=_LANGGRAPH_SERIALIZED,
-            inputs={},
-            run_id=workflow_run_id,
-            parent_run_id=None,
-        )
-        _run_chat(handler, run_id=chat_run_id, parent_run_id=workflow_run_id)
-        handler.on_chain_end(outputs={}, run_id=workflow_run_id)
-
-        spans = _spans_by_operation(span_exporter)
-        assert _CONVERSATION_ID not in spans["invoke_workflow"].attributes
-        assert _CONVERSATION_ID not in spans["chat"].attributes
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.skipif(
+    _CREATE_AGENT is None, reason="create_agent requires LangChain 1.x"
+)
+async def test_unnamed_agent_conversation_id(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    instrument_langchain: None,
+) -> None:
+    assert _CREATE_AGENT is not None
+    agent = _CREATE_AGENT(
+        FakeChatModel(responses=[AIMessage(content="12")]), tools=[]
+    )
+    result: Any = await invoke(
+        agent,
+        {"messages": [HumanMessage(content="Calculate")]},
+        asynchronous,
+        config={"metadata": {"thread_id": "t1"}},
+    )
+    assert result["messages"][-1].content == "12"
+    spans = _spans_by_operation(span_exporter)
+    assert set(spans) == {"invoke_agent", "chat"}
+    assert spans["invoke_agent"].name == "invoke_agent"
+    assert GenAI.GEN_AI_AGENT_NAME not in spans["invoke_agent"].attributes
+    assert (
+        spans["invoke_agent"].attributes[GenAI.GEN_AI_CONVERSATION_ID] == "t1"
+    )
+    assert spans["chat"].attributes[GenAI.GEN_AI_CONVERSATION_ID] == "t1"

@@ -22,13 +22,10 @@ import json
 import re
 import sys
 
-_PY_FACTOR_VERSION: dict[str, str] = {"pypy3": "pypy-3.10"}
 _PY_RE = re.compile(r"^py(\d)(\d+)$")
 
 
 def py_factor_to_version(factor: str) -> str:
-    if factor in _PY_FACTOR_VERSION:
-        return _PY_FACTOR_VERSION[factor]
     m = _PY_RE.fullmatch(factor)
     if not m:
         raise ValueError(f"Unrecognized python factor: {factor!r}")

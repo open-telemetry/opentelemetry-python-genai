@@ -5,7 +5,7 @@ import datetime
 import importlib.util
 import json
 from dataclasses import asdict
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import openai
@@ -18,12 +18,14 @@ from opentelemetry.instrumentation.genai.openai.utils import get_served_model
 from opentelemetry.semconv._incubating.attributes import (
     openai_attributes as OpenAIAttributes,
 )
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     BlobPart,
     FilePart,
     FunctionToolDefinition,
     GenericToolDefinition,
     LLMInvocation,
+    ReasoningPart,
     ServerToolCallPart,
     ServerToolCallResponsePart,
     TextPart,
@@ -32,6 +34,8 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import gen_ai_json_dumps
+
+from .test_utils import GEN_AI_CONVERSATION_COMPACTED
 
 try:
     # Responses types are not available in the oldest supported OpenAI SDK.
@@ -62,7 +66,7 @@ except ImportError:
     HAS_RESPONSES_TYPES = False
     _has_tool_search_types = False
 
-_UTC_2026 = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+_UTC_2026 = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
 pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_TYPES,
@@ -102,11 +106,67 @@ def _make_response(output=None, **overrides):
     return Response.model_validate(payload)
 
 
+def _response_accepts_output_item(item):
+    if not HAS_RESPONSES_TYPES:
+        return False
+
+    try:
+        _make_response(output=[item])
+    except Exception:  # pragma: no cover - capability probe
+        return False
+    return True
+
+
+_supports_computer_tool_call = _response_accepts_output_item(
+    {
+        "id": "cc_1",
+        "type": "computer_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "pending_safety_checks": [],
+        "action": {
+            "type": "click",
+            "x": 1,
+            "y": 2,
+            "button": "left",
+        },
+    }
+)
+
+_COMPACTION_ITEM = {
+    "id": "cmp_1",
+    "type": "compaction",
+    "encrypted_content": "opaque",
+}
+_supports_compaction_item: bool = _response_accepts_output_item(
+    _COMPACTION_ITEM
+)
+
+_supports_computer_tool_actions: bool = _response_accepts_output_item(
+    {
+        "id": "cc_1",
+        "type": "computer_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "pending_safety_checks": [],
+        "actions": [
+            {"type": "click", "x": 1, "y": 2, "button": "left"},
+            {"type": "keypress", "keys": ["ENTER"]},
+        ],
+    }
+)
+
+
 class _RawResponse:
+    """A ``with_raw_response`` result: raw body plus a ``parse()`` tripwire."""
+
     def __init__(self, parsed_response):
         self.headers = {"x-ms-served-model": "served-gpt-4.1"}
         self.parsed_response = parsed_response
         self.parse_count = 0
+        self.http_response = SimpleNamespace(
+            content=parsed_response.model_dump_json().encode("utf-8")
+        )
 
     def parse(self):
         self.parse_count += 1
@@ -611,6 +671,65 @@ def test_extract_input_messages_records_custom_tool_calls(loaded_module):
     assert tool_response.response == "1 row"
 
 
+def test_extract_input_messages_records_computer_tool_history(
+    loaded_module: ModuleType,
+) -> None:
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "computer_call",
+                "call_id": "call_computer",
+                "action": {"type": "click", "x": 1, "y": 2},
+            },
+            {
+                "type": "computer_call_output",
+                "call_id": "call_computer",
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "data:image/png;base64,AA==",
+                },
+            },
+        ]
+    )
+
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    (tool_call,) = messages[0].parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.id == "call_computer"
+    assert tool_call.name == "computer"
+    assert tool_call.arguments == {"action": {"type": "click", "x": 1, "y": 2}}
+    (tool_response,) = messages[1].parts
+    assert isinstance(tool_response, ToolCallResponsePart)
+    assert tool_response.id == tool_call.id
+    assert tool_response.response == {
+        "type": "computer_screenshot",
+        "image_url": "data:image/png;base64,AA==",
+    }
+
+
+def test_extract_input_messages_preserves_computer_tool_action_lists(
+    loaded_module: ModuleType,
+) -> None:
+    actions: list[dict[str, object]] = [
+        {"type": "click", "x": 1, "y": 2, "button": "left"},
+        {"type": "keypress", "keys": ["ENTER"]},
+    ]
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "computer_call",
+                "call_id": "call_computer",
+                "actions": actions,
+            }
+        ]
+    )
+
+    (tool_call,) = messages[0].parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.name == "computer"
+    assert tool_call.arguments == {"actions": actions}
+
+
 def test_extract_input_messages_without_tool_part_types(loaded_module):
     tool_items = [
         {
@@ -627,6 +746,163 @@ def test_extract_input_messages_without_tool_part_types(loaded_module):
         mock.patch.object(loaded_module, "ToolCallResponsePart", None),
     ):
         assert loaded_module.get_input_messages(tool_items) == []
+
+
+def test_extract_input_messages_maps_reasoning_dict_with_summary(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Thought step"}],
+                "content": None,
+            }
+        ]
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert len(messages[0].parts) == 1
+    part = messages[0].parts[0]
+    assert isinstance(part, ReasoningPart)
+    assert part.type == "reasoning"
+    assert part.content == "Thought step"
+
+
+def test_extract_input_messages_maps_reasoning_dict_with_content(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [],
+                "content": [
+                    {"type": "reasoning_text", "text": "Deep thought"}
+                ],
+            }
+        ]
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert len(messages[0].parts) == 1
+    part = messages[0].parts[0]
+    assert isinstance(part, ReasoningPart)
+    assert part.type == "reasoning"
+    assert part.content == "Deep thought"
+
+
+def test_extract_input_messages_skips_empty_reasoning(loaded_module):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [],
+                "content": [],
+                "encrypted_content": "gAAAAABqnmzMN9RqmH9jGxjmoJdoO3La",
+            }
+        ]
+    )
+
+    assert messages == []
+
+
+def test_extract_input_messages_maps_reasoning_sdk_model(loaded_module):
+    if loaded_module.ResponseReasoningItem is None:
+        pytest.skip("openai SDK too old to support ResponseReasoningItem")
+
+    item = loaded_module.ResponseReasoningItem.model_validate(
+        {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "SDK thought"}],
+            "content": [
+                {"type": "reasoning_text", "text": "SDK deep thought"}
+            ],
+            "status": "completed",
+        }
+    )
+    messages = loaded_module.get_input_messages([item])
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert len(messages[0].parts) == 2
+    assert isinstance(messages[0].parts[0], ReasoningPart)
+    assert messages[0].parts[0].content == "SDK thought"
+    assert isinstance(messages[0].parts[1], ReasoningPart)
+    assert messages[0].parts[1].content == "SDK deep thought"
+
+
+def test_extract_input_messages_reasoning_not_merged_with_tool_calls(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "f1",
+                "arguments": "{}",
+            },
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning..."}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "f2",
+                "arguments": "{}",
+            },
+        ]
+    )
+
+    assert len(messages) == 3
+    assert [m.role for m in messages] == [
+        "assistant",
+        "assistant",
+        "assistant",
+    ]
+    assert messages[0].parts[0].type == "tool_call"
+    assert messages[1].parts[0].type == "reasoning"
+    assert messages[1].parts[0].content == "Planning..."
+    assert messages[2].parts[0].type == "tool_call"
+
+
+def test_extract_input_messages_reasoning_before_parallel_tool_calls(
+    loaded_module,
+):
+    messages = loaded_module.get_input_messages(
+        [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Planning..."}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "f1",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "f2",
+                "arguments": "{}",
+            },
+        ]
+    )
+
+    assert [m.role for m in messages] == ["assistant", "assistant"]
+    assert [p.type for p in messages[0].parts] == ["reasoning"]
+    assert [p.id for p in messages[1].parts] == ["call_1", "call_2"]
 
 
 def test_extract_output_messages_maps_parts_and_finish_reasons(loaded_module):
@@ -844,32 +1120,115 @@ def test_extract_output_messages_maps_server_tools(
     assert part.server_tool_call == expected_payload
 
 
-@pytest.mark.skipif(
-    not _has_tool_search_types,
-    reason="openai SDK too old to support tool_search server tool items",
+@pytest.mark.parametrize(
+    ("item", "expected_id", "expected_payload"),
+    [
+        pytest.param(
+            {
+                "id": "ts_2",
+                "type": "tool_search_output",
+                "call_id": "ts_1",
+                "execution": "server",
+                "status": "completed",
+                "tools": [],
+            },
+            "ts_1",
+            {
+                "execution": "server",
+                "status": "completed",
+                "tools": [],
+                "type": "tool_search",
+            },
+            marks=pytest.mark.skipif(
+                not _has_tool_search_types,
+                reason="openai SDK too old to support tool_search server tool items",
+            ),
+        ),
+    ],
 )
-def test_extract_output_messages_maps_server_tool_search_result(loaded_module):
-    item = {
-        "id": "ts_2",
-        "type": "tool_search_output",
-        "call_id": "ts_1",
-        "execution": "server",
-        "status": "completed",
-        "tools": [],
-    }
+def test_extract_output_messages_maps_server_tool_results(
+    loaded_module, item, expected_id, expected_payload
+):
     response = _make_response(output=[item])
 
     messages = loaded_module.get_output_messages_from_response(response)
 
     part = messages[0].parts[0]
     assert isinstance(part, ServerToolCallResponsePart)
-    assert part.id == "ts_1"
-    assert part.server_tool_call_response == {
-        "execution": "server",
-        "status": "completed",
-        "tools": [],
-        "type": "tool_search",
+    assert part.id == expected_id
+    assert part.server_tool_call_response == expected_payload
+
+
+@pytest.mark.skipif(
+    not _supports_computer_tool_call,
+    reason="openai SDK too old to support computer tool items",
+)
+def test_extract_output_messages_maps_computer_call_as_client_tool_call(
+    loaded_module: ModuleType,
+) -> None:
+    response = _make_response(
+        output=[
+            {
+                "id": "cc_1",
+                "type": "computer_call",
+                "call_id": "call_1",
+                "status": "completed",
+                "pending_safety_checks": [],
+                "action": {
+                    "type": "click",
+                    "x": 1,
+                    "y": 2,
+                    "button": "left",
+                },
+            }
+        ]
+    )
+
+    (message,) = loaded_module.get_output_messages_from_response(response)
+    (tool_call,) = message.parts
+    assert message.finish_reason == "tool_call"
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.id == "call_1"
+    assert tool_call.name == "computer"
+    assert tool_call.arguments == {
+        "action": {
+            "type": "click",
+            "x": 1,
+            "y": 2,
+            "button": "left",
+        }
     }
+    assert loaded_module.extract_finish_reasons(response) == ["tool_calls"]
+
+
+@pytest.mark.skipif(
+    not _supports_computer_tool_actions,
+    reason="openai SDK too old to support computer tool action lists",
+)
+def test_extract_output_messages_preserves_computer_tool_action_lists(
+    loaded_module: ModuleType,
+) -> None:
+    actions: list[dict[str, object]] = [
+        {"type": "click", "x": 1, "y": 2, "button": "left"},
+        {"type": "keypress", "keys": ["ENTER"]},
+    ]
+    response = _make_response(
+        output=[
+            {
+                "id": "cc_1",
+                "type": "computer_call",
+                "call_id": "call_1",
+                "status": "completed",
+                "pending_safety_checks": [],
+                "actions": actions,
+            }
+        ]
+    )
+
+    (message,) = loaded_module.get_output_messages_from_response(response)
+    (tool_call,) = message.parts
+    assert isinstance(tool_call, ToolCallRequestPart)
+    assert tool_call.arguments == {"actions": actions}
 
 
 @pytest.mark.skipif(
@@ -1135,13 +1494,14 @@ def test_get_response_error_parses_raw_response(loaded_module):
         status="failed",
         error={"code": "server_error", "message": "boom"},
     )
-    raw_response = SimpleNamespace(parse=mock.Mock(return_value=response))
+    raw_response = _RawResponse(response)
 
     error = loaded_module.get_response_error(raw_response)
 
     assert error is not None
     assert error.type == "server_error"
-    raw_response.parse.assert_called_once_with()
+    assert error.message == "boom"
+    assert raw_response.parse_count == 0
 
 
 def test_get_response_error_keeps_streaming_raw_response_lazy(loaded_module):
@@ -1204,6 +1564,29 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
         is None
     )
     assert loaded_module.extract_params(text="plain").output_type is None
+
+
+def test_extract_params_output_type_from_text_format(loaded_module):
+    class _Event(BaseModel):
+        name: str
+
+    assert (
+        loaded_module.extract_params(text_format=_Event).output_type == "json"
+    )
+    assert (
+        loaded_module.extract_params(text_format=_Event(name="x")).output_type
+        is None
+    )
+    assert loaded_module.extract_params(text_format=None).output_type is None
+    assert (
+        loaded_module.extract_params(text_format="Event").output_type is None
+    )
+    assert (
+        loaded_module.extract_params(
+            text={"format": {"type": "text"}}, text_format=_Event
+        ).output_type
+        == "text"
+    )
 
 
 def test_extract_conversation_id_handles_supported_shapes(loaded_module):
@@ -1366,7 +1749,7 @@ def test_set_invocation_response_attributes_prefers_raw_served_model_header(
         invocation, raw_response, capture_content=False
     )
 
-    assert raw_response.parse_count == 1
+    assert raw_response.parse_count == 0
     assert invocation.response_model_name == "served-gpt-4.1"
 
 
@@ -1383,7 +1766,7 @@ def test_set_invocation_response_attributes_falls_back_to_body_model_when_header
         invocation, raw_response, capture_content=False
     )
 
-    assert raw_response.parse_count == 1
+    assert raw_response.parse_count == 0
     assert invocation.response_model_name == "deployment-gpt-4.1"
 
 
@@ -1400,7 +1783,7 @@ def test_set_invocation_response_attributes_falls_back_to_body_model_when_header
         invocation, raw_response, capture_content=False
     )
 
-    assert raw_response.parse_count == 1
+    assert raw_response.parse_count == 0
     assert invocation.response_model_name == "deployment-gpt-4.1"
 
 
@@ -1684,6 +2067,7 @@ def _make_request_invocation():
         system_instruction=[],
         input_messages=[],
         tool_definitions=None,
+        conversation_compacted=None,
         attributes={},
     )
 
@@ -1716,6 +2100,147 @@ def test_apply_request_attributes_captures_tool_definitions(loaded_module):
         not_captured, params, capture_content=False
     )
     assert not_captured.tool_definitions is None
+
+
+@pytest.mark.parametrize("capture_content", [True, False])
+def test_apply_request_attributes_marks_compacted_input(
+    loaded_module, capture_content
+):
+    params = loaded_module.extract_params(
+        model="gpt-5.4",
+        input=[
+            {"role": "user", "content": "Continue."},
+            _COMPACTION_ITEM,
+        ],
+    )
+
+    invocation = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        invocation, params, capture_content=capture_content
+    )
+
+    assert invocation.conversation_compacted is True
+
+
+@pytest.mark.skipif(
+    not _supports_compaction_item,
+    reason="openai SDK has no compaction output item",
+)
+def test_apply_request_attributes_marks_compacted_sdk_input(loaded_module):
+    """A compacted window passed back as SDK output items is detected."""
+    compacted = _make_response(output=[_COMPACTION_ITEM])
+    params = loaded_module.extract_params(
+        model="gpt-5.4", input=compacted.output
+    )
+
+    invocation = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        invocation, params, capture_content=False
+    )
+
+    assert invocation.conversation_compacted is True
+
+
+@pytest.mark.parametrize(
+    "input_items",
+    [
+        "Continue.",
+        [{"role": "user", "content": "Continue."}],
+        [{"type": "compaction_trigger"}],
+        None,
+    ],
+)
+def test_apply_request_attributes_leaves_uncompacted_input_unset(
+    loaded_module, input_items
+):
+    params = loaded_module.extract_params(model="gpt-5.4", input=input_items)
+
+    invocation = _make_request_invocation()
+    loaded_module.apply_request_attributes(
+        invocation, params, capture_content=True
+    )
+
+    assert invocation.conversation_compacted is None
+
+
+@pytest.mark.skipif(
+    not _supports_compaction_item,
+    reason="openai SDK has no compaction output item",
+)
+@pytest.mark.parametrize("capture_content", [True, False])
+def test_set_invocation_response_attributes_marks_compacted_output(
+    loaded_module, tracer_provider, span_exporter, capture_content
+):
+    invocation = TelemetryHandler(tracer_provider=tracer_provider).inference(
+        provider="openai", request_model="gpt-5.4"
+    )
+    result = _make_response(
+        output=[
+            _COMPACTION_ITEM,
+            {
+                "id": "msg_1",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Done.", "annotations": []}
+                ],
+            },
+        ]
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, result, capture_content=capture_content
+    )
+    invocation.stop()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GEN_AI_CONVERSATION_COMPACTED] is True
+
+
+def test_set_invocation_response_attributes_leaves_uncompacted_output_unset(
+    loaded_module, tracer_provider, span_exporter
+):
+    invocation = TelemetryHandler(tracer_provider=tracer_provider).inference(
+        provider="openai", request_model="gpt-4.1"
+    )
+
+    loaded_module.set_invocation_response_attributes(
+        invocation, _make_response(), capture_content=False
+    )
+    invocation.stop()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert GEN_AI_CONVERSATION_COMPACTED not in span.attributes
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        (
+            {"type": "response.output_item.added", "item": _COMPACTION_ITEM},
+            True,
+        ),
+        (
+            {"type": "response.output_item.done", "item": _COMPACTION_ITEM},
+            True,
+        ),
+        (
+            {"type": "response.output_item.done", "item": {"type": "message"}},
+            None,
+        ),
+        ({"type": "response.output_text.delta", "delta": "compaction"}, None),
+        ({"type": "response.output_item.done"}, None),
+    ],
+)
+def test_set_stream_event_attributes_marks_compaction_items(
+    loaded_module, event, expected
+):
+    invocation = SimpleNamespace(conversation_compacted=None)
+
+    loaded_module.set_stream_event_attributes(invocation, event)
+
+    assert invocation.conversation_compacted is expected
 
 
 def test_set_fetch_response_attributes_captures_tool_definitions(
@@ -1778,7 +2303,7 @@ def test_set_fetch_response_attributes_prefers_raw_served_model_header(
         invocation, raw_response, capture_content=False
     )
 
-    assert raw_response.parse_count == 1
+    assert raw_response.parse_count == 0
     assert invocation.response_model_name == "served-gpt-4.1"
 
 

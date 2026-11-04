@@ -68,10 +68,9 @@ For releasing every package that has towncrier changelog fragments:
    - Publishes each ready package to PyPI.
    - Creates a GitHub release tag (`<pkg>==<version>`) on `main` for each.
    - Opens a PR bumping released packages to the next minor `.dev` version.
-4. Review and merge the post-release version-bump PR. If a workspace package
-   (e.g. `opentelemetry-util-genai`) was released at a new floor required by
-   other packages, remove its `-e` editable install from
-   `tests/requirements.oldest.txt` in that PR so `deps-check` passes.
+     The bump also removes local installs from `tests/requirements.oldest.txt`
+     for workspace dependencies whose declared floor is now released.
+4. Review and merge the post-release version-bump PR.
 
 Packages without changelog fragments are skipped during prepare and logged in
 the workflow output.
@@ -117,7 +116,8 @@ comes from a branch cut from that version's tag.
 
 1. Create `package-release/<pkg>/v<X>.<Y>bx` from the `<pkg>==<X>.<Y>b<N>`
    tag if it does not exist yet.
-2. Cherry-pick or develop the fix on the branch.
+2. Open a pull request targeting `package-release/<pkg>/v<X>.<Y>bx` with the
+   cherry-picked or developed fix, and merge it after review and CI pass.
 3. Run
    [`Prepare backport patch`](./.github/workflows/prepare-backport-patch.yml)
    against the backport branch. Bumps the patch version and runs
@@ -174,6 +174,21 @@ When a new package is ready to ship:
 
 All packages share the same environment. The first upload from CI activates
 each publisher.
+
+## Verifying Release Provenance
+
+Every release publishes **PEP 740 PyPI Digital Attestations** and a **GitHub
+SLSA Build Provenance Attestation**, and attaches the exact `.whl` and
+`.tar.gz` files to the GitHub Release tag (`<pkg>==<version>`).
+
+Users can cryptographically verify that a downloaded wheel or sdist was built
+by this repository's official workflow from the tagged commit SHA:
+
+```bash
+gh attestation verify <wheel-or-sdist-file> \
+  --repo open-telemetry/opentelemetry-python-genai \
+  --signer-workflow open-telemetry/opentelemetry-python-genai/.github/workflows/_release-build.yml
+```
 
 ## Troubleshooting
 

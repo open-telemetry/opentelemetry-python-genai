@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
@@ -27,6 +28,8 @@ from opentelemetry.util.genai.invocation import (
 _RAW_RESPONSE_BODY: ContextVar[str | None] = ContextVar(
     "raw_response_body", default=None
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class _EmbeddingMethodsSnapshot:
@@ -83,7 +86,11 @@ def _apply_embedding_response_attributes(
                     "promptTokenCount"
                 )
         except Exception:
-            pass
+            _logger.debug(
+                "Could not parse usageMetadata from the raw embedding "
+                "response body; input tokens are not recorded.",
+                exc_info=True,
+            )
 
 
 def _create_instrumented_embed_content(

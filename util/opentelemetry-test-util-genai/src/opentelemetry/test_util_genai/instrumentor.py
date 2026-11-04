@@ -6,8 +6,7 @@
 Every instrumentation's ``tests/conftest.py`` carries a handful of fixtures
 shaped like:
 
-- set ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` (and sometimes
-  ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT``)
+- set ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``
 - ``instrumentor.instrument(tracer_provider=..., logger_provider=..., meter_provider=...)``
 - ``yield instrumentor``
 - restore env vars; ``instrumentor.uninstrument()``
@@ -27,7 +26,6 @@ from typing import Any
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 
 # Sentinel marking "completion_hook not supplied" so ``None`` stays a valid,
@@ -43,7 +41,6 @@ def instrument(
     logger_provider: Any,
     meter_provider: Any,
     content_capture: str | None = None,
-    emit_event: bool = False,
     extra_env: Mapping[str, str] | None = None,
     completion_hook: Any = _UNSET,
 ) -> Iterator[BaseInstrumentor]:
@@ -65,12 +62,11 @@ def instrument(
                 yield instrumentor
 
     ``content_capture`` is forwarded to
-    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` and
-    ``emit_event=True`` sets ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` to
-    ``"true"``; both default to leaving their variable untouched. Pass
-    ``extra_env`` for anything else. ``completion_hook`` is forwarded to
-    ``instrumentor.instrument(completion_hook=...)`` when provided (left off
-    entirely by default so the instrumentor's own default resolution runs).
+    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` (left untouched by
+    default). Pass ``extra_env`` for anything else. ``completion_hook`` is
+    forwarded to ``instrumentor.instrument(completion_hook=...)`` when provided
+    (left off entirely by default so the instrumentor's own default resolution
+    runs).
 
     Previous values are restored on exit so tests stay isolated.
     """
@@ -79,8 +75,6 @@ def instrument(
         overrides[OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT] = (
             content_capture
         )
-    if emit_event:
-        overrides[OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT] = "true"
     if extra_env:
         overrides.update(extra_env)
     previous = {k: os.environ.get(k) for k in overrides}

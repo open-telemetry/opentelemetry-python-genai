@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+import mimetypes
+import sys
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
@@ -16,6 +18,8 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
+    BlobPart,
+    FilePart,
     FunctionToolDefinition,
     InputMessage,
     MessagePart,
@@ -27,9 +31,11 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
     ToolDefinition,
 )
+from opentelemetry.util.genai.utils import decode_base64, image_from_url
 
 if TYPE_CHECKING:
     from portkey_ai import AsyncPortkey, Portkey
+
 
 # Mapping from Portkey ``provider`` values to the well-known
 # ``gen_ai.provider.name`` values defined by the GenAI semantic conventions.
@@ -143,7 +149,95 @@ def _extract_tool_calls(tool_calls: Iterable[Any]) -> list[ToolCallRequest]:
     return parts
 
 
-def _prepare_input_messages(messages: Iterable[Any]) -> list[InputMessage]:
+# "audio/mp3" is not a registered media type - the payload is MPEG audio.
+_AUDIO_MIME_TYPES = {"wav": "audio/wav", "mp3": "audio/mpeg"}
+
+
+def _audio_to_part(input_audio: Any) -> MessagePart | None:
+    """Build a blob part for an ``input_audio`` descriptor."""
+    if input_audio is None:
+        return None
+    data = get_property_value(input_audio, "data")
+    if not isinstance(data, str):
+        return None
+    decoded = decode_base64(data)
+    if decoded is None:
+        return None
+    audio_format = get_property_value(input_audio, "format")
+    return BlobPart(
+        mime_type=_AUDIO_MIME_TYPES.get(audio_format)
+        if isinstance(audio_format, str)
+        else None,
+        modality=Modality.AUDIO,
+        content=decoded,
+    )
+
+
+def _document_to_part(file_obj: Any) -> MessagePart | None:
+    """Build a part for a file descriptor: a reference when the file is
+    hosted by the provider (``file_id``), a blob when uploaded inline
+    (``file_data``)."""
+    if file_obj is None:
+        return None
+    filename = get_property_value(file_obj, "filename")
+    mime_type = (
+        mimetypes.guess_type(filename)[0]
+        if isinstance(filename, str) and filename
+        else None
+    )
+    file_id = get_property_value(file_obj, "file_id")
+    if isinstance(file_id, str) and file_id:
+        return FilePart(
+            mime_type=mime_type, modality=Modality.DOCUMENT, file_id=file_id
+        )
+    file_data = get_property_value(file_obj, "file_data")
+    if not isinstance(file_data, str) or not file_data:
+        return None
+    if file_data.startswith("data:"):
+        return image_from_url(file_data, modality=Modality.DOCUMENT)
+    content = decode_base64(file_data)
+    if content is None:
+        return None
+    return BlobPart(
+        mime_type=mime_type, modality=Modality.DOCUMENT, content=content
+    )
+
+
+def _content_part_to_message_part(item: Any) -> MessagePart | None:
+    if isinstance(item, str):
+        return Text(content=item)
+    part_type = get_property_value(item, "type")
+    text = get_property_value(item, "text")
+    if part_type in ("text", "input_text", "output_text") or (
+        part_type is None and isinstance(text, str)
+    ):
+        if isinstance(text, str):
+            return Text(content=text)
+        return None
+    if part_type == "image_url":
+        image_url = get_property_value(item, "image_url")
+        if not isinstance(image_url, str):
+            image_url = get_property_value(image_url, "url")
+        if isinstance(image_url, str) and image_url:
+            return image_from_url(image_url)
+        return None
+    if part_type == "input_audio":
+        return _audio_to_part(get_property_value(item, "input_audio"))
+    if part_type in ("file", "input_file"):
+        return _document_to_part(get_property_value(item, "file") or item)
+    if part_type == "refusal":
+        refusal = get_property_value(item, "refusal")
+        if isinstance(refusal, str):
+            return Text(content=refusal)
+        return None
+    return None
+
+
+def prepare_input_messages(
+    messages: Iterable[Any] | None,
+) -> list[InputMessage]:
+    if not messages:
+        return []
     chat_messages: list[InputMessage] = []
     for message in messages:
         role = get_property_value(message, "role")
@@ -164,24 +258,21 @@ def _prepare_input_messages(messages: Iterable[Any]) -> list[InputMessage]:
             if isinstance(content, str):
                 parts.append(Text(content=content))
             elif isinstance(content, Mapping):
-                content_dict = cast(Mapping[str, Any], content)
-                content_type = content_dict.get("type")
-                if content_type == "text" and content_dict.get("text"):
-                    parts.append(Text(content=str(content_dict["text"])))
-            elif isinstance(content, Iterable):
-                for item in cast(Iterable[Any], content):
-                    if isinstance(item, str):
-                        parts.append(Text(content=item))
-                    elif isinstance(item, Mapping):
-                        item_dict = cast(Mapping[str, Any], item)
-                        item_type = item_dict.get("type")
-                        if item_type == "text" and item_dict.get("text"):
-                            parts.append(Text(content=str(item_dict["text"])))
+                part = _content_part_to_message_part(content)
+                if part is not None:
+                    parts.append(part)
+            elif isinstance(content, Sequence) and not isinstance(
+                content, (bytes, bytearray)
+            ):
+                for item in cast(Sequence[Any], content):
+                    part = _content_part_to_message_part(item)
+                    if part is not None:
+                        parts.append(part)
         chat_messages.append(InputMessage(role=str(role), parts=parts))
     return chat_messages
 
 
-def _prepare_tool_definitions(
+def prepare_tool_definitions(
     tools: Iterable[Any] | None,
 ) -> list[ToolDefinition] | None:
     if not tools:
@@ -239,25 +330,42 @@ def _prepare_output_messages(
     return output_messages
 
 
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, float):
+        return value
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and abs(value) <= sys.float_info.max
+    ):
+        return float(value)
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
 def _apply_request_parameters(
     invocation: InferenceInvocation,
     kwargs: dict[str, Any],
-    capture_content: bool,
 ) -> None:
     if (temp := get_value(kwargs.get("temperature"))) is not None:
-        invocation.temperature = float(temp)
+        invocation.temperature = _as_float(temp)
     if (top_p := get_value(kwargs.get("top_p"))) is not None:
-        invocation.top_p = float(top_p)
+        invocation.top_p = _as_float(top_p)
     elif (p := get_value(kwargs.get("p"))) is not None:
-        invocation.top_p = float(p)
+        invocation.top_p = _as_float(p)
     if (top_k := get_value(kwargs.get("top_k"))) is not None:
-        invocation.top_k = int(top_k)
+        invocation.top_k = _as_int(top_k)
     if (max_tokens := get_value(kwargs.get("max_tokens"))) is not None:
-        invocation.max_tokens = int(max_tokens)
+        invocation.max_tokens = _as_int(max_tokens)
     elif (
         max_completion_tokens := get_value(kwargs.get("max_completion_tokens"))
     ) is not None:
-        invocation.max_tokens = int(max_completion_tokens)
+        invocation.max_tokens = _as_int(max_completion_tokens)
     if (stop := get_value(kwargs.get("stop"))) is not None:
         if isinstance(stop, str):
             invocation.stop_sequences = [stop]
@@ -268,13 +376,13 @@ def _apply_request_parameters(
     if (
         presence_penalty := get_value(kwargs.get("presence_penalty"))
     ) is not None:
-        invocation.presence_penalty = float(presence_penalty)
+        invocation.presence_penalty = _as_float(presence_penalty)
     if (
         frequency_penalty := get_value(kwargs.get("frequency_penalty"))
     ) is not None:
-        invocation.frequency_penalty = float(frequency_penalty)
+        invocation.frequency_penalty = _as_float(frequency_penalty)
     if (seed := get_value(kwargs.get("seed"))) is not None:
-        invocation.seed = int(seed)
+        invocation.seed = _as_int(seed)
     if (choice_count := get_value(kwargs.get("n"))) is not None:
         if isinstance(choice_count, int) and choice_count != 1:
             invocation.request_choice_count = choice_count
@@ -303,25 +411,11 @@ def _apply_request_parameters(
             else:
                 invocation.output_type = response_format
 
-    tools = kwargs.get("tools")
-    if tools is not None and isinstance(tools, Iterable):
-        invocation.tool_definitions = _prepare_tool_definitions(
-            cast(Iterable[Any], tools)
-        )
-
-    if capture_content:
-        messages = kwargs.get("messages")
-        if messages is not None and isinstance(messages, Iterable):
-            invocation.input_messages = _prepare_input_messages(
-                cast(Iterable[Any], messages)
-            )
-
 
 def create_inference_invocation(
     handler: TelemetryHandler,
     instance: Any,
     kwargs: dict[str, Any],
-    capture_content: bool,
     *,
     is_prompt: bool = False,
 ) -> InferenceInvocation:
@@ -346,7 +440,7 @@ def create_inference_invocation(
                 prompt_id
             )
 
-    _apply_request_parameters(invocation, kwargs, capture_content)
+    _apply_request_parameters(invocation, kwargs)
     return invocation
 
 

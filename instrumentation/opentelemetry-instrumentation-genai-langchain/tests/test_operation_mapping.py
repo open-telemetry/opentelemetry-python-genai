@@ -9,7 +9,7 @@ Tests the public API: classify_chain_run, resolve_agent_name.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Self
 
 import langchain.agents
 import pytest
@@ -19,7 +19,6 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from typing_extensions import Self
 
 from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     OperationName,

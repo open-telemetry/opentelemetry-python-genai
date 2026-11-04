@@ -1,0 +1,439 @@
+interactions:
+- request:
+    body: |-
+      {
+        "input": [
+          {
+            "role": "user",
+            "content": "Take a screenshot of the current page."
+          }
+        ],
+        "model": "gpt-6-luna",
+        "tool_choice": "required",
+        "tools": [
+          {
+            "type": "computer"
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - '******'
+      connection:
+      - keep-alive
+      content-length:
+      - '154'
+      content-type:
+      - application/json
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.16.2
+      x-stainless-arch:
+      - x64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Linux
+      x-stainless-package-version:
+      - 3.16.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.8
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_03812e5ef8c62a13006ac69db033ec87d2a919657a739876b0",
+          "object": "response",
+          "created_at": 1791401392,
+          "status": "completed",
+          "access_programs": null,
+          "background": false,
+          "billing": {
+            "payer": "openai"
+          },
+          "completed_at": 1791401393,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-6-luna",
+          "moderation": null,
+          "output": [
+            {
+              "id": "cu_03812e5ef8c62a13006ac69db168b487d281cfd57b9bdc1786",
+              "type": "computer_call",
+              "status": "completed",
+              "actions": [
+                {
+                  "type": "screenshot"
+                }
+              ],
+              "call_id": "call_9u4AJgvmwyTNBCzdzTezTo6Z"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "24h",
+          "reasoning": {
+            "context": "all_turns",
+            "effort": "medium",
+            "mode": "standard",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "required",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "computer"
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 0.98,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 825,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 19,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 844
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a46f512c8ff081e5-IAD
+      connection:
+      - keep-alive
+      content-length:
+      - '2008'
+      content-type:
+      - application/json
+      date:
+      - Wed, 07 Oct 2026 19:29:54 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '2523'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '2000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '2000000'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 0s
+      x-request-id:
+      - req_5e2fa7df822242a0bb340f19b3913d84
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "input": [
+          {
+            "role": "user",
+            "content": "Take a screenshot of the current page."
+          },
+          {
+            "id": "cu_03812e5ef8c62a13006ac69db168b487d281cfd57b9bdc1786",
+            "call_id": "call_9u4AJgvmwyTNBCzdzTezTo6Z",
+            "status": "completed",
+            "type": "computer_call",
+            "actions": [
+              {
+                "type": "screenshot"
+              }
+            ]
+          },
+          {
+            "type": "computer_call_output",
+            "call_id": "call_9u4AJgvmwyTNBCzdzTezTo6Z",
+            "output": {
+              "type": "computer_screenshot",
+              "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAARklEQVR42u3XQQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAgICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
+            }
+          }
+        ],
+        "model": "gpt-6-luna",
+        "tools": [
+          {
+            "type": "computer"
+          }
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, zstd
+      authorization:
+      - '******'
+      connection:
+      - keep-alive
+      content-length:
+      - '635'
+      content-type:
+      - application/json
+      cookie:
+      - test_cookie
+      host:
+      - api.openai.com
+      user-agent:
+      - OpenAI/Python 3.16.2
+      x-stainless-arch:
+      - x64
+      x-stainless-async:
+      - 'false'
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - Linux
+      x-stainless-package-version:
+      - 3.16.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.14.8
+    method: POST
+    uri: https://api.openai.com/v1/responses
+  response:
+    body:
+      string: |-
+        {
+          "id": "resp_03812e5ef8c62a13006ac69db2d63c87d28b796e0dc11b4c61",
+          "object": "response",
+          "created_at": 1791401394,
+          "status": "completed",
+          "access_programs": null,
+          "background": false,
+          "billing": {
+            "payer": "openai"
+          },
+          "completed_at": 1791401396,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-6-luna",
+          "moderation": null,
+          "output": [
+            {
+              "id": "rs_03812e5ef8c62a13006ac69db3a7a487d28bd45aa10eb7d1e1",
+              "type": "reasoning",
+              "content": [],
+              "encrypted_content": "gAAAAABqxp20T7WWpzZDqBTHilRILdpZFwKygu1k034IQ1a28xX8dwl4T3KRxfuBuBDuOEKTxE29od4QqMqJgLmFHtgttzFfyHrSY0fw5NNJKEyZ0IhO90739E5mqLtgYtjfZdtvxQEn6pSsBrU8RtdslNWhMAq6QLfuCo21VA5g-1esc4AZqzE1WeYgYk7SEmIL-JlWjGBrF4bgS_eTSw6lTL0bXWTAhPgvEoFGAINtU0LwhCbyxKUn2hzddY7c95N__U_xHH4IWe88ZB-SJRp-PDJsur0O6lWd83ZD-Ulyoae49X2HrBdARn4iKuICbg4DzqxIyUT_18RsPRRUE77PG9rZPrBfUyVk-2XH0n4FL_q5P6AZay_okdMu_nyunW8lK5vRkqO7oV6FP75y2HslH9VzKb9ypHg9wqX-243KS6PCf9KsrfMJKoJjMnU-6ymDM_gi9qwpJTCaUkirHTpDoYmVzARB38KwQNPE1Bp2_mvAzmj0Olj-GDtbw6lI8GrpyuvxfEpY83094-nV6lM7gJfb_mDJt5aA74rThT55TtwyqKCD3MsZ3x1AQrbtLhMQsk37pCgzhJgoeXDQDx-MS18hrNxlB-ok0-4GkeicV0ji6hYMr9IqGJWGuweA3h13bXBhXpDGKD6uL0pGuh8btUoLHBNldtlac_34CBZdxstW76NMbAU-ZhqOi1RvXVI6O2kWdQr-hhKu6rHC0s7nON5ceMmOSeVT8EhQU8o8MiJtwedc-P-lDc9QUTRSMmZd-UUOXgDRMBXcw9UmmmMMDtq1jaXLrBfZLkrW9j0aEIsQd4szaLJx20HXSjmKEXR2WwpSFS1reS4er9kOEsdJPYXFK8JchKi0R-048EfuSx31xygp8vQ270WIZuYog-20wdZmW5QLPeDe7RBDFy-fHVLuf-jo9i5-aXO9WefiC3dKP78vXuE2Wpvfwuok3oeuUjA6_6QkPCp5PiSxmElgn11j91UDwKXAHooaEEPllD_iCftcmzfpy6wZrBse3gwH67qLb3OtcL52p1AsZtkg50dtMIDFUilVnMkXfgBrZ85Of2Zh7YscvFRjCjINJTld6pG9xA5oWn9c4skRVGLCOEffKyxd5y7VEyH_s1gfXjoVWMdzlyaFMaAtgcL_NpxISLg9nez0jK1kRkKam7clHUHDO2lWJVoGnV3oghg8lxGseAa4GtV5q8_LJu-nZhHN5gxMP8evG7xxAiTjO5r_7ynNaQsgM2wwVj63iPZcQcA9JDLp3v36kKJ3eu-1DWTAnhz9bQ6aNyC5lMtQKC0RPrLqcc9UL9Fk1iveiXStDSHCSRCI7bCWEE0G-JPZfDjac-CnRXm7Y20kPxoHw0IspcelCoPb4g==",
+              "summary": []
+            },
+            {
+              "id": "msg_03812e5ef8c62a13006ac69db3dd8487d2b688dcde9523fc7b",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "\u3010computer.initialize\u2020screenshot\u3011"
+                }
+              ],
+              "phase": "final_answer",
+              "role": "assistant"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": "24h",
+          "reasoning": {
+            "context": "all_turns",
+            "effort": "medium",
+            "mode": "standard",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "computer"
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 0.98,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 858,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 37,
+            "output_tokens_details": {
+              "reasoning_tokens": 24
+            },
+            "total_tokens": 895
+          },
+          "user": null,
+          "metadata": {}
+        }
+    headers:
+      Set-Cookie: test_set_cookie
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a46f513d4fb081e5-IAD
+      connection:
+      - keep-alive
+      content-length:
+      - '3694'
+      content-type:
+      - application/json
+      date:
+      - Wed, 07 Oct 2026 19:29:56 GMT
+      openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1736'
+      openai-project: test_openai_project_id
+      openai-version:
+      - '2020-10-01'
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      transfer-encoding:
+      - chunked
+      x-content-type-options:
+      - nosniff
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '2000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '2000000'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 0s
+      x-request-id:
+      - req_7023f0bfc342447babafd15c5f1a11ec
+    status:
+      code: 200
+      message: OK
+version: 1

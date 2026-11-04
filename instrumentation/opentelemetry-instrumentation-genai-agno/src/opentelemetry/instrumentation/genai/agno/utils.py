@@ -5,10 +5,8 @@
 
 from __future__ import annotations
 
-import dataclasses
-import json
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
@@ -17,6 +15,11 @@ from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     RetrievalDocument,
     ToolDefinition,
+)
+from opentelemetry.util.genai.utils import (
+    gen_ai_json_dumps,
+    get_argument,
+    object_to_any_value,
 )
 
 
@@ -34,94 +37,14 @@ def format_retrieval_document(doc: Document) -> RetrievalDocument:
     )
 
 
-@runtime_checkable
-class _ModelDumpJson(Protocol):
-    def model_dump_json(self) -> str: ...
-
-
-@runtime_checkable
-class _JsonDump(Protocol):
-    def json(self) -> str: ...
-
-
-@runtime_checkable
-class _ModelDump(Protocol):
-    def model_dump(self) -> Any: ...
-
-
-@runtime_checkable
-class _DictDump(Protocol):
-    def dict(self) -> Any: ...
-
-
-def _json_default(obj: object) -> object:
-    if isinstance(obj, type):
-        return str(obj)
-    if isinstance(obj, _ModelDump):
-        try:
-            return obj.model_dump()
-        except Exception:
-            pass
-    if isinstance(obj, _DictDump):
-        try:
-            return obj.dict()
-        except Exception:
-            pass
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        try:
-            return dataclasses.asdict(obj)
-        except Exception:
-            pass
-    return str(obj)
-
-
 def format_content(val: object) -> str:
     """Format content into a string, converting structured objects to JSON."""
-    if val is None:
-        return ""
     if isinstance(val, str):
         return val
-    if isinstance(val, type):
+    any_value = object_to_any_value(val)
+    if any_value is None:
         return str(val)
-    if isinstance(val, _ModelDumpJson):
-        try:
-            return str(val.model_dump_json())
-        except Exception:
-            pass
-    if isinstance(val, _JsonDump):
-        try:
-            return str(val.json())
-        except Exception:
-            pass
-    if isinstance(val, _ModelDump):
-        try:
-            return json.dumps(
-                val.model_dump(), ensure_ascii=False, default=_json_default
-            )
-        except Exception:
-            pass
-    if isinstance(val, _DictDump):
-        try:
-            return json.dumps(
-                val.dict(), ensure_ascii=False, default=_json_default
-            )
-        except Exception:
-            pass
-    if dataclasses.is_dataclass(val) and not isinstance(val, type):
-        try:
-            return json.dumps(
-                dataclasses.asdict(val),
-                ensure_ascii=False,
-                default=_json_default,
-            )
-        except Exception:
-            pass
-    if isinstance(val, (dict, list)):
-        try:
-            return json.dumps(val, ensure_ascii=False, default=_json_default)
-        except Exception:
-            pass
-    return str(cast(object, val))
+    return gen_ai_json_dumps(any_value, ensure_ascii=False)
 
 
 def _get_property_value(obj: Any, property_name: str) -> Any:
@@ -243,3 +166,56 @@ def prepare_tool_definitions(
                 )
 
     return definitions or None
+
+
+def extract_session_id(
+    instance: Any = None,
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    run_response: Any = None,
+    wrapped: Callable[..., Any] | None = None,
+    *,
+    is_continue: bool = False,
+) -> str | None:
+    """Extract session_id from call arguments, instance, or response."""
+    if is_continue:
+        if run_response is None:
+            if wrapped is not None and (args or kwargs):
+                run_response = get_argument(
+                    "run_response", wrapped, args or (), kwargs or {}
+                )
+            elif kwargs:
+                run_response = kwargs.get("run_response")
+
+        if run_response is not None:
+            if (
+                session_id := getattr(run_response, "session_id", None)
+            ) is not None:
+                return str(session_id)
+            if instance is not None and (
+                (session_id := getattr(instance, "session_id", None))
+                is not None
+            ):
+                return str(session_id)
+            return None
+
+    if wrapped is not None and (args or kwargs):
+        session_id = get_argument(
+            "session_id", wrapped, args or (), kwargs or {}
+        )
+        if session_id is not None:
+            return str(session_id)
+    else:
+        if kwargs and (session_id := kwargs.get("session_id")) is not None:
+            return str(session_id)
+        if args and len(args) > 4 and args[4] is not None:
+            return str(args[4])
+    if instance is not None and (
+        (session_id := getattr(instance, "session_id", None)) is not None
+    ):
+        return str(session_id)
+    if run_response is not None and (
+        (session_id := getattr(run_response, "session_id", None)) is not None
+    ):
+        return str(session_id)
+    return None

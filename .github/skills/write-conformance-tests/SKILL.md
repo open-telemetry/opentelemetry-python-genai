@@ -65,7 +65,6 @@ instruments: walk its wrappers (the step-6 mapping for a port) for which
 | `blob` | `BlobPart` | inline image/audio/video **bytes** (`modality` distinguishes them) |
 | `uri` | `UriPart` | an external media **URL** (`modality`) |
 | `file` | `FilePart` | a **file reference** / id (`modality`) |
-| `generic` | `GenericPart` | a provider item with no semconv mapping — flag, don't drop |
 
 Group by shared turn/cassette — typically one `multimodal.py` for the
 image/audio/file/url inputs the client accepts, `tool_calling.py` for tool

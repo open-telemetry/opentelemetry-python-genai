@@ -1,11 +1,13 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
+    AsyncFetchResponseStreamWrapper,
     AsyncResponseStreamManagerWrapper,
     AsyncResponseStreamWrapper,
     FetchResponseStreamWrapper,
@@ -78,13 +80,22 @@ def _noop_on_stream_chunk(chunk_at):
     del chunk_at
 
 
+def _fake_invocation(**overrides):
+    """A stand-in for an invocation with the stream wrapper's context hooks."""
+    fields = {
+        "request_model": None,
+        "stop": _noop_stop,
+        "fail": _noop_fail,
+        "_on_stream_chunk": _noop_on_stream_chunk,
+        "suspend": _noop_stop,
+        "activate": nullcontext,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
 def _make_wrapper(manager):
-    invocation = SimpleNamespace(
-        request_model=None,
-        stop=_noop_stop,
-        _on_stream_chunk=_noop_on_stream_chunk,
-        fail=_noop_fail,
-    )
+    invocation = _fake_invocation()
     return ResponseStreamManagerWrapper(
         manager=manager,
         invocation_factory=lambda: invocation,
@@ -94,12 +105,7 @@ def _make_wrapper(manager):
 
 def _make_stream_wrapper(stream, invocation=None):
     if invocation is None:
-        invocation = SimpleNamespace(
-            request_model=None,
-            stop=_noop_stop,
-            fail=_noop_fail,
-            _on_stream_chunk=_noop_on_stream_chunk,
-        )
+        invocation = _fake_invocation()
     return ResponseStreamWrapper(
         stream=stream,
         invocation=invocation,
@@ -108,12 +114,7 @@ def _make_stream_wrapper(stream, invocation=None):
 
 
 def _make_async_manager_wrapper(manager):
-    invocation = SimpleNamespace(
-        request_model=None,
-        stop=_noop_stop,
-        _on_stream_chunk=_noop_on_stream_chunk,
-        fail=_noop_fail,
-    )
+    invocation = _fake_invocation()
     return AsyncResponseStreamManagerWrapper(
         manager=manager,
         invocation_factory=lambda: invocation,
@@ -123,12 +124,7 @@ def _make_async_manager_wrapper(manager):
 
 def _make_async_stream_wrapper(stream, invocation=None):
     if invocation is None:
-        invocation = SimpleNamespace(
-            request_model=None,
-            stop=_noop_stop,
-            fail=_noop_fail,
-            _on_stream_chunk=_noop_on_stream_chunk,
-        )
+        invocation = _fake_invocation()
     return AsyncResponseStreamWrapper(
         stream=stream,
         invocation=invocation,
@@ -205,12 +201,7 @@ def test_manager_enter_failure_fails_invocation_and_reraises():
     error = RuntimeError("enter failure")
     manager = _FakeManager(stream=SimpleNamespace(), enter_error=error)
     failures = []
-    invocation = SimpleNamespace(
-        request_model=None,
-        stop=_noop_stop,
-        _on_stream_chunk=_noop_on_stream_chunk,
-        fail=failures.append,
-    )
+    invocation = _fake_invocation(fail=failures.append)
     wrapper = ResponseStreamManagerWrapper(
         manager=manager,
         invocation_factory=lambda: invocation,
@@ -272,12 +263,7 @@ async def test_async_manager_enter_failure_fails_invocation_and_reraises():
     error = RuntimeError("enter failure")
     manager = _FakeAsyncManager(stream=SimpleNamespace(), enter_error=error)
     failures = []
-    invocation = SimpleNamespace(
-        request_model=None,
-        stop=_noop_stop,
-        _on_stream_chunk=_noop_on_stream_chunk,
-        fail=failures.append,
-    )
+    invocation = _fake_invocation(fail=failures.append)
     wrapper = AsyncResponseStreamManagerWrapper(
         manager=manager,
         invocation_factory=lambda: invocation,
@@ -310,9 +296,7 @@ async def test_async_stream_wrapper_exit_fails_and_closes_on_exception():
     stream = _FakeAsyncStream()
     stopped = []
     failures = []
-    invocation = SimpleNamespace(
-        request_model=None, stop=_noop_stop, fail=failures.append
-    )
+    invocation = _fake_invocation(fail=failures.append)
     wrapper = _make_async_stream_wrapper(stream, invocation=invocation)
     wrapper._stop = stopped.append
 
@@ -387,9 +371,7 @@ async def test_async_stream_wrapper_fails_and_reraises_stream_errors():
     error = ValueError("boom")
     stream = _FakeAsyncStream(error=error)
     failures = []
-    invocation = SimpleNamespace(
-        request_model=None, stop=_noop_stop, fail=failures.append
-    )
+    invocation = _fake_invocation(fail=failures.append)
     wrapper = _make_async_stream_wrapper(stream, invocation=invocation)
 
     with pytest.raises(ValueError, match="boom"):
@@ -458,9 +440,7 @@ def _make_response(**overrides):
 
 def _capturing_invocation():
     calls = {"stop": 0, "fail": []}
-    invocation = SimpleNamespace(
-        request_model=None, response_model_name=None, attributes={}
-    )
+    invocation = _fake_invocation(response_model_name=None, attributes={})
     invocation.stop = lambda: calls.__setitem__("stop", calls["stop"] + 1)
     invocation.fail = lambda error: calls["fail"].append(error)
     return invocation, calls
@@ -562,7 +542,7 @@ def _make_fetch_stream_wrapper(stream, invocation):
 
 def _capturing_fetch_invocation():
     calls = {"stop": 0, "fail": []}
-    invocation = SimpleNamespace(
+    invocation = _fake_invocation(
         response_model_name=None,
         response_status=None,
         finish_reasons=None,
@@ -638,3 +618,39 @@ def test_fetch_stream_transport_error_event_still_fails_the_fetch():
     assert calls["stop"] == 0
     (error,) = calls["fail"]
     assert error.type == "rate_limit_exceeded"
+
+
+_COMPACTION_ITEM_EVENT = SimpleNamespace(
+    type="response.output_item.done",
+    item={"id": "cmp_1", "type": "compaction", "encrypted_content": "opaque"},
+)
+
+
+def test_inference_stream_records_streamed_compaction():
+    invocation, _ = _capturing_invocation()
+    wrapper = _make_stream_wrapper(_FakeSyncStream(), invocation=invocation)
+
+    wrapper.process_event(_COMPACTION_ITEM_EVENT)
+
+    assert invocation.conversation_compacted is True
+
+
+@pytest.mark.parametrize(
+    ("wrapper_type", "stream"),
+    [
+        (FetchResponseStreamWrapper, _FakeSyncStream()),
+        (AsyncFetchResponseStreamWrapper, _FakeAsyncStream()),
+    ],
+    ids=["sync", "async"],
+)
+def test_fetch_stream_ignores_replayed_compaction(wrapper_type, stream):
+    """Compaction in a replay belongs to the original generation."""
+    invocation, calls = _capturing_fetch_invocation()
+    wrapper = wrapper_type(
+        stream=stream, invocation=invocation, capture_content=False
+    )
+
+    wrapper.process_event(_COMPACTION_ITEM_EVENT)
+
+    assert not hasattr(invocation, "conversation_compacted")
+    assert calls == {"stop": 0, "fail": []}

@@ -15,6 +15,35 @@ See https://github.com/open-telemetry/opentelemetry-python-genai/blob/main/CONTR
 
 <!-- changelog start -->
 
+## Version 1.3b0 (2026-10-23)
+
+### Added
+
+- Capture reasoning token counts `gen_ai.usage.reasoning.output_tokens` on
+  messages
+  ([#779](https://github.com/open-telemetry/opentelemetry-python-genai/pull/779))
+- Add instrumentation for `beta.messages` (`create`, `stream`, and `parse`).
+  ([#781](https://github.com/open-telemetry/opentelemetry-python-genai/pull/781))
+- Support anthropic 2.x
+  ([#966](https://github.com/open-telemetry/opentelemetry-python-genai/pull/966))
+
+### Changed
+
+- Drop file-backed and iterator document content instead of recording it as a
+  type-only `GenericPart`.
+  ([#936](https://github.com/open-telemetry/opentelemetry-python-genai/pull/936))
+
+### Fixed
+
+- Preserve available Anthropic partial response content when a stream fails.
+  ([#793](https://github.com/open-telemetry/opentelemetry-python-genai/pull/793))
+- Stop request extraction from raising on a `system` list that holds plain
+  strings.
+  ([#866](https://github.com/open-telemetry/opentelemetry-python-genai/pull/866))
+- Capture one-shot message, content, system, and tool iterators lazily as the
+  Anthropic SDK consumes them.
+  ([#873](https://github.com/open-telemetry/opentelemetry-python-genai/pull/873))
+
 ## Version 1.2b0 (2026-09-24)
 
 ### Added

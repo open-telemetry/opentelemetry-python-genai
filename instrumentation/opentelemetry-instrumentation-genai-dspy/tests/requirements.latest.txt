@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Exercise the latest supported DSPy release with workspace instrumentation.
-dspy~=3.4.0
+dspy~=3.4.1
 numpy
 
 -e util/opentelemetry-util-genai

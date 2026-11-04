@@ -151,3 +151,23 @@ def test_parse_max_queue_size_envvar(
                 "is not a valid integer for OTEL_INSTRUMENTATION_GENAI_UPLOAD_MAX_QUEUE_SIZE. Defaulting to 20."
                 in caplog.records[0].message
             )
+
+
+@pytest.mark.parametrize("envvar_value", ("0", "-5"))
+def test_parse_non_positive_max_queue_size_envvar(
+    envvar_value, load_completion_hook, caplog
+):
+    """A non-positive queue size is invalid and falls back to the default."""
+    with patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_UPLOAD_MAX_QUEUE_SIZE": envvar_value},
+    ):
+        assert isinstance(hook := load_completion_hook(), UploadCompletionHook)
+        assert hook._max_queue_size == 20
+
+        assert caplog.records
+        assert caplog.records[0].levelno == logging.WARNING
+        assert (
+            "is not a positive integer for OTEL_INSTRUMENTATION_GENAI_UPLOAD_MAX_QUEUE_SIZE. Defaulting to 20."
+            in caplog.records[0].message
+        )

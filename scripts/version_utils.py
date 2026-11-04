@@ -9,12 +9,8 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tomllib
 from pathlib import Path
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
 
 
 def find_package_dir(repo_root: Path, package_name: str) -> Path | None:
@@ -312,6 +308,14 @@ def main(argv: list[str] | None = None, repo_root: Path | None = None) -> int:
                     f"Warning: failed to update {pyproject_path}: {err}",
                     file=sys.stderr,
                 )
+
+    # Lazy import: check_deps imports this module.
+    from check_deps import strip_released_local_installs
+
+    for path in strip_released_local_installs(repo_root):
+        print(
+            f"Removed local installs of released workspace deps from {path.relative_to(repo_root)}"
+        )
 
     return 0
 

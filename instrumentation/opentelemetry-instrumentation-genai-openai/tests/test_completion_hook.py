@@ -12,7 +12,11 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 
-from .test_utils import DEFAULT_MODEL, USER_ONLY_PROMPT
+from .test_utils import (
+    DEFAULT_MODEL,
+    USER_ONLY_PROMPT,
+    assert_inference_event_without_content,
+)
 
 
 def test_custom_hook_is_called(
@@ -51,14 +55,14 @@ def test_custom_hook_is_called(
     assert kwargs["outputs"]
     assert kwargs["span"] is not None
 
-    # Content goes to the hook only — not to span attributes or log records
+    # Content goes to the hook only - not to span or log record attributes
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span_attrs = spans[0].attributes or {}
     assert "gen_ai.input.messages" not in span_attrs
     assert "gen_ai.output.messages" not in span_attrs
 
-    assert log_exporter.get_finished_logs() == ()
+    assert_inference_event_without_content(log_exporter.get_finished_logs())
 
 
 @patch.dict(

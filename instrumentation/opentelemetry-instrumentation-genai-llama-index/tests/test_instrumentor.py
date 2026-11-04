@@ -52,3 +52,13 @@ def test_uninstrument_removes_span_handler() -> None:
     span_handler = instrumentor._span_handler
     instrumentor.uninstrument()
     assert span_handler not in get_dispatcher().span_handlers
+
+
+def test_uninstrument_after_reinstantiation() -> None:
+    instrumentor = LlamaIndexInstrumentor()
+    instrumentor.instrument()
+    span_handler = instrumentor._span_handler
+
+    # Re-instantiate the singleton: __init__ should not reset _span_handler
+    LlamaIndexInstrumentor().uninstrument()
+    assert span_handler not in get_dispatcher().span_handlers

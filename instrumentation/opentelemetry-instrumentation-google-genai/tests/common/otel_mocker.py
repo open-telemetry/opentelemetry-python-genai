@@ -81,7 +81,9 @@ class _LogWrapper:
         return self._log_data.log_record.event_name
 
     def __str__(self):
-        return self._log_data.log_record.to_json()
+        if hasattr(self._log_data.log_record, "to_json"):
+            return self._log_data.log_record.to_json()
+        return f"LogRecord(event_name={self.event_name}, attributes={self.attributes}, body={self.body})"
 
 
 class _MetricDataPointWrapper:

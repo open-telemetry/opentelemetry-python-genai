@@ -153,3 +153,33 @@ class ConfigSpanAttributesTestCase(TestCase):
                 "gcp.gen_ai.operation.config.automatic_function_calling.ignore_call_history"
             ]
         )
+
+    def test_invalid_config_dict_logs_debug(self):
+        with self.assertLogs(
+            "opentelemetry.instrumentation.google_genai.generate_content",
+            level="DEBUG",
+        ) as captured:
+            self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents="Some input prompt",
+                config={"not_a_real_field": 1},
+            )
+        self.assertTrue(
+            any(
+                "Unable to parse GenerateContentConfig" in record.getMessage()
+                for record in captured.records
+            )
+        )
+
+    def test_invalid_config_dict_does_not_warn(self):
+        # The SDK raises loudly for a genuinely invalid config, so repeating a
+        # warning on every call would only be noise; this path stays at debug.
+        with self.assertNoLogs(
+            "opentelemetry.instrumentation.google_genai.generate_content",
+            level="WARNING",
+        ):
+            self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents="Some input prompt",
+                config={"not_a_real_field": 1},
+            )

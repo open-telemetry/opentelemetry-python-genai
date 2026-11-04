@@ -32,12 +32,11 @@ the openai SDK directly and produces those.
 
 from __future__ import annotations
 
-import json
 import weakref
-from collections.abc import Mapping
 from typing import Any
 
-from agents.tracing import Span, Trace, TracingProcessor
+from agents import RunHooks
+from agents.tracing import Span, Trace, TracingProcessor, get_current_span
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
@@ -53,20 +52,15 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import Error
-from opentelemetry.util.types import AnyValue
+from opentelemetry.util.genai.utils import (
+    object_to_any_value,
+    tool_arguments_to_any_value,
+)
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation
 # only puts the name in the span name, not as an attribute.
 _WORKFLOW_NAME_ATTR = "gen_ai.workflow.name"
-
-
-def _tool_arguments(raw: str) -> AnyValue:
-    try:
-        parsed: AnyValue = json.loads(raw)
-    except ValueError:
-        return raw
-    return parsed if isinstance(parsed, Mapping) else raw
 
 
 class GenAITracingProcessor(TracingProcessor):
@@ -86,6 +80,9 @@ class GenAITracingProcessor(TracingProcessor):
         self._invocations: weakref.WeakKeyDictionary[
             Any, WorkflowInvocation | LocalAgentInvocation | ToolInvocation
         ] = weakref.WeakKeyDictionary()
+        self._agent_spans: weakref.WeakValueDictionary[str, Span[Any]] = (
+            weakref.WeakValueDictionary()
+        )
 
     def on_trace_start(self, trace: Trace) -> None:
         # ``trace.name`` comes from ``RunConfig.workflow_name`` (default
@@ -116,7 +113,12 @@ class GenAITracingProcessor(TracingProcessor):
                 agent_name=span_data.name,
             )
             self._invocations[span] = invocation
+            self._agent_spans[span.span_id] = span
             return
+        if span.parent_id is not None:
+            agent_span = self._agent_spans.get(span.parent_id)
+            if agent_span is not None:
+                self._agent_spans[span.span_id] = agent_span
         if isinstance(span_data, FunctionSpanData):
             invocation = self._handler.tool(
                 name=span_data.name,
@@ -130,6 +132,7 @@ class GenAITracingProcessor(TracingProcessor):
         # instrumentation; the rest have no semconv yet.
 
     def on_span_end(self, span: Span[Any]) -> None:
+        self._agent_spans.pop(span.span_id, None)
         invocation = self._invocations.pop(span, None)
         if invocation is None:
             return
@@ -140,12 +143,8 @@ class GenAITracingProcessor(TracingProcessor):
         ):
             arguments = span.span_data.input
             if arguments:
-                invocation.arguments = _tool_arguments(arguments)
-            output = span.span_data.output
-            if output is not None:
-                invocation.tool_result = (
-                    output if isinstance(output, str) else str(output)
-                )
+                invocation.arguments = tool_arguments_to_any_value(arguments)
+            invocation.tool_result = object_to_any_value(span.span_data.output)
         # SpanError is a mapping, not a raised exception, so it never
         # reaches util-genai's exception path on its own.
         span_error = getattr(span, "error", None)
@@ -159,6 +158,22 @@ class GenAITracingProcessor(TracingProcessor):
             return
         invocation.stop()
 
+    def _get_current_agent(self) -> LocalAgentInvocation | None:
+        span = get_current_span()
+        agent_span = (
+            self._agent_spans.get(span.span_id) if span is not None else None
+        )
+        invocation = (
+            self._invocations.get(agent_span)
+            if agent_span is not None
+            else None
+        )
+        return (
+            invocation
+            if isinstance(invocation, LocalAgentInvocation)
+            else None
+        )
+
     def shutdown(self) -> None:
         for invocation in list(self._invocations.values()):
             try:
@@ -166,6 +181,49 @@ class GenAITracingProcessor(TracingProcessor):
             except Exception:  # pylint: disable=broad-except
                 pass
         self._invocations.clear()
+        self._agent_spans.clear()
 
     def force_flush(self) -> None:  # pragma: no cover - nothing to flush
         pass
+
+
+class GenAIRunHooks(RunHooks[Any]):
+    """Count logical model calls and tools while forwarding lifecycle hooks."""
+
+    def __init__(
+        self,
+        hooks: RunHooks[Any] | None,
+        processor: GenAITracingProcessor,
+    ) -> None:
+        self._hooks = hooks if hooks is not None else RunHooks()
+        self._processor = processor
+
+    def __getattribute__(self, name: str) -> Any:
+        if name.startswith("on_") and name not in GenAIRunHooks.__dict__:
+            return getattr(object.__getattribute__(self, "_hooks"), name)
+        return object.__getattribute__(self, name)
+
+    def _get_invocation(self) -> LocalAgentInvocation | None:
+        invocation = self._processor._get_current_agent()
+        if invocation is not None:
+            if invocation.inference_calls is None:
+                invocation.inference_calls = 0
+            if invocation.tool_calls is None:
+                invocation.tool_calls = 0
+        return invocation
+
+    async def on_agent_start(self, *args: Any, **kwargs: Any) -> None:
+        self._get_invocation()
+        await self._hooks.on_agent_start(*args, **kwargs)
+
+    async def on_llm_start(self, *args: Any, **kwargs: Any) -> None:
+        invocation = self._get_invocation()
+        if invocation is not None:
+            invocation.inference_calls = (invocation.inference_calls or 0) + 1
+        await self._hooks.on_llm_start(*args, **kwargs)
+
+    async def on_tool_start(self, *args: Any, **kwargs: Any) -> None:
+        invocation = self._get_invocation()
+        if invocation is not None:
+            invocation.tool_calls = (invocation.tool_calls or 0) + 1
+        await self._hooks.on_tool_start(*args, **kwargs)

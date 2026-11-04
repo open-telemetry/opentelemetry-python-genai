@@ -1,0 +1,1 @@
+Check if logger is enabled before emitting inference details event, and set event severity to DEBUG per GenAI semantic conventions.

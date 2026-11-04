@@ -114,8 +114,8 @@ def load_completion_hook() -> CompletionHook:
 
     This function loads an completion hook from the entry point group
     ``opentelemetry_genai_completion_hook`` with name coming from
-    :envvar:`OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`. If one can't be found, returns a no-op
-    implementation.
+    :envvar:`OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK`. If the configured name cannot be
+    resolved to a valid hook, a warning is logged and a no-op implementation is returned.
 
     The returned hook wraps the user-provided implementation so any exception
     raised by ``on_completion`` is logged and swallowed.
@@ -124,17 +124,19 @@ def load_completion_hook() -> CompletionHook:
     if not hook_name:
         return _NoOpCompletionHook()
 
+    hook_names: list[str] = []
     for entry_point in entry_points(
         group="opentelemetry_genai_completion_hook"
     ):
         name = entry_point.name
+        hook_names.append(name)
         try:
             if hook_name != name:
                 continue
 
             hook = entry_point.load()()
             if not isinstance(hook, CompletionHook):
-                _logger.debug(
+                _logger.warning(
                     "%s is not a valid CompletionHook. Using noop", name
                 )
                 continue
@@ -147,6 +149,13 @@ def load_completion_hook() -> CompletionHook:
                 "CompletionHook %s configuration failed. Using noop", name
             )
 
+    if hook_name not in hook_names:
+        _logger.warning(
+            "%s is not a valid option for %s. Must be one of %s. Using noop.",
+            hook_name,
+            OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK,
+            ", ".join(hook_names) or "none",
+        )
     return _NoOpCompletionHook()
 
 
