@@ -21,7 +21,6 @@ from opentelemetry.util.genai._invocation import (
     _ContextData,
 )
 from opentelemetry.util.genai.completion_hook import (
-    CompletionHook,
     _NoOpCompletionHook,
 )
 from opentelemetry.util.genai.utils import ContentCapturingMode
@@ -57,7 +56,6 @@ class EmbeddingInvocation(GenAIInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         provider: str,
         *,
         request_model: str | None = None,
@@ -246,7 +244,6 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         provider: str,
         *,
         request_model: str | None = None,
@@ -260,7 +257,6 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
             tracer,
             instruments,
             logger,
-            _NoOpCompletionHook(),
             provider,
             request_model=request_model,
             server_address=server_address,

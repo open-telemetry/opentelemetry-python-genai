@@ -22,7 +22,6 @@ from opentelemetry.util.genai._invocation import (
     _resolve_suppressed_content_and_hook,
 )
 from opentelemetry.util.genai.completion_hook import (
-    CompletionHook,
     _NoOpCompletionHook,
 )
 from opentelemetry.util.genai.types import RetrievalDocument
@@ -79,7 +78,6 @@ class RetrievalInvocation(GenAIInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -298,7 +296,6 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -314,15 +311,14 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
             self._capture_content_to_context,
             _upload_completion,
             effective_content_mode,
-            effective_completion_hook,
+            _effective_completion_hook,
         ) = _resolve_suppressed_content_and_hook(
-            ctx_data, content_capturing_mode, _NoOpCompletionHook()
+            ctx_data, content_capturing_mode, None
         )
         super().__init__(
             tracer,
             instruments,
             logger,
-            effective_completion_hook,
             data_source_id=data_source_id,
             provider=provider,
             request_model=request_model,
