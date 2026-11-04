@@ -199,8 +199,8 @@ When a client operation (inference, embeddings, retrieval, fetch response, or re
 invocation) fails with an exception, the package also emits a ``gen_ai.client.operation.exception``
 event (with ``WARN`` severity) carrying ``exception.type``, ``exception.message``, and
 ``exception.stacktrace``. ``exception.message`` may contain sensitive information. The event is not
-emitted for failures reported without an exception, for abandoned streams, or for a
-``BaseException`` that is not an ``Exception``, such as cancellation.
+emitted for failures reported without an exception, or for a ``BaseException`` that is not an
+``Exception``, such as cancellation.
 
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^

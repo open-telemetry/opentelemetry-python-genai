@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import timeit
-import traceback
 from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -24,10 +23,7 @@ from opentelemetry.context import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.semconv.attributes import (
-    error_attributes,
-    exception_attributes,
-)
+from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import (
     Span,
     SpanKind,
@@ -57,7 +53,6 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    fq_exception_type,
     gen_ai_json_dumps,
     get_content_capturing_mode,
     object_to_any_value,
@@ -186,9 +181,6 @@ def _resolve_suppressed_content_and_hook(
     )
 
 
-_EXCEPTION_EVENT_NAME = "gen_ai.client.operation.exception"
-
-
 class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     """
     Base class for all GenAI invocation types. Manages the lifecycle of a single
@@ -200,6 +192,9 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
 
     _records_stream_telemetry: ClassVar[bool] = False
     """Whether stream wrappers mark this invocation as streamed and record chunk timing."""
+
+    _exception_event_name: ClassVar[str | None] = None
+    """Name of the event emitted when the operation fails with an exception, if any."""
 
     def __init__(
         self,
@@ -235,7 +230,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._completion_hook = completion_hook
         self._error_type_resolver = error_type_resolver
         self._operation_name: str = operation_name
-        self._span_kind: SpanKind = span_kind
         self._content_capturing_mode: ContentCapturingMode = (
             get_content_capturing_mode()
             if content_capturing_mode is None
@@ -455,51 +449,32 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 )
 
     def _emit_exception_event(self, error: Error) -> None:
-        """Emit a ``gen_ai.client.operation.exception`` event for a raised exception.
+        """Emit the invocation's exception event for a raised exception.
 
-        Only client operations that own their span report it; a suppressed
-        invocation leaves it to the invocation it runs inside. Errors built
-        without an exception have nothing to report, and, as in the SDK's
+        Only invocations with an ``_exception_event_name`` report it. Errors
+        built without an exception have nothing to report, and, as in the SDK's
         ``use_span``, a ``BaseException`` that is not an ``Exception`` (such as
-        cancellation) is not treated as one.
+        cancellation) is not treated as one. The SDK fills ``exception.type``,
+        ``exception.message`` and ``exception.stacktrace`` from the exception.
 
         For more details, see the semantic convention documentation:
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-exceptions.md
         """
-        from opentelemetry.util.genai.stream import (  # pylint: disable=import-outside-toplevel
-            AbandonedStreamError,
-        )
-
+        event_name = self._exception_event_name
         exception = error.exception
-        if (
-            not self._start_span
-            or self._span_kind is not SpanKind.CLIENT
-            or not isinstance(exception, Exception)
-            # Raised by the stream wrappers themselves, not by the operation.
-            or isinstance(exception, AbandonedStreamError)
-        ):
+        if event_name is None or not isinstance(exception, Exception):
             return
         if not self._logger.enabled(
             context=self._span_context,
             severity_number=SeverityNumber.WARN,
-            event_name=_EXCEPTION_EVENT_NAME,
+            event_name=event_name,
         ):
             return
         self._logger.emit(
-            LogRecord(
-                event_name=_EXCEPTION_EVENT_NAME,
-                attributes={
-                    exception_attributes.EXCEPTION_TYPE: fq_exception_type(
-                        exception
-                    ),
-                    exception_attributes.EXCEPTION_MESSAGE: str(exception),
-                    exception_attributes.EXCEPTION_STACKTRACE: "".join(
-                        traceback.format_exception(exception)
-                    ),
-                },
-                context=self._span_context,
-                severity_number=SeverityNumber.WARN,
-            )
+            event_name=event_name,
+            exception=exception,
+            context=self._span_context,
+            severity_number=SeverityNumber.WARN,
         )
 
     def stop(self) -> None:

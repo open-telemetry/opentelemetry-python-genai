@@ -504,6 +504,8 @@ class RemoteAgentInvocation(AgentInvocation):
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-client-span
     """
 
+    _exception_event_name = "gen_ai.client.operation.exception"
+
     def __init__(
         self,
         tracer: Tracer,

@@ -559,27 +559,40 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             SeverityNumber.DEBUG,
         )
 
-    def _exception_events(self):
+    def _exception_events(self, event_name=EXCEPTION_EVENT):
         return [
             log.log_record
             for log in self.log_exporter.get_finished_logs()
-            if log.log_record.event_name == EXCEPTION_EVENT
+            if log.log_record.event_name == event_name
         ]
 
     def test_failed_client_operation_emits_exception_event(self):
         handler = self.telemetry_handler
         operations = {
-            "inference": lambda: handler.inference("provider"),
-            "embedding": lambda: handler.embedding("provider"),
-            "retrieval": lambda: handler.retrieval(provider="provider"),
-            "fetch_response": lambda: handler.fetch_response(
-                "provider", response_id="resp_1"
+            "inference": (
+                lambda: handler.inference("provider"),
+                "gen_ai.client.operation.exception",
             ),
-            "invoke_remote_agent": lambda: handler.invoke_remote_agent(
-                "provider"
+            "embedding": (
+                lambda: handler.embedding("provider"),
+                "gen_ai.client.operation.exception",
+            ),
+            "retrieval": (
+                lambda: handler.retrieval(provider="provider"),
+                "gen_ai.client.operation.exception",
+            ),
+            "fetch_response": (
+                lambda: handler.fetch_response(
+                    "provider", response_id="resp_1"
+                ),
+                "gen_ai.client.operation.exception",
+            ),
+            "invoke_remote_agent": (
+                lambda: handler.invoke_remote_agent("provider"),
+                "gen_ai.client.operation.exception",
             ),
         }
-        for name, start in operations.items():
+        for name, (start, event_name) in operations.items():
             with self.subTest(operation=name):
                 self.span_exporter.clear()
                 self.log_exporter.clear()
@@ -587,7 +600,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                     with start():
                         _raise_rate_limit()
 
-                (event,) = self._exception_events()
+                (event,) = self._exception_events(event_name)
                 span = _get_single_span(self.span_exporter)
                 self.assertEqual(event.severity_number, SeverityNumber.WARN)
                 self.assertEqual(event.trace_id, span.context.trace_id)
@@ -630,7 +643,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             "error_without_exception": Error(
                 type="response.failed", message="server error"
             ),
-            "abandoned_stream": AbandonedStreamError(),
             "cancelled": asyncio.CancelledError(),
             "keyboard_interrupt": KeyboardInterrupt(),
             "generator_exit": GeneratorExit(),
@@ -645,6 +657,20 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                     invocation.fail(error)
 
                 self.assertEqual(self._exception_events(), [])
+
+    def test_abandoned_stream_emits_exception_event(self):
+        invocation = self.telemetry_handler.inference("provider")
+        invocation.fail(AbandonedStreamError())
+
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_TYPE],
+            "opentelemetry.util.genai.stream.AbandonedStreamError",
+        )
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_MESSAGE],
+            "abandoned stream",
+        )
 
     def test_exception_event_type_is_not_the_resolved_error_type(self):
         invocation = self.telemetry_handler.inference(

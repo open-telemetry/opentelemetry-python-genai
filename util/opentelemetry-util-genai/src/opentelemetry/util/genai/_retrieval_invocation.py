@@ -71,6 +71,8 @@ class RetrievalInvocation(GenAIInvocation):
     - gen_ai.retrieval.query.text: Query text (Opt-In, may contain sensitive data)
     """
 
+    _exception_event_name = "gen_ai.client.operation.exception"
+
     def __init__(
         self,
         tracer: Tracer,

@@ -147,6 +147,7 @@ class InferenceInvocation(GenAIInvocation):
     """
 
     _records_stream_telemetry = True
+    _exception_event_name = "gen_ai.client.operation.exception"
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
