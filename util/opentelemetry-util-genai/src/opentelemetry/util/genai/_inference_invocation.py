@@ -891,7 +891,8 @@ class InferenceInvocation(GenAIInvocation):
             self.data.tool_definitions = tool_definitions
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
-        attrs = dict(self._start_attributes)
+        attrs = dict(self.metric_attributes)
+        attrs.update(self._start_attributes)
         if self.data.provider_name is not None:
             attrs[GenAI.GEN_AI_PROVIDER_NAME] = self.data.provider_name
         if self.data.request_model is not None:
@@ -902,19 +903,27 @@ class InferenceInvocation(GenAIInvocation):
             attrs[server_attributes.SERVER_ADDRESS] = self.data.server_address
         if self.data.server_port is not None:
             attrs[server_attributes.SERVER_PORT] = self.data.server_port
-        attrs.update(self.metric_attributes)
         return attrs
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        if self.data.usage_input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = (
-                self.data.usage_input_tokens
-            )
-        if self.data.usage_output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
-                self.data.usage_output_tokens
-            )
+        input_tokens = self.data.usage_input_tokens
+        if input_tokens is None:
+            raw_input = self.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS)
+            if isinstance(raw_input, int) and not isinstance(raw_input, bool):
+                input_tokens = raw_input
+        if input_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = input_tokens
+
+        output_tokens = self.data.usage_output_tokens
+        if output_tokens is None:
+            raw_output = self.attributes.get(GenAI.GEN_AI_USAGE_OUTPUT_TOKENS)
+            if isinstance(raw_output, int) and not isinstance(
+                raw_output, bool
+            ):
+                output_tokens = raw_output
+        if output_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = output_tokens
         return counts
 
     def _apply_finish(self, error: Error | None = None) -> None:
@@ -929,10 +938,9 @@ class InferenceInvocation(GenAIInvocation):
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:
             self.data.request_stream = self._request_stream
-        attributes: dict[str, AttributeValue] = {}
+        attributes: dict[str, AttributeValue] = dict(self.attributes)
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=True))
-        attributes.update(self.attributes)
         start_keys = set(self._start_attributes)
         span_attributes = {
             k: v for k, v in attributes.items() if k not in start_keys
@@ -959,11 +967,10 @@ class InferenceInvocation(GenAIInvocation):
         if not self._emit_event:
             return None
 
-        attributes: dict[str, AttributeValue] = {}
+        attributes: dict[str, AttributeValue] = dict(self.attributes)
         attributes.update(self._start_attributes)
         attributes.update(self._get_attributes())
         attributes.update(self._get_message_attributes(for_span=False))
-        attributes.update(self.attributes)
         return LogRecord(
             event_name="gen_ai.client.inference.operation.details",
             attributes=attributes,

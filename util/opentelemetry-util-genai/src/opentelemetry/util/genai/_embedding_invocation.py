@@ -178,20 +178,19 @@ class EmbeddingInvocation(GenAIInvocation):
             (server_attributes.SERVER_ADDRESS, self._data.server_address),
             (server_attributes.SERVER_PORT, self._data.server_port),
         )
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-        attrs.update(self.metric_attributes)
+        attrs: dict[str, AttributeValue] = dict(self.metric_attributes)
+        attrs[GenAI.GEN_AI_OPERATION_NAME] = self._operation_name
+        attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
     def _get_metric_token_counts(self) -> dict[str, int]:
-        if self._data.usage_input_tokens is not None:
-            return {
-                GenAI.GenAiTokenTypeValues.INPUT.value: (
-                    self._data.usage_input_tokens
-                )
-            }
+        input_tokens = self._data.usage_input_tokens
+        if input_tokens is None:
+            raw_input = self.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS)
+            if isinstance(raw_input, int) and not isinstance(raw_input, bool):
+                input_tokens = raw_input
+        if input_tokens is not None:
+            return {GenAI.GenAiTokenTypeValues.INPUT.value: input_tokens}
         return {}
 
     def _apply_finish(self, error: Error | None = None) -> None:
@@ -226,10 +225,10 @@ class EmbeddingInvocation(GenAIInvocation):
             (GenAI.GEN_AI_RESPONSE_MODEL, self._data.response_model),
             (GenAI.GEN_AI_USAGE_INPUT_TOKENS, self._data.usage_input_tokens),
         )
-        attributes: dict[str, AttributeValue] = {
-            key: value for key, value in optional_attrs if value is not None
-        }
-        attributes.update(self.attributes)
+        attributes: dict[str, AttributeValue] = dict(self.attributes)
+        attributes.update(
+            {key: value for key, value in optional_attrs if value is not None}
+        )
         self.span.set_attributes(attributes)
         self._record_client_metrics()
 

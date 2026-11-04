@@ -224,11 +224,9 @@ class RetrievalInvocation(GenAIInvocation):
             (server_attributes.SERVER_ADDRESS, self._data.server_address),
             (server_attributes.SERVER_PORT, self._data.server_port),
         )
-        attrs: dict[str, AttributeValue] = {
-            GenAI.GEN_AI_OPERATION_NAME: self._operation_name,
-            **{k: v for k, v in optional_attrs if v is not None},
-        }
-        attrs.update(self.metric_attributes)
+        attrs: dict[str, AttributeValue] = dict(self.metric_attributes)
+        attrs[GenAI.GEN_AI_OPERATION_NAME] = self._operation_name
+        attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
     def _get_content_attributes_for_span(self) -> dict[str, AttributeValue]:
@@ -274,11 +272,9 @@ class RetrievalInvocation(GenAIInvocation):
                 else None,
             ),
         )
-        attributes: dict[str, AttributeValue] = {
-            k: v for k, v in optional_attrs if v is not None
-        }
+        attributes: dict[str, AttributeValue] = dict(self.attributes)
+        attributes.update({k: v for k, v in optional_attrs if v is not None})
         attributes.update(self._get_content_attributes_for_span())
-        attributes.update(self.attributes)
         self.span.set_attributes(attributes)
         self._record_client_metrics()
 

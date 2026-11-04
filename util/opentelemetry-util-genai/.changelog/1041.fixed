@@ -1,0 +1,1 @@
+Preserve outer invocation typed attributes over colliding entries in `attributes` and `metric_attributes` dictionaries when enriching from context, and fall back to `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` in `attributes` when recording token usage metrics.

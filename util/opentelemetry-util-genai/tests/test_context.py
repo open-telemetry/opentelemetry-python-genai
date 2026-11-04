@@ -1088,6 +1088,129 @@ class TestInferenceContext(BaseContextTest):
         self.assertTrue(config_data.capture_content)
         self.assertTrue(config_data.upload_completion)
 
+    def test_raw_context_attributes_do_not_overwrite_outer_typed_fields(
+        self,
+    ) -> None:
+        log_exporter = InMemoryLogRecordExporter()
+        logger_provider = LoggerProvider()
+        logger_provider.add_log_record_processor(
+            SimpleLogRecordProcessor(log_exporter)
+        )
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+            logger_provider=logger_provider,
+        )
+        with handler.inference(
+            "outer-provider",
+            request_model="outer-model",
+        ) as root_inv:
+            root_inv.temperature = 0.2
+
+            # Simulate an inner instrumentation (e.g. LiteLLM) publishing directly
+            # to ctx_data.attributes and ctx_data.metric_attributes.
+            ctx_data = get_inference_context_data()
+            assert ctx_data is not None
+            ctx_data.attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_REQUEST_MODEL: "inner-model",
+                    GenAI.GEN_AI_REQUEST_TEMPERATURE: 0.9,
+                    GenAI.GEN_AI_RESPONSE_MODEL: "inner-resp-model",
+                    GenAI.GEN_AI_RESPONSE_ID: "resp-xyz",
+                    GenAI.GEN_AI_USAGE_INPUT_TOKENS: 15,
+                    GenAI.GEN_AI_USAGE_OUTPUT_TOKENS: 25,
+                    server_attributes.SERVER_ADDRESS: "api.openai.com",
+                    server_attributes.SERVER_PORT: 443,
+                    "litellm.call.id": "call-1",
+                }
+            )
+            ctx_data.metric_attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_REQUEST_MODEL: "inner-model",
+                    GenAI.GEN_AI_RESPONSE_MODEL: "inner-resp-model",
+                    server_attributes.SERVER_ADDRESS: "api.openai.com",
+                    server_attributes.SERVER_PORT: 443,
+                }
+            )
+
+        spans = self.span_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        span_attrs = spans[0].attributes
+        # Outer typed fields win over inner raw dict
+        self.assertEqual(
+            span_attrs.get(GenAI.GEN_AI_PROVIDER_NAME), "outer-provider"
+        )
+        self.assertEqual(
+            span_attrs.get(GenAI.GEN_AI_REQUEST_MODEL), "outer-model"
+        )
+        self.assertEqual(span_attrs.get(GenAI.GEN_AI_REQUEST_TEMPERATURE), 0.2)
+        # Missing fields on outer are enriched from inner raw dict
+        self.assertEqual(
+            span_attrs.get(GenAI.GEN_AI_RESPONSE_MODEL), "inner-resp-model"
+        )
+        self.assertEqual(span_attrs.get(GenAI.GEN_AI_RESPONSE_ID), "resp-xyz")
+        self.assertEqual(span_attrs.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 15)
+        self.assertEqual(span_attrs.get(GenAI.GEN_AI_USAGE_OUTPUT_TOKENS), 25)
+        self.assertEqual(
+            span_attrs.get(server_attributes.SERVER_ADDRESS), "api.openai.com"
+        )
+        self.assertEqual(span_attrs.get(server_attributes.SERVER_PORT), 443)
+        self.assertEqual(span_attrs.get("litellm.call.id"), "call-1")
+
+        # Event attributes also preserve outer typed fields
+        logs = log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 1)
+        event_attrs = logs[0].log_record.attributes
+        assert event_attrs is not None
+        self.assertEqual(
+            event_attrs.get(GenAI.GEN_AI_PROVIDER_NAME), "outer-provider"
+        )
+        self.assertEqual(
+            event_attrs.get(GenAI.GEN_AI_REQUEST_MODEL), "outer-model"
+        )
+        self.assertEqual(
+            event_attrs.get(GenAI.GEN_AI_REQUEST_TEMPERATURE), 0.2
+        )
+        self.assertEqual(
+            event_attrs.get(GenAI.GEN_AI_RESPONSE_MODEL), "inner-resp-model"
+        )
+
+        # Metrics preserve outer typed fields and record token usage from raw attributes
+        metrics = self._harvest_metrics()
+        duration_point = metrics["gen_ai.client.operation.duration"][0]
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_PROVIDER_NAME),
+            "outer-provider",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_REQUEST_MODEL),
+            "outer-model",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_RESPONSE_MODEL),
+            "inner-resp-model",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(server_attributes.SERVER_ADDRESS),
+            "api.openai.com",
+        )
+        token_points = metrics["gen_ai.client.token.usage"]
+        token_by_type = {
+            p.attributes[GenAI.GEN_AI_TOKEN_TYPE]: p for p in token_points
+        }
+        self.assertAlmostEqual(
+            token_by_type[GenAI.GenAiTokenTypeValues.INPUT.value].sum,
+            15.0,
+            places=3,
+        )
+        self.assertAlmostEqual(
+            token_by_type[GenAI.GenAiTokenTypeValues.OUTPUT.value].sum,
+            25.0,
+            places=3,
+        )
+
     def test_inference_invocation_property_delegation_to_data(self) -> None:
         with self.handler.inference(
             "test-provider",
