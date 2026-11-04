@@ -61,6 +61,9 @@ class GenerateRequirementsTest(unittest.TestCase):
                 ",".join((*locked, *other, coverage)),
                 "-k",
                 "deps",
+                "disallow_pass_env",
+                "install_command",
+                "commands_pre",
                 "--format",
                 "json",
                 "--colored",
@@ -80,6 +83,30 @@ class GenerateRequirementsTest(unittest.TestCase):
             ]
             self.assertEqual(
                 dependencies, [f"-r {lock_dir}/{environment}.txt"]
+            )
+            self.assertIn(
+                "UV_OVERRIDE*",
+                configurations[environment]["disallow_pass_env"],
+            )
+            self.assertTrue(
+                set(generator._RESOLUTION_ENV).issubset(
+                    configurations[environment]["disallow_pass_env"]
+                )
+            )
+            self.assertIn(
+                "--no-deps", configurations[environment]["install_command"]
+            )
+            self.assertIn(
+                "--no-config", configurations[environment]["install_command"]
+            )
+            self.assertIn(
+                "--no-sources", configurations[environment]["install_command"]
+            )
+            self.assertTrue(
+                any(
+                    "uv pip check" in command
+                    for command in configurations[environment]["commands_pre"]
+                )
             )
         for environment in other:
             dependencies = [
@@ -106,7 +133,15 @@ class GenerateRequirementsTest(unittest.TestCase):
             generator.portable(dependency, root)
             for dependency in configurations[coverage]["deps"]
         ]
-        self.assertIn(f"-r {lock_dir}/{locked[1]}.txt", coverage_dependencies)
+        self.assertFalse(
+            any("/tests/locks/" in dep for dep in coverage_dependencies)
+        )
+        self.assertTrue(
+            any(
+                dep.endswith("/tests/requirements.latest.txt")
+                for dep in coverage_dependencies
+            )
+        )
 
     def test_environment_resolution_and_python_version(self) -> None:
         self.assertEqual(
@@ -140,6 +175,10 @@ class GenerateRequirementsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             write_pilot_inputs(root)
+            (root / "tests").mkdir()
+            (root / "tests/requirements.oldest.txt").write_text(
+                "# input\n", encoding="utf-8"
+            )
             output = root / "locked.txt"
             dependencies = [
                 "pytest>=8",
@@ -176,6 +215,8 @@ class GenerateRequirementsTest(unittest.TestCase):
                     kwargs["env"]["UV_RESOLUTION"], "lowest-direct"
                 )
                 self.assertNotIn("UV_CONFIG_FILE", kwargs["env"])
+                self.assertNotIn("UV_OVERRIDE", kwargs["env"])
+                self.assertNotIn("UV_CONSTRAINT", kwargs["env"])
                 self.assertEqual(
                     kwargs["input"],
                     "pytest>=8\n"
@@ -197,7 +238,16 @@ class GenerateRequirementsTest(unittest.TestCase):
                 )
                 return subprocess.CompletedProcess(command, 0)
 
-            with patch.object(generator.subprocess, "run", side_effect=run):
+            with (
+                patch.dict(
+                    generator.os.environ,
+                    {
+                        "UV_OVERRIDE": "override.txt",
+                        "UV_CONSTRAINT": "constraint.txt",
+                    },
+                ),
+                patch.object(generator.subprocess, "run", side_effect=run),
+            ):
                 generator.generate_requirements(root, OLDEST, output)
             content = output.read_text(encoding="utf-8")
             self.assertNotIn(str(root), content)
@@ -224,8 +274,12 @@ class GenerateRequirementsTest(unittest.TestCase):
             fingerprint = generator.input_fingerprint(
                 root, OLDEST, ["pytest>=8"]
             )
+            body = "pytest==8.0.0\n"
             output.write_text(
-                f"# Inputs SHA256: {fingerprint}\n", encoding="utf-8"
+                f"# Inputs SHA256: {fingerprint}\n"
+                f"# Packages SHA256: {generator.lock_shape(body, pin_versions=True)}\n"
+                f"{body}",
+                encoding="utf-8",
             )
             with patch.object(generator.subprocess, "run", side_effect=config):
                 generator.generate_requirements(
@@ -238,6 +292,122 @@ class GenerateRequirementsTest(unittest.TestCase):
                     generator.generate_requirements(
                         root, OLDEST, output, check=True
                     )
+
+    def test_nested_requirements_change_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            write_pilot_inputs(root)
+            (root / "tests").mkdir()
+            (root / "tests/root.txt").write_text(
+                "-r nested.txt\n", encoding="utf-8"
+            )
+            nested = root / "tests/nested.txt"
+            nested.write_text("anyio<4.10\n", encoding="utf-8")
+            dependencies = ["-r ./tests/root.txt"]
+            before = generator.input_fingerprint(root, OLDEST, dependencies)
+            nested.write_text("anyio<4.8\n", encoding="utf-8")
+            self.assertNotEqual(
+                before, generator.input_fingerprint(root, OLDEST, dependencies)
+            )
+
+    def test_lock_shape_detects_removed_or_unpinned_packages(self) -> None:
+        original = "pytest==8.0.0\nanyio==4.16.0\n"
+        self.assertEqual(
+            generator.lock_shape(original),
+            generator.lock_shape(original.replace("4.16.0", "4.17.0")),
+        )
+        self.assertNotEqual(
+            generator.lock_shape(original, pin_versions=True),
+            generator.lock_shape(
+                original.replace("4.16.0", "4.17.0"), pin_versions=True
+            ),
+        )
+        self.assertNotEqual(
+            generator.lock_shape(original),
+            generator.lock_shape("pytest==8.0.0\n"),
+        )
+        with self.assertRaisesRegex(ValueError, "unpinned"):
+            generator.lock_shape("anyio>=4\n")
+
+    def test_check_rejects_a_removed_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            write_pilot_inputs(root)
+            output = root / "locked.txt"
+            dependencies = ["pytest>=8"]
+            fingerprint = generator.input_fingerprint(
+                root, OLDEST, dependencies
+            )
+            body = "pytest==8.0.0\nanyio==4.16.0\n"
+            output.write_text(
+                f"# Inputs SHA256: {fingerprint}\n"
+                f"# Packages SHA256: {generator.lock_shape(body, pin_versions=True)}\n{body}",
+                encoding="utf-8",
+            )
+            configuration = {"deps": dependencies}
+            installed = {"deps": [f"-r {output}"]}
+            with patch.object(
+                generator,
+                "tox_configuration",
+                side_effect=[
+                    configuration,
+                    installed,
+                    configuration,
+                    installed,
+                ],
+            ):
+                generator.generate_requirements(
+                    root, OLDEST, output, check=True
+                )
+                output.write_text(
+                    output.read_text(encoding="utf-8").replace(
+                        "anyio==4.16.0\n", ""
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "out of date"):
+                    generator.generate_requirements(
+                        root, OLDEST, output, check=True
+                    )
+
+    def test_direct_requirements_reject_incompatible_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            generator.validate_direct_requirements(
+                root, ["anthropic<3"], "anthropic==2.4.0\n"
+            )
+            with self.assertRaisesRegex(ValueError, "does not satisfy"):
+                generator.validate_direct_requirements(
+                    root, ["anthropic<3"], "anthropic==3.0.0\n"
+                )
+            with self.assertRaisesRegex(
+                ValueError, "missing direct requirement"
+            ):
+                generator.validate_direct_requirements(
+                    root, ["anthropic<3"], "pytest==8.0.0\n"
+                )
+            (root / "inputs with spaces.txt").write_text(
+                "anthropic<3\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                ValueError, "missing direct requirement"
+            ):
+                generator.validate_direct_requirements(
+                    root, ['-r "inputs with spaces.txt"'], "pytest==8.0.0\n"
+                )
+            generator.validate_direct_requirements(
+                root, ['-c "inputs with spaces.txt"'], "pytest==8.0.0\n"
+            )
+
+    def test_portable_handles_escaped_spaces(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lock inputs ") as temporary:
+            root = Path(temporary).resolve()
+            escaped = root.as_posix().replace(" ", "\\ ")
+            with patch.object(generator.os, "name", "posix"):
+                self.assertEqual(
+                    generator.portable(f"-r {escaped}/tests/input.txt", root),
+                    "-r ./tests/input.txt",
+                )
 
     def test_check_rejects_tox_bypassing_the_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

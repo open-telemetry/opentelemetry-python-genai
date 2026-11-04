@@ -142,11 +142,12 @@ uv run --no-project --with tox --with tox-uv python scripts/generate_requirement
   --output instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/py311-test-instrumentation-genai-anthropic-oldest.txt
 ```
 
-Use a tox version supporting `tox config --format json`. The output uses
+Use tox 4.36 or newer. The output uses
 `lowest-direct` for oldest environments and `highest` for latest environments.
 It keeps explicitly selected local packages editable and disables implicit
-workspace source substitutions. Tox environment overrides, including CrewAI's
-compatibility override, are preserved.
+workspace source substitutions. For other packages, tox environment overrides,
+including CrewAI's compatibility override, are preserved. The Anthropic pilot
+ignores inherited uv resolution overrides when generating and installing locks.
 
 The Anthropic oldest and latest test matrix installs the committed locks
 under `instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/`.
@@ -155,23 +156,28 @@ Python 3.15 latest environments. These locks include platform markers and keep
 local packages editable. Their source dependencies are defined separately in
 `tox.ini`, so regeneration does not use the existing lock as input. The latest
 source requirements are also used by the unchanged conformance environment.
-Other Python versions continue to use the source dependencies directly.
+Other Python versions and coverage environments use the source dependencies
+directly.
 
-CI checks each lock's input fingerprint without resolving new packages. When an
-input changes, regenerate and review all affected locks. Pass `--check` with the
-same environment and output arguments to verify a lock's inputs locally. For
-Anthropic, this replaces the handwritten-oldest-file coverage and redundancy
+CI checks each lock's inputs and package set without resolving new packages.
+Included requirements and constraints are tracked as inputs. The oldest lock
+also fingerprints versions; latest lock versions may be updated by Renovate.
+The check does not query the package index to confirm that versions are newest.
+The locked tox environments install only the listed packages and check their
+dependency metadata before running tests.
+When an input or package set changes, regenerate and review affected locks.
+Pass `--check` with the same environment and output arguments to verify a lock
+locally. For Anthropic, this replaces the handwritten-oldest-file coverage and redundancy
 check; the instrumentation metadata, latest bounds, and workspace dependency
 checks still run. Other packages retain their existing checks and tox inputs;
 their exported files target the platform running the command. Locks pin the
 test and runtime dependency graph; editable project build dependencies and
 package downloads are not vendored.
 
-The helper's regression tests use the standard library. With tox installed,
-they also check the test environment configuration:
+Run the helper's regression tests with tox and its dependencies available:
 
 ```sh
-python -m unittest discover -s scripts/tests -v
+uv run --no-project --with tox --with tox-uv python -m unittest discover -s scripts/tests -v
 ```
 
 ## Skills
