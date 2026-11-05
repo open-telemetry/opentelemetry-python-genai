@@ -1,7 +1,11 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Mapping
+from __future__ import annotations
+
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import TypeAlias
@@ -34,14 +38,63 @@ class _PromptContext:
 
 
 @dataclass
+class _InferenceCallScope:
+    run_id: UUID
+    parent: _InferenceCallScope | None = None
+    positions: dict[UUID, int] = field(
+        default_factory=lambda: dict[UUID, int]()
+    )
+    keys: dict[UUID, list[tuple[UUID, int]]] = field(
+        default_factory=lambda: dict[UUID, list[tuple[UUID, int]]]()
+    )
+
+    def key(self, agent_run_id: UUID) -> tuple[UUID, int]:
+        position = self.positions.get(agent_run_id, 0)
+        self.positions[agent_run_id] = position + 1
+        keys = self.keys.setdefault(agent_run_id, [])
+        if position == len(keys):
+            # Repeated inner attempts reuse their key without advancing the parent.
+            keys.append(
+                self.parent.key(agent_run_id)
+                if self.parent is not None
+                else (self.run_id, position)
+            )
+        return keys[position]
+
+    def is_nested_in(self, scope: _InferenceCallScope) -> bool:
+        current: _InferenceCallScope | None = self
+        while current is not None:
+            if current is scope:
+                return True
+            current = current.parent
+        return False
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        token = _inference_calls.set(self)
+        try:
+            yield
+        finally:
+            _inference_calls.reset(token)
+
+
+_inference_calls: ContextVar[_InferenceCallScope | None] = ContextVar(
+    "otel_langchain_inference_calls", default=None
+)
+_INFERENCE_CALLS_KEY = "__otel_langchain_inference_calls"
+
+
+@dataclass
 class _InvocationState:
     invocation: _AnyInvocation | None
     children: list[UUID] = field(default_factory=lambda: list())
     parent_run_id: UUID | None = None
     ended: bool = False
     agent_name: str | None = None
-    # None leaves this run outside logical inference accounting.
-    inference_counted: bool | None = None
+    inference_scope: _InferenceCallScope | None = None
+    inference_call_keys: set[tuple[UUID, int]] = field(
+        default_factory=lambda: set[tuple[UUID, int]]()
+    )
     prompt_context: _PromptContext | None = None
     pending_prompt_contexts: list[_PromptContext] = field(
         default_factory=lambda: list[_PromptContext]()
@@ -61,13 +114,10 @@ class _InvocationManager:
         parent_run_id: UUID | None,
         invocation: _AnyInvocation | None,
         agent_name: str | None = None,
-        *,
-        logical_inference: bool = False,
     ) -> None:
         invocation_state = _InvocationState(
             invocation=invocation,
             agent_name=agent_name,
-            inference_counted=False if logical_inference else None,
         )
 
         invocation_state.parent_run_id = parent_run_id
@@ -98,28 +148,82 @@ class _InvocationManager:
             current = self.get_parent_run_id(current)
         return None
 
+    def get_inference_scope(
+        self,
+        parent_run_id: UUID | None,
+        configured: _InferenceCallScope | None = None,
+    ) -> _InferenceCallScope | None:
+        scope = _inference_calls.get()
+        if configured is not None and (
+            scope is None or configured.is_nested_in(scope)
+        ):
+            scope = configured
+        current = parent_run_id
+        while current is not None:
+            state = self._invocations.get(current)
+            if state is None:
+                break
+            if state.inference_scope is not None:
+                candidate = state.inference_scope
+                if scope is None or candidate.is_nested_in(scope):
+                    scope = candidate
+                break
+            if isinstance(
+                state.invocation,
+                (
+                    LocalAgentInvocation,
+                    InferenceInvocation,
+                    ToolInvocation,
+                    RetrievalInvocation,
+                ),
+            ):
+                break
+            current = state.parent_run_id
+        return scope
+
+    def start_inference_attempt(
+        self,
+        run_id: UUID,
+        configured: _InferenceCallScope | None = None,
+    ) -> _InferenceCallScope | None:
+        with self._call_count_lock:
+            state = self._invocations.get(run_id)
+            if state is None:
+                return None
+            if state.inference_scope is None:
+                state.inference_scope = _InferenceCallScope(
+                    run_id,
+                    self.get_inference_scope(state.parent_run_id, configured),
+                )
+            else:
+                scope = state.inference_scope
+                state.inference_scope = _InferenceCallScope(
+                    run_id, scope.parent, keys=scope.keys
+                )
+            return state.inference_scope
+
     def record_agent_call(
         self, parent_run_id: UUID | None, *, tool_call: bool = False
     ) -> None:
         with self._call_count_lock:
+            scope = (
+                None if tool_call else self.get_inference_scope(parent_run_id)
+            )
             current = parent_run_id
-            logical_call: _InvocationState | None = None
             while current is not None:
                 state = self._invocations.get(current)
-                if state is not None and state.inference_counted is not None:
-                    logical_call = state
                 invocation = self.get_invocation(current)
                 if isinstance(invocation, LocalAgentInvocation):
                     if tool_call:
                         if invocation.tool_calls is not None:
                             invocation.tool_calls += 1
-                    elif invocation.inference_calls is not None and (
-                        logical_call is None
-                        or logical_call.inference_counted is False
-                    ):
+                    elif invocation.inference_calls is not None:
+                        if scope is not None and state is not None:
+                            key = scope.key(current)
+                            if key in state.inference_call_keys:
+                                return
+                            state.inference_call_keys.add(key)
                         invocation.inference_calls += 1
-                        if logical_call is not None:
-                            logical_call.inference_counted = True
                     return
                 if isinstance(
                     invocation,

@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from contextvars import copy_context
 from importlib import import_module, invalidate_caches
 from importlib.util import find_spec
+from inspect import iscoroutinefunction
 from pathlib import Path
 from typing import Any, TypedDict
 from unittest import mock
@@ -26,7 +27,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
+from langchain_core.runnables import (
+    Runnable,
+    RunnableBranch,
+    RunnableLambda,
+    fallbacks,
+    retry,
+)
 from langchain_core.runnables import base as runnables_base
 from langchain_core.tools import BaseTool, StructuredTool, Tool
 from langchain_core.vectorstores import VectorStore
@@ -727,6 +734,8 @@ def test_uninstrument_restores_execution_methods(
         (BaseRetriever, "ainvoke"),
         (BaseChatModel, "stream"),
         (BaseChatModel, "astream"),
+        (BaseChatModel, "invoke"),
+        (BaseChatModel, "ainvoke"),
         (Runnable, "_call_with_config"),
         (Runnable, "_acall_with_config"),
         (Runnable, "_transform_stream_with_config"),
@@ -738,7 +747,22 @@ def test_uninstrument_restores_execution_methods(
         (RunnableBranch, "stream"),
         (RunnableBranch, "astream"),
         (runnables_base, "set_config_context"),
+        (retry, "patch_config"),
+        (fallbacks, "patch_config"),
     ]
+    if find_spec("langchain.agents.middleware") is not None:
+        for module_name, class_name in (
+            ("model_retry", "ModelRetryMiddleware"),
+            ("model_fallback", "ModelFallbackMiddleware"),
+        ):
+            middleware = getattr(
+                import_module(f"langchain.agents.middleware.{module_name}"),
+                class_name,
+            )
+            targets.extend(
+                (middleware, method)
+                for method in ("wrap_model_call", "awrap_model_call")
+            )
     targets.extend(
         (manager_type, method)
         for manager_type in (CallbackManager, AsyncCallbackManager)
@@ -766,6 +790,9 @@ def test_uninstrument_restores_execution_methods(
         ):
             for (owner, name), original in zip(targets, originals):
                 assert getattr(owner, name) is not original
+                assert iscoroutinefunction(getattr(owner, name)) == (
+                    iscoroutinefunction(original)
+                )
         for (owner, name), original in zip(targets, originals):
             assert getattr(owner, name) is original
 
