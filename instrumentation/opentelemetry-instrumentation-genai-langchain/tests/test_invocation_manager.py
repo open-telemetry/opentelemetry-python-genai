@@ -155,34 +155,80 @@ def test_record_agent_call_leaves_untracked_counts_unset(
     assert outer.tool_calls == 0
 
 
-@pytest.mark.parametrize("logical_inference", [False, True])
-def test_record_agent_call_counts_logical_inferences_once(
+@pytest.mark.parametrize("with_retry", [False, True])
+def test_record_agent_call_deduplicates_logical_keys(
     invocation_manager: _InvocationManager,
-    logical_inference: bool,
+    with_retry: bool,
 ) -> None:
     agent_id, node_id, child_id = (uuid.uuid4() for _ in range(3))
     agent = mock.Mock(
         spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
     )
     invocation_manager.add_invocation_state(agent_id, None, agent)
-    invocation_manager.add_invocation_state(
-        node_id, agent_id, None, logical_inference=logical_inference
-    )
+    invocation_manager.add_invocation_state(node_id, agent_id, None)
     invocation_manager.add_invocation_state(child_id, node_id, None)
     for _ in range(2):
-        invocation_manager.record_agent_call(child_id)
-        invocation_manager.record_agent_call(child_id, tool_call=True)
-    assert agent.inference_calls == (1 if logical_inference else 2)
-    assert agent.tool_calls == 2
+        if with_retry:
+            invocation_manager.start_inference_attempt(node_id)
+        for _ in range(2):
+            invocation_manager.record_agent_call(child_id)
+            invocation_manager.record_agent_call(child_id, tool_call=True)
+    assert agent.inference_calls == (2 if with_retry else 4)
+    assert agent.tool_calls == 4
+    assert len(
+        invocation_manager._invocations[agent_id].inference_call_keys
+    ) == (2 if with_retry else 0)
 
     invocation_manager.delete_invocation_state(child_id)
     invocation_manager.delete_invocation_state(node_id)
     next_node_id = uuid.uuid4()
-    invocation_manager.add_invocation_state(
-        next_node_id, agent_id, None, logical_inference=logical_inference
-    )
+    invocation_manager.add_invocation_state(next_node_id, agent_id, None)
     invocation_manager.record_agent_call(next_node_id)
-    assert agent.inference_calls == (2 if logical_inference else 3)
+    assert agent.inference_calls == (3 if with_retry else 5)
+
+
+def test_nested_retry_keys_do_not_advance_the_outer_operation(
+    invocation_manager: _InvocationManager,
+) -> None:
+    agent_id, outer_id = uuid.uuid4(), uuid.uuid4()
+    agent = mock.Mock(
+        spec=LocalAgentInvocation, inference_calls=0, tool_calls=0
+    )
+    invocation_manager.add_invocation_state(agent_id, None, agent)
+    invocation_manager.add_invocation_state(outer_id, agent_id, None)
+    for _ in range(2):
+        invocation_manager.start_inference_attempt(outer_id)
+        inner_id = uuid.uuid4()
+        invocation_manager.add_invocation_state(inner_id, outer_id, None)
+        for _ in range(2):
+            invocation_manager.start_inference_attempt(inner_id)
+            for _ in range(2):
+                invocation_manager.record_agent_call(inner_id)
+        invocation_manager.delete_invocation_state(inner_id)
+        invocation_manager.record_agent_call(outer_id)
+        assert agent.inference_calls == 3
+
+
+def test_overlapping_attempts_have_separate_positions(
+    invocation_manager: _InvocationManager,
+) -> None:
+    agent_id, retry_id = uuid.uuid4(), uuid.uuid4()
+    agent = mock.Mock(spec=LocalAgentInvocation, inference_calls=0)
+    invocation_manager.add_invocation_state(agent_id, None, agent)
+    invocation_manager.add_invocation_state(retry_id, agent_id, None)
+    first = invocation_manager.start_inference_attempt(retry_id)
+    assert first is not None
+    with first.activate():
+        invocation_manager.record_agent_call(retry_id)
+    second = invocation_manager.start_inference_attempt(retry_id)
+    assert second is not None
+    with second.activate():
+        invocation_manager.record_agent_call(retry_id)
+    with first.activate():
+        invocation_manager.record_agent_call(retry_id)
+    with second.activate():
+        invocation_manager.record_agent_call(retry_id)
+    assert agent.inference_calls == 2
 
 
 def test_delete_invocation_state(invocation_manager, mock_invocation):

@@ -25,7 +25,6 @@ from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
     _PromptContext,
 )
 from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
-    LANGGRAPH_NODE_KEY,
     OperationName,
     classify_chain_run,
     resolve_agent_name,
@@ -316,20 +315,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_context = self._invocation_manager.get_parent_context(
             parent_run_id
         )
-        parent_invocation = (
-            self._invocation_manager.get_invocation(parent_run_id)
-            if parent_run_id is not None
-            else None
-        )
-        # Retry/fallback attempts share the native model node's run.
-        logical_inference = (
-            agent_announcement is None
-            and isinstance(parent_invocation, LocalAgentInvocation)
-            and parent_invocation.inference_calls is not None
-            and metadata is not None
-            and metadata.get(LANGGRAPH_NODE_KEY) in ("agent", "model")
-            and kwargs.get("name") == metadata.get(LANGGRAPH_NODE_KEY)
-        )
         conversation_id = _conversation_id(metadata)
         capture_content = self._telemetry_handler.should_capture_content()
         if operation == OperationName.INVOKE_WORKFLOW:
@@ -397,7 +382,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         run_id,
                         parent_run_id,
                         None,
-                        logical_inference=logical_inference,
                     )
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
@@ -419,7 +403,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     run_id,
                     parent_run_id,
                     None,
-                    logical_inference=logical_inference,
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
@@ -427,7 +410,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 run_id,
                 parent_run_id,
                 None,
-                logical_inference=logical_inference,
             )
 
         invocation = self._invocation_manager.get_invocation(run_id)
