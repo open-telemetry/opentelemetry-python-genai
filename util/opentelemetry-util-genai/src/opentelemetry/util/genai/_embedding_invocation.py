@@ -16,9 +16,9 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
 )
 from opentelemetry.util.genai.completion_hook import (
     CompletionHook,
@@ -33,7 +33,7 @@ CLIENT_EMBEDDING_CONTEXT_KEY: Final[str] = (
 
 
 @dataclass
-class EmbeddingData(_ContextData):
+class EmbeddingData(ContextData):
     """Typed data passed from inner embedding invocations to the outer invocation."""
 
     provider_name: str | None = None

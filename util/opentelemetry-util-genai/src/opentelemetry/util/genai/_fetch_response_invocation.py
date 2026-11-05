@@ -16,9 +16,9 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -46,7 +46,7 @@ _GEN_AI_RESPONSE_STATUS: Final = "gen_ai.response.status"
 
 
 @dataclass
-class FetchResponseData(_ContextData):
+class FetchResponseData(ContextData):
     """Typed data passed from inner fetch response invocations to the outer invocation."""
 
     provider_name: str | None = None

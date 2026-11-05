@@ -16,9 +16,9 @@ from opentelemetry.semconv.attributes import server_attributes
 from opentelemetry.trace import SpanKind, Tracer
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
@@ -36,7 +36,7 @@ _GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
 
 
 @dataclass
-class RetrievalData(_ContextData):
+class RetrievalData(ContextData):
     """Typed data passed from inner retrieval invocations to the outer invocation."""
 
     data_source_id: str | None = None

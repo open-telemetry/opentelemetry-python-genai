@@ -20,9 +20,9 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -87,7 +87,7 @@ CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
 
 
 @dataclass
-class InferenceData(_ContextData):
+class InferenceData(ContextData):
     """Typed data passed from inner inference invocations to the outer invocation."""
 
     conversation_id: str | None = None
