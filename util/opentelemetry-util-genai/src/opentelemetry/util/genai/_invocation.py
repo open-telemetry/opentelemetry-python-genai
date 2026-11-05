@@ -65,6 +65,7 @@ _GEN_AI_PROMPT_VARIABLE_PREFIX: str = "gen_ai.prompt.variable."
 ContextToken: TypeAlias = Token[Context]
 
 __all__ = [
+    "ContextData",
     "ContextToken",
     "GenAIInvocation",
     "_ContextData",
@@ -74,7 +75,7 @@ __all__ = [
 
 
 @dataclass
-class _ContextData:
+class ContextData:
     """Base class for invocation context data containers."""
 
     capture_content: bool = False
@@ -118,6 +119,9 @@ class _ContextData:
                 self.attributes.setdefault(k, v)
             for k, v in other.metric_attributes.items():
                 self.metric_attributes.setdefault(k, v)
+
+
+_ContextData = ContextData
 
 
 def _is_active_completion_hook(hook: CompletionHook | None) -> bool:
