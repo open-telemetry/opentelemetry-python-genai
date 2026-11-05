@@ -353,9 +353,35 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         finally:
             detach(token)
 
+    def _get_attributes(self) -> dict[str, AttributeValue]:  # pylint: disable=no-self-use
+        """Return typed attributes for span/event recording."""
+        return {}
+
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         """Return low-cardinality attributes for metric recording."""
         return self.metric_attributes
+
+    def _merge_context_data(
+        self, target: ContextData, source: ContextData
+    ) -> None:
+        """Merge inner context data into ``target`` while preserving outer precedence.
+
+        Inner raw ``attributes`` and ``metric_attributes`` are ignored for keys
+        already set on the outer invocation (via either typed fields or raw
+        dicts), without copying outer typed values into ``self.attributes``.
+        """
+        outer_typed_attrs = (
+            self._start_attributes.keys() | self._get_attributes().keys()
+        ) - self.attributes.keys()
+        outer_typed_metric_attrs = (
+            self._get_metric_attributes().keys()
+            - self.metric_attributes.keys()
+        )
+        target.merge(source, overwrite=False)
+        for k in outer_typed_attrs:
+            self.attributes.pop(k, None)
+        for k in outer_typed_metric_attrs:
+            self.metric_attributes.pop(k, None)
 
     def _get_metric_token_counts(self) -> dict[str, int]:  # pylint: disable=no-self-use
         """Return {token_type: count} for token histogram recording."""

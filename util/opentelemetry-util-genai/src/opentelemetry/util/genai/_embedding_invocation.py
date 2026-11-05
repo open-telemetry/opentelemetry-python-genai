@@ -163,19 +163,12 @@ class EmbeddingInvocation(GenAIInvocation):
     def input_tokens(self, value: int | None) -> None:
         self._data.usage_input_tokens = value
 
-    def enrich_from_context(self, data: EmbeddingData) -> None:
+    def _enrich_from_context(self, data: EmbeddingData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values.
         """
-        for k, v in (
-            *self._start_attributes.items(),
-            *self._get_attributes().items(),
-        ):
-            self.attributes.setdefault(k, v)
-        for k, v in self._get_metric_attributes().items():
-            self.metric_attributes.setdefault(k, v)
-        self._data.merge(data, overwrite=False)
+        self._merge_context_data(self._data, data)
 
     def _get_metric_attributes(self) -> dict[str, AttributeValue]:
         optional_attrs = (
@@ -236,7 +229,7 @@ class EmbeddingInvocation(GenAIInvocation):
             CLIENT_EMBEDDING_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, EmbeddingData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
         attributes = self._get_attributes()

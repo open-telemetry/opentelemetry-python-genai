@@ -851,7 +851,7 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
-    def enrich_from_context(self, data: InferenceData) -> None:
+    def _enrich_from_context(self, data: InferenceData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -863,14 +863,7 @@ class InferenceInvocation(GenAIInvocation):
         prompt_variable = self.data.prompt_variable
         tool_definitions = self.data.tool_definitions
 
-        for k, v in (
-            *self._start_attributes.items(),
-            *self._get_attributes().items(),
-        ):
-            self.attributes.setdefault(k, v)
-        for k, v in self._get_metric_attributes().items():
-            self.metric_attributes.setdefault(k, v)
-        self.data.merge(data, overwrite=False)
+        self._merge_context_data(self.data, data)
 
         if data.capture_content:
             self.data.input_messages = (
@@ -940,7 +933,7 @@ class InferenceInvocation(GenAIInvocation):
             CLIENT_INFERENCE_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, InferenceData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:

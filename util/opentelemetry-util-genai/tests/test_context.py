@@ -962,7 +962,7 @@ class TestInferenceContext(BaseContextTest):
                 ],
             )
 
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
 
             # Non-content fields are enriched
             self.assertEqual(outer.data.usage_input_tokens, 100)
@@ -1016,7 +1016,7 @@ class TestInferenceContext(BaseContextTest):
                 ],
             )
 
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
 
             # Non-content fields are enriched
             self.assertEqual(outer.data.usage_input_tokens, 100)
@@ -1218,6 +1218,60 @@ class TestInferenceContext(BaseContextTest):
         self.assertAlmostEqual(
             token_by_type[GenAI.GenAiTokenTypeValues.OUTPUT.value].sum,
             25.0,
+            places=3,
+        )
+
+    def test_enrich_from_context_does_not_freeze_typed_fields(self) -> None:
+        log_exporter = InMemoryLogRecordExporter()
+        logger_provider = LoggerProvider()
+        logger_provider.add_log_record_processor(
+            SimpleLogRecordProcessor(log_exporter)
+        )
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+            logger_provider=logger_provider,
+        )
+        with handler.inference(
+            "outer-provider",
+            request_model="outer-model",
+        ) as root_inv:
+            root_inv.input_tokens = 10
+            root_inv._enrich_from_context(
+                InferenceData(
+                    response_model="inner-resp-model",
+                    attributes={GenAI.GEN_AI_USAGE_INPUT_TOKENS: 99},
+                )
+            )
+            self.assertNotIn(
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS, root_inv.attributes
+            )
+            root_inv.input_tokens = 20
+
+        (span,) = self.span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 20
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_RESPONSE_MODEL),
+            "inner-resp-model",
+        )
+
+        (log,) = log_exporter.get_finished_logs()
+        assert log.log_record.attributes is not None
+        self.assertEqual(
+            log.log_record.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 20
+        )
+
+        metrics = self._harvest_metrics()
+        token_points = metrics["gen_ai.client.token.usage"]
+        token_by_type = {
+            p.attributes[GenAI.GEN_AI_TOKEN_TYPE]: p for p in token_points
+        }
+        self.assertAlmostEqual(
+            token_by_type[GenAI.GenAiTokenTypeValues.INPUT.value].sum,
+            20.0,
             places=3,
         )
 
@@ -2063,6 +2117,107 @@ class TestEmbeddingContext(BaseContextTest):
         )
         self.assertEqual(attrs.get(server_attributes.SERVER_PORT), 8443)
 
+    def test_raw_context_attributes_do_not_overwrite_outer_typed_fields(
+        self,
+    ) -> None:
+        with self.handler.embedding(
+            "outer-provider",
+            request_model="outer-model",
+        ) as root_inv:
+            root_inv.dimension_count = 512
+            root_inv.attributes[GenAI.GEN_AI_REQUEST_ENCODING_FORMATS] = [
+                "outer-fmt"
+            ]
+
+            ctx_data = get_value(CLIENT_EMBEDDING_CONTEXT_KEY)
+            assert isinstance(ctx_data, EmbeddingData)
+            ctx_data.request_encoding_formats = ["inner-fmt"]
+            ctx_data.attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_REQUEST_MODEL: "inner-model",
+                    GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT: 1024,
+                    GenAI.GEN_AI_RESPONSE_MODEL: "inner-resp-model",
+                    GenAI.GEN_AI_USAGE_INPUT_TOKENS: 15,
+                    server_attributes.SERVER_ADDRESS: "api.openai.com",
+                    server_attributes.SERVER_PORT: 443,
+                    "custom.embed": "val",
+                }
+            )
+            ctx_data.metric_attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_REQUEST_MODEL: "inner-model",
+                    GenAI.GEN_AI_RESPONSE_MODEL: "inner-resp-model",
+                    server_attributes.SERVER_ADDRESS: "api.openai.com",
+                    server_attributes.SERVER_PORT: 443,
+                }
+            )
+            root_inv._enrich_from_context(ctx_data)
+            root_inv.dimension_count = 768
+
+        (span,) = self.span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_PROVIDER_NAME), "outer-provider"
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_REQUEST_MODEL), "outer-model"
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_EMBEDDINGS_DIMENSION_COUNT), 768
+        )
+        self.assertEqual(
+            list(
+                span.attributes.get(GenAI.GEN_AI_REQUEST_ENCODING_FORMATS)
+                or []
+            ),
+            ["outer-fmt"],
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_RESPONSE_MODEL),
+            "inner-resp-model",
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 15
+        )
+        self.assertEqual(
+            span.attributes.get(server_attributes.SERVER_ADDRESS),
+            "api.openai.com",
+        )
+        self.assertEqual(
+            span.attributes.get(server_attributes.SERVER_PORT), 443
+        )
+        self.assertEqual(span.attributes.get("custom.embed"), "val")
+
+        metrics = self._harvest_metrics()
+        duration_point = metrics["gen_ai.client.operation.duration"][0]
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_PROVIDER_NAME),
+            "outer-provider",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_REQUEST_MODEL),
+            "outer-model",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_RESPONSE_MODEL),
+            "inner-resp-model",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(server_attributes.SERVER_ADDRESS),
+            "api.openai.com",
+        )
+        token_points = metrics["gen_ai.client.token.usage"]
+        token_by_type = {
+            p.attributes[GenAI.GEN_AI_TOKEN_TYPE]: p for p in token_points
+        }
+        self.assertAlmostEqual(
+            token_by_type[GenAI.GenAiTokenTypeValues.INPUT.value].sum,
+            15.0,
+            places=3,
+        )
+
 
 class TestRetrievalContext(BaseContextTest):
     def setUp(self) -> None:
@@ -2167,7 +2322,7 @@ class TestRetrievalContext(BaseContextTest):
                 ],
                 data_source_id="inner-ds",
             )
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
 
             # Non-content fields: outer top_k preserved
             self.assertEqual(outer._data.retrieval_top_k, 5)
@@ -2229,7 +2384,7 @@ class TestRetrievalContext(BaseContextTest):
                     RetrievalDocument(id="inner-doc", score=0.1)
                 ],
             )
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
             self.assertEqual(outer._data.retrieval_query_text, "inner query")
             self.assertEqual(
                 outer._data.retrieval_documents,
@@ -2245,7 +2400,7 @@ class TestRetrievalContext(BaseContextTest):
                     RetrievalDocument(id="inner-doc", score=0.1)
                 ],
             )
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
             self.assertIsNone(outer._data.retrieval_query_text)
             self.assertIsNone(outer._data.retrieval_documents)
 
@@ -2379,6 +2534,78 @@ class TestRetrievalContext(BaseContextTest):
                 [RetrievalDocument(id="inner-doc", score=0.8)],
             )
 
+    def test_raw_context_attributes_do_not_overwrite_outer_typed_fields(
+        self,
+    ) -> None:
+        with self.handler.retrieval(
+            data_source_id="outer-ds",
+            provider="outer-provider",
+            request_model="outer-model",
+        ) as root_inv:
+            root_inv.top_k = 5
+            root_inv.attributes[server_attributes.SERVER_ADDRESS] = (
+                "search.outer.com"
+            )
+
+            ctx_data = get_value(CLIENT_RETRIEVAL_CONTEXT_KEY)
+            assert isinstance(ctx_data, RetrievalData)
+            ctx_data.server_address = "search.inner.com"
+            ctx_data.attributes.update(
+                {
+                    GenAI.GEN_AI_DATA_SOURCE_ID: "inner-ds",
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_REQUEST_MODEL: "inner-model",
+                    "gen_ai.retrieval.top_k": 20,
+                    server_attributes.SERVER_PORT: 9200,
+                    "custom.retrieval": "val",
+                }
+            )
+            ctx_data.metric_attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_REQUEST_MODEL: "inner-model",
+                    server_attributes.SERVER_PORT: 9200,
+                }
+            )
+            root_inv._enrich_from_context(ctx_data)
+            root_inv.top_k = 10
+
+        (span,) = self.span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_DATA_SOURCE_ID), "outer-ds"
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_PROVIDER_NAME), "outer-provider"
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_REQUEST_MODEL), "outer-model"
+        )
+        self.assertEqual(span.attributes.get("gen_ai.retrieval.top_k"), 10)
+        self.assertEqual(
+            span.attributes.get(server_attributes.SERVER_ADDRESS),
+            "search.outer.com",
+        )
+        self.assertEqual(
+            span.attributes.get(server_attributes.SERVER_PORT), 9200
+        )
+        self.assertEqual(span.attributes.get("custom.retrieval"), "val")
+
+        metrics = self._harvest_metrics()
+        duration_point = metrics["gen_ai.client.operation.duration"][0]
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_PROVIDER_NAME),
+            "outer-provider",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_REQUEST_MODEL),
+            "outer-model",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(server_attributes.SERVER_PORT),
+            9200,
+        )
+
 
 class TestFetchResponseContext(BaseContextTest):
     def setUp(self) -> None:
@@ -2503,7 +2730,7 @@ class TestFetchResponseContext(BaseContextTest):
                     )
                 ],
             )
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
 
             # Non-content fields: outer preserved, inner enriched
             self.assertEqual(outer._data.response_model, "root-model")
@@ -2591,7 +2818,7 @@ class TestFetchResponseContext(BaseContextTest):
                 capture_content=True,
                 output_messages=expected_msgs,
             )
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
             self.assertEqual(outer._data.output_messages, expected_msgs)
 
     def test_enrich_from_context_drops_content_when_disabled(self) -> None:
@@ -2606,7 +2833,7 @@ class TestFetchResponseContext(BaseContextTest):
                     )
                 ],
             )
-            outer.enrich_from_context(inner_data)
+            outer._enrich_from_context(inner_data)
             self.assertEqual(outer._data.output_messages, [])
 
     def test_suppressed_fetch_response_content_capture_enabled_when_configured(
@@ -2926,3 +3153,80 @@ class TestFetchResponseContext(BaseContextTest):
             self.assertEqual(kwargs["inputs"], [])
             self.assertEqual(kwargs["outputs"], expected_outputs)
             self.assertIs(kwargs["span"], root_inv.span)
+
+    def test_raw_context_attributes_do_not_overwrite_outer_typed_fields(
+        self,
+    ) -> None:
+        with self.handler.fetch_response(
+            "outer-provider",
+            response_id="outer-resp-id",
+        ) as root_inv:
+            root_inv.response_status = "in_progress"
+            root_inv.attributes["gen_ai.request.stream_cursor"] = "outer-cur"
+
+            ctx_data = get_value(CLIENT_FETCH_RESPONSE_CONTEXT_KEY)
+            assert isinstance(ctx_data, FetchResponseData)
+            ctx_data.request_stream_cursor = "inner-cur"
+            ctx_data.attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_RESPONSE_ID: "inner-resp-id",
+                    "gen_ai.response.status": "failed",
+                    GenAI.GEN_AI_RESPONSE_MODEL: "inner-resp-model",
+                    server_attributes.SERVER_ADDRESS: "api.openai.com",
+                    server_attributes.SERVER_PORT: 443,
+                    "custom.fetch": "val",
+                }
+            )
+            ctx_data.metric_attributes.update(
+                {
+                    GenAI.GEN_AI_PROVIDER_NAME: "inner-provider",
+                    GenAI.GEN_AI_RESPONSE_MODEL: "inner-resp-model",
+                    server_attributes.SERVER_ADDRESS: "api.openai.com",
+                    server_attributes.SERVER_PORT: 443,
+                }
+            )
+            root_inv._enrich_from_context(ctx_data)
+            root_inv.response_status = "completed"
+
+        (span,) = self.span_exporter.get_finished_spans()
+        assert span.attributes is not None
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_PROVIDER_NAME), "outer-provider"
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_RESPONSE_ID), "outer-resp-id"
+        )
+        self.assertEqual(
+            span.attributes.get("gen_ai.response.status"), "completed"
+        )
+        self.assertEqual(
+            span.attributes.get("gen_ai.request.stream_cursor"), "outer-cur"
+        )
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_RESPONSE_MODEL),
+            "inner-resp-model",
+        )
+        self.assertEqual(
+            span.attributes.get(server_attributes.SERVER_ADDRESS),
+            "api.openai.com",
+        )
+        self.assertEqual(
+            span.attributes.get(server_attributes.SERVER_PORT), 443
+        )
+        self.assertEqual(span.attributes.get("custom.fetch"), "val")
+
+        metrics = self._harvest_metrics()
+        duration_point = metrics["gen_ai.client.operation.duration"][0]
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_PROVIDER_NAME),
+            "outer-provider",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(GenAI.GEN_AI_RESPONSE_MODEL),
+            "inner-resp-model",
+        )
+        self.assertEqual(
+            duration_point.attributes.get(server_attributes.SERVER_ADDRESS),
+            "api.openai.com",
+        )

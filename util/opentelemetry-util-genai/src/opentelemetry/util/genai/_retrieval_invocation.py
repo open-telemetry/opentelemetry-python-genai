@@ -190,7 +190,7 @@ class RetrievalInvocation(GenAIInvocation):
     ) -> None:
         self._data.retrieval_documents = value
 
-    def enrich_from_context(self, data: RetrievalData) -> None:
+    def _enrich_from_context(self, data: RetrievalData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -199,14 +199,7 @@ class RetrievalInvocation(GenAIInvocation):
         retrieval_query_text = self._data.retrieval_query_text
         retrieval_documents = self._data.retrieval_documents
 
-        for k, v in (
-            *self._start_attributes.items(),
-            *self._get_attributes().items(),
-        ):
-            self.attributes.setdefault(k, v)
-        for k, v in self._get_metric_attributes().items():
-            self.metric_attributes.setdefault(k, v)
-        self._data.merge(data, overwrite=False)
+        self._merge_context_data(self._data, data)
 
         if data.capture_content:
             self._data.retrieval_query_text = (
@@ -281,7 +274,7 @@ class RetrievalInvocation(GenAIInvocation):
             CLIENT_RETRIEVAL_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, RetrievalData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
         attributes = self._get_attributes()
