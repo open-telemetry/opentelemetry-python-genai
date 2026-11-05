@@ -57,7 +57,7 @@ from opentelemetry.util.genai.utils import (
     tool_arguments_to_any_value,
 )
 
-from .patch import _current_conversation_id, _get_active_conversation_id
+from .patch import _get_active_conversation_id
 
 # Non-semconv attribute: surfaces the workflow name on the workflow span
 # so callers can query/filter by it. util-genai's WorkflowInvocation

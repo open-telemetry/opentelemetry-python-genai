@@ -10,6 +10,16 @@ from typing import Any
 
 from agents.memory.session import Session
 
+__all__ = [
+    "_current_conversation_id",
+    "_current_session",
+    "_extract_conversation_id",
+    "_extract_session",
+    "_get_active_conversation_id",
+    "patch",
+    "unpatch",
+]
+
 _current_conversation_id: contextvars.ContextVar[str | None] = (
     contextvars.ContextVar("_current_conversation_id", default=None)
 )

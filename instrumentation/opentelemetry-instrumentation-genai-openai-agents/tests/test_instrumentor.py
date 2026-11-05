@@ -21,11 +21,8 @@ from opentelemetry.instrumentation.genai.openai_agents.package import (
     _instruments,
 )
 from opentelemetry.instrumentation.genai.openai_agents.patch import (
-    _current_conversation_id,
     _extract_conversation_id,
     _get_active_conversation_id,
-    patch,
-    unpatch,
 )
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
