@@ -1442,8 +1442,30 @@ class DetailedUsageLM(FakeLM):
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
-            "prompt_tokens_details": AttrDict({"cached_tokens": 4}),
-            "completion_tokens_details": AttrDict({"reasoning_tokens": 3}),
+            "prompt_tokens_details": AttrDict(
+                {
+                    "cached_tokens": 4,
+                    "cache_write_tokens": 2,
+                    "text_tokens": 6,
+                    "image_tokens": 3,
+                    "audio_tokens": 1,
+                    "cached_tokens_details": AttrDict(
+                        {
+                            "text_tokens": 2,
+                            "image_tokens": 1,
+                            "audio_tokens": 1,
+                        }
+                    ),
+                }
+            ),
+            "completion_tokens_details": AttrDict(
+                {
+                    "reasoning_tokens": 3,
+                    "text_tokens": 4,
+                    "image_tokens": 1,
+                    "audio_tokens": 2,
+                }
+            ),
         }
         return response
 
@@ -1455,7 +1477,17 @@ def test_lm_call_cached_and_reasoning_tokens(
 
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 4
+    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 2
     assert span.attributes[GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] == 3
+    assert span.attributes["gen_ai.usage.text.input_tokens"] == 6
+    assert span.attributes["gen_ai.usage.image.input_tokens"] == 3
+    assert span.attributes["gen_ai.usage.audio.input_tokens"] == 1
+    assert span.attributes["gen_ai.usage.text.cache_read.input_tokens"] == 2
+    assert span.attributes["gen_ai.usage.image.cache_read.input_tokens"] == 1
+    assert span.attributes["gen_ai.usage.audio.cache_read.input_tokens"] == 1
+    assert span.attributes["gen_ai.usage.text.output_tokens"] == 4
+    assert span.attributes["gen_ai.usage.image.output_tokens"] == 1
+    assert span.attributes["gen_ai.usage.audio.output_tokens"] == 2
 
 
 @pytest.mark.skipif(not hasattr(dspy, "lm15"), reason="requires DSPy 3.4+")

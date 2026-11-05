@@ -897,21 +897,95 @@ def apply_usage_to_invocation(
         out_tokens = _get_field(usage, "output_tokens")
     invocation.output_tokens = safe_int(out_tokens)
 
-    thinking = _get_field(usage, "reasoning_tokens")
+    prompt_details = _get_field(usage, "prompt_tokens_details")
+    if prompt_details is None:
+        prompt_details = _get_field(usage, "input_tokens_details")
     completion_details = _get_field(usage, "completion_tokens_details")
+    if completion_details is None:
+        completion_details = _get_field(usage, "output_tokens_details")
+
+    thinking = _get_field(usage, "reasoning_tokens")
+    if thinking is None:
+        thinking = _get_field(usage, "thinking_tokens")
     if thinking is None and completion_details is not None:
         thinking = _get_field(completion_details, "reasoning_tokens")
+        if thinking is None:
+            thinking = _get_field(completion_details, "thinking_tokens")
     invocation.thinking_tokens = safe_int(thinking)
 
     cache_read = _get_field(usage, "cache_read_tokens")
-    prompt_details = _get_field(usage, "prompt_tokens_details")
+    if cache_read is None:
+        cache_read = _get_field(usage, "cache_read_input_tokens")
     if cache_read is None and prompt_details is not None:
         cache_read = _get_field(prompt_details, "cached_tokens")
     invocation.cache_read_input_tokens = safe_int(cache_read)
 
-    invocation.cache_write_input_tokens = safe_int(
-        _get_field(usage, "cache_write_tokens")
-    )
+    cache_write = _get_field(usage, "cache_write_tokens")
+    if cache_write is None:
+        cache_write = _get_field(usage, "cache_creation_input_tokens")
+    if cache_write is None and prompt_details is not None:
+        cache_write = _get_field(prompt_details, "cache_write_tokens")
+        if cache_write is None:
+            cache_write = _get_field(prompt_details, "cache_creation_tokens")
+        if cache_write is None:
+            cache_write = _get_field(
+                prompt_details, "cache_creation_input_tokens"
+            )
+    invocation.cache_write_input_tokens = safe_int(cache_write)
+
+    if prompt_details is not None:
+        invocation.set_input_tokens(
+            (
+                (
+                    Modality.TEXT,
+                    safe_int(_get_field(prompt_details, "text_tokens")),
+                ),
+                (
+                    Modality.IMAGE,
+                    safe_int(_get_field(prompt_details, "image_tokens")),
+                ),
+                (
+                    Modality.AUDIO,
+                    safe_int(_get_field(prompt_details, "audio_tokens")),
+                ),
+            )
+        )
+        cached_details = _get_field(prompt_details, "cached_tokens_details")
+        if cached_details is not None:
+            invocation.set_cache_read_input_tokens(
+                (
+                    (
+                        Modality.TEXT,
+                        safe_int(_get_field(cached_details, "text_tokens")),
+                    ),
+                    (
+                        Modality.IMAGE,
+                        safe_int(_get_field(cached_details, "image_tokens")),
+                    ),
+                    (
+                        Modality.AUDIO,
+                        safe_int(_get_field(cached_details, "audio_tokens")),
+                    ),
+                )
+            )
+
+    if completion_details is not None:
+        invocation.set_output_tokens(
+            (
+                (
+                    Modality.TEXT,
+                    safe_int(_get_field(completion_details, "text_tokens")),
+                ),
+                (
+                    Modality.IMAGE,
+                    safe_int(_get_field(completion_details, "image_tokens")),
+                ),
+                (
+                    Modality.AUDIO,
+                    safe_int(_get_field(completion_details, "audio_tokens")),
+                ),
+            )
+        )
 
 
 def extract_input_content(input_args: Mapping[str, object]) -> str:
