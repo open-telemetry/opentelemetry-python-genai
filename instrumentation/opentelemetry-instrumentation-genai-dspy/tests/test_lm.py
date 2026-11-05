@@ -1436,9 +1436,11 @@ def test_lm15_tool_result_id(instrument_dspy) -> None:
 
 
 class DetailedUsageLM(FakeLM):
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        response = super().forward(*args, **kwargs)
-        response["usage"] = {
+    def __init__(
+        self, usage: dict[str, Any] | None = None, **kwargs: Any
+    ) -> None:
+        super().__init__(**kwargs)
+        self._usage = usage or {
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
@@ -1467,27 +1469,148 @@ class DetailedUsageLM(FakeLM):
                 }
             ),
         }
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        response = super().forward(*args, **kwargs)
+        response["usage"] = self._usage
         return response
 
 
-def test_lm_call_cached_and_reasoning_tokens(
-    instrument_dspy, span_exporter
+@pytest.mark.anyio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "usage,expected_attrs,omitted_attrs",
+    [
+        pytest.param(
+            None,
+            {
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS: 10,
+                GenAI.GEN_AI_USAGE_OUTPUT_TOKENS: 5,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 4,
+                "gen_ai.usage.cache_write.input_tokens": 2,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 3,
+                "gen_ai.usage.text.input_tokens": 6,
+                "gen_ai.usage.image.input_tokens": 3,
+                "gen_ai.usage.audio.input_tokens": 1,
+                "gen_ai.usage.text.cache_read.input_tokens": 2,
+                "gen_ai.usage.image.cache_read.input_tokens": 1,
+                "gen_ai.usage.audio.cache_read.input_tokens": 1,
+                "gen_ai.usage.text.output_tokens": 4,
+                "gen_ai.usage.image.output_tokens": 1,
+                "gen_ai.usage.audio.output_tokens": 2,
+            },
+            (),
+            id="prompt_and_completion_details",
+        ),
+        pytest.param(
+            {
+                "input_tokens": 12,
+                "output_tokens": 7,
+                "input_tokens_details": AttrDict(
+                    {
+                        "cached_tokens": 5,
+                        "cache_creation_tokens": 3,
+                        "text_tokens": 8,
+                        "image_tokens": 4,
+                    }
+                ),
+                "output_tokens_details": AttrDict(
+                    {
+                        "thinking_tokens": 2,
+                        "text_tokens": 5,
+                        "audio_tokens": 2,
+                    }
+                ),
+            },
+            {
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS: 12,
+                GenAI.GEN_AI_USAGE_OUTPUT_TOKENS: 7,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 5,
+                "gen_ai.usage.cache_write.input_tokens": 3,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 2,
+                "gen_ai.usage.text.input_tokens": 8,
+                "gen_ai.usage.image.input_tokens": 4,
+                "gen_ai.usage.text.output_tokens": 5,
+                "gen_ai.usage.audio.output_tokens": 2,
+            },
+            (
+                "gen_ai.usage.audio.input_tokens",
+                "gen_ai.usage.image.output_tokens",
+            ),
+            id="input_and_output_details_aliases",
+        ),
+        pytest.param(
+            {
+                "input_tokens": 9,
+                "output_tokens": 4,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 1,
+                "thinking_tokens": 2,
+            },
+            {
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS: 9,
+                GenAI.GEN_AI_USAGE_OUTPUT_TOKENS: 4,
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: 3,
+                "gen_ai.usage.cache_write.input_tokens": 1,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: 2,
+            },
+            ("gen_ai.usage.text.input_tokens",),
+            id="top_level_aliases",
+        ),
+        pytest.param(
+            {
+                "input_tokens": 8,
+                "output_tokens": 3,
+                "input_tokens_details": AttrDict(
+                    {
+                        "cached_tokens": 0,
+                        "cache_creation_input_tokens": 2,
+                        "text_tokens": 0,
+                        "image_tokens": None,
+                    }
+                ),
+                "output_tokens_details": AttrDict(
+                    {
+                        "reasoning_tokens": 0,
+                        "text_tokens": 0,
+                    }
+                ),
+            },
+            {
+                GenAI.GEN_AI_USAGE_INPUT_TOKENS: 8,
+                GenAI.GEN_AI_USAGE_OUTPUT_TOKENS: 3,
+                "gen_ai.usage.cache_write.input_tokens": 2,
+            },
+            (
+                GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+                GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+                "gen_ai.usage.text.input_tokens",
+                "gen_ai.usage.image.input_tokens",
+                "gen_ai.usage.text.output_tokens",
+            ),
+            id="zero_and_missing_values",
+        ),
+    ],
+)
+async def test_lm_call_cached_and_reasoning_tokens(
+    instrument_dspy,
+    span_exporter,
+    use_async: bool,
+    usage: dict[str, Any] | None,
+    expected_attrs: dict[str, int],
+    omitted_attrs: tuple[str, ...],
 ) -> None:
-    DetailedUsageLM()("Capital of France?")
+    lm = DetailedUsageLM(usage=usage)
+    if use_async:
+        await lm.acall("Capital of France?")
+    else:
+        lm("Capital of France?")
 
     (span,) = span_exporter.get_finished_spans()
-    assert span.attributes[GenAI.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] == 4
-    assert span.attributes["gen_ai.usage.cache_write.input_tokens"] == 2
-    assert span.attributes[GenAI.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] == 3
-    assert span.attributes["gen_ai.usage.text.input_tokens"] == 6
-    assert span.attributes["gen_ai.usage.image.input_tokens"] == 3
-    assert span.attributes["gen_ai.usage.audio.input_tokens"] == 1
-    assert span.attributes["gen_ai.usage.text.cache_read.input_tokens"] == 2
-    assert span.attributes["gen_ai.usage.image.cache_read.input_tokens"] == 1
-    assert span.attributes["gen_ai.usage.audio.cache_read.input_tokens"] == 1
-    assert span.attributes["gen_ai.usage.text.output_tokens"] == 4
-    assert span.attributes["gen_ai.usage.image.output_tokens"] == 1
-    assert span.attributes["gen_ai.usage.audio.output_tokens"] == 2
+    for key, value in expected_attrs.items():
+        assert span.attributes[key] == value
+    for key in omitted_attrs:
+        assert key not in span.attributes
 
 
 @pytest.mark.skipif(not hasattr(dspy, "lm15"), reason="requires DSPy 3.4+")
