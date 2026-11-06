@@ -1231,7 +1231,7 @@ def test_extract_output_messages_maps_computer_call_as_client_tool_call(
             "button": "left",
         }
     }
-    assert loaded_module.extract_finish_reasons(response) == ["tool_calls"]
+    assert loaded_module.extract_finish_reasons(response) == ["tool_call"]
 
 
 @pytest.mark.skipif(
@@ -1505,7 +1505,7 @@ def test_extract_finish_reasons_maps_terminal_message_and_tool_items(
 
     assert loaded_module.extract_finish_reasons(response) == [
         "stop",
-        "tool_calls",
+        "tool_call",
     ]
 
 

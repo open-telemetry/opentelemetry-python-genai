@@ -6,6 +6,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from opentelemetry._logs import SeverityNumber
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -63,7 +64,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event(self):
@@ -91,10 +91,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         log_record = logs[0].log_record
 
-        # Verify event name
+        # Verify event name and severity
         self.assertEqual(
             log_record.event_name, "gen_ai.client.inference.operation.details"
         )
+        self.assertEqual(log_record.severity_number, SeverityNumber.DEBUG)
 
         # Verify event attributes
         attrs = log_record.attributes
@@ -155,7 +156,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_and_span(self):
@@ -218,7 +218,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_with_error(self):
@@ -258,37 +257,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
-        },
-    )
-    def test_does_not_emit_llm_event_when_emit_event_false(self):
-        handler = TelemetryHandler(
-            tracer_provider=self.tracer_provider,
-            logger_provider=self.logger_provider,
-        )
-        message = _create_input_message("emit false test")
-        chat_generation = _create_output_message("emit false response")
-
-        invocation = handler.inference(
-            "test-provider", request_model="emit-false-model"
-        )
-        invocation.input_messages = [message]
-        invocation.output_messages = [chat_generation]
-        invocation.stop()
-
-        # Check no event was emitted
-        logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
-
-    @patch.dict(
-        os.environ,
-        {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
         },
     )
-    def test_does_not_emit_llm_event_by_default_for_no_content(self):
-        """Test that event is not emitted by default when content_capturing is NO_CONTENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+    def test_emits_llm_event_without_messages_for_no_content(self):
+        """Test that event is emitted but messages are omitted when content_capturing is NO_CONTENT."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -302,9 +275,14 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         ]
         invocation.stop()
 
-        # Check that no event was emitted (NO_CONTENT defaults to False)
         logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
+        self.assertEqual(len(logs), 1)
+        log_record = logs[0].log_record
+        self.assertEqual(
+            log_record.event_name, "gen_ai.client.inference.operation.details"
+        )
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, log_record.attributes)
 
     @patch.dict(
         os.environ,
@@ -312,8 +290,8 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
         },
     )
-    def test_does_not_emit_llm_event_by_default_for_span_only(self):
-        """Test that event is not emitted by default when content_capturing is SPAN_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+    def test_emits_llm_event_without_messages_for_span_only(self):
+        """Test that event is emitted but messages are on span only when content_capturing is SPAN_ONLY."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -327,9 +305,18 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         ]
         invocation.stop()
 
-        # Check that no event was emitted (SPAN_ONLY defaults to False)
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+        self.assertIn(GenAI.GEN_AI_INPUT_MESSAGES, span_attrs)
+
         logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
+        self.assertEqual(len(logs), 1)
+        log_record = logs[0].log_record
+        self.assertEqual(
+            log_record.event_name, "gen_ai.client.inference.operation.details"
+        )
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, log_record.attributes)
 
     @patch.dict(
         os.environ,
@@ -366,7 +353,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event_by_default_for_span_and_event(self):
-        """Test that event is emitted by default when content_capturing is SPAN_AND_EVENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+        """Test that event is emitted when content_capturing is SPAN_AND_EVENT."""
         message = _create_input_message("span and event test")
         chat_generation = _create_output_message("span and event response")
         system_instruction = _create_system_instruction("System prompt")
@@ -401,7 +388,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emit_event_determined_at_construction_time(self):
@@ -417,23 +403,56 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         # Changing os.environ after construction should have no effect
         with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"}
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"
+            },
         ):
             invocation.stop()
 
         logs = self.log_exporter.get_finished_logs()
         self.assertEqual(len(logs), 1)
 
+    def test_inference_invocation_derives_emit_event_from_logger_enabled(
+        self,
+    ):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger_enabled = self.logger_provider.get_logger("test-enabled")
+        logger_enabled.enabled = unittest.mock.MagicMock(return_value=True)
+
+        inv_enabled = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger_enabled,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertTrue(inv_enabled._emit_event)
+
+        logger_disabled = self.logger_provider.get_logger("test-disabled")
+        logger_disabled.enabled = unittest.mock.MagicMock(return_value=False)
+
+        inv_disabled = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger_disabled,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        self.assertFalse(inv_disabled._emit_event)
+
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
         },
     )
-    def test_emit_event_disabled_at_construction_time_not_affected_by_env_change(
-        self,
-    ):
+    def test_emits_llm_event_with_debug_severity(self):
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -441,41 +460,86 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         invocation = handler.inference(
             "test-provider", request_model="event-model"
         )
-        invocation.input_messages = [_create_input_message("test")]
-        invocation.output_messages = [_create_output_message("response")]
-
-        # Changing os.environ after construction should not cause event emission
-        with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"}
-        ):
-            invocation.stop()
+        invocation.stop()
 
         logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(
+            logs[0].log_record.severity_number, SeverityNumber.DEBUG
+        )
 
-    def test_inference_invocation_derives_emit_event_from_content_capturing_mode(
-        self,
-    ):
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        },
+    )
+    def test_event_not_emitted_when_logger_disabled(self):
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
         )
-        inv_enabled = InferenceInvocation(
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=False)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
             self.tracer_provider.get_tracer("test"),
             handler._instruments,
-            self.logger_provider.get_logger("test"),
+            logger,
             handler._completion_hook,
             provider="test-provider",
             content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
         )
-        self.assertTrue(inv_enabled._emit_event)
+        inv.stop()
 
-        inv_disabled = InferenceInvocation(
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 0)
+        enabled_mock.assert_called_once()
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(
+            kwargs.get("event_name"),
+            "gen_ai.client.inference.operation.details",
+        )
+        self.assertEqual(
+            kwargs.get("severity_number"),
+            SeverityNumber.DEBUG,
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        },
+    )
+    def test_event_emitted_when_logger_enabled(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=True)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
             self.tracer_provider.get_tracer("test"),
             handler._instruments,
-            self.logger_provider.get_logger("test"),
+            logger,
             handler._completion_hook,
             provider="test-provider",
-            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
         )
-        self.assertFalse(inv_disabled._emit_event)
+        inv.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 1)
+        enabled_mock.assert_called_once()
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(
+            kwargs.get("event_name"),
+            "gen_ai.client.inference.operation.details",
+        )
+        self.assertEqual(
+            kwargs.get("severity_number"),
+            SeverityNumber.DEBUG,
+        )
