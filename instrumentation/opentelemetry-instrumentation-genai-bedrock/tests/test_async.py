@@ -957,6 +957,132 @@ async def test_async_invoke_model_stream_success(
     )
 
 
+NOVA_INVOKE_MODEL_STREAM_EVENTS = [
+    {"chunk": {"bytes": json.dumps(chunk).encode()}}
+    for chunk in [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "Checking "},
+                "contentBlockIndex": 0,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "the weather."},
+                "contentBlockIndex": 0,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {
+            "contentBlockStart": {
+                "start": {
+                    "toolUse": {"toolUseId": "tool-1", "name": "get_weather"}
+                },
+                "contentBlockIndex": 1,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"city": "Seoul"}'}},
+                "contentBlockIndex": 1,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": 1}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {
+            "metadata": {"usage": {"inputTokens": 7, "outputTokens": 9}},
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 7,
+                "outputTokenCount": 9,
+            },
+        },
+    ]
+]
+
+
+async def _drain_nova_invoke_model_stream(client: Any) -> None:
+    with _stub(
+        client,
+        "invoke_model_with_response_stream",
+        {"body": _MockAsyncEventStream(NOVA_INVOKE_MODEL_STREAM_EVENTS)},
+        modelId=NOVA_MODEL_ID,
+        body="{}",
+    ):
+        response = await client.invoke_model_with_response_stream(
+            modelId=NOVA_MODEL_ID, body="{}"
+        )
+
+        assert isinstance(
+            response["body"], AsyncBedrockInvokeModelStreamWrapper
+        )
+        chunks = [chunk async for chunk in response["body"]]
+        assert len(chunks) == len(NOVA_INVOKE_MODEL_STREAM_EVENTS)
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_stream_nova_text_and_tool_call(
+    async_bedrock_client,
+    instrument_with_content,
+    span_exporter,
+) -> None:
+    await _drain_nova_invoke_model_stream(async_bedrock_client)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 7
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 9
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    output_msgs = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    )
+    assert output_msgs == [
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "content": "Checking the weather."},
+                {
+                    "type": "tool_call",
+                    "id": "tool-1",
+                    "name": "get_weather",
+                    "arguments": {"city": "Seoul"},
+                },
+            ],
+            "finish_reason": "tool_call",
+            "name": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_model_stream_nova_no_content(
+    async_bedrock_client,
+    instrument_no_content,
+    span_exporter,
+    log_exporter,
+) -> None:
+    await _drain_nova_invoke_model_stream(async_bedrock_client)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 7
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 9
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
+    recorded = [str(value) for value in span.attributes.values()] + [
+        str(log.log_record.body) for log in log_exporter.get_finished_logs()
+    ]
+    for value in recorded:
+        assert "Checking" not in value
+        assert "Seoul" not in value
+
+
 @pytest.mark.asyncio
 async def test_async_invoke_model_stream_error(
     async_bedrock_client,
