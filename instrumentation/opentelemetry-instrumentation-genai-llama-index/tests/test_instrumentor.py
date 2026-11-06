@@ -99,7 +99,7 @@ def test_instrument_does_not_import_llama_index() -> None:
 
 
 def test_uninstrument_before_import_does_not_attach() -> None:
-    # uninstrument must remove the registered hook().
+    # The hook stays registered after uninstrument, but must not attach.
     _run_in_fresh_interpreter(
         """
         instrumentor.instrument()
@@ -115,8 +115,7 @@ def test_uninstrument_before_import_does_not_attach() -> None:
 
 
 def test_reinstrument_before_import_attaches_once() -> None:
-    # Each instrument() registers a hook, so later calls must not register
-    # a duplicate hook.
+    # Each instrument() registers another hook; only the first one may attach.
     _run_in_fresh_interpreter(
         """
         instrumentor.instrument()
