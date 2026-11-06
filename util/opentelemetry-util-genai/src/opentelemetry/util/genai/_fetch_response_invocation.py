@@ -436,10 +436,6 @@ class SuppressedFetchResponseInvocation(FetchResponseInvocation):
             _attach_to_context=_attach_to_context,
         )
 
-    def _on_stream_chunk(self, chunk_at: float) -> None:
-        super()._on_stream_chunk(chunk_at)
-        self._data.request_stream = True
-
     def publish_to_context(self, data: FetchResponseData) -> None:
         """Publish invocation attributes to the active fetch response context."""
         self._data.attributes = self.attributes

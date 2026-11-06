@@ -1112,3 +1112,53 @@ def test_workflow_acontinue_run_stream_spans(
         span.attributes.get(GenAIAttributes.GEN_AI_CONVERSATION_ID)
         == "wf-async-stream-cont"
     )
+
+
+def test_agent_stream_empty_session_id_not_set() -> None:
+    """Test that an empty session_id on a stream chunk does not set gen_ai.conversation.id."""
+    from unittest.mock import MagicMock
+
+    from opentelemetry.instrumentation.genai.agno.stream import (
+        _AgentStreamMixin,
+    )
+
+    mixin = _AgentStreamMixin()
+    mixin._self_agent_invocation = MagicMock()
+    mixin._self_agent_invocation.conversation_id = None
+    mixin._self_capture_content = False
+
+    class FakeChunk:
+        session_id = ""
+        event = ""
+
+    mixin._process_chunk(FakeChunk())
+    assert mixin._self_agent_invocation.conversation_id is None
+
+    FakeChunk.session_id = "sess-123"
+    mixin._process_chunk(FakeChunk())
+    assert mixin._self_agent_invocation.conversation_id == "sess-123"
+
+
+def test_workflow_stream_empty_session_id_not_set() -> None:
+    """Test that an empty session_id on a workflow stream chunk does not set gen_ai.conversation.id."""
+    from unittest.mock import MagicMock
+
+    from opentelemetry.instrumentation.genai.agno.stream import (
+        _WorkflowStreamMixin,
+    )
+
+    mixin = _WorkflowStreamMixin()
+    mixin._self_workflow_invocation = MagicMock()
+    mixin._self_workflow_invocation.conversation_id = None
+    mixin._self_capture_content = False
+
+    class FakeChunk:
+        session_id = ""
+        event = ""
+
+    mixin._process_chunk(FakeChunk())
+    assert mixin._self_workflow_invocation.conversation_id is None
+
+    FakeChunk.session_id = "wf-sess-456"
+    mixin._process_chunk(FakeChunk())
+    assert mixin._self_workflow_invocation.conversation_id == "wf-sess-456"

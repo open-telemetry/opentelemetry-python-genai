@@ -38,7 +38,7 @@
 # the newest supported version of external dependencies.
 
 anthropic <3
-wrapt==2.5.1
+wrapt==2.5.2
 # test with the latest version of opentelemetry-api, sdk, semantic conventions, and instrumentation
 
 -e util/opentelemetry-util-genai
