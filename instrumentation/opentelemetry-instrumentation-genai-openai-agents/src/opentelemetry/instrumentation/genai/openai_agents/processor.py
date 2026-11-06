@@ -107,10 +107,7 @@ class GenAITracingProcessor(TracingProcessor):
     def on_trace_end(self, trace: Trace) -> None:
         invocation = self._invocations.pop(trace, None)
         if invocation is not None:
-            if (
-                isinstance(invocation, WorkflowInvocation)
-                and not invocation.conversation_id
-            ):
+            if isinstance(invocation, WorkflowInvocation):
                 conv_id = _get_active_conversation_id()
                 if conv_id is not None:
                     invocation.conversation_id = conv_id
@@ -123,10 +120,7 @@ class GenAITracingProcessor(TracingProcessor):
             conv_id = _get_active_conversation_id()
             if conv_id is not None:
                 for inv in self._invocations.values():
-                    if (
-                        isinstance(inv, WorkflowInvocation)
-                        and not inv.conversation_id
-                    ):
+                    if isinstance(inv, WorkflowInvocation):
                         inv.conversation_id = conv_id
                         inv._data.conversation_id = conv_id
             kwargs: dict[str, Any] = {}

@@ -186,6 +186,40 @@ def test_agent_span_reads_session_id_when_initialized() -> None:
         _current_session.reset(token)
 
 
+def test_agent_span_conversation_id_updates_workflow_with_fallback_group_id() -> (
+    None
+):
+    handler = _build_handler()
+    workflow_inv = MagicMock(
+        spec=WorkflowInvocation, attributes={}, conversation_id="g1"
+    )
+    workflow_inv._data = MagicMock(conversation_id="g1")
+    handler.workflow.return_value = workflow_inv
+    processor = GenAITracingProcessor(handler, provider="openai")
+    trace = _Trace("trace-1", "Agent workflow", group_id="g1")
+
+    processor.on_trace_start(trace)
+    handler.workflow.assert_called_once_with(
+        name="Agent workflow", conversation_id="g1"
+    )
+
+    token = _current_conversation_id.set("conv-1")
+    try:
+        span = _Span(AgentSpanData(name="triage"))
+        processor.on_span_start(span)
+
+        handler.invoke_local_agent.assert_called_once_with(
+            agent_name="triage", conversation_id="conv-1"
+        )
+        assert workflow_inv.conversation_id == "conv-1"
+        assert workflow_inv._data.conversation_id == "conv-1"
+
+        processor.on_trace_end(trace)
+        workflow_inv.stop.assert_called_once_with()
+    finally:
+        _current_conversation_id.reset(token)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("event", "args", "kwargs"),

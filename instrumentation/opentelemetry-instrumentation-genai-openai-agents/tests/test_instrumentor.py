@@ -549,6 +549,35 @@ def test_runner_entry_points_preserve_hooks(
 
 
 @pytest.mark.asyncio
+async def test_runner_conversation_id_updates_outer_trace_group_id(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    model = _mock_model([_FINAL_MESSAGE])
+    agent = agents.Agent(name="test_agent", model=model)
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        with agents.tracing.trace("Outer workflow", group_id="g1"):
+            await agents.Runner.run(agent, "hello", conversation_id="conv-1")
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "invoke_workflow Outer workflow" in spans
+    assert "invoke_agent test_agent" in spans
+    workflow_span = spans["invoke_workflow Outer workflow"]
+    agent_span = spans["invoke_agent test_agent"]
+    assert workflow_span.attributes is not None
+    assert agent_span.attributes is not None
+    assert workflow_span.attributes["gen_ai.conversation.id"] == "conv-1"
+    assert agent_span.attributes["gen_ai.conversation.id"] == "conv-1"
+
+
+@pytest.mark.asyncio
 async def test_manual_agent_spans_do_not_record_call_counts(
     tracer_provider: TracerProvider,
     logger_provider: Any,
