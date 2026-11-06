@@ -750,7 +750,11 @@ def get_output_messages_from_response(
             continue
 
         if isinstance(item, ResponseReasoningItem):
-            finish_reason = _finish_reason_from_status(item.status)
+            # The API omits `status` on reasoning items; they finish with the
+            # response.
+            finish_reason = _finish_reason_from_status(
+                item.status or response.status
+            )
             if finish_reason is None:
                 continue
 
