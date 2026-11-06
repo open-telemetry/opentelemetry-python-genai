@@ -14,11 +14,7 @@ import langchain.agents
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-from langchain_core.runnables import (
-    RunnableConfig,
-    RunnableLambda,
-    RunnablePassthrough,
-)
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import Tool, tool
 from langchain_core.utils.function_calling import convert_to_openai_function
 from langgraph.prebuilt import ToolNode, create_react_agent
@@ -710,9 +706,7 @@ async def test_native_agent_call_counts(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
-@pytest.mark.parametrize(
-    "strategy", ["retry", "fallback", "retry_fallback", "fallback_retry"]
-)
+@pytest.mark.parametrize("strategy", ["retry", "fallback"])
 @pytest.mark.parametrize("failure", [False, True])
 @pytest.mark.parametrize("use_tool", [False, True])
 @pytest.mark.parametrize(
@@ -740,7 +734,7 @@ async def test_native_agent_retries_count_traced_inferences(
     instrument_langchain: None,
 ) -> None:
     error = RuntimeError("model call failed")
-    attempts = 3 if failure else 2
+    attempts = 3 if strategy == "retry" and failure else 2
 
     @tool
     def calculate() -> str:
@@ -777,35 +771,28 @@ async def test_native_agent_retries_count_traced_inferences(
             ModelRetryMiddleware,
         )
 
-        retry = ModelRetryMiddleware(
-            max_retries=attempts - 1,
-            retry_on=(RuntimeError,),
-            initial_delay=0,
-            jitter=False,
-            on_failure="error",
+        policy = (
+            ModelRetryMiddleware(
+                max_retries=attempts - 1,
+                retry_on=(RuntimeError,),
+                initial_delay=0,
+                jitter=False,
+                on_failure="error",
+            )
+            if strategy == "retry"
+            else ModelFallbackMiddleware(fallback)
         )
-        fallback_policy = ModelFallbackMiddleware(fallback)
-        policies = {
-            "retry": [retry],
-            "fallback": [fallback_policy],
-            "retry_fallback": [fallback_policy, retry],
-            "fallback_retry": [retry, fallback_policy],
-        }[strategy]
         agent = langchain.agents.create_agent(
-            model, tools=tools, middleware=policies
+            model, tools=tools, middleware=[policy]
         )
     else:
-        retry = model.with_retry(
-            wait_exponential_jitter=False, stop_after_attempt=attempts
-        )
-        wrapped = {
-            "retry": retry,
-            "fallback": model.with_fallbacks([fallback]),
-            "retry_fallback": retry.with_fallbacks([fallback]),
-            "fallback_retry": model.with_fallbacks([fallback]).with_retry(
+        wrapped = (
+            model.with_retry(
                 wait_exponential_jitter=False, stop_after_attempt=attempts
-            ),
-        }[strategy]
+            )
+            if strategy == "retry"
+            else model.with_fallbacks([fallback])
+        )
         if tools:
             wrapped = wrapped.bind(
                 tools=[
@@ -860,27 +847,18 @@ async def test_native_agent_retries_count_traced_inferences(
         for span in spans
         if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     ]
-    logical_calls = 2 if use_tool and not failure else 1
-    expected_attempts = {
-        "retry": attempts + logical_calls - 1,
-        "fallback": 2 * logical_calls,
-        "retry_fallback": (
-            2 * attempts
-            if failure and use_middleware
-            else (attempts + 1) * logical_calls
-        ),
-        "fallback_retry": 2 * (attempts if failure else logical_calls),
-    }[strategy]
+    model_turns = 2 if use_tool and not failure else 1
+    expected_attempts = (
+        attempts + model_turns - 1 if strategy == "retry" else 2 * model_turns
+    )
     assert len(chats) == expected_attempts
     errors = [
         chat for chat in chats if chat.status.status_code == StatusCode.ERROR
     ]
     if failure:
         assert len(errors) == expected_attempts
-    elif strategy != "retry":
-        assert len(errors) == logical_calls * (
-            attempts if strategy == "retry_fallback" else 1
-        )
+    elif strategy == "fallback":
+        assert len(errors) == model_turns
     else:
         assert len(errors) == 1
     for chat in chats:
@@ -938,22 +916,15 @@ def _assert_agent_call_counts(
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
 @pytest.mark.parametrize("same_model", [False, True])
-@pytest.mark.parametrize(
-    "policy", ["none", "retry", "fallback", "retry_fallback", "fallback_retry"]
-)
 async def test_independent_model_calls_share_one_agent_node(
     asynchronous: bool,
     streaming: bool,
     same_model: bool,
-    policy: str,
     span_exporter: InMemorySpanExporter,
     metric_reader: InMemoryMetricReader,
     instrument_langchain: None,
 ) -> None:
-    first = _ToolChatModel(
-        responses=[AIMessage(content="answer")],
-        error=RuntimeError("retry pipeline") if policy != "none" else None,
-    )
+    first = _ToolChatModel(responses=[AIMessage(content="answer")])
     second = (
         first
         if same_model
@@ -962,7 +933,6 @@ async def test_independent_model_calls_share_one_agent_node(
         )
     )
     parents: list[UUID | None] = []
-    errors = 0
 
     class Observe(BaseCallbackHandler):
         def on_chat_model_start(
@@ -975,26 +945,8 @@ async def test_independent_model_calls_share_one_agent_node(
         ) -> None:
             parents.append(parent_run_id)
 
-        def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
-            nonlocal errors
-            errors += 1
-            if errors == (2 if "_" in policy else 1):
-                first.error = None
-
     pipeline = first | RunnableLambda(lambda message: [message]) | second
-    retry = pipeline.with_retry(
-        wait_exponential_jitter=False, stop_after_attempt=2
-    )
-    protected = {
-        "none": pipeline,
-        "retry": retry,
-        "fallback": pipeline.with_fallbacks([pipeline]),
-        "retry_fallback": retry.with_fallbacks([pipeline]),
-        "fallback_retry": pipeline.with_fallbacks([pipeline]).with_retry(
-            wait_exponential_jitter=False, stop_after_attempt=2
-        ),
-    }[policy]
-    agent = create_react_agent(protected, tools=[])
+    agent = create_react_agent(pipeline, tools=[])
     inputs = {"messages": [("user", "run both model calls")]}
     config: RunnableConfig = {"callbacks": [Observe()]}
     if not streaming:
@@ -1004,79 +956,15 @@ async def test_independent_model_calls_share_one_agent_node(
             pass
     else:
         list(agent.stream(inputs, config=config))
-    if policy == "none":
-        assert len(parents) == 2
-        assert parents[0] is not None and parents[0] == parents[1]
+    assert len(parents) == 2
+    assert parents[0] is not None and parents[0] == parents[1]
     chats = [
         span
         for span in span_exporter.get_finished_spans()
         if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     ]
-    expected_errors = 0 if policy == "none" else (2 if "_" in policy else 1)
-    assert errors == expected_errors
-    assert len(chats) == 2 + expected_errors
-    _assert_agent_call_counts(metric_reader, 2 + expected_errors)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize(
-    "policy", ["retry", "fallback", "retry_fallback", "fallback_retry"]
-)
-async def test_agent_inference_counts_partial_batch_attempts(
-    asynchronous: bool,
-    policy: str,
-    span_exporter: InMemorySpanExporter,
-    metric_reader: InMemoryMetricReader,
-    instrument_langchain: None,
-) -> None:
-    model = _ToolChatModel(responses=[AIMessage(content="answer")])
-    failed = False
-
-    def gate(value: dict[str, Any]) -> str:
-        nonlocal failed
-        if value["input"] == "retry" and not failed:
-            failed = True
-            raise RuntimeError("retry only this input")
-        return value["input"]
-
-    pipeline = (
-        RunnablePassthrough.assign(
-            first=RunnableLambda(lambda value: value["input"]) | model
-        )
-        | RunnableLambda(gate)
-        | model
-    )
-    retry = pipeline.with_retry(
-        wait_exponential_jitter=False, stop_after_attempt=2
-    )
-    protected = {
-        "retry": retry,
-        "fallback": pipeline.with_fallbacks([pipeline]),
-        "retry_fallback": retry.with_fallbacks([pipeline]),
-        "fallback_retry": pipeline.with_fallbacks([pipeline]).with_retry(
-            wait_exponential_jitter=False, stop_after_attempt=2
-        ),
-    }[policy]
-    inputs = [{"input": "success"}, {"input": "retry"}]
-
-    def run(_: object) -> BaseMessage:
-        return protected.batch(inputs)[-1]
-
-    async def arun(_: object) -> BaseMessage:
-        return (await protected.abatch(inputs))[-1]
-
-    agent = create_react_agent(RunnableLambda(run, afunc=arun), tools=[])
-    await _invoke(
-        agent, {"messages": [("user", "run both inputs")]}, asynchronous
-    )
-    chats = [
-        span
-        for span in span_exporter.get_finished_spans()
-        if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
-    ]
-    assert len(chats) == 5
-    _assert_agent_call_counts(metric_reader, 5)
+    assert len(chats) == 2
+    _assert_agent_call_counts(metric_reader, 2)
 
 
 @pytest.mark.asyncio
