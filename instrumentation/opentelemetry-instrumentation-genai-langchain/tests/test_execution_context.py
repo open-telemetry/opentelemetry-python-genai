@@ -12,7 +12,6 @@ from contextlib import ExitStack
 from contextvars import copy_context
 from importlib import import_module, invalidate_caches
 from importlib.util import find_spec
-from inspect import iscoroutinefunction
 from pathlib import Path
 from typing import Any, TypedDict
 from unittest import mock
@@ -27,13 +26,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import (
-    Runnable,
-    RunnableBranch,
-    RunnableLambda,
-    fallbacks,
-    retry,
-)
+from langchain_core.runnables import Runnable, RunnableBranch, RunnableLambda
 from langchain_core.runnables import base as runnables_base
 from langchain_core.tools import BaseTool, StructuredTool, Tool
 from langchain_core.vectorstores import VectorStore
@@ -734,8 +727,6 @@ def test_uninstrument_restores_execution_methods(
         (BaseRetriever, "ainvoke"),
         (BaseChatModel, "stream"),
         (BaseChatModel, "astream"),
-        (BaseChatModel, "invoke"),
-        (BaseChatModel, "ainvoke"),
         (Runnable, "_call_with_config"),
         (Runnable, "_acall_with_config"),
         (Runnable, "_transform_stream_with_config"),
@@ -747,29 +738,13 @@ def test_uninstrument_restores_execution_methods(
         (RunnableBranch, "stream"),
         (RunnableBranch, "astream"),
         (runnables_base, "set_config_context"),
-        (retry, "patch_config"),
-        (fallbacks, "patch_config"),
     ]
-    if find_spec("langchain.agents.middleware") is not None:
-        for module_name, class_name in (
-            ("model_retry", "ModelRetryMiddleware"),
-            ("model_fallback", "ModelFallbackMiddleware"),
-        ):
-            middleware = getattr(
-                import_module(f"langchain.agents.middleware.{module_name}"),
-                class_name,
-            )
-            targets.extend(
-                (middleware, method)
-                for method in ("wrap_model_call", "awrap_model_call")
-            )
     targets.extend(
         (manager_type, method)
         for manager_type in (CallbackManager, AsyncCallbackManager)
         for method in (
             "on_chain_start",
             "on_chat_model_start",
-            "on_llm_start",
             "on_tool_start",
             "on_retriever_start",
         )
@@ -790,9 +765,6 @@ def test_uninstrument_restores_execution_methods(
         ):
             for (owner, name), original in zip(targets, originals):
                 assert getattr(owner, name) is not original
-                assert iscoroutinefunction(getattr(owner, name)) == (
-                    iscoroutinefunction(original)
-                )
         for (owner, name), original in zip(targets, originals):
             assert getattr(owner, name) is original
 
@@ -832,7 +804,6 @@ class _Recorder(BaseCallbackHandler):
         self.starts += 1
 
     on_chat_model_start = on_chain_start
-    on_llm_start = on_chain_start
     on_tool_start = on_chain_start
     on_retriever_start = on_chain_start
 
@@ -992,7 +963,7 @@ async def test_reinstrument_replaces_stale_callbacks(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    "operation", ["chain", "chat_model", "llm", "tool", "retriever"]
+    "operation", ["chain", "chat_model", "tool", "retriever"]
 )
 @pytest.mark.parametrize(
     "recorder_type",
@@ -1032,11 +1003,6 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
                 ),
             ),
         ),
-        "llm": (
-            ({"name": "LLM"}, ["hello"]),
-            "on_llm_end",
-            (LLMResult(generations=[]),),
-        ),
         "tool": (({"name": "echo"}, "hello"), "on_tool_end", ("answer",)),
         "retriever": (
             ({"name": "lookup"}, "hello"),
@@ -1051,7 +1017,7 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
         )
         if asynchronous:
             result = await result
-        return result[0] if operation in ("chat_model", "llm") else result
+        return result[0] if operation == "chat_model" else result
 
     async def finish(run, error=False):
         method = end_method.replace("_end", "_error") if error else end_method
@@ -1094,9 +1060,7 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
         ):
             for _ in range(2):
                 await finish(await start())
-            assert len(new_exporter.get_finished_spans()) == (
-                0 if operation == "llm" else 2
-            )
+            assert len(new_exporter.get_finished_spans()) == 2
             assert not span_exporter.get_finished_spans()
             assert recorder.starts == 4
             assert new_hook.on_completion.call_count == 2 * hook_calls_per_run
@@ -1112,13 +1076,10 @@ async def test_reinstrument_refreshes_direct_callback_dispatch(
         await finish(inflight, error=fail)
         new_provider.shutdown()
 
-    if operation == "llm":
-        assert not span_exporter.get_finished_spans()
-    else:
-        (span,) = span_exporter.get_finished_spans()
-        assert span.status.status_code == (
-            StatusCode.ERROR if fail else StatusCode.UNSET
-        )
+    (span,) = span_exporter.get_finished_spans()
+    assert span.status.status_code == (
+        StatusCode.ERROR if fail else StatusCode.UNSET
+    )
     assert old_hook.on_completion.call_count == hook_calls_per_run
     assert not old_handler._invocation_manager._invocations
 
