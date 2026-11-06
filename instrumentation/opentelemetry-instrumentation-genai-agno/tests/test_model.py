@@ -933,6 +933,29 @@ def test_resolve_model_provider_prefers_class() -> None:
     assert resolve_model_provider(WatsonX(id="m")) == "ibm.watsonx.ai"
 
 
+def test_resolve_model_provider_openai_like() -> None:
+    """Test that OpenAILike with inherited default provider resolves to unknown."""
+    from dataclasses import dataclass
+
+    try:
+        from agno.models.openai.like import OpenAILike
+
+        model = OpenAILike(id="llama3", base_url="http://localhost:8000/v1")
+    except ImportError:
+
+        @dataclass
+        class OpenAIChat(MockModel):
+            provider: str = "OpenAI"
+
+        @dataclass
+        class OpenAILike(OpenAIChat):
+            pass
+
+        model = OpenAILike(id="llama3")
+
+    assert resolve_model_provider(model) == "unknown"
+
+
 @pytest.mark.parametrize(
     "raw_reason", ["tool_calls", "tool_use", "function_call"]
 )
