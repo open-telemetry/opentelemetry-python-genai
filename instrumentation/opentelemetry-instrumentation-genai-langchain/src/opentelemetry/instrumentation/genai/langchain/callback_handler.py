@@ -94,6 +94,15 @@ def _string_sequence(value: object) -> list[str]:
     ]
 
 
+def _prompt_version(metadata: Mapping[str, Any] | None) -> str | None:
+    # Prompts pulled from LangChain Hub carry their commit as metadata.
+    for key in ("prompt_version", "lc_hub_commit_hash"):
+        value = (metadata or {}).get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            return str(value)
+    return None
+
+
 def _extract_prompt_context(
     runnable: Mapping[str, Any],
     inputs: object,
@@ -123,8 +132,10 @@ def _extract_prompt_context(
             else None
         )
 
+    version = _prompt_version(metadata) if name is not None else None
+
     if not capture_variables:
-        return _PromptContext(name=name, variables={})
+        return _PromptContext(name=name, variables={}, version=version)
 
     required_variables = _string_sequence(
         template_kwargs.get("input_variables")
@@ -172,7 +183,9 @@ def _extract_prompt_context(
                 continue
             effective_variables[key] = value
 
-    return _PromptContext(name=name, variables=effective_variables)
+    return _PromptContext(
+        name=name, variables=effective_variables, version=version
+    )
 
 
 def _conversation_id(metadata: dict[str, Any] | None) -> str | None:
@@ -566,6 +579,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         )
         if prompt_context is not None:
             llm_invocation.prompt_name = prompt_context.name
+            llm_invocation.prompt_version = prompt_context.version
             llm_invocation.prompt_variables = prompt_context.variables
         llm_invocation.input_messages = input_messages
         llm_invocation.top_p = top_p
