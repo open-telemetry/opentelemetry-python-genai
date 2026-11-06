@@ -31,6 +31,9 @@ from opentelemetry.instrumentation.genai.anthropic.wrappers import (
     AsyncMessagesStreamWrapper,
     MessagesStreamWrapper,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAIAttributes,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 _MODEL = "claude-sonnet-4-20250514"
@@ -677,3 +680,218 @@ async def test_async_raw_response_caller_error_after_parse_fails_inside_invocati
     _assert_all_in_invocation(finish_seen, invocation)
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code is trace.StatusCode.ERROR
+
+
+# --- MessageStream helpers ---------------------------------------------------
+
+_HELPERS = ["until_done", "get_final_message", "get_final_text"]
+
+
+class _HelperStream:
+    """Stands in for the SDK's ``MessageStream``, whose helpers drive the SDK
+    object directly instead of the wrapper."""
+
+    def __init__(self, invocation: Any) -> None:
+        self._invocation = invocation
+        self.text_stream = self._texts()
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(())
+
+    def close(self) -> None:
+        pass
+
+    def _texts(self) -> Iterator[str]:
+        for text in ("Hel", "lo"):
+            _assert_invocation_current(self._invocation)
+            yield text
+
+    def until_done(self) -> None:
+        _assert_invocation_current(self._invocation)
+
+    def get_final_message(self) -> Message:
+        _assert_invocation_current(self._invocation)
+        return _start_event().message
+
+    def get_final_text(self) -> str:
+        _assert_invocation_current(self._invocation)
+        return "Hello"
+
+
+class _AsyncHelperStream:
+    def __init__(self, invocation: Any) -> None:
+        self._invocation = invocation
+        self.text_stream = self._texts()
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[Any]:
+        return
+        yield
+
+    async def close(self) -> None:
+        pass
+
+    async def _texts(self) -> AsyncIterator[str]:
+        for text in ("Hel", "lo"):
+            await asyncio.sleep(0)
+            _assert_invocation_current(self._invocation)
+            yield text
+
+    async def until_done(self) -> None:
+        await asyncio.sleep(0)
+        _assert_invocation_current(self._invocation)
+
+    async def get_final_message(self) -> Message:
+        await asyncio.sleep(0)
+        _assert_invocation_current(self._invocation)
+        return _start_event().message
+
+    async def get_final_text(self) -> str:
+        await asyncio.sleep(0)
+        _assert_invocation_current(self._invocation)
+        return "Hello"
+
+
+def test_sync_text_stream_activates_per_chunk(
+    tracer_provider, logger_provider, meter_provider
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = MessagesStreamWrapper(
+        _HelperStream(invocation), invocation, False
+    )
+
+    texts = stream.text_stream
+    assert stream.text_stream is texts
+    collected = []
+    for text in texts:
+        assert context.get_current() is before
+        collected.append(text)
+    assert collected == ["Hel", "lo"]
+    assert context.get_current() is before
+
+
+@pytest.mark.parametrize("helper", _HELPERS)
+def test_sync_stream_helper_activates(
+    tracer_provider, logger_provider, meter_provider, helper
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = MessagesStreamWrapper(
+        _HelperStream(invocation), invocation, False
+    )
+
+    getattr(stream, helper)()
+    assert context.get_current() is before
+
+
+@pytest.mark.asyncio
+async def test_async_text_stream_activates_per_chunk(
+    tracer_provider, logger_provider, meter_provider
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = AsyncMessagesStreamWrapper(
+        _AsyncHelperStream(invocation), invocation, False
+    )
+
+    texts = stream.text_stream
+    assert stream.text_stream is texts
+
+    async def drain() -> list[str]:
+        collected = []
+        async for text in texts:
+            assert context.get_current() is before
+            collected.append(text)
+        return collected
+
+    assert await asyncio.create_task(drain()) == ["Hel", "lo"]
+    assert context.get_current() is before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("helper", _HELPERS)
+async def test_async_stream_helper_activates(
+    tracer_provider, logger_provider, meter_provider, helper
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = AsyncMessagesStreamWrapper(
+        _AsyncHelperStream(invocation), invocation, False
+    )
+
+    await asyncio.create_task(getattr(stream, helper)())
+    assert context.get_current() is before
+
+
+def test_stream_helpers_not_advertised_on_plain_streams(
+    tracer_provider, logger_provider, meter_provider
+) -> None:
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    stream = MessagesStreamWrapper(iter(()), invocation, False)
+    async_stream = AsyncMessagesStreamWrapper(
+        _aevents(invocation, _start_event(), None), invocation, False
+    )
+
+    for name in ["text_stream", *_HELPERS]:
+        assert not hasattr(stream, name)
+        assert not hasattr(async_stream, name)
+
+
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_sync_messages_stream")
+def test_sync_messages_stream_helpers_keep_caller_span_current(
+    tracer_provider,
+    span_exporter,
+    anthropic_client,
+    instrument_no_content,
+    caplog,
+):
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        with anthropic_client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            for _ in stream.text_stream:
+                assert _is_current(caller)
+            message = stream.get_final_message()
+            assert _is_current(caller)
+        assert _is_current(caller)
+    (chat,) = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert chat.parent is not None
+    assert chat.parent.span_id == caller.get_span_context().span_id
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
+    _assert_no_detach_errors(caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr()
+@pytest.mark.cassette("test_async_messages_stream")
+async def test_async_messages_stream_helpers_keep_caller_span_current(
+    tracer_provider,
+    span_exporter,
+    async_anthropic_client,
+    instrument_no_content,
+    caplog,
+):
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("caller") as caller:
+        async with async_anthropic_client.messages.stream(
+            model=_MODEL, max_tokens=100, messages=_MESSAGES
+        ) as stream:
+            async for _ in stream.text_stream:
+                assert _is_current(caller)
+            message = await stream.get_final_message()
+            assert _is_current(caller)
+        assert _is_current(caller)
+    (chat,) = [
+        s for s in span_exporter.get_finished_spans() if s.name != "caller"
+    ]
+    assert chat.parent is not None
+    assert chat.parent.span_id == caller.get_span_context().span_id
+    assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
+    _assert_no_detach_errors(caplog)
