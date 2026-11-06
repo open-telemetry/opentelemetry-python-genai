@@ -64,13 +64,16 @@ from opentelemetry.instrumentation.genai.agno.stream import (
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     extract_model_finish_reasons,
+    extract_model_id,
     extract_session_id,
     format_content,
     format_model_input_messages,
     format_model_output_message,
     format_retrieval_document,
     has_model_output_content,
+    populate_provider_data,
     prepare_tool_definitions,
+    record_model_token_usage,
     resolve_embedder_provider,
     resolve_model_provider,
     safe_float,
@@ -480,15 +483,6 @@ def unpatch_agent() -> None:
             pass
 
 
-def _extract_embedder_model(embedder: Embedder) -> str | None:
-    model = (
-        getattr(embedder, "id", None)
-        or getattr(embedder, "model", None)
-        or getattr(embedder, "name", None)
-    )
-    return str(model) if model is not None else None
-
-
 def _extract_embedder_input_tokens(usage: Mapping[str, Any]) -> int | None:
     for key in ("prompt_tokens", "input_tokens", "total_tokens"):
         if (tok := safe_int(usage.get(key))) is not None:
@@ -501,7 +495,7 @@ def _start_embedding(
     instance: Embedder,
 ) -> EmbeddingInvocation:
     provider = resolve_embedder_provider(instance)
-    request_model = _extract_embedder_model(instance)
+    request_model = extract_model_id(instance)
     invocation = handler.embedding(
         provider=provider,
         request_model=request_model,
@@ -1786,11 +1780,7 @@ def _start_model_inference(
     run_response = get_argument("run_response", wrapped, args, kwargs)
 
     provider = resolve_model_provider(instance)
-    request_model = (
-        getattr(instance, "id", None)
-        or getattr(instance, "model", None)
-        or getattr(instance, "name", None)
-    )
+    request_model = extract_model_id(instance)
     server_address: str | None = None
     server_port: int | None = None
     base_url = getattr(instance, "base_url", None)
@@ -1811,9 +1801,7 @@ def _start_model_inference(
     )
     invocation = handler.inference(
         provider,
-        request_model=str(request_model)
-        if request_model is not None
-        else None,
+        request_model=request_model,
         server_address=server_address,
         server_port=server_port,
         conversation_id=str(session_id) if session_id is not None else None,
@@ -1863,17 +1851,8 @@ def _populate_model_response_telemetry(
         if assistant_message is not None
         else None
     )
+    populate_provider_data(invocation, provider_data)
 
-    if isinstance(provider_data, dict):
-        provider_dict = cast(dict[str, Any], provider_data)
-        if "id" in provider_dict and not invocation.response_id:
-            invocation.response_id = str(cast(object, provider_dict["id"]))
-        if "model" in provider_dict and not invocation.response_model_name:
-            invocation.response_model_name = str(
-                cast(object, provider_dict["model"])
-            )
-
-    source_metrics = None
     if assistant_message is not None:
         metrics = getattr(assistant_message, "metrics", None)
         if metrics is not None and any(
@@ -1887,33 +1866,7 @@ def _populate_model_response_telemetry(
                 "reasoning_tokens",
             )
         ):
-            source_metrics = metrics
-
-    if source_metrics is not None:
-        invocation.input_tokens = safe_int(
-            getattr(source_metrics, "input_tokens", None)
-        )
-        invocation.output_tokens = safe_int(
-            getattr(source_metrics, "output_tokens", None)
-        )
-        if (
-            cache_read := safe_int(
-                getattr(source_metrics, "cache_read_tokens", None)
-            )
-        ) is not None and cache_read > 0:
-            invocation.cache_read_input_tokens = cache_read
-        if (
-            cache_write := safe_int(
-                getattr(source_metrics, "cache_write_tokens", None)
-            )
-        ) is not None and cache_write > 0:
-            invocation.cache_write_input_tokens = cache_write
-        if (
-            reasoning := safe_int(
-                getattr(source_metrics, "reasoning_tokens", None)
-            )
-        ) is not None and reasoning > 0:
-            invocation.thinking_tokens = reasoning
+            record_model_token_usage(invocation, metrics)
 
     finish_reasons = extract_model_finish_reasons(assistant_message)
     invocation.finish_reasons = finish_reasons
