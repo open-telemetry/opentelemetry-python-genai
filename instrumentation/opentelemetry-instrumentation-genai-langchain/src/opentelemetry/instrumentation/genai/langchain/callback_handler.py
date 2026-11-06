@@ -331,7 +331,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if capture_content:
                 workflow.input_messages = make_input_message(inputs)
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, workflow
+                run_id, parent_run_id, workflow, metadata=metadata, tags=tags
             )
         elif operation == OperationName.INVOKE_AGENT:
             # agent name passed by the user
@@ -375,11 +375,17 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         parent_run_id,
                         agent,
                         agent_name=suggested_agent_name,
+                        metadata=metadata,
+                        tags=tags,
                     )
                 else:
                     # We create invoke_agent span for the initial chain for agent. All follow-up chains invoked for agent invocation will not create agent span.
                     self._invocation_manager.add_invocation_state(
-                        run_id, parent_run_id, None
+                        run_id,
+                        parent_run_id,
+                        None,
+                        metadata=metadata,
+                        tags=tags,
                     )
             elif agent_announcement is not None:
                 agent = self._telemetry_handler.invoke_local_agent(
@@ -398,12 +404,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 # parent-child traversal through _find_agent_context is not broken for
                 # any children of this node.
                 self._invocation_manager.add_invocation_state(
-                    run_id, parent_run_id, None
+                    run_id, parent_run_id, None, metadata=metadata, tags=tags
                 )
         else:
             # For unclassified chains, we still want to track them in the invocation manager to maintain the parent-child relationships, even though we won't create spans for them.
             self._invocation_manager.add_invocation_state(
-                run_id, parent_run_id, None
+                run_id, parent_run_id, None, metadata=metadata, tags=tags
             )
 
         if prompt_context := _extract_prompt_context(
@@ -422,6 +428,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> Any:
+        self._emit_langgraph_state_change(run_id, outputs)
         self._invocation_manager.publish_prompt_context(run_id)
         invocation = self._invocation_manager.get_invocation(run_id=run_id)
         if invocation is None or not isinstance(
@@ -994,3 +1001,52 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     ancestor_agent_names.add(agent_name.lower())
             current = self._invocation_manager.get_parent_run_id(current)
         return nearest_agent_name, ancestor_agent_names
+
+    def _find_nearest_workflow(
+        self, run_id: UUID | None
+    ) -> WorkflowInvocation | None:
+        current = run_id
+        visited: set[UUID] = set()
+        while current is not None and current not in visited:
+            visited.add(current)
+            entity = self._invocation_manager.get_invocation(current)
+            if isinstance(entity, WorkflowInvocation):
+                return entity
+            current = self._invocation_manager.get_parent_run_id(current)
+        return None
+
+    def _emit_langgraph_state_change(
+        self, run_id: UUID, outputs: object
+    ) -> None:
+        if not self._invocation_manager.is_langgraph_node(run_id):
+            return
+
+        if isinstance(outputs, Mapping):
+            updates = cast(Mapping[object, object], outputs)
+        else:
+            # LangGraph is optional when instrumenting LangChain alone.
+            try:
+                from langgraph.types import Command
+            except ImportError:
+                return
+            if not isinstance(outputs, Command):
+                return
+            update: object = outputs.update
+            if not isinstance(update, Mapping):
+                return
+            updates = cast(Mapping[object, object], update)
+        if not updates:
+            return
+
+        workflow = self._find_nearest_workflow(
+            self._invocation_manager.get_parent_run_id(run_id)
+        )
+        if workflow is None:
+            return
+
+        attributes = {"gen_ai.execution.state.changed_key.count": len(updates)}
+        workflow.emit_event(
+            "gen_ai.execution.state.changed",
+            attributes,
+            body="Execution state changed",
+        )

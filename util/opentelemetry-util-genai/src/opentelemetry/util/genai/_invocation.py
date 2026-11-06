@@ -357,6 +357,25 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Return {token_type: count} for token histogram recording."""
         return {}
 
+    def emit_event(
+        self,
+        event_name: str,
+        attributes: Mapping[str, AttributeValue],
+        *,
+        body: str | None = None,
+    ) -> None:
+        """Emit an event correlated with this active invocation."""
+        if self._finished:
+            return
+        self._logger.emit(
+            LogRecord(
+                event_name=event_name,
+                body=body,
+                attributes=dict(attributes),
+                context=self._span_context,
+            )
+        )
+
     def record_stream_chunk(self) -> None:
         """Record one output chunk arriving.
 
