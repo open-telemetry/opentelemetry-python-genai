@@ -22,5 +22,6 @@
 # every oldest env installs. Pin here only test-only deps that nothing else already provides.
 # agno workflow dependencies
 fastapi >= 0.100.0
+openai >= 1.0.0
 
 -e util/opentelemetry-util-genai
