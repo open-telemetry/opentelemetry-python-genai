@@ -28,9 +28,6 @@ from tests._api import invoke as _invoke
 from opentelemetry.instrumentation.genai.langchain.callback_handler import (
     OpenTelemetryLangChainCallbackHandler,
 )
-from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
-    _inference_calls,
-)
 from opentelemetry.instrumentation.genai.langchain.utils import (
     _get_property_value,
     prepare_tool_definitions,
@@ -731,7 +728,7 @@ async def test_native_agent_call_counts(
         ),
     ],
 )
-async def test_native_agent_retries_count_logical_inferences(
+async def test_native_agent_retries_count_traced_inferences(
     asynchronous: bool,
     streaming: bool,
     strategy: str,
@@ -902,7 +899,7 @@ async def test_native_agent_retries_count_logical_inferences(
         for metric in scope.metrics
     }
     for name, total in (
-        ("gen_ai.invoke_agent.inference_calls", logical_calls),
+        ("gen_ai.invoke_agent.inference_calls", expected_attempts),
         ("gen_ai.invoke_agent.tool_calls", int(use_tool and not failure)),
     ):
         (point,) = metrics[name].data.data_points
@@ -919,7 +916,6 @@ def _assert_agent_call_counts(
     inference_calls: int,
     tool_calls: int = 0,
 ) -> None:
-    assert _inference_calls.get() is None
     data = metric_reader.get_metrics_data()
     assert data is not None
     metrics = {
@@ -969,20 +965,14 @@ async def test_independent_model_calls_share_one_agent_node(
     errors = 0
 
     class Observe(BaseCallbackHandler):
-        raise_error = True
-
         def on_chat_model_start(
             self,
             serialized: dict[str, Any],
             messages: list[list[BaseMessage]],
             *,
             parent_run_id: UUID | None = None,
-            metadata: dict[str, Any] | None = None,
             **kwargs: Any,
         ) -> None:
-            assert not any(
-                key.startswith("__otel_langchain") for key in metadata or {}
-            )
             parents.append(parent_run_id)
 
         def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
@@ -1006,11 +996,7 @@ async def test_independent_model_calls_share_one_agent_node(
     }[policy]
     agent = create_react_agent(protected, tools=[])
     inputs = {"messages": [("user", "run both model calls")]}
-    config: RunnableConfig = {
-        "callbacks": [Observe()],
-        "configurable": {"user_setting": 7},
-        "metadata": {"request": "test", "user_setting": 7},
-    }
+    config: RunnableConfig = {"callbacks": [Observe()]}
     if not streaming:
         await _invoke(agent, inputs, asynchronous, config=config)
     elif asynchronous:
@@ -1026,15 +1012,10 @@ async def test_independent_model_calls_share_one_agent_node(
         for span in span_exporter.get_finished_spans()
         if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     ]
-    assert len(chats) == 2 + errors
-    assert config["configurable"] == {"user_setting": 7}
-    assert config["metadata"] == {"request": "test", "user_setting": 7}
-    assert all(
-        "__otel_langchain" not in str(span.attributes)
-        and "_InferenceCallScope" not in str(span.attributes)
-        for span in span_exporter.get_finished_spans()
-    )
-    _assert_agent_call_counts(metric_reader, 2)
+    expected_errors = 0 if policy == "none" else (2 if "_" in policy else 1)
+    assert errors == expected_errors
+    assert len(chats) == 2 + expected_errors
+    _assert_agent_call_counts(metric_reader, 2 + expected_errors)
 
 
 @pytest.mark.asyncio
@@ -1042,7 +1023,7 @@ async def test_independent_model_calls_share_one_agent_node(
 @pytest.mark.parametrize(
     "policy", ["retry", "fallback", "retry_fallback", "fallback_retry"]
 )
-async def test_agent_inference_counts_partial_batch_retries(
+async def test_agent_inference_counts_partial_batch_attempts(
     asynchronous: bool,
     policy: str,
     span_exporter: InMemorySpanExporter,
@@ -1095,7 +1076,7 @@ async def test_agent_inference_counts_partial_batch_retries(
         if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
     ]
     assert len(chats) == 5
-    _assert_agent_call_counts(metric_reader, 4)
+    _assert_agent_call_counts(metric_reader, 5)
 
 
 @pytest.mark.asyncio
@@ -1150,7 +1131,7 @@ async def test_agent_inference_counts_direct_fallback_stream(
     assert sum(
         span.status.status_code == StatusCode.ERROR for span in chats
     ) == (2 if failure else 1)
-    _assert_agent_call_counts(metric_reader, 1)
+    _assert_agent_call_counts(metric_reader, 2)
 
 
 @pytest.mark.asyncio

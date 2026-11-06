@@ -5,18 +5,16 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from contextvars import Context as PythonContext
 from functools import partial, wraps
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, distribution
 from inspect import iscoroutinefunction, signature
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackManager
-from langchain_core.runnables import RunnableConfig
-from langchain_core.runnables.config import ensure_config
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.context import attach, detach, get_current
@@ -29,9 +27,6 @@ from opentelemetry.instrumentation.genai.langchain._run_context import (
     _wrap_stream,
 )
 from opentelemetry.instrumentation.genai.langchain.invocation_manager import (
-    _INFERENCE_CALLS_KEY,
-    _inference_calls,
-    _InferenceCallScope,
     _InvocationManager,
 )
 from opentelemetry.instrumentation.utils import unwrap
@@ -69,56 +64,33 @@ class _ExecutionContext:
         self._patched: list[tuple[Any, str]] = []
 
     @contextmanager
-    def _activate(
-        self,
-        run_id: UUID | None,
-        configured: _InferenceCallScope | None = None,
-    ) -> Iterator[None]:
+    def _activate(self, run_id: UUID | None) -> Iterator[None]:
         context = self._invocations.get_parent_context(run_id)
-        token = (
-            attach(context)
-            if context is not None and get_current() is not context
-            else None
-        )
-        scope = self._invocations.get_inference_scope(run_id, configured)
-        scope_token = (
-            _inference_calls.set(scope) if scope is not None else None
-        )
+        if context is None or get_current() is context:
+            yield
+            return
+        token = attach(context)
         try:
             yield
         finally:
-            if scope_token is not None:
-                _inference_calls.reset(scope_token)
-            if token is not None:
-                detach(token)
+            detach(token)
 
-    def _wrap_input_config(
-        self, original: Callable[..., Any]
-    ) -> Callable[..., Any]:
+    def _wrap_batch(self, original: Callable[..., Any]) -> Callable[..., Any]:
         parameters = signature(original)
 
-        def context_for(
+        def parent_run_id_for(
             instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
-        ) -> AbstractContextManager[None]:
+        ) -> UUID | None:
             # One input runs in this frame; several run in the executor or
             # as tasks, each in a copied context that this frame never sees.
             bound = parameters.bind(instance, *args, **kwargs).arguments
-            if "inputs" in bound and len(bound["inputs"]) != 1:
-                return self._activate(None)
+            if len(bound["inputs"]) != 1:
+                return None
             config = bound.get("config")
             if isinstance(config, Sequence):
                 config = cast(Any, config[0]) if config else None
-            typed_config = cast(RunnableConfig, config or {})
-            callbacks = typed_config.get("callbacks")
-            configured = typed_config.get("configurable", {}).get(
-                _INFERENCE_CALLS_KEY
-            )
-            return self._activate(
-                getattr(callbacks, "parent_run_id", None),
-                configured
-                if isinstance(configured, _InferenceCallScope)
-                else None,
-            )
+            callbacks = cast(Any, config or {}).get("callbacks")
+            return getattr(callbacks, "parent_run_id", None)
 
         @wraps(original)
         def sync(
@@ -127,7 +99,7 @@ class _ExecutionContext:
             args: tuple[Any, ...],
             kwargs: dict[str, Any],
         ) -> Any:
-            with context_for(instance, args, kwargs):
+            with self._activate(parent_run_id_for(instance, args, kwargs)):
                 return wrapped(*args, **kwargs)
 
         @wraps(original)
@@ -137,7 +109,7 @@ class _ExecutionContext:
             args: tuple[Any, ...],
             kwargs: dict[str, Any],
         ) -> Any:
-            with context_for(instance, args, kwargs):
+            with self._activate(parent_run_id_for(instance, args, kwargs)):
                 return await wrapped(*args, **kwargs)
 
         return asynchronous if iscoroutinefunction(original) else sync
@@ -198,13 +170,6 @@ class _ExecutionContext:
         parent = self._invocations.get_parent_context(
             getattr(callbacks, "parent_run_id", None)
         )
-        configured = config.get("configurable", {}).get(_INFERENCE_CALLS_KEY)
-        scope = self._invocations.get_inference_scope(
-            getattr(callbacks, "parent_run_id", None),
-            configured
-            if isinstance(configured, _InferenceCallScope)
-            else None,
-        )
         with wrapped(*args, **kwargs) as context:
             # LangChain runs each child (a sequence step, a parallel branch, a
             # graph node) in this copied context. Restore the token in that
@@ -217,99 +182,11 @@ class _ExecutionContext:
                 and context.run(get_current) is not parent
                 else None
             )
-            scope_token = (
-                context.run(_inference_calls.set, scope)
-                if scope is not None
-                else None
-            )
             try:
                 yield context
             finally:
-                if scope_token is not None:
-                    context.run(_inference_calls.reset, scope_token)
                 if token is not None:
                     context.run(detach, token)
-
-    def _wrap_attempt_config(
-        self, original: Callable[..., Any]
-    ) -> Callable[..., Any]:
-        @wraps(original)
-        def wrapper(
-            wrapped: Callable[..., Any],
-            instance: Any,
-            args: tuple[Any, ...],
-            kwargs: dict[str, Any],
-        ) -> Any:
-            config: RunnableConfig = wrapped(*args, **kwargs)
-            run_id = getattr(config.get("callbacks"), "parent_run_id", None)
-            configured = config.get("configurable", {}).get(
-                _INFERENCE_CALLS_KEY
-            )
-            if isinstance(run_id, UUID):
-                scope = self._invocations.start_inference_attempt(
-                    run_id,
-                    configured
-                    if isinstance(configured, _InferenceCallScope)
-                    else None,
-                )
-                if scope is not None:
-                    # The reserved prefix prevents promotion into callback metadata.
-                    config["configurable"] = {
-                        **config.get("configurable", {}),
-                        _INFERENCE_CALLS_KEY: scope,
-                    }
-            return config
-
-        return wrapper
-
-    def _wrap_model_attempts(
-        self, original: Callable[..., Any]
-    ) -> Callable[..., Any]:
-        parameters = signature(original)
-
-        @wraps(original)
-        def wrapper(
-            wrapped: Callable[..., Any],
-            instance: Any,
-            args: tuple[Any, ...],
-            kwargs: dict[str, Any],
-        ) -> Any:
-            bound = parameters.bind(instance, *args, **kwargs)
-            handler = cast(Callable[..., Any], bound.arguments["handler"])
-            config = ensure_config()
-            configured = config.get("configurable", {}).get(
-                _INFERENCE_CALLS_KEY
-            )
-            scope = _InferenceCallScope(
-                uuid4(),
-                self._invocations.get_inference_scope(
-                    getattr(config.get("callbacks"), "parent_run_id", None),
-                    configured
-                    if isinstance(configured, _InferenceCallScope)
-                    else None,
-                ),
-            )
-
-            @wraps(handler)
-            def sync(*args: Any, **kwargs: Any) -> Any:
-                with _InferenceCallScope(
-                    scope.run_id, scope.parent, keys=scope.keys
-                ).activate():
-                    return handler(*args, **kwargs)
-
-            @wraps(handler)
-            async def asynchronous(*args: Any, **kwargs: Any) -> Any:
-                with _InferenceCallScope(
-                    scope.run_id, scope.parent, keys=scope.keys
-                ).activate():
-                    return await handler(*args, **kwargs)
-
-            bound.arguments["handler"] = (
-                asynchronous if iscoroutinefunction(original) else sync
-            )
-            return wrapped(*bound.args[1:], **bound.kwargs)
-
-        return wrapper
 
     def _patch(
         self,
@@ -353,44 +230,6 @@ class _ExecutionContext:
             )
 
     def instrument(self) -> None:
-        for module_name in (
-            "langchain_core.runnables.retry",
-            "langchain_core.runnables.fallbacks",
-        ):
-            self._patch(
-                module_name, None, "patch_config", self._wrap_attempt_config
-            )
-        for method in ("invoke", "ainvoke"):
-            self._patch(
-                "langchain_core.language_models.chat_models",
-                "BaseChatModel",
-                method,
-                self._wrap_input_config,
-            )
-        try:
-            agents = import_module("langchain.agents")
-        except ImportError as error:
-            _logger.debug("Skipping optional model-call middleware: %s", error)
-        else:
-            if hasattr(agents, "create_agent"):
-                for module_name, class_name in (
-                    (
-                        "langchain.agents.middleware.model_retry",
-                        "ModelRetryMiddleware",
-                    ),
-                    (
-                        "langchain.agents.middleware.model_fallback",
-                        "ModelFallbackMiddleware",
-                    ),
-                ):
-                    for method in ("wrap_model_call", "awrap_model_call"):
-                        self._patch(
-                            module_name,
-                            class_name,
-                            method,
-                            self._wrap_model_attempts,
-                        )
-
         for module_name, class_name, method in _METHODS:
             self._patch(module_name, class_name, method, self._wrap)
 
@@ -474,7 +313,7 @@ class _ExecutionContext:
                 "langchain_core.runnables.base",
                 "Runnable",
                 method,
-                self._wrap_input_config,
+                self._wrap_batch,
             )
 
         for class_name, wrapper in (
@@ -483,7 +322,6 @@ class _ExecutionContext:
         ):
             for method in (
                 "on_chat_model_start",
-                "on_llm_start",
                 "on_chain_start",
                 "on_tool_start",
                 "on_retriever_start",
