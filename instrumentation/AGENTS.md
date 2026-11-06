@@ -72,8 +72,9 @@ Before emitting an inference (`chat`) or `embeddings` span, ask:
 
 ### One span per operation
 
-- When one wrapped entry point calls another wrapped one in the same library (e.g. `run` calls
-  `run_async`, or a batch API calls the single-item API), emit only the outer span. Test nested
+- When one wrapped entry point calls another wrapped one for the same logical operation (e.g.
+  `run` calls `run_async`), emit only the outer span. Distinct nested operations - tools run by
+  an agent, nested workflows, individual items of a batch - still get their own spans. Test nested
   and threaded topologies for duplicate spans.
 - If the library also emits its own telemetry, coexist with it. Don't disable or alter it by
   default.
@@ -201,7 +202,8 @@ and don't call `invocation.stop()` when the SDK returns the stream.
 
 Instrumentation runs on every call of the instrumented library.
 
-- Resolve imports, signatures, and feature checks once at instrument or import time, not per call.
+- Resolve imports, function signatures, and feature checks once at instrument or import time.
+  Binding each call's arguments to the signature still happens per call.
 - Keep per-chunk stream processing O(1): append chunks and join or parse once at the end.
 - Don't block the event loop or move work onto it from async code paths.
 
@@ -211,13 +213,13 @@ Instrumentation runs on every call of the instrumented library.
   `False`.
 - Don't invent `'unknown'`, `''`, or `0` for missing optional attributes - leave them unset,
   unless semconv defines a fallback value (e.g. `unknown` for `gen_ai.provider.name`). Omit
-  optional list attributes when empty; required ones (e.g. `gen_ai.response.finish_reasons`) are
-  still recorded.
+  optional list attributes when empty; follow the attribute's semconv requirement level otherwise.
 - Every code path that starts an invocation must stop or fail it, including early returns and
   results the caller never reads, parses, or awaits.
 - A stream abandoned before completion is finalized as a failure.
-- When fixing a bug, check the sync/async counterpart and sibling instrumentations for the same
-  issue - fix it, move the logic to the util, or file an issue.
+- When fixing a bug, check affected sync/async counterparts and callers of changed shared
+  helpers. Keep unrelated pre-existing bugs in sibling instrumentations as follow-up suggestions;
+  don't expand the PR to fix them or require a tracking issue.
 
 ## Private APIs
 
@@ -255,8 +257,10 @@ Instrumentation runs on every call of the instrumented library.
   framework or module name.
 - `gen_ai.agent.id`: only a stable identifier assigned by the provider (remote agents) - not
   `id(obj)` or the agent name.
-- Finish reasons: map to `FinishReason` values. Don't infer them from library internals or default
-  to `stop`.
+- Finish reasons go in `gen_ai.response.finish_reasons`, one per generation in response order
+  (`OutputMessage.finish_reason` is deprecated). Map provider values to the util `FinishReason`
+  values where one applies (e.g. `tool_calls`/`tool_use` -> `tool_call`). Don't infer them from
+  library internals or default to `stop`.
 - Emit one span and one metric point per logical operation. Retries and calls delegated to
   another instrumented library don't count.
 - Record operation-specific metrics with exactly the attribute set semconv lists for them. Keep
@@ -297,7 +301,8 @@ Instrumentation runs on every call of the instrumented library.
   and still finalize the span with the matching `error.type`.
 - Tests must verify exact attribute names **and value types**, checked against the semconv spec.
 - Tests that accompany a fix or behavior change should fail without it. Tests that only add
-  coverage are fine. Assert exact values, not presence, length, or substrings.
+  coverage are fine. Assert exact values when the value is the contract; use presence, absence,
+  length, or substring checks when those are the behavior under test.
 - For every content-bearing attribute, test content capture both enabled and disabled (assert the
   content is absent). Don't drop existing negative assertions when editing tests.
 - Drive the instrumented library's public API and assert exported telemetry. Don't test private

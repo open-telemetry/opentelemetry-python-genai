@@ -9,11 +9,13 @@ Review rules for PRs touching `instrumentation/**`. Flag violations with a link 
 Go through these on every PR before the detailed sections below.
 
 **Tests.** For every new or changed instrumented method, list which of these are missing and flag
-the PR: sync | async | streaming | provider error | stream closed early | content capture on |
-content capture off (content absent).
+the PR. Only count variants the API actually has and paths that apply to it: sync | async |
+streaming | provider error | stream closed early | content capture on | content capture off
+(content absent).
 - For a fix or behavior change, flag tests that would pass without it (no assertion on the
-  changed value). Tests that only add coverage are fine. Flag presence/length/substring checks
-  instead of exact values.
+  changed value). Tests that only add coverage are fine. Require exact values when the value is
+  the contract; presence, absence, length, or substring checks are appropriate when those are
+  the behavior under test.
 - Flag tests that call `_private` helpers or hand-built SDK mocks instead of the instrumented
   client public API.
 
@@ -63,16 +65,18 @@ content capture off (content absent).
   class, and version-specific branches no `oldest`/`latest` test reaches.
 
 **Performance.** Flag per-call work that can run once at instrument time (imports, signature
-binding, feature checks), per-chunk stream processing that re-joins or re-parses everything
-accumulated so far, and blocking work on async code paths.
+inspection, feature checks - binding each call's arguments is per-call work), per-chunk stream
+processing that re-joins or re-parses everything accumulated so far, and blocking work on async
+code paths.
 
 **Errors.** Flag telemetry code that can raise into the user's call or import (e.g. unguarded
 base64/JSON parsing). Also flag broad `try`/`except` around whole wrappers or around util calls -
 extraction should be typed so it can't raise, with narrow `try`/`except` only around parsing
 untyped data.
 
-**Spans.** Flag duplicate spans when one wrapped entry point calls another in the same library,
-and code that disables or alters the library's own telemetry by default.
+**Spans.** Flag duplicate spans when one wrapped entry point calls another for the same logical
+operation (distinct nested operations like agent tool calls or nested workflows keep their
+spans), and code that disables or alters the library's own telemetry by default.
 
 **Util helpers.** Flag package-local copies of provider-agnostic helpers (base64/data URLs,
 provider-name maps) that exist in, or belong in, the util.
@@ -90,9 +94,9 @@ wrappers like `IteratorCapture` are fine), or replace functions without `@functo
 the call returns (streams, tool streams, raw responses, early returns); async invocations started
 when the coroutine is created instead of inside it; and suppressed context detach errors.
 
-**Parity.** When a PR fixes a bug or adds a capability, flag if the sync/async counterpart or
-sibling instrumentations have the same issue and the PR doesn't fix it, move it to util, or link
-an issue.
+**Parity.** Check affected sync/async counterparts and callers of changed shared helpers for
+the same bug or inconsistent behavior. Unrelated pre-existing bugs in sibling instrumentations
+are nonblocking follow-ups, not reasons to expand the PR or require a tracking issue.
 
 ## 0. Reviewer mindset
 
@@ -146,7 +150,7 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Adding attributes to invocations produced by the util is fine.
 - Flag captured request iterators that bypass `IteratorCapture`, eager consumption or replay,
   wrapping unrelated arguments, capture when disabled, and snapshots taken before SDK consumption.
-  See [request property capture](../../AGENTS.md#capturing-properties-that-may-contain-iterators).
+  See [request property capture](../../instrumentation/AGENTS.md#capturing-properties-that-may-contain-iterators).
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers, and
   invocation-backed wrappers that do not pass the invocation to `super().__init__(stream, invocation)`

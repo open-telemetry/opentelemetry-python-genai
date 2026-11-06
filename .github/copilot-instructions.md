@@ -1,5 +1,10 @@
 # Review rules for all PRs
 
+Report problems introduced or made worse by the diff. Before reporting, identify the changed
+line, the contract or repository rule it violates, and the concrete consequence. Check nearby
+code and existing review comments; don't repeat findings or flag unrelated pre-existing issues.
+For missing tests, name the behavior that could regress without an assertion.
+
 ## 0. What not to flag
 
 CI already runs deterministic gates on every PR. If a gate would catch it, the gate reports it, 

@@ -9,7 +9,8 @@ and the shared `opentelemetry-util-genai` utilities.
 ## General Rules and Guidelines
 
 The most important rule is not to post comments on issues or PRs that are AI-generated. Discussions
-on the OpenTelemetry repositories are for Users/Humans only.
+on the OpenTelemetry repositories are for Users/Humans only. Configured automated PR review bots
+may publish their reviews; this exception does not authorize coding agents to post on users' behalf.
 
 Follow the PR scoping guidance in [CONTRIBUTING.md](CONTRIBUTING.md). Keep AI-assisted PRs tightly
 isolated to the requested change and never include unrelated cleanup or opportunistic improvements
@@ -32,8 +33,8 @@ Keep it short - prose under 200 words. Answer, in order:
 - Why? Skip this for bug fixes.
 - Any known gaps or concerns.
 
-AI-generated analyses, long reports, or design dumps go in a relevant issue or a separate PR
-comment - not in the PR description.
+Keep AI-generated analyses, long reports, or design dumps out of the PR description. Provide them
+locally for a human to review and decide whether to publish.
 
 ## Structure
 
