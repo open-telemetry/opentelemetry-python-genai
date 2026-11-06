@@ -129,3 +129,24 @@ def test_reinstrument_before_import_attaches_once() -> None:
         assert handlers == ["NullSpanHandler", "LlamaIndexSpanHandler"]
         """
     )
+
+
+def test_attach_failure_does_not_crash_app_import() -> None:
+    _run_in_fresh_interpreter(
+        """
+        import sys
+        from unittest import TestCase
+
+        sys.modules[
+            "opentelemetry.instrumentation.genai.llama_index._handler"
+        ] = None
+        instrumentor.instrument()
+
+        with TestCase().assertLogs(
+            "opentelemetry.instrumentation.genai.llama_index", "ERROR"
+        ):
+            import llama_index.core
+
+        assert instrumentor._span_handler is None
+        """
+    )

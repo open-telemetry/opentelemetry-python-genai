@@ -31,6 +31,7 @@ Completion hook configuration is forwarded from
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -46,6 +47,8 @@ from opentelemetry.util.genai.completion_hook import load_completion_hook
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 __all__ = ["LlamaIndexInstrumentor"]
+
+_logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -109,17 +112,21 @@ class LlamaIndexInstrumentor(BaseInstrumentor):
     def _attach(self, _module: ModuleType) -> None:
         if self._handler is None or self._span_handler is not None:
             return
-        from llama_index.core import (
-            instrumentation,  # pylint: disable=import-outside-toplevel
-        )
+        try:
+            from llama_index.core import (  # pylint: disable=import-outside-toplevel
+                instrumentation,
+            )
 
-        from opentelemetry.instrumentation.genai.llama_index._handler import (  # pylint: disable=import-outside-toplevel
-            LlamaIndexSpanHandler,
-        )
+            from opentelemetry.instrumentation.genai.llama_index._handler import (  # pylint: disable=import-outside-toplevel
+                LlamaIndexSpanHandler,
+            )
 
-        span_handler = LlamaIndexSpanHandler(self._handler)
-        dispatcher = cast(
-            _Dispatcher, getattr(instrumentation, "get_dispatcher")()
-        )
-        dispatcher.add_span_handler(span_handler)
+            span_handler = LlamaIndexSpanHandler(self._handler)
+            dispatcher = cast(
+                _Dispatcher, getattr(instrumentation, "get_dispatcher")()
+            )
+            dispatcher.add_span_handler(span_handler)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _logger.exception("Failed to attach LlamaIndex span handler")
+            return
         self._span_handler = span_handler
