@@ -895,3 +895,75 @@ async def test_async_messages_stream_helpers_keep_caller_span_current(
     assert chat.parent.span_id == caller.get_span_context().span_id
     assert chat.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
     _assert_no_detach_errors(caplog)
+
+
+# --- closing through stream.response -----------------------------------------
+
+
+class _ObservedResponse:
+    def __init__(self, seen: list[trace.SpanContext]) -> None:
+        self._seen = seen
+
+    def close(self) -> None:
+        self._seen.append(trace.get_current_span().get_span_context())
+
+    async def aclose(self) -> None:
+        await asyncio.sleep(0)
+        self._seen.append(trace.get_current_span().get_span_context())
+
+
+class _StreamWithResponse:
+    def __init__(self, seen: list[trace.SpanContext]) -> None:
+        self.response = _ObservedResponse(seen)
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(())
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[Any]:
+        return
+        yield
+
+    def close(self) -> None:
+        pass
+
+
+def test_sync_response_close_finalizes_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, seen)
+    stream = MessagesStreamWrapper(
+        _StreamWithResponse(seen), invocation, False
+    )
+
+    stream.response.close()
+
+    assert context.get_current() is before
+    assert len(seen) == 2
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_response_aclose_finalizes_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, seen)
+    stream = AsyncMessagesStreamWrapper(
+        _StreamWithResponse(seen), invocation, False
+    )
+
+    await asyncio.create_task(stream.response.aclose())
+
+    assert context.get_current() is before
+    assert len(seen) == 2
+    _assert_all_in_invocation(seen, invocation)
+    assert len(span_exporter.get_finished_spans()) == 1

@@ -381,7 +381,11 @@ class MessagesStreamWrapper(
 
     @property
     def response(self) -> _http_lib.Response:
-        return finalize_on_close(self.stream.response, self._stop)
+        return finalize_on_close(
+            self.stream.response,
+            self._stop,
+            execution_context=self._execution_context,
+        )
 
     @property
     def stream(
@@ -482,7 +486,11 @@ class AsyncMessagesStreamWrapper(
 
     @property
     def response(self) -> _http_lib.Response:
-        return finalize_on_aclose(self.stream.response, self._stop)
+        return finalize_on_aclose(
+            self.stream.response,
+            self._stop,
+            execution_context=self._execution_context,
+        )
 
     @property
     def stream(
