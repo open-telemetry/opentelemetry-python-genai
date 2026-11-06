@@ -1,0 +1,1 @@
+Handle streamed tool call deltas that omit `index` instead of failing with a `TypeError`.
