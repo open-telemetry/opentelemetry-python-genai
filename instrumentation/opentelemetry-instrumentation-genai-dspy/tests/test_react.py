@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest import mock
 
@@ -126,11 +125,11 @@ def assert_agent_finish_reason(
     attrs = agent_spans[0].attributes or {}
     assert attrs.get(GenAI.GEN_AI_RESPONSE_FINISH_REASONS) == (finish_reason,)
 
-    output_msgs_raw = attrs.get(GenAI.GEN_AI_OUTPUT_MESSAGES)
+    output_msgs = attrs.get(GenAI.GEN_AI_OUTPUT_MESSAGES)
     if content_capture == "NO_CONTENT":
-        assert output_msgs_raw is None
+        assert output_msgs is None
     else:
-        output_msgs = json.loads(str(output_msgs_raw))
+        assert output_msgs is not None
         assert output_msgs[0].get("finish_reason") is None
 
 
@@ -171,21 +170,18 @@ def test_react_sync_execution(
     assert agent_attrs.get(GenAI.GEN_AI_AGENT_NAME) == "dspy.ReAct"
 
     # Verify input messages
-    input_msgs_raw = agent_attrs.get(GenAI.GEN_AI_INPUT_MESSAGES)
-    assert input_msgs_raw is not None
-    input_msgs = json.loads(str(input_msgs_raw))
+    input_msgs = agent_attrs.get(GenAI.GEN_AI_INPUT_MESSAGES)
+    assert input_msgs is not None
     assert input_msgs[0]["parts"][0]["content"] == "What is 2 + 2?"
 
     # Verify output messages
-    output_msgs_raw = agent_attrs.get(GenAI.GEN_AI_OUTPUT_MESSAGES)
-    assert output_msgs_raw is not None
-    output_msgs = json.loads(str(output_msgs_raw))
+    output_msgs = agent_attrs.get(GenAI.GEN_AI_OUTPUT_MESSAGES)
+    assert output_msgs is not None
     assert output_msgs[0]["parts"][0]["content"] == "4"
 
     # Verify tool definitions
-    tool_defs_raw = agent_attrs.get(GenAI.GEN_AI_TOOL_DEFINITIONS)
-    assert tool_defs_raw is not None
-    tool_defs = json.loads(str(tool_defs_raw))
+    tool_defs = agent_attrs.get(GenAI.GEN_AI_TOOL_DEFINITIONS)
+    assert tool_defs is not None
     assert any(t["name"] == "add" for t in tool_defs)
 
     # Verify child tool spans reference agent span and finish is skipped

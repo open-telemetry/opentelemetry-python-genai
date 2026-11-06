@@ -20,3 +20,4 @@
 # dependencies here only when they are not already provided elsewhere.
 llama-index-llms-openai==0.7.10
 
+-e util/opentelemetry-util-genai

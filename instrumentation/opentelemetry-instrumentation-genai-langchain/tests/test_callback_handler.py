@@ -313,12 +313,14 @@ async def test_chain_classification_and_completion(
         assert attrs[GenAI.GEN_AI_AGENT_DESCRIPTION] == "does math"
         assert GenAI.GEN_AI_AGENT_ID not in attrs
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
-        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
-        assert inputs[0]["parts"] == [
+        inputs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
+        outputs = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
+        assert list(inputs[0]["parts"]) == [
             {"type": "text", "content": "Solve this"}
         ]
-        assert outputs[0]["parts"] == [{"type": "text", "content": "Solved"}]
+        assert list(outputs[0]["parts"]) == [
+            {"type": "text", "content": "Solved"}
+        ]
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
@@ -366,7 +368,7 @@ async def test_chain_input_and_output_capture(
     attrs = span.attributes
     assert attrs is not None
     if content_capture == ContentCapturingMode.SPAN_ONLY and inputs:
-        captured = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        captured = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert json.loads(captured[0]["parts"][0]["content"]) == inputs
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
@@ -375,9 +377,9 @@ async def test_chain_input_and_output_capture(
         isinstance(last, AIMessage)
         or (isinstance(last, dict) and last.get("role") == "assistant")
     ):
-        captured = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        captured = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert len(captured) == 1
-        assert captured[0]["parts"] == [
+        assert list(captured[0]["parts"]) == [
             {"type": "text", "content": "final answer"}
         ]
     else:
@@ -409,8 +411,8 @@ async def test_unnamed_agent_respects_content_capture(
     assert attrs is not None
     assert GenAI.GEN_AI_AGENT_NAME not in attrs
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (message,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
-        assert message["parts"] == [{"type": "text", "content": "hello"}]
+        (message,) = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
+        assert list(message["parts"]) == [{"type": "text", "content": "hello"}]
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
@@ -543,9 +545,9 @@ async def test_prompt_sequence_calls_real_callback_managers(
     assert chat.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 5
     assert chat.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 2
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        inputs = json.loads(chat.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+        inputs = chat.attributes[GenAI.GEN_AI_INPUT_MESSAGES]
         assert [m["role"] for m in inputs] == ["system", "user"]
-        assert inputs[1]["parts"] == [
+        assert list(inputs[1]["parts"]) == [
             {"type": "text", "content": "What is 3 * 4?"}
         ]
 
@@ -606,9 +608,9 @@ async def test_chat_response_parts_and_finish_reason(
     attrs = span.attributes
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (reason,)
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        inputs = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        inputs = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert inputs[0]["name"] == "Alice"
-        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output["name"] == "weather_bot"
         assert output["role"] == "assistant"
         assert output["finish_reason"] == reason
@@ -711,9 +713,9 @@ async def test_chat_finish_reason_metadata_fallback(
     attrs = span.attributes
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == (expected,)
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output["finish_reason"] == expected
-        assert output["parts"] == [{"type": "text", "content": "answer"}]
+        assert list(output["parts"]) == [{"type": "text", "content": "answer"}]
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
@@ -759,7 +761,7 @@ async def test_chat_multiple_generations_keep_finish_reason_alignment(
         "length",
     )
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        outputs = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        outputs = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert [m["finish_reason"] for m in outputs] == [
             "stop",
             "error",
@@ -1025,9 +1027,9 @@ async def test_streamed_chat_response(
     assert attrs.get(GenAI.GEN_AI_RESPONSE_ID) == expected_id
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+        (output,) = attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]
         assert output["role"] == "assistant"
-        assert output["parts"] == [{"type": "text", "content": "hello"}]
+        assert list(output["parts"]) == [{"type": "text", "content": "hello"}]
     else:
         assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
 
@@ -1112,7 +1114,7 @@ async def test_retriever_invocation(
         assert (
             attrs[GenAI.GEN_AI_RETRIEVAL_QUERY_TEXT] == "semantic search query"
         )
-        captured = json.loads(attrs[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS])
+        captured = attrs[GenAI.GEN_AI_RETRIEVAL_DOCUMENTS]
         assert len(captured) == 2
         assert captured[0]["id"] == "doc-1"
         expected_score = (
@@ -1423,7 +1425,7 @@ async def test_multimodal_input_content_capture(
     ).content == "a red pixel"
     attrs = finished_chat(span_exporter).attributes
     if content_capture == ContentCapturingMode.SPAN_ONLY:
-        (captured,) = json.loads(attrs[GenAI.GEN_AI_INPUT_MESSAGES])
+        (captured,) = attrs[GenAI.GEN_AI_INPUT_MESSAGES]
         assert captured["name"] == "Alice"
         assert captured["parts"][0] == {
             "type": "text",
@@ -1431,7 +1433,7 @@ async def test_multimodal_input_content_capture(
         }
         blob = captured["parts"][1]
         assert blob["type"] == "blob"
-        assert base64.b64decode(blob["content"]) == _REAL_PNG_BYTES
+        assert blob["content"] == _REAL_PNG_BYTES
     else:
         assert GenAI.GEN_AI_INPUT_MESSAGES not in attrs
 

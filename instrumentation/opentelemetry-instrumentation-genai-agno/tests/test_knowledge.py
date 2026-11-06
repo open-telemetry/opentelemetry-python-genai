@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -68,12 +67,10 @@ def test_knowledge_search_content_capture(
     )
 
     raw_docs = span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
-    assert isinstance(raw_docs, str)
-    parsed_docs = json.loads(raw_docs)
-    assert parsed_docs == [
+    assert raw_docs == (
         {"id": "doc_1", "score": 0.95},
         {"id": "doc_2", "score": 0.88},
-    ]
+    )
 
 
 def test_knowledge_search_no_content_capture(
@@ -151,8 +148,7 @@ def test_knowledge_asearch_content_capture(
         == "async query"
     )
     raw_docs = span.attributes.get(GenAIAttributes.GEN_AI_RETRIEVAL_DOCUMENTS)
-    assert isinstance(raw_docs, str)
-    assert json.loads(raw_docs) == [{"id": "adoc_1", "score": 0.9}]
+    assert raw_docs == ({"id": "adoc_1", "score": 0.9},)
 
 
 def test_knowledge_asearch_no_content_capture(

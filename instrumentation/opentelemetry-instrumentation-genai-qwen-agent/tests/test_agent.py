@@ -90,14 +90,12 @@ def test_agent_run(span_exporter, instrument_with_content):
     assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in attrs
     assert attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL] == "qwen-max"
 
-    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    input_messages = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert input_messages[-1]["role"] == "user"
-    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["role"] == "assistant"
-    system_instructions = json.loads(
-        attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    )
-    assert system_instructions == [
+    system_instructions = attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
+    assert list(system_instructions) == [
         {"content": "You are a helpful assistant.", "type": "text"}
     ]
 
@@ -139,7 +137,7 @@ def test_multi_turn_conversation(span_exporter, instrument_with_content):
     )
     assert len(agent_spans) == 1
     attrs = dict(agent_spans[0].attributes or {})
-    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    input_messages = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     roles = [message["role"] for message in input_messages]
     assert roles == ["user", "assistant", "user"]
 
@@ -217,8 +215,9 @@ def test_agent_run_with_tool_call(span_exporter, instrument_with_content):
         == "Get the current weather for a given city."
     )
     arguments = tool_attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS]
-    assert isinstance(arguments, str)
-    assert "Beijing" in arguments
+    assert arguments == {"city": "Beijing"} or (
+        isinstance(arguments, str) and "Beijing" in arguments
+    )
     result = tool_attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT]
     assert isinstance(result, str)
     assert "sunny" in result
@@ -318,11 +317,11 @@ def test_agent_run_records_only_final_output_message(
     agent_spans = _spans_named(span_exporter, "invoke_agent ToolHistoryBot")
     assert len(agent_spans) == 1
     attrs = dict(agent_spans[0].attributes or {})
-    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_messages) == 1
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["finish_reason"] == "stop"
-    assert output_messages[0]["parts"] == [
+    assert list(output_messages[0]["parts"]) == [
         {"content": "Final verdict: continue.", "type": "text"}
     ]
 
@@ -359,7 +358,7 @@ def test_agent_run_input_history_records_tool_call_parts(
     agent_spans = _spans_named(span_exporter, "invoke_agent ToolPartsBot")
     assert len(agent_spans) == 1
     attrs = dict(agent_spans[0].attributes or {})
-    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    input_messages = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     parts = [part for message in input_messages for part in message["parts"]]
 
     tool_calls = [part for part in parts if part["type"] == "tool_call"]
@@ -467,17 +466,17 @@ def test_agent_run_with_tuple_messages(span_exporter, instrument_with_content):
     assert len(agent_spans) == 1
     attrs = dict(agent_spans[0].attributes or {})
 
-    input_data = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    input_data = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_data) == 1
     assert input_data[0]["role"] == "user"
-    assert input_data[0]["parts"] == [
+    assert list(input_data[0]["parts"]) == [
         {"content": "Hello\nfrom tuple", "type": "text"}
     ]
 
-    output_data = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    output_data = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_data) == 1
     assert output_data[0]["role"] == "assistant"
-    assert output_data[0]["parts"] == [
+    assert list(output_data[0]["parts"]) == [
         {"content": "Answer from tuple", "type": "text"}
     ]
 
@@ -551,14 +550,14 @@ def test_agent_run_with_user_list_messages(
     assert len(agent_spans) == 1
     attrs = dict(agent_spans[0].attributes or {})
 
-    input_data = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    input_data = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_data) == 1
-    assert input_data[0]["parts"] == [
+    assert list(input_data[0]["parts"]) == [
         {"content": "Hello UserList", "type": "text"}
     ]
 
-    output_data = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+    output_data = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_data) == 1
-    assert output_data[0]["parts"] == [
+    assert list(output_data[0]["parts"]) == [
         {"content": "Answer from UserList", "type": "text"}
     ]

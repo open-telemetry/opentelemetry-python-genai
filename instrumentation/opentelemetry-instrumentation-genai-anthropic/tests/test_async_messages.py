@@ -89,12 +89,9 @@ def expected_input_tokens(usage):
 
 
 def _load_span_messages(span, attribute):
-    value = span.attributes.get(attribute)
-    assert value is not None
-    assert isinstance(value, str)
-    parsed = json.loads(value)
-    assert isinstance(parsed, list)
-    return parsed
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    return get_content_attribute(span.attributes, attribute)
 
 
 _WEATHER_TOOL = {

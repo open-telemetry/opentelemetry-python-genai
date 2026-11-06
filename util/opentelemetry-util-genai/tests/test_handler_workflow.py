@@ -23,6 +23,7 @@ from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import WorkflowInvocation
 from opentelemetry.util.genai.types import (
+    ContentCapturingMode,
     Error,
     InputMessage,
     OutputMessage,
@@ -363,6 +364,49 @@ class TelemetryHandlerWorkflowSamplingTest(_WorkflowTestBase):
         self.assertEqual(
             spans[0].attributes[GenAI.GEN_AI_OPERATION_NAME],
             "invoke_workflow",
+        )
+
+    @patch(
+        "opentelemetry.util.genai.handler.get_content_capturing_mode",
+        return_value=ContentCapturingMode.SPAN_ONLY,
+    )
+    def test_workflow_messages_recorded_as_structured_values(
+        self, _mock_cap
+    ) -> None:
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        with handler.workflow("wf") as inv:
+            inv.input_messages = [
+                InputMessage(role="user", parts=[TextPart(content="hello")])
+            ]
+            inv.output_messages = [
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="hi")],
+                    finish_reason="stop",
+                )
+            ]
+
+        attrs = self._get_finished_spans()[0].attributes
+        self.assertEqual(
+            attrs[GenAI.GEN_AI_INPUT_MESSAGES],
+            (
+                {
+                    "role": "user",
+                    "parts": ({"type": "text", "content": "hello"},),
+                    "name": None,
+                },
+            ),
+        )
+        self.assertEqual(
+            attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+            (
+                {
+                    "role": "assistant",
+                    "parts": ({"type": "text", "content": "hi"},),
+                    "finish_reason": "stop",
+                    "name": None,
+                },
+            ),
         )
 
 

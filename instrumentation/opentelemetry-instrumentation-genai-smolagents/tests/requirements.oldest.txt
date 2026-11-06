@@ -26,3 +26,5 @@
 # pyproject.toml or the instruments extra. This is the version smolagents 1.24.0
 # declares in its openai extra.
 openai>=1.58.1
+
+-e util/opentelemetry-util-genai

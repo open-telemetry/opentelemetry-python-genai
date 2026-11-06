@@ -8,7 +8,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from types import TracebackType
 from typing import Any, ClassVar, Self, TypeAlias, cast
 
@@ -491,7 +491,7 @@ def get_content_attributes(
     prompt_variables: Mapping[str, object] | None = None,
     for_span: bool,
     content_capturing_mode: ContentCapturingMode | None = None,
-) -> dict[str, Any]:
+) -> dict[str, AttributeValue]:
     """Serialize messages, system instructions, and tool definitions into attributes.
 
     Args:
@@ -501,8 +501,8 @@ def get_content_attributes(
             is deprecated; use ``SystemInstructionPart``.
         tool_definitions: Tool definitions to serialize (may be None).
         prompt_variables: Prompt template variables to serialize (may be None).
-        for_span: If True, serialize for span attributes (JSON string);
-                  if False, serialize for event attributes (list of dicts).
+        for_span: If True, check span content capturing modes;
+                  if False, check event content capturing modes.
         content_capturing_mode: Configured content capturing mode; if None,
                                 reads from environment.
     """
@@ -523,32 +523,38 @@ def get_content_attributes(
         )
     )
 
-    def serialize(items: Sequence[Any]) -> Any:
-        dicts = [asdict(item) for item in items]
-        return gen_ai_json_dumps(dicts) if for_span else dicts
-
     if mode not in allowed_modes:
         return {}
 
     optional_attrs = (
         (
             GenAI.GEN_AI_INPUT_MESSAGES,
-            serialize(input_messages) if input_messages else None,
+            object_to_any_value(list(input_messages))
+            if input_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            serialize(output_messages) if output_messages else None,
+            object_to_any_value(list(output_messages))
+            if output_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,
-            serialize(system_instruction) if system_instruction else None,
+            object_to_any_value(list(system_instruction))
+            if system_instruction
+            else None,
         ),
         (
             GenAI.GEN_AI_TOOL_DEFINITIONS,
-            serialize(tool_definitions) if tool_definitions else None,
+            object_to_any_value(list(tool_definitions))
+            if tool_definitions
+            else None,
         ),
     )
-    result = {key: value for key, value in optional_attrs if value is not None}
+    result: dict[str, AttributeValue] = {
+        key: value for key, value in optional_attrs if value is not None
+    }
     if prompt_variables:
         for k, v in prompt_variables.items():
             serialized = _json_dumps_unless_str(v)

@@ -40,16 +40,23 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.test.weaver_live_check import (
     LiveCheckError,
     LiveCheckReport,
@@ -122,7 +129,13 @@ class Scenario(ABC):
 
 def _build_providers(
     endpoint: str,
-) -> tuple[TracerProvider, MeterProvider, LoggerProvider]:
+) -> tuple[
+    TracerProvider,
+    MeterProvider,
+    LoggerProvider,
+    InMemorySpanExporter,
+    InMemoryLogRecordExporter,
+]:
     # OTLP/gRPC exporters are only installed in the *-conformance tox envs
     # (see dev-requirements-conformance.txt). Import lazily so this module
     # stays importable in regular test envs that exclude conformance tests.
@@ -140,6 +153,8 @@ def _build_providers(
     tracer_provider.add_span_processor(
         SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
     )
+    span_exporter = InMemorySpanExporter()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
 
     # Disable periodic export — metrics flush via the explicit force_flush()
     # at the end of the scenario, so the report is deterministic.
@@ -155,8 +170,18 @@ def _build_providers(
             OTLPLogExporter(endpoint=endpoint, insecure=True)
         )
     )
+    log_exporter = InMemoryLogRecordExporter()
+    logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
+    )
 
-    return tracer_provider, meter_provider, logger_provider
+    return (
+        tracer_provider,
+        meter_provider,
+        logger_provider,
+        span_exporter,
+        log_exporter,
+    )
 
 
 def _seen_metric_names(report: LiveCheckReport) -> set[str]:
@@ -178,10 +203,62 @@ def _seen_span_operations(report: LiveCheckReport) -> dict[str, int]:
     return counts
 
 
+def _normalize_sample_value(val: Any) -> Any:
+    if isinstance(val, (tuple, list)):
+        return [_normalize_sample_value(x) for x in val]
+    if isinstance(val, dict):
+        return {k: _normalize_sample_value(v) for k, v in val.items()}
+    return val
+
+
+def _enrich_attributes(
+    sample_attrs: list[dict[str, Any]], attrs: Mapping[str, Any]
+) -> None:
+    for attr_entry in sample_attrs:
+        name = attr_entry.get("name")
+        if name not in attrs:
+            continue
+        attr_entry["value"] = _normalize_sample_value(attrs[name])
+
+
+def _enrich_report_samples(
+    report: LiveCheckReport,
+    finished_spans: Sequence[ReadableSpan],
+    finished_logs: Sequence[Any],
+) -> None:
+    # Weaver drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
+    # empty lists [] or None for structured content attributes (messages, tool definitions).
+    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed.
+    span_idx = 0
+    log_idx = 0
+    for entry in report.get("samples", []):
+        if "span" in entry and span_idx < len(finished_spans):
+            span = finished_spans[span_idx]
+            span_idx += 1
+            if span.attributes:
+                _enrich_attributes(
+                    entry["span"].get("attributes", []), span.attributes
+                )
+        elif "log" in entry and log_idx < len(finished_logs):
+            log = finished_logs[log_idx]
+            log_idx += 1
+            log_record = getattr(log, "log_record", log)
+            attrs = getattr(log_record, "attributes", None)
+            if attrs:
+                _enrich_attributes(entry["log"].get("attributes", []), attrs)
+
+
 def _dump_report(scenario: Scenario, report: LiveCheckReport) -> None:
     out = Path("weaver_reports") / f"{type(scenario).__name__}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report._report, indent=2, sort_keys=True))
+    out.write_text(
+        json.dumps(
+            report._report,
+            indent=2,
+            sort_keys=True,
+            default=lambda o: repr(o) if isinstance(o, bytes) else str(o),
+        )
+    )
 
 
 def run_conformance(
@@ -196,9 +273,13 @@ def run_conformance(
     :class:`AssertionError` on declared violations weaver no longer
     reports.
     """
-    tracer_provider, meter_provider, logger_provider = _build_providers(
-        weaver.otlp_endpoint
-    )
+    (
+        tracer_provider,
+        meter_provider,
+        logger_provider,
+        span_exporter,
+        log_exporter,
+    ) = _build_providers(weaver.otlp_endpoint)
 
     try:
         scenario.run(
@@ -212,6 +293,11 @@ def run_conformance(
         logger_provider.force_flush()
 
         report = weaver.end(timeout=120)
+        _enrich_report_samples(
+            report,
+            span_exporter.get_finished_spans(),
+            log_exporter.get_finished_logs(),
+        )
         _dump_report(scenario, report)
 
         _check_violations(scenario, report)

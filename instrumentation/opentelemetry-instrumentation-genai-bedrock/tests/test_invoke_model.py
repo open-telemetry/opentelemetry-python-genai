@@ -133,21 +133,17 @@ def test_invoke_model_anthropic_messages(
     )
 
     # Verify captured content
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["content"] == "Hello!"
 
-    sys_instruction = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    )
+    sys_instruction = span.attributes[
+        GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+    ]
     assert sys_instruction[0]["content"] == "You are a helpful assistant."
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["parts"][0]["content"] == "Hi there!"
@@ -540,18 +536,14 @@ def test_invoke_model_anthropic_tool_call_and_result(
         "tool_call",
     )
 
-    input_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    )
+    input_msgs = span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     assert len(input_msgs) == 1
     assert input_msgs[0]["role"] == "user"
     assert input_msgs[0]["parts"][0]["type"] == "tool_call_response"
     assert input_msgs[0]["parts"][0]["id"] == "toolu_prev"
     assert input_msgs[0]["parts"][0]["response"] == "72 degrees and sunny"
 
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert len(output_msgs) == 1
     assert output_msgs[0]["role"] == "assistant"
     assert output_msgs[0]["finish_reason"] == "tool_call"
@@ -677,9 +669,7 @@ def test_invoke_model_mistral(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 15
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         output_msgs[0]["parts"][0]["content"]
         == "The capital of France is Paris."
@@ -749,9 +739,7 @@ def test_invoke_model_cohere(
     )
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 5
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 6
-    output_msgs = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
+    output_msgs = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert (
         output_msgs[0]["parts"][0]["content"] == "Spring brings blossoms pink"
     )

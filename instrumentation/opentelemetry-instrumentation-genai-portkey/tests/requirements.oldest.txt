@@ -24,3 +24,5 @@
 # portkey-ai 1.0.0 pins typing-extensions==4.7.1; without this, newer transitive deps (e.g.
 # anyio>=4.15) push resolution past the declared portkey-ai floor.
 typing-extensions==4.7.1
+
+-e util/opentelemetry-util-genai

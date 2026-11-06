@@ -4,7 +4,6 @@
 """Test configuration and fixtures for Anthropic instrumentation tests."""
 # pylint: disable=redefined-outer-name
 
-import json
 import os
 
 import pytest
@@ -96,11 +95,11 @@ def multimodal_input_message():
 
 
 def assert_multimodal_input(span: ReadableSpan) -> None:
-    value = span.attributes.get(GenAIAttributes.GEN_AI_INPUT_MESSAGES)
-    assert value is not None
-    assert isinstance(value, str)
-    messages = json.loads(value)
-    assert isinstance(messages, list)
+    from opentelemetry.test_util_genai.content import get_content_attribute
+
+    messages = get_content_attribute(
+        span.attributes, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
 
@@ -114,7 +113,7 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "image/png",
         "modality": "image",
-        "content": "QUJD",
+        "content": b"ABC",
     }
     assert parts[2] == {
         "type": "uri",
@@ -126,7 +125,7 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "application/pdf",
         "modality": "document",
-        "content": "QUJD",
+        "content": b"ABC",
     }
     assert parts[4] == {
         "type": "uri",
@@ -138,7 +137,7 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
         "type": "blob",
         "mime_type": "text/plain",
         "modality": "document",
-        "content": "RG9jdW1lbnQgdGV4dA==",
+        "content": b"Document text",
     }
     assert parts[6] == {
         "type": "text",

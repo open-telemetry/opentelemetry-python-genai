@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from openai import OpenAI
@@ -156,5 +155,5 @@ def _attr(span: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _messages(value: str | None) -> list[dict[str, Any]]:
-    return json.loads(value) if value else []
+def _messages(value: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return value or []

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import ValuesView
 from typing import Any, cast
@@ -296,19 +295,19 @@ async def test_agent_run_span(
         "Answers math questions."
     )
     assert isinstance(attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL], str)
-    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
-    assert input_messages == [
+    input_messages = attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    assert input_messages == (
         {
-            "parts": [{"content": "What is two plus two?", "type": "text"}],
+            "parts": ({"content": "What is two plus two?", "type": "text"},),
             "role": "user",
             "name": None,
-        }
-    ]
-    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+        },
+    )
+    output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["role"] == "assistant"
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]) == [
-        {"content": "Be concise.", "type": "text"}
-    ]
+    assert attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"content": "Be concise.", "type": "text"},
+    )
     assert GenAIAttributes.GEN_AI_PROVIDER_NAME not in attrs
 
 
@@ -367,15 +366,15 @@ async def test_agent_run_captures_chat_message_input(
     )
 
     span = _spans_named(span_exporter, "invoke_agent chat-message-agent")[0]
-    assert json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    ) == [
+    assert span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
-            "parts": [{"content": "Hello from a ChatMessage", "type": "text"}],
+            "parts": (
+                {"content": "Hello from a ChatMessage", "type": "text"},
+            ),
             "role": "user",
             "name": None,
-        }
-    ]
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -407,9 +406,7 @@ async def test_agent_span_skips_unnamed_tool_definition(
     span = _spans_named(span_exporter, "invoke_agent agent-with-unnamed-tool")[
         0
     ]
-    definitions = json.loads(
-        span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
-    )
+    definitions = span.attributes[GenAIAttributes.GEN_AI_TOOL_DEFINITIONS]
     assert len(definitions) == 1
     assert definitions[0]["name"] == "echo"
 
@@ -539,18 +536,18 @@ async def test_react_agent_run_span(
         "Answers math questions with ReAct reasoning."
     )
     assert isinstance(attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL], str)
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
+    assert attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
-            "parts": [{"content": "What is two plus two?", "type": "text"}],
+            "parts": ({"content": "What is two plus two?", "type": "text"},),
             "role": "user",
             "name": None,
-        }
-    ]
-    output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
+        },
+    )
+    output_messages = attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
     assert output_messages[0]["role"] == "assistant"
-    assert output_messages[0]["parts"] == [
-        {"content": "Four.", "type": "text"}
-    ]
+    assert output_messages[0]["parts"] == (
+        {"content": "Four.", "type": "text"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1028,12 +1025,12 @@ async def test_agent_workflow_captures_early_stopping_response(
     agent_span = _spans_named(
         span_exporter, "invoke_agent early-stopping-agent"
     )[0]
-    agent_output = json.loads(
-        agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
-    assert agent_output[0]["parts"] == [
-        {"type": "text", "content": "generated answer"}
+    agent_output = agent_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     ]
+    assert agent_output[0]["parts"] == (
+        {"type": "text", "content": "generated answer"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1083,13 +1080,13 @@ async def test_agent_workflow_captures_first_arriving_return_direct_result(
     agent_span = _spans_named(
         span_exporter, "invoke_agent arrival-order-agent"
     )[0]
-    agent_output = json.loads(
-        agent_span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
-    )
-    # Which return_direct result LlamaIndex picks depends on task scheduling.
-    assert agent_output[0]["parts"] == [
-        {"type": "text", "content": result.response.content}
+    agent_output = agent_span.attributes[
+        GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     ]
+    # Which return_direct result LlamaIndex picks depends on task scheduling.
+    assert agent_output[0]["parts"] == (
+        {"type": "text", "content": result.response.content},
+    )
 
 
 @pytest.mark.asyncio
@@ -1231,31 +1228,29 @@ async def test_agent_workflow_captures_content(
     agent_span = _spans_named(span_exporter, "invoke_agent content-agent")[0]
     workflow_attrs = dict(workflow_span.attributes or {})
     agent_attrs = dict(agent_span.attributes or {})
-    assert json.loads(
-        workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
-    ) == [
+    assert workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
         {
             "role": "user",
-            "parts": [{"type": "text", "content": "Run the workflow"}],
+            "parts": ({"type": "text", "content": "Run the workflow"},),
             "name": None,
-        }
-    ]
-    assert json.loads(workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[
-        0
-    ]["parts"] == [{"type": "text", "content": "workflow complete"}]
-    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
-        {
-            "role": "user",
-            "parts": [{"type": "text", "content": "Run the workflow"}],
-            "name": None,
-        }
-    ]
-    assert json.loads(
-        agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS]
-    ) == [{"type": "text", "content": "Answer briefly."}]
-    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[0][
+        },
+    )
+    assert workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES][0][
         "parts"
-    ] == [{"type": "text", "content": "workflow complete"}]
+    ] == ({"type": "text", "content": "workflow complete"},)
+    assert agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES] == (
+        {
+            "role": "user",
+            "parts": ({"type": "text", "content": "Run the workflow"},),
+            "name": None,
+        },
+    )
+    assert agent_attrs[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS] == (
+        {"type": "text", "content": "Answer briefly."},
+    )
+    assert agent_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES][0]["parts"] == (
+        {"type": "text", "content": "workflow complete"},
+    )
 
 
 @pytest.mark.asyncio
@@ -1386,10 +1381,8 @@ def test_sync_tool_span(
     assert attrs[GenAIAttributes.GEN_AI_TOOL_NAME] == "multiply"
     assert attrs[GenAIAttributes.GEN_AI_TOOL_TYPE] == "function"
     assert isinstance(attrs[GenAIAttributes.GEN_AI_TOOL_DESCRIPTION], str)
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS]) == {
-        "value": 4
-    }
-    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT] == "8"
+    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_ARGUMENTS] == {"value": 4}
+    assert attrs[GenAIAttributes.GEN_AI_TOOL_CALL_RESULT] == 8
 
 
 @pytest.mark.asyncio

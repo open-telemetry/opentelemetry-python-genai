@@ -22,6 +22,7 @@ from opentelemetry.metrics import get_meter_provider
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.test_util_genai.instrumentor import instrument
 from opentelemetry.trace import StatusCode, get_tracer_provider
 from opentelemetry.util.genai.environment_variables import (
@@ -387,7 +388,9 @@ def _assert_streamed_create_output(
         and getattr(event.delta, "type", None) == "text"
     )
     assert expected_output
-    [message] = json.loads(span.attributes["gen_ai.output.messages"])
+    [message] = get_content_attribute(
+        span.attributes, "gen_ai.output.messages"
+    )
     assert message["role"] == "assistant"
     assert message["parts"] == [{"type": "text", "content": expected_output}]
     assert message["finish_reason"] is None
@@ -460,7 +463,9 @@ def _assert_streamed_tool_call(
     if content_mode == "no_content_capture":
         assert "gen_ai.output.messages" not in span.attributes
         return
-    [message] = json.loads(span.attributes["gen_ai.output.messages"])
+    [message] = get_content_attribute(
+        span.attributes, "gen_ai.output.messages"
+    )
     assert message["finish_reason"] is None
     assert message["parts"] == [
         {
@@ -709,7 +714,9 @@ def _assert_closed_early_span(
     if content_mode == "no_content_capture":
         assert "gen_ai.output.messages" not in span.attributes
         return
-    [message] = json.loads(span.attributes["gen_ai.output.messages"])
+    [message] = get_content_attribute(
+        span.attributes, "gen_ai.output.messages"
+    )
     assert message["parts"] == [{"type": "text", "content": received_text}]
     assert message["finish_reason"] is None
 
@@ -823,7 +830,7 @@ def test_sync_interactions_get(
         if part.type == "text"
     )
     assert expected_output
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    messages = span.attributes["gen_ai.output.messages"]
     texts = [
         part["content"]
         for part in messages[0]["parts"]
@@ -1004,7 +1011,7 @@ def test_sync_interactions_get_streaming(
         and getattr(event.delta, "text", None)
     )
     assert streamed
-    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    messages = span.attributes["gen_ai.output.messages"]
     assert [
         part["content"]
         for part in messages[0]["parts"]

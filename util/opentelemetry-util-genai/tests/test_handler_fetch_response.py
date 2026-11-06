@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from unittest import TestCase
 from unittest.mock import patch
@@ -364,19 +363,19 @@ class TelemetryHandlerFetchResponseContentTest(_FetchResponseTestBase):
 
         attrs = self._get_finished_spans()[0].attributes
         self.assertEqual(
-            json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES]),
-            [
+            attrs[GenAI.GEN_AI_OUTPUT_MESSAGES],
+            (
                 {
                     "role": "assistant",
-                    "parts": [{"content": "This is a test.", "type": "text"}],
+                    "parts": ({"content": "This is a test.", "type": "text"},),
                     "finish_reason": "stop",
                     "name": None,
-                }
-            ],
+                },
+            ),
         )
         self.assertEqual(
-            json.loads(attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS]),
-            [{"content": "You are a helpful assistant.", "type": "text"}],
+            attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS],
+            ({"content": "You are a helpful assistant.", "type": "text"},),
         )
         # A fetched response carries no input messages.
         self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, attrs)

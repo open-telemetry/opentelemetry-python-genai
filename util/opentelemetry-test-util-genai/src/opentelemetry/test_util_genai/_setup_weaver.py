@@ -8,6 +8,7 @@ The registry source is ``open-telemetry/semantic-conventions-genai``.
 
 from __future__ import annotations
 
+import http.client
 import logging
 import os
 import re
@@ -17,10 +18,17 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 # Bounds the fetch of the registry tarballs so a slow/unreachable
 # GitHub doesn't hang conformance runs until the OS-level socket timeout.
 _FETCH_TIMEOUT_SECONDS = 60
+
+# Capture the real connection classes before any @pytest.mark.vcr cassette
+# patches http.client, so lazy schema provisioning inside a VCR test still
+# reaches GitHub.
+_HTTPConnection = http.client.HTTPConnection
+_HTTPSConnection = http.client.HTTPSConnection
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +80,8 @@ def _download_and_extract(url: str, target: Path, label: str) -> None:
         logger.info("Fetching %s from %s", label, url)
         try:
             with (
+                patch.object(http.client, "HTTPConnection", _HTTPConnection),
+                patch.object(http.client, "HTTPSConnection", _HTTPSConnection),
                 urllib.request.urlopen(
                     url, timeout=_FETCH_TIMEOUT_SECONDS
                 ) as response,

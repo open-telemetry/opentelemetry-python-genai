@@ -24,3 +24,4 @@
 # AgentScope 1.0.x imports streamablehttp_client, removed in MCP 2.
 mcp<2
 
+-e util/opentelemetry-util-genai

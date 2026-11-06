@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 from unittest import mock
@@ -154,9 +153,7 @@ class MultimodalScenario(Scenario):
         ]
         assert chat_spans, "no chat span emitted"
 
-        input_messages = json.loads(
-            _attr(chat_spans[0], "gen_ai.input.messages")
-        )
+        input_messages = _attr(chat_spans[0], "gen_ai.input.messages")
         assert len(input_messages) == 1
         assert input_messages[0]["role"] == "user"
 
@@ -170,7 +167,7 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "image/png",
             "modality": "image",
-            "content": "QUJD",
+            "content": b"ABC",
         }
         assert parts[2] == {
             "type": "uri",
@@ -182,7 +179,7 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "application/pdf",
             "modality": "document",
-            "content": "QUJD",
+            "content": b"ABC",
         }
         assert parts[4] == {
             "type": "uri",
@@ -194,7 +191,7 @@ class MultimodalScenario(Scenario):
             "type": "blob",
             "mime_type": "text/plain",
             "modality": "document",
-            "content": "RG9jdW1lbnQgdGV4dA==",
+            "content": b"Document text",
         }
         assert parts[6] == {
             "type": "text",
