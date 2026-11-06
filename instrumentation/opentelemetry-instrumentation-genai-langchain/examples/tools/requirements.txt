@@ -1,4 +1,4 @@
-langchain==1.4.7
+langchain==1.4.8
 langchain-openai>=1.7.3
 langgraph>=1.2.19
 opentelemetry-sdk>=1.45.2
