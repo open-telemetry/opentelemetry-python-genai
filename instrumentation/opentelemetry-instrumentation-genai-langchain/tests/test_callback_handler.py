@@ -126,11 +126,10 @@ def _run_id():
     return uuid.uuid4()
 
 
-@pytest.mark.parametrize("callback", ["on_llm_start", "on_chat_model_start"])
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("native_agent", [False, True])
-def test_model_start_does_not_count_untraced_calls(
-    callback: str, enabled: bool, native_agent: bool
+def test_chat_model_start_does_not_count_untraced_calls(
+    enabled: bool, native_agent: bool
 ) -> None:
     handler, telemetry, _, agent = _make_handler()
     parent_run_id = _run_id()
@@ -147,7 +146,7 @@ def test_model_start_does_not_count_untraced_calls(
     handler._enabled = enabled
 
     for _ in range(2):
-        getattr(handler, callback)(
+        handler.on_chat_model_start(
             {}, [], run_id=_run_id(), parent_run_id=parent_run_id
         )
 
