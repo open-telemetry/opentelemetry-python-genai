@@ -197,6 +197,98 @@ def test_stream_wrapper_titan_with_metrics(
     assert output_msgs[0]["parts"][0]["content"] == "Here is the response."
 
 
+def test_stream_wrapper_nova_text_and_tool_call(
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_AND_EVENT"
+    )
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    invocation = handler.inference(
+        provider="aws.bedrock",
+        request_model="amazon.nova-lite-v1:0",
+    )
+    chunks = [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "Checking "},
+                "contentBlockIndex": 0,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "the weather."},
+                "contentBlockIndex": 0,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {
+            "contentBlockStart": {
+                "start": {
+                    "toolUse": {"toolUseId": "tool-1", "name": "get_weather"}
+                },
+                "contentBlockIndex": 1,
+            }
+        },
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"city": "Seoul"}'}},
+                "contentBlockIndex": 1,
+            }
+        },
+        {"contentBlockStop": {"contentBlockIndex": 1}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {
+            "metadata": {"usage": {"inputTokens": 7, "outputTokens": 9}},
+            "amazon-bedrock-invocationMetrics": {
+                "inputTokenCount": 7,
+                "outputTokenCount": 9,
+            },
+        },
+    ]
+    events = [
+        {"chunk": {"bytes": json.dumps(chunk).encode("utf-8")}}
+        for chunk in chunks
+    ]
+    wrapper = BedrockInvokeModelStreamWrapper(
+        stream=events,  # type: ignore[arg-type]
+        invocation=invocation,
+        capture_content=True,
+    )
+    list(wrapper)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 7
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 9
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
+        "tool_call",
+    )
+    output_msgs = json.loads(
+        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    )
+    assert output_msgs == [
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "content": "Checking the weather."},
+                {
+                    "type": "tool_call",
+                    "id": "tool-1",
+                    "name": "get_weather",
+                    "arguments": {"city": "Seoul"},
+                },
+            ],
+            "finish_reason": "tool_call",
+            "name": None,
+        }
+    ]
+
+
 def test_stream_wrapper_llama_and_mistral(
     tracer_provider,
     span_exporter,
