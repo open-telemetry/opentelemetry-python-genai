@@ -17,6 +17,8 @@ from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.stream import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    finalize_on_aclose,
+    finalize_on_close,
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
@@ -208,6 +210,17 @@ class ChatStreamWrapper(
         self._self_service_tier = None
         self._self_usage = None
 
+    @property
+    def response(self):
+        # ChatCompletionStream (chat.completions.stream()) closes this HTTP
+        # response directly instead of the stream, so that close has to
+        # finalize telemetry too.
+        return finalize_on_close(
+            self._self_stream.response,
+            self._finalize_success,
+            execution_context=self._execution_context,
+        )
+
 
 class AsyncChatStreamWrapper(
     _ChatStreamMixin,
@@ -227,6 +240,15 @@ class AsyncChatStreamWrapper(
         self._self_response_id = None
         self._self_service_tier = None
         self._self_usage = None
+
+    @property
+    def response(self):
+        # See ChatStreamWrapper.response.
+        return finalize_on_aclose(
+            self._self_stream.response,
+            self._finalize_success,
+            execution_context=self._execution_context,
+        )
 
 
 __all__ = [
