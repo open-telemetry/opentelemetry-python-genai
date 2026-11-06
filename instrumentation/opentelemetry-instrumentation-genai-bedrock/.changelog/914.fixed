@@ -1,0 +1,1 @@
+Restore caller context while Amazon Bedrock response streams are idle.

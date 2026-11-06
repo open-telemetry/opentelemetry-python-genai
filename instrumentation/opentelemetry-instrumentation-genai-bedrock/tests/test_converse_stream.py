@@ -9,6 +9,7 @@ import pytest
 from botocore.eventstream import EventStream
 from botocore.exceptions import ClientError, EventStreamError
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.genai.bedrock.stream import (
     BedrockConverseStreamWrapper,
 )
@@ -43,9 +44,14 @@ def test_converse_stream_with_content(
             "stopSequences": ["|"],
         },
     )
+    # The caller's context must be the one that was active before the call, both
+    # before the stream is consumed and after it is drained: the suspending
+    # wrapper is what keeps the Bedrock span out of the caller's context.
+    assert trace.get_current_span() is trace.INVALID_SPAN
 
     events = list(response["stream"])
     assert len(events) > 0
+    assert trace.get_current_span() is trace.INVALID_SPAN
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
