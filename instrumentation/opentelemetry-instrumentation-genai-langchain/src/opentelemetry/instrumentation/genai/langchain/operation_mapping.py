@@ -138,6 +138,7 @@ def resolve_agent_name(
 def _has_agent_signals(
     metadata: dict[str, Any] | None,
     ancestor_agent_names: set[str] | None = None,
+    is_agent_node: bool = False,
 ) -> bool:
     """Return True when metadata contains any signal that the chain is an agent.
 
@@ -153,9 +154,14 @@ def _has_agent_signals(
         and str(metadata_name).lower() in ancestor_agent_names
     )
     return bool(
-        metadata.get(_META_AGENT_SPAN)
-        or (metadata_name and not inherited_name)
-        or metadata.get(_META_AGENT_TYPE)
+        (metadata_name and not inherited_name)
+        or (
+            not is_agent_node
+            and (
+                metadata.get(_META_AGENT_TYPE)
+                or metadata.get(_META_AGENT_SPAN)
+            )
+        )
     )
 
 
@@ -175,16 +181,11 @@ def _detect_agent_name(
 
 def _looks_like_workflow(
     serialized: dict[str, Any],
-    metadata: dict[str, Any] | None,
     parent_run_id: UUID | None,
 ) -> bool:
     """Return True if the chain looks like a top-level workflow/graph."""
     if parent_run_id is not None:
         return False
-
-    # An explicit workflow override is authoritative.
-    if metadata and metadata.get(_META_WORKFLOW_SPAN):
-        return True
 
     # Heuristic: check for LangGraph identifier in the serialized repr.
     if serialized:
@@ -215,6 +216,7 @@ def _should_ignore_chain(
     agent_name: str | None,
     kwargs: dict[str, Any],
     declared_agent_name: str | None = None,
+    graph_metadata: dict[str, Any] | None = None,
 ) -> bool:
     """Return True if the chain callback should be silently suppressed.
 
@@ -222,8 +224,10 @@ def _should_ignore_chain(
     * The node is the LangGraph ``__start__`` node.
     * The name carries the ``Middleware.`` prefix.
     * ``metadata["otel_trace"]`` is explicitly ``False``.
-    * ``metadata["otel_agent_span"]`` is explicitly ``False`` and no other
-      agent signals are present.
+    * ``otel_agent_span`` is explicitly ``False`` and no other agent signals
+      are present. ``graph_metadata``, when given, replaces ``metadata`` for
+      this check, because callback metadata also carries what the graph
+      inherited from its enclosing task.
     """
     if metadata:
         node = metadata.get(LANGGRAPH_NODE_KEY)
@@ -233,10 +237,14 @@ def _should_ignore_chain(
         if metadata.get(_META_OTEL_TRACE) is False:
             return True
 
+        agent_span_metadata = (
+            metadata if graph_metadata is None else graph_metadata
+        )
         if (
-            metadata.get(_META_AGENT_SPAN) is False
-            and not metadata.get(_META_AGENT_NAME)
-            and not metadata.get(_META_AGENT_TYPE)
+            agent_span_metadata.get(_META_AGENT_SPAN) is False
+            and not agent_span_metadata.get(_META_AGENT_NAME)
+            and not agent_span_metadata.get(_META_AGENT_TYPE)
+            and not agent_span_metadata.get(_META_WORKFLOW_SPAN)
         ):
             return True
 
@@ -261,17 +269,25 @@ def classify_chain_run(
     declared_agent_name: str | None = None,
     announced_agent: bool = False,
     ancestor_agent_names: set[str] | None = None,
+    announced_workflow: bool = False,
+    has_parent_agent: bool = False,
+    graph_metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Classify a ``on_chain_start`` callback into a semconv operation.
 
     Returns one of the :class:`OperationName` constants, or ``None`` when
     the chain should be suppressed (no span emitted).
 
+    ``graph_metadata`` is the metadata an announced graph carries itself. An
+    announced workflow uses it, not ``metadata``, to decide whether it opted
+    out of agent spans.
+
     Classification order:
     1. Check for explicit suppression signals.
-    2. Check for agent signals → ``invoke_agent``.
-    3. Check for workflow signals → ``invoke_workflow``.
-    4. Default: ``None`` (suppress – unclassified chains are not emitted).
+    2. Honor graph announcements.
+    3. Honor explicit agent and workflow overrides.
+    4. Check remaining agent and workflow signals.
+    5. Suppress unclassified chains.
     """
     agent_name = resolve_agent_name(
         serialized,
@@ -283,21 +299,53 @@ def classify_chain_run(
     )
 
     # 1. Suppress known noise.
-    if _should_ignore_chain(metadata, agent_name, kwargs, declared_agent_name):
+    if graph_metadata and graph_metadata.get(_META_OTEL_TRACE) is False:
+        return None
+    if _should_ignore_chain(
+        metadata,
+        agent_name,
+        kwargs,
+        declared_agent_name,
+        graph_metadata if announced_workflow else None,
+    ):
         return None
 
-    # 2. Agent detection.
+    # 2. Graph announcements identify roots despite inherited callback metadata.
+    if announced_agent or declared_agent_name:
+        return OperationName.INVOKE_AGENT
+
+    if announced_workflow:
+        return OperationName.INVOKE_WORKFLOW
+
+    is_agent_node = bool(
+        has_parent_agent
+        and metadata
+        and metadata.get(LANGGRAPH_NODE_KEY) == agent_name
+    )
+
+    # 3. Explicit callback metadata.
     if (
-        announced_agent
-        or declared_agent_name
-        or _has_agent_signals(metadata, ancestor_agent_names)
-        or _detect_agent_name(agent_name, metadata)
+        metadata
+        and metadata.get(_META_AGENT_SPAN)
+        and _has_agent_signals(metadata, ancestor_agent_names, is_agent_node)
     ):
         return OperationName.INVOKE_AGENT
 
-    # 3. Workflow / orchestration detection.
-    if _looks_like_workflow(serialized, metadata, parent_run_id):
+    if (
+        parent_run_id is None
+        and metadata
+        and metadata.get(_META_WORKFLOW_SPAN)
+    ):
         return OperationName.INVOKE_WORKFLOW
 
-    # 4. Default: suppress unclassified chains.
+    # 4. Remaining callback signals.
+    if _has_agent_signals(
+        metadata, ancestor_agent_names, is_agent_node
+    ) or _detect_agent_name(agent_name, metadata):
+        return OperationName.INVOKE_AGENT
+
+    if _looks_like_workflow(serialized, parent_run_id):
+        return OperationName.INVOKE_WORKFLOW
+
+    # 5. Default: suppress unclassified chains.
     return None

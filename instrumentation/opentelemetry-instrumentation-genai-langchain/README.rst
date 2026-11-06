@@ -142,6 +142,16 @@ programmatically, which takes precedence over the environment variable::
 
     LangChainInstrumentor().instrument(completion_hook=my_hook)
 
+Callback metadata ``otel_workflow_span=True`` marks only the top-level run as a
+workflow; inherited metadata does not turn its nodes into workflows. Nested
+compiled LangGraph workflows are detected independently. Runnables marked with
+``agent_type`` or ``otel_agent_span=True`` can emit agent spans inside an
+enclosing agent.
+
+Graph-bound conversation IDs are used when callback metadata has no ID.
+Per-run callback IDs take precedence, and graph-bound ``otel_trace=False``
+suppresses the graph span even when the runtime omits it from callback metadata.
+
 Known Limitations
 -----------------
 
