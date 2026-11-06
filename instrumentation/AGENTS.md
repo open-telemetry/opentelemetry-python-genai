@@ -151,10 +151,16 @@ finally:
 Instrumentation observes; it should not change what a call returns or when its work happens.
 
 - **No new side effects.** Don't do work the SDK didn't — building telemetry must never consume,
-  materialize, or otherwise trigger the result early. Stay as lazy as the original.
+  materialize, or otherwise trigger the result early. Stay as lazy as the original. For example,
+  don't call `raw_response.parse()` (it runs user validators), and don't read request bodies or
+  iterate inputs before the SDK does - record what the SDK reads through a proxy instead.
+- **Don't change what the library receives.** Don't inject or alter values in kwargs, request
+  objects, or results in ways the library or other callbacks can observe. Transparent wrappers that
+  pass the same values through (e.g. `IteratorCapture`) are fine.
 - **Don't change the returned type.** `isinstance` and `__class__` must still resolve to the
   original type. A transparent proxy (e.g. `wrapt.ObjectProxy`) satisfies this; returning a
-  different or already-parsed type does not.
+  different or already-parsed type does not. A method that returned a coroutine must still return
+  one.
 - **Keep wrappers transparent.** A wrapper should be indistinguishable from what it wraps —
   attributes and behavior forward unchanged, only telemetry is added.
 - **Decorate replacement functions with `@functools.wraps(original)`.** Whenever a function or bound
@@ -169,6 +175,15 @@ Full transparency isn't always reachable — prefer the least intrusive option t
 Follow [Streaming responses](../util/opentelemetry-util-genai/AGENTS.md#streaming-responses): subclass
 `SyncStreamWrapper` / `AsyncStreamWrapper`, call `invocation.suspend()` before returning the stream,
 and don't call `invocation.stop()` when the SDK returns the stream.
+
+### Context propagation
+
+- When the instrumented call returns, its span must not be current in the caller's context, on
+  any path: streams (including tool streams), raw or unparsed responses, early returns. Suspend or
+  detach before returning.
+- For async APIs, start the invocation inside the awaited coroutine, not when the coroutine is
+  created. Otherwise concurrent calls nest under each other.
+- Don't suppress context detach errors. They signal mismatched attach/detach; fix the pairing.
 
 ## Library versions
 

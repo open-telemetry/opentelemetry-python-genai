@@ -81,6 +81,15 @@ provider-name maps) that exist in, or belong in, the util.
 modes, or streaming variants not exercised by a scenario, and `expected_metrics` not updated when
 the util adds a signal.
 
+**Return contract.** Flag wrappers that change the returned type or shape (`isinstance` breaks, a
+coroutine becomes a value), trigger work early (`raw_response.parse()`, reading request bodies,
+iterating inputs before the SDK), alter values the library receives (transparent pass-through
+wrappers like `IteratorCapture` are fine), or replace functions without `@functools.wraps`.
+
+**Context.** Flag paths where the invocation's span stays current in the caller's context after
+the call returns (streams, tool streams, raw responses, early returns); async invocations started
+when the coroutine is created instead of inside it; and suppressed context detach errors.
+
 **Parity.** When a PR fixes a bug or adds a capability, flag if the sync/async counterpart or
 sibling instrumentations have the same issue and the PR doesn't fix it, move it to util, or link
 an issue.
