@@ -1,0 +1,8 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+pytest>=8
+pytest-asyncio>=0.24
+pytest-vcr>=1.0.2
+-e util/opentelemetry-test-util-genai
+-e instrumentation/opentelemetry-instrumentation-genai-anthropic[instruments]

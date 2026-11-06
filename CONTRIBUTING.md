@@ -130,6 +130,50 @@ uv run tox -e changelog-preview
 If your change doesn't need an entry (pure docs/tooling), add the
 `Skip Changelog` label to the PR.
 
+### Anthropic test requirements
+
+The Anthropic test matrix installs generated requirements for Python 3.11
+oldest and latest, and Python 3.15 latest. Its declared runtime floors come
+from `pyproject.toml`. `tests/requirements.oldest.in` holds only local runtime
+workspace overrides needed for unreleased floors; the test harness is separate
+in `tests/requirements.test.in`. Latest inputs include the existing
+`tests/requirements.latest.txt` through `tests/requirements.latest.in`.
+
+Regenerate the locks from the repository root with uv 0.12.1:
+
+```sh
+uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.11 --resolution=lowest-direct \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.oldest.in \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+  --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/requirements.oldest.txt
+uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.11 \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.latest.in \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+  --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/requirements.latest.txt
+uv pip compile --no-config --no-sources --universal --no-annotate --python-version=3.15 \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.latest.in \
+  instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/requirements.test.in \
+  --output-file=instrumentation/opentelemetry-instrumentation-genai-anthropic/tests/locks/py315/requirements.latest.txt
+```
+
+Existing pins are retained when compatible with the inputs. Add `--upgrade`
+to deliberately refresh all pins, retaining `--resolution=lowest-direct` for
+the oldest lock. Review the resulting diff.
+
+Renovate updates the latest requirements and locks together; the oldest lock
+is excluded by the existing `requirements.oldest.txt` ignore rule. Dependency
+CI runs these compile commands and fails if the committed locks need changes.
+Its `anthropic-locks` artifact contains the regenerated patch for review.
+Workspace dependency validation and release cleanup read the oldest runtime
+inputs, so required editable installs remain checked independently of test
+helpers.
+
+Run the workspace-check regression tests with:
+
+```sh
+uv run --no-project --with packaging python -m unittest discover -s scripts/tests -v
+```
+
 ## Skills
 
 This repo ships skills (under `.github/skills/`) that automate the heavy,
