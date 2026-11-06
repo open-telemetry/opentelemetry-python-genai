@@ -6,9 +6,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, NonCallableMock
+from unittest.mock import AsyncMock, MagicMock, NonCallableMock, PropertyMock
 
 import agents
+import agents.run
 import agents.tracing
 import pytest
 from openai.types.responses import Response, ResponseCompletedEvent
@@ -18,6 +19,10 @@ from opentelemetry.instrumentation.genai.openai_agents import (
 )
 from opentelemetry.instrumentation.genai.openai_agents.package import (
     _instruments,
+)
+from opentelemetry.instrumentation.genai.openai_agents.patch import (
+    _extract_conversation_id,
+    _get_active_conversation_id,
 )
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
@@ -229,6 +234,172 @@ def test_double_uninstrument_is_noop() -> None:
     instrumentor.uninstrument()  # must not raise
 
 
+def test_extract_conversation_id_from_kwargs() -> None:
+    assert (
+        _extract_conversation_id((), {"conversation_id": "conv-123"})
+        == "conv-123"
+    )
+
+
+def test_extract_conversation_id_from_session() -> None:
+    session = MagicMock(session_id="sess-456")
+    assert _extract_conversation_id((), {"session": session}) == "sess-456"
+
+
+def test_extract_conversation_id_prefers_conversation_id_over_session() -> (
+    None
+):
+    session = MagicMock(session_id="sess-456")
+    assert (
+        _extract_conversation_id(
+            (), {"conversation_id": "conv-123", "session": session}
+        )
+        == "conv-123"
+    )
+
+
+def test_extract_conversation_id_from_resumed_run_state() -> None:
+    run_state = MagicMock(_conversation_id="state-789")
+    # input as positional arg 1
+    assert _extract_conversation_id(("agent", run_state), {}) == "state-789"
+    # input as keyword arg
+    assert _extract_conversation_id((), {"input": run_state}) == "state-789"
+
+
+def test_extract_conversation_id_returns_none_when_empty() -> None:
+    assert _extract_conversation_id((), {}) is None
+    assert _extract_conversation_id((), {"conversation_id": None}) is None
+    assert _extract_conversation_id((), {"session": None}) is None
+    assert (
+        _extract_conversation_id((), {"session": MagicMock(session_id=None)})
+        is None
+    )
+
+
+def test_extract_conversation_id_uninitialized_session_returns_none() -> None:
+    session = MagicMock()
+    type(session).session_id = PropertyMock(
+        side_effect=ValueError("Session ID not yet available.")
+    )
+    assert _extract_conversation_id((), {"session": session}) is None
+
+
+def test_instrument_and_uninstrument_wraps_runner_methods() -> None:
+    instrumentor = OpenAIAgentsInstrumentor()
+    instrumentor.instrument()
+    try:
+        assert hasattr(agents.Runner.run, "__wrapped__")
+        assert hasattr(agents.Runner.run_sync, "__wrapped__")
+        assert hasattr(agents.Runner.run_streamed, "__wrapped__")
+    finally:
+        instrumentor.uninstrument()
+    assert not hasattr(agents.Runner.run, "__wrapped__")
+    assert not hasattr(agents.Runner.run_sync, "__wrapped__")
+    assert not hasattr(agents.Runner.run_streamed, "__wrapped__")
+
+
+def test_wrap_runner_sync_sets_and_resets_conversation_id() -> None:
+    instrumentor = OpenAIAgentsInstrumentor()
+    captured_conv_id = None
+
+    def fake_run_sync(*args: Any, **kwargs: Any) -> str:
+        nonlocal captured_conv_id
+        captured_conv_id = _get_active_conversation_id()
+        return "ok"
+
+    assert _get_active_conversation_id() is None
+    result = instrumentor._wrap_runner(
+        fake_run_sync,
+        None,
+        (),
+        {"conversation_id": "conv-sync-123"},
+    )
+    assert result == "ok"
+    assert captured_conv_id == "conv-sync-123"
+    assert _get_active_conversation_id() is None
+
+
+@pytest.mark.asyncio
+async def test_wrap_runner_async_sets_and_resets_session_id() -> None:
+    instrumentor = OpenAIAgentsInstrumentor()
+    captured_conv_id = None
+
+    async def fake_run(*args: Any, **kwargs: Any) -> str:
+        nonlocal captured_conv_id
+        captured_conv_id = _get_active_conversation_id()
+        return "async_ok"
+
+    assert _get_active_conversation_id() is None
+    session = MagicMock(session_id="session-async-456")
+    coro = instrumentor._wrap_runner(
+        fake_run,
+        None,
+        (),
+        {"session": session},
+    )
+    result = await coro
+    assert result == "async_ok"
+    assert captured_conv_id == "session-async-456"
+    assert _get_active_conversation_id() is None
+
+
+def test_wrap_runner_streamed_sets_and_resets_conversation_id() -> None:
+    instrumentor = OpenAIAgentsInstrumentor()
+    captured_conv_id = None
+
+    def fake_run_streamed(*args: Any, **kwargs: Any) -> str:
+        nonlocal captured_conv_id
+        captured_conv_id = _get_active_conversation_id()
+        return "streamed_ok"
+
+    assert _get_active_conversation_id() is None
+    result = instrumentor._wrap_runner(
+        fake_run_streamed,
+        None,
+        (),
+        {"conversation_id": "conv-stream-789"},
+    )
+    assert result == "streamed_ok"
+    assert captured_conv_id == "conv-stream-789"
+    assert _get_active_conversation_id() is None
+
+
+def test_wrap_runner_sync_resets_conversation_id_on_exception() -> None:
+    instrumentor = OpenAIAgentsInstrumentor()
+
+    def fake_run_sync_fail(*args: Any, **kwargs: Any) -> str:
+        assert _get_active_conversation_id() == "conv-err"
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        instrumentor._wrap_runner(
+            fake_run_sync_fail,
+            None,
+            (),
+            {"conversation_id": "conv-err"},
+        )
+    assert _get_active_conversation_id() is None
+
+
+@pytest.mark.asyncio
+async def test_wrap_runner_async_resets_conversation_id_on_exception() -> None:
+    instrumentor = OpenAIAgentsInstrumentor()
+
+    async def fake_run_fail(*args: Any, **kwargs: Any) -> str:
+        assert _get_active_conversation_id() == "conv-async-err"
+        raise RuntimeError("boom")
+
+    coro = instrumentor._wrap_runner(
+        fake_run_fail,
+        None,
+        (),
+        {"conversation_id": "conv-async-err"},
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        await coro
+    assert _get_active_conversation_id() is None
+
+
 @agents.function_tool
 def _failing_tool() -> str:
     raise ValueError("database connection failed")
@@ -375,6 +546,35 @@ def test_runner_entry_points_preserve_hooks(
     _assert_agent_call_metrics(
         metric_reader, span_exporter, inference_calls=1, tool_calls=0
     )
+
+
+@pytest.mark.asyncio
+async def test_runner_conversation_id_updates_outer_trace_group_id(
+    tracer_provider: TracerProvider,
+    logger_provider: Any,
+    meter_provider: Any,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    model = _mock_model([_FINAL_MESSAGE])
+    agent = agents.Agent(name="test_agent", model=model)
+    with instrument(
+        OpenAIAgentsInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        with agents.tracing.trace("Outer workflow", group_id="g1"):
+            await agents.Runner.run(agent, "hello", conversation_id="conv-1")
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "invoke_workflow Outer workflow" in spans
+    assert "invoke_agent test_agent" in spans
+    workflow_span = spans["invoke_workflow Outer workflow"]
+    agent_span = spans["invoke_agent test_agent"]
+    assert workflow_span.attributes is not None
+    assert agent_span.attributes is not None
+    assert workflow_span.attributes["gen_ai.conversation.id"] == "conv-1"
+    assert agent_span.attributes["gen_ai.conversation.id"] == "conv-1"
 
 
 @pytest.mark.asyncio

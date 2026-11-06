@@ -1,0 +1,1 @@
+Record ``gen_ai.conversation.id`` from ``conversation_id`` or ``session.session_id`` on workflow and agent spans.
