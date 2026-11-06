@@ -8,14 +8,16 @@ from __future__ import annotations
 import json
 from typing import Any
 from unittest.mock import MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+import langchain.agents
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import Tool, tool
 from langchain_core.utils.function_calling import convert_to_openai_function
+from langgraph.prebuilt import ToolNode, create_react_agent
 from tests._api import FakeChatModel as _ToolChatModel
 from tests._api import invoke as _invoke
 
@@ -29,6 +31,7 @@ from opentelemetry.instrumentation.genai.langchain.utils import (
 from opentelemetry.instrumentation.genai.langchain.version import __version__
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -606,6 +609,421 @@ async def test_tool_error(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize(
+    ("failure", "use_tool"),
+    [(None, False), (None, True), ("model", True), ("tool", True)],
+)
+async def test_native_agent_call_counts(
+    asynchronous: bool,
+    streaming: bool,
+    failure: str | None,
+    use_tool: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    error = RuntimeError("agent call failed")
+
+    @tool
+    def calculate() -> str:
+        """Return the calculation result."""
+        if failure == "tool":
+            raise error
+        return "42"
+
+    model = _ToolChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "calculate", "args": {}, "id": "1"}],
+            ),
+            AIMessage(content="42"),
+        ]
+        if use_tool
+        else [AIMessage(content="42")],
+        error=error if failure == "model" else None,
+    )
+    agent = create_react_agent(
+        model, ToolNode([calculate], handle_tool_errors=False)
+    )
+    inputs = {"messages": [("user", "calculate")]}
+
+    async def run() -> None:
+        if not streaming:
+            await _invoke(agent, inputs, asynchronous)
+        elif asynchronous:
+            async for _ in agent.astream(inputs):
+                pass
+        else:
+            list(agent.stream(inputs))
+
+    if failure:
+        with pytest.raises(RuntimeError) as raised:
+            await run()
+        assert raised.value is error
+    else:
+        await run()
+    (agent_span,) = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.parent is None
+        and span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
+        == "invoke_agent"
+    ]
+    assert agent_span.status.status_code == (
+        StatusCode.ERROR if failure else StatusCode.UNSET
+    )
+    if failure:
+        assert (
+            agent_span.attributes[error_attributes.ERROR_TYPE]
+            == "RuntimeError"
+        )
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    for name, total in (
+        (
+            "gen_ai.invoke_agent.inference_calls",
+            1 if failure or not use_tool else 2,
+        ),
+        (
+            "gen_ai.invoke_agent.tool_calls",
+            int(use_tool and failure != "model"),
+        ),
+    ):
+        (point,) = metrics[name].data.data_points
+        assert point.count == 1
+        assert type(point.sum) is int
+        assert point.sum == total
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize("strategy", ["retry", "fallback"])
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("use_tool", [False, True])
+@pytest.mark.parametrize(
+    "use_middleware",
+    [
+        False,
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                not hasattr(langchain.agents, "create_agent"),
+                reason="Model middleware requires LangChain 1.x",
+            ),
+        ),
+    ],
+)
+async def test_native_agent_retries_count_traced_inferences(
+    asynchronous: bool,
+    streaming: bool,
+    strategy: str,
+    failure: bool,
+    use_tool: bool,
+    use_middleware: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    error = RuntimeError("model call failed")
+    attempts = 3 if strategy == "retry" and failure else 2
+
+    @tool
+    def calculate() -> str:
+        """Return the calculation result."""
+        return "42"
+
+    tools = [calculate] if use_tool else []
+    responses = (
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "calculate", "args": {}, "id": "1"}],
+            ),
+            AIMessage(content="42"),
+        ]
+        if use_tool
+        else [AIMessage(content="42")]
+    )
+    model = _ToolChatModel(responses=responses, error=error)
+    fallback = _ToolChatModel(
+        responses=responses,
+        model_name="fallback-model",
+        error=error if failure else None,
+    )
+
+    class RecoverOnError(BaseCallbackHandler):
+        def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+            if strategy == "retry" and not failure:
+                model.error = None
+
+    if use_middleware:
+        from langchain.agents.middleware import (
+            ModelFallbackMiddleware,
+            ModelRetryMiddleware,
+        )
+
+        policy = (
+            ModelRetryMiddleware(
+                max_retries=attempts - 1,
+                retry_on=(RuntimeError,),
+                initial_delay=0,
+                jitter=False,
+                on_failure="error",
+            )
+            if strategy == "retry"
+            else ModelFallbackMiddleware(fallback)
+        )
+        agent = langchain.agents.create_agent(
+            model, tools=tools, middleware=[policy]
+        )
+    else:
+        wrapped = (
+            model.with_retry(
+                wait_exponential_jitter=False, stop_after_attempt=attempts
+            )
+            if strategy == "retry"
+            else model.with_fallbacks([fallback])
+        )
+        if tools:
+            wrapped = wrapped.bind(
+                tools=[
+                    {
+                        "type": "function",
+                        "function": convert_to_openai_function(item),
+                    }
+                    for item in tools
+                ]
+            )
+        agent = create_react_agent(wrapped, tools=tools)
+
+    agent_name = "model" if use_middleware else "retry_agent"
+
+    async def run() -> None:
+        inputs = {"messages": [("user", "calculate")]}
+        config: RunnableConfig = {
+            "callbacks": [RecoverOnError()],
+            "metadata": {
+                "agent_name": agent_name,
+                "otel_agent_span": use_middleware and not use_tool,
+            },
+        }
+        if not streaming:
+            result = await _invoke(agent, inputs, asynchronous, config=config)
+            assert result["messages"][-1].content == "42"
+        elif asynchronous:
+            async for _ in agent.astream(inputs, config=config):
+                pass
+        else:
+            list(agent.stream(inputs, config=config))
+
+    if failure:
+        with pytest.raises(RuntimeError) as raised:
+            await run()
+        assert raised.value is error
+    else:
+        await run()
+    spans = span_exporter.get_finished_spans()
+    (agent_span,) = [
+        span
+        for span in spans
+        if span.parent is None
+        and span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
+        == "invoke_agent"
+    ]
+    assert agent_span.status.status_code == (
+        StatusCode.ERROR if failure else StatusCode.UNSET
+    )
+    chats = [
+        span
+        for span in spans
+        if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
+    ]
+    model_turns = 2 if use_tool and not failure else 1
+    expected_attempts = (
+        attempts + model_turns - 1 if strategy == "retry" else 2 * model_turns
+    )
+    assert len(chats) == expected_attempts
+    errors = [
+        chat for chat in chats if chat.status.status_code == StatusCode.ERROR
+    ]
+    if failure:
+        assert len(errors) == expected_attempts
+    elif strategy == "fallback":
+        assert len(errors) == model_turns
+    else:
+        assert len(errors) == 1
+    for chat in chats:
+        if chat.status.status_code == StatusCode.ERROR:
+            assert (
+                chat.attributes[error_attributes.ERROR_TYPE] == "RuntimeError"
+            )
+        else:
+            assert chat.status.status_code == StatusCode.UNSET
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    for name, total in (
+        ("gen_ai.invoke_agent.inference_calls", expected_attempts),
+        ("gen_ai.invoke_agent.tool_calls", int(use_tool and not failure)),
+    ):
+        (point,) = metrics[name].data.data_points
+        assert (
+            point.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME] == agent_name
+        )
+        assert point.count == 1
+        assert type(point.sum) is int
+        assert point.sum == total
+
+
+def _assert_agent_call_counts(
+    metric_reader: InMemoryMetricReader,
+    inference_calls: int,
+    tool_calls: int = 0,
+) -> None:
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    for name, total in (
+        ("gen_ai.invoke_agent.inference_calls", inference_calls),
+        ("gen_ai.invoke_agent.tool_calls", tool_calls),
+    ):
+        (point,) = metrics[name].data.data_points
+        assert point.count == 1
+        assert type(point.sum) is int
+        assert point.sum == total
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["invoke", "stream"])
+@pytest.mark.parametrize("same_model", [False, True])
+async def test_independent_model_calls_share_one_agent_node(
+    asynchronous: bool,
+    streaming: bool,
+    same_model: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    first = _ToolChatModel(responses=[AIMessage(content="answer")])
+    second = (
+        first
+        if same_model
+        else _ToolChatModel(
+            responses=[AIMessage(content="answer")], model_name="second-model"
+        )
+    )
+    parents: list[UUID | None] = []
+
+    class Observe(BaseCallbackHandler):
+        def on_chat_model_start(
+            self,
+            serialized: dict[str, Any],
+            messages: list[list[BaseMessage]],
+            *,
+            parent_run_id: UUID | None = None,
+            **kwargs: Any,
+        ) -> None:
+            parents.append(parent_run_id)
+
+    pipeline = first | RunnableLambda(lambda message: [message]) | second
+    agent = create_react_agent(pipeline, tools=[])
+    inputs = {"messages": [("user", "run both model calls")]}
+    config: RunnableConfig = {"callbacks": [Observe()]}
+    if not streaming:
+        await _invoke(agent, inputs, asynchronous, config=config)
+    elif asynchronous:
+        async for _ in agent.astream(inputs, config=config):
+            pass
+    else:
+        list(agent.stream(inputs, config=config))
+    assert len(parents) == 2
+    assert parents[0] is not None and parents[0] == parents[1]
+    chats = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
+    ]
+    assert len(chats) == 2
+    _assert_agent_call_counts(metric_reader, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("failure", [False, True])
+async def test_agent_inference_counts_direct_fallback_stream(
+    asynchronous: bool,
+    failure: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    error = RuntimeError("model stream failed")
+    model = _ToolChatModel(
+        responses=[AIMessage(content="answer")], error=error
+    )
+    fallback = _ToolChatModel(
+        responses=[AIMessage(content="answer")],
+        error=error if failure else None,
+    )
+    protected = model.with_fallbacks([fallback])
+
+    def run(_: object) -> BaseMessage:
+        result = None
+        for chunk in protected.stream("hello"):
+            result = chunk if result is None else result + chunk
+        assert result is not None and result.content == "answer"
+        return result
+
+    async def arun(_: object) -> BaseMessage:
+        result = None
+        async for chunk in protected.astream("hello"):
+            result = chunk if result is None else result + chunk
+        assert result is not None and result.content == "answer"
+        return result
+
+    agent = create_react_agent(RunnableLambda(run, afunc=arun), tools=[])
+    if failure:
+        with pytest.raises(RuntimeError) as raised:
+            await _invoke(
+                agent, {"messages": [("user", "hello")]}, asynchronous
+            )
+        assert raised.value is error
+    else:
+        await _invoke(agent, {"messages": [("user", "hello")]}, asynchronous)
+    chats = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
+    ]
+    assert len(chats) == 2
+    assert sum(
+        span.status.status_code == StatusCode.ERROR for span in chats
+    ) == (2 if failure else 1)
+    _assert_agent_call_counts(metric_reader, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_tool_parents_to_workflow_instead_of_ambient_span(
     asynchronous: bool,
     tracer_provider: TracerProvider,
@@ -660,6 +1078,7 @@ async def test_tool_carries_nearest_agent_name(
     asynchronous: bool,
     nested: bool,
     span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
     instrument_langchain: None,
 ) -> None:
     def calculate(
@@ -723,6 +1142,17 @@ async def test_tool_carries_nearest_agent_name(
         assert (
             specialist_span.parent.span_id == coordinator_span.context.span_id
         )
+
+    data = metric_reader.get_metrics_data()
+    assert data is not None
+    metrics = {
+        metric.name: metric
+        for resource in data.resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+    }
+    assert "gen_ai.invoke_agent.inference_calls" not in metrics
+    assert "gen_ai.invoke_agent.tool_calls" not in metrics
 
 
 def _model_response(
