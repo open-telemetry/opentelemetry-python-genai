@@ -35,7 +35,7 @@ class FinishReasonsTestCase(TestCase):
             )
         )
         self.assertEqual(
-            self.generate_and_get_span_finish_reasons(), ["safety"]
+            self.generate_and_get_span_finish_reasons(), ["content_filter"]
         )
 
     def test_single_candidate_with_max_tokens_reason(self):
@@ -45,14 +45,16 @@ class FinishReasonsTestCase(TestCase):
             )
         )
         self.assertEqual(
-            self.generate_and_get_span_finish_reasons(), ["max_tokens"]
+            self.generate_and_get_span_finish_reasons(), ["length"]
         )
 
     def test_single_candidate_with_no_reason(self):
         self.configure_valid_response(
             candidate=genai_types.Candidate(finish_reason=None)
         )
-        self.assertEqual(self.generate_and_get_span_finish_reasons(), [])
+        self.assertEqual(
+            self.generate_and_get_span_finish_reasons(), ["error"]
+        )
 
     def test_single_candidate_with_unspecified_reason(self):
         self.configure_valid_response(
@@ -62,7 +64,7 @@ class FinishReasonsTestCase(TestCase):
         )
         self.assertEqual(
             self.generate_and_get_span_finish_reasons(),
-            ["finish_reason_unspecified"],
+            ["error"],
         )
 
     def test_multiple_candidates_with_valid_reasons(self):
@@ -77,7 +79,7 @@ class FinishReasonsTestCase(TestCase):
             ]
         )
         self.assertEqual(
-            self.generate_and_get_span_finish_reasons(), ["max_tokens", "stop"]
+            self.generate_and_get_span_finish_reasons(), ["length", "stop"]
         )
 
     def test_doesnt_sort_finish_reasons(self):
@@ -96,7 +98,7 @@ class FinishReasonsTestCase(TestCase):
         )
         self.assertEqual(
             self.generate_and_get_span_finish_reasons(),
-            ["stop", "max_tokens", "safety"],
+            ["stop", "length", "content_filter"],
         )
 
     def test_doesnt_deduplicate_finish_reasons(self):
@@ -132,10 +134,10 @@ class FinishReasonsTestCase(TestCase):
             self.generate_and_get_span_finish_reasons(),
             [
                 "stop",
-                "max_tokens",
+                "length",
                 "stop",
                 "stop",
-                "safety",
+                "content_filter",
                 "stop",
                 "stop",
                 "stop",
