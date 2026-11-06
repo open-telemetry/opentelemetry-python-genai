@@ -19,6 +19,13 @@ from opentelemetry.util.genai._invocation import (
     _json_dumps_unless_str,
 )
 from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.types import (
+    InputMessage,
+    OutputMessage,
+    Role,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
+)
 from opentelemetry.util.genai.utils import ContentCapturingMode
 from opentelemetry.util.types import AnyValue, AttributeValue
 
@@ -208,7 +215,42 @@ class ToolInvocation(GenAIInvocation):
         }
         attributes.update(self.attributes)
         self.span.set_attributes(attributes)
+        self._call_completion_hook(
+            inputs=self._get_hook_inputs(),
+            outputs=self._get_hook_outputs(),
+        )
         self._record_metrics()
+
+    def _get_hook_inputs(self) -> list[InputMessage]:
+        if self.arguments is None:
+            return []
+        return [
+            InputMessage(
+                role=Role.ASSISTANT.value,
+                parts=[
+                    ToolCallRequestPart(
+                        arguments=self.arguments,
+                        name=self._data.tool_name or self._name,
+                        id=self._data.tool_call_id,
+                    )
+                ],
+            )
+        ]
+
+    def _get_hook_outputs(self) -> list[OutputMessage]:
+        if self.tool_result is None:
+            return []
+        return [
+            OutputMessage(
+                role=Role.TOOL.value,
+                parts=[
+                    ToolCallResponsePart(
+                        response=self.tool_result,
+                        id=self._data.tool_call_id,
+                    )
+                ],
+            )
+        ]
 
     def _record_metrics(self) -> None:
         duration_seconds = max(
