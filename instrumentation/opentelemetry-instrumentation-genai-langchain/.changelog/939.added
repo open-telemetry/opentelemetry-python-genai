@@ -1,0 +1,1 @@
+Link chat spans to the prompt template that produced their input when the prompt runs outside a chain or several prompts share a parent, set `gen_ai.prompt.version` from `prompt_version` or LangChain Hub metadata, and detect every `BasePromptTemplate` subclass

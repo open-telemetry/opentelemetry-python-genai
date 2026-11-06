@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # tests/test_invocation_manager.py
+import gc
 import uuid
 from unittest import mock
 
@@ -319,3 +320,37 @@ def test_unpublished_prompt_context_is_discarded_on_delete(invocation_manager):
     invocation_manager.delete_invocation_state(prompt_id)
 
     assert invocation_manager.consume_prompt_context(parent_id) is None
+
+
+def test_prompt_value_context_lives_as_long_as_the_value(invocation_manager):
+    class Value:
+        pass
+
+    value = Value()
+    context = _PromptContext("greeting", {}, "3")
+    invocation_manager.set_prompt_value_context(value, context)
+
+    assert invocation_manager.get_prompt_value_context(value) == context
+    del value
+    gc.collect()
+    assert invocation_manager._prompt_values == {}
+
+
+def test_prompt_value_context_skips_values_without_weak_references(
+    invocation_manager,
+):
+    value = ("not", "weak-referenceable")
+    invocation_manager.set_prompt_value_context(
+        value, _PromptContext("greeting", {})
+    )
+
+    assert invocation_manager.get_prompt_value_context(value) is None
+
+
+def test_model_prompt_context_is_taken_once(invocation_manager):
+    run_id = uuid.uuid4()
+    context = _PromptContext("greeting", {})
+    invocation_manager.set_model_prompt_context(run_id, context)
+
+    assert invocation_manager.pop_model_prompt_context(run_id) == context
+    assert invocation_manager.pop_model_prompt_context(run_id) is None
