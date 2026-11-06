@@ -36,6 +36,7 @@ __all__ = [
 class OperationName:
     """Canonical GenAI semantic convention operation names."""
 
+    TEXT_COMPLETION: str = GenAI.GenAiOperationNameValues.TEXT_COMPLETION.value
     INVOKE_AGENT: str = GenAI.GenAiOperationNameValues.INVOKE_AGENT.value
     INVOKE_WORKFLOW: str = GenAI.GenAiOperationNameValues.INVOKE_WORKFLOW.value
 

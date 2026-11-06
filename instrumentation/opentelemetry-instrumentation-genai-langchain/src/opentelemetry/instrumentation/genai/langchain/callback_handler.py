@@ -57,6 +57,7 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     RetrievalDocument,
     Role,
+    TextPart,
 )
 from opentelemetry.util.genai.utils import (
     object_to_any_value,
@@ -469,6 +470,71 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
     ) -> None:
         if not self._enabled:
             return
+
+        # ``messages`` from on_chat_model_start is ``list[list[BaseMessage]]``
+        # (one inner list per generation request). Flatten and let
+        # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
+        # with proper roles, tool-call requests, tool results, and reasoning.
+        flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
+        input_messages: list[InputMessage] = []
+        if self._telemetry_handler.should_capture_content():
+            input_messages = to_input_messages(flattened)
+
+        self._on_model_start(
+            serialized,
+            input_messages=input_messages,
+            operation_name=None,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            metadata=metadata,
+            **kwargs,
+        )
+
+    def on_llm_start(
+        self,
+        serialized: dict[str, Any],
+        prompts: list[str],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not self._enabled:
+            return
+
+        input_messages: list[InputMessage] = []
+        if self._telemetry_handler.should_capture_content():
+            input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(prompt)],
+                )
+                for prompt in prompts
+            ]
+
+        self._on_model_start(
+            serialized,
+            input_messages=input_messages,
+            operation_name=OperationName.TEXT_COMPLETION,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            metadata=metadata,
+            **kwargs,
+        )
+
+    def _on_model_start(
+        self,
+        serialized: dict[str, Any],
+        *,
+        input_messages: list[InputMessage],
+        operation_name: str | None,
+        run_id: UUID,
+        parent_run_id: UUID | None,
+        metadata: dict[str, Any] | None,
+        **kwargs: Any,
+    ) -> None:
         if "invocation_params" in kwargs:
             params = (
                 kwargs["invocation_params"].get("params")
@@ -495,11 +561,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if model := metadata.get("ls_model_name"):
                 request_model = str(model)
 
-        # Skip telemetry for unsupported request models
-        if request_model is None:
-            return
-
-        request_model = request_model.removeprefix("models/")
+        if request_model is not None:
+            request_model = request_model.removeprefix("models/")
 
         # Initialize variables with default values to avoid "possibly unbound" errors
         request_choice_count = None
@@ -542,15 +605,6 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
             if "ls_max_tokens" in metadata:
                 max_tokens = metadata.get("ls_max_tokens")
 
-        # ``messages`` from on_chat_model_start is ``list[list[BaseMessage]]``
-        # (one inner list per generation request). Flatten and let
-        # :func:`to_input_messages` produce spec-conformant ``InputMessage`` s
-        # with proper roles, tool-call requests, tool results, and reasoning.
-        flattened: list[BaseMessage] = [msg for sub in messages for msg in sub]
-        input_messages: list[InputMessage] = []
-        if self._telemetry_handler.should_capture_content():
-            input_messages = to_input_messages(flattened)
-
         parent_context = self._invocation_manager.get_parent_context(
             parent_run_id
         )
@@ -560,6 +614,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         llm_invocation = self._telemetry_handler.inference(
             provider,
             request_model=request_model,
+            operation_name=operation_name,
             context=parent_context,
             conversation_id=_conversation_id(metadata),
             _attach_to_context=False,
@@ -628,15 +683,27 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
         served_model: str | None = None
         generation_model: str | None = None
         generation_response_id: str | None = None
+        raw_llm_output: object = getattr(response, "llm_output", None)
+        llm_output: Mapping[str, Any] | None = (
+            cast(Mapping[str, Any], raw_llm_output)
+            if isinstance(raw_llm_output, Mapping)
+            else None
+        )
+        raw_token_usage: object = (
+            llm_output.get("token_usage") if llm_output is not None else None
+        )
+        token_usage: Mapping[str, Any] | None = (
+            cast(Mapping[str, Any], raw_token_usage)
+            if isinstance(raw_token_usage, Mapping)
+            else None
+        )
         for generation in getattr(response, "generations", []):
-            for chat_generation in generation:
-                message = chat_generation.message
-                if message is None:
-                    continue
+            for output_generation in generation:
+                message = getattr(output_generation, "message", None)
 
                 if generation_model is None or generation_response_id is None:
                     gen_model, gen_response_id = (
-                        response_fields_from_generation(chat_generation)
+                        response_fields_from_generation(output_generation)
                     )
                     generation_model = generation_model or gen_model
                     generation_response_id = (
@@ -648,7 +715,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                 # (snake_case); older versions used ``stopReason``.
                 finish_reason: str | None = None
                 generation_info = getattr(
-                    chat_generation, "generation_info", None
+                    output_generation, "generation_info", None
                 )
                 if generation_info is not None:
                     # ChatOllama spells its stop reason `done_reason`;
@@ -658,19 +725,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         "finish_reason"
                     ) or generation_info.get("done_reason")
 
-                if chat_generation.message:
+                if message is not None:
                     # Responses API (RAPI) may include the served model in the
                     # response headers, which accurately returns the served
                     # model name for the request.
-                    if (
-                        served_model is None
-                        and chat_generation.message.response_metadata
-                    ):
-                        headers = (
-                            chat_generation.message.response_metadata.get(
-                                "headers"
-                            )
-                        )
+                    if served_model is None and message.response_metadata:
+                        headers = message.response_metadata.get("headers")
                         if isinstance(headers, Mapping):
                             headers_map = cast(Mapping[Any, Any], headers)
                             for name, value in headers_map.items():
@@ -685,41 +745,28 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                                     break
 
                     # Get finish reason if not found in generation_info above
-                    if (
-                        not finish_reason
-                        and chat_generation.message.response_metadata
-                    ):
+                    if not finish_reason and message.response_metadata:
                         finish_reason = (
-                            chat_generation.message.response_metadata.get(
-                                "finish_reason"
-                            )
-                            or chat_generation.message.response_metadata.get(
-                                "stopReason"
-                            )
-                            or chat_generation.message.response_metadata.get(
-                                "stop_reason"
-                            )
-                            or chat_generation.message.response_metadata.get(
-                                "done_reason"
-                            )
+                            message.response_metadata.get("finish_reason")
+                            or message.response_metadata.get("stopReason")
+                            or message.response_metadata.get("stop_reason")
+                            or message.response_metadata.get("done_reason")
                         )
                     finish_reason = finish_reason or "error"
 
-                    name_str = _message_name(chat_generation.message)
+                    name_str = _message_name(message)
 
                     # Build parts via ``_ai_message_parts`` so text, reasoning
                     # and tool calls are all preserved. Only decode content when
                     # capture is enabled; finish reason, usage, model and id are
                     # collected unconditionally below.
                     if self._telemetry_handler.should_capture_content():
-                        message_parts = _ai_message_parts(
-                            chat_generation.message
-                        )
+                        message_parts = _ai_message_parts(message)
                         # Skip empty messages, consistent with
                         # ``to_output_messages``.
                         if message_parts:
                             output_message = OutputMessage(
-                                role=_normalize_role(chat_generation.message)
+                                role=_normalize_role(message)
                                 or Role.ASSISTANT.value,
                                 parts=message_parts,
                                 finish_reason=finish_reason,
@@ -729,8 +776,8 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     finish_reasons.append(finish_reason)
 
                     # Get token usage if available
-                    if chat_generation.message.usage_metadata:
-                        usage_metadata = chat_generation.message.usage_metadata
+                    if message.usage_metadata:
+                        usage_metadata = message.usage_metadata
                         input_tokens = usage_metadata.get("input_tokens", 0)
                         if not isinstance(input_tokens, int) or isinstance(
                             input_tokens, bool
@@ -781,13 +828,40 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                         )
 
                         llm_invocation.output_tokens = output_tokens
+                else:
+                    if self._telemetry_handler.should_capture_content():
+                        text = getattr(output_generation, "text", None)
+                        if isinstance(text, str) and text:
+                            output_messages.append(
+                                OutputMessage(
+                                    role=Role.ASSISTANT.value,
+                                    parts=[TextPart(text)],
+                                    finish_reason=finish_reason,
+                                )
+                            )
+                    if finish_reason:
+                        finish_reasons.append(finish_reason)
+
+        if token_usage is not None:
+            if llm_invocation.input_tokens is None:
+                input_tokens = token_usage.get("prompt_tokens")
+                if isinstance(input_tokens, int) and not isinstance(
+                    input_tokens, bool
+                ):
+                    llm_invocation.input_tokens = input_tokens
+            if llm_invocation.output_tokens is None:
+                output_tokens = token_usage.get("completion_tokens")
+                if isinstance(output_tokens, int) and not isinstance(
+                    output_tokens, bool
+                ):
+                    llm_invocation.output_tokens = output_tokens
 
         llm_invocation.output_messages = output_messages
         if finish_reasons:
             llm_invocation.finish_reasons = finish_reasons
 
         response_model, response_id = resolve_response_model_and_id(
-            llm_output=getattr(response, "llm_output", None),
+            llm_output=llm_output,
             served_model=served_model,
             generation_model=generation_model,
             generation_response_id=generation_response_id,
