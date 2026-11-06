@@ -423,6 +423,8 @@ class LocalAgentInvocation(AgentInvocation):
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-internal-span
     """
 
+    _exception_event_name = "gen_ai.invoke_agent.exception"
+
     def __init__(
         self,
         tracer: Tracer,
@@ -504,7 +506,7 @@ class RemoteAgentInvocation(AgentInvocation):
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md#invoke-agent-client-span
     """
 
-    _exception_event_name = "gen_ai.client.operation.exception"
+    _exception_event_name = "gen_ai.client.invoke_agent.exception"
 
     def __init__(
         self,

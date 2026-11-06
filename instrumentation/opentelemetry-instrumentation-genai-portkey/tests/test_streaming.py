@@ -484,7 +484,7 @@ async def test_async_streaming_midstream_sdk_error(
         (event,) = [
             log.log_record
             for log in log_exporter.get_finished_logs()
-            if log.log_record.event_name == "gen_ai.client.operation.exception"
+            if log.log_record.event_name == "gen_ai.client.inference.exception"
         ]
         assert event.attributes["exception.type"] == "ConnectionResetError"
         assert event.span_id == span.context.span_id

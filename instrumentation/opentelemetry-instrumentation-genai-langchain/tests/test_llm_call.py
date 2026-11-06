@@ -465,7 +465,7 @@ def test_chat_openai_gpt_3_5_turbo_model_llm_call_with_error(
     (exception_event,) = [
         log.log_record
         for log in logs
-        if log.log_record.event_name == "gen_ai.client.operation.exception"
+        if log.log_record.event_name == "gen_ai.client.inference.exception"
     ]
     assert exception_event.attributes["exception.type"] == error_type
     assert exception_event.span_id == spans[0].context.span_id

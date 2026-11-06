@@ -1,1 +1,1 @@
-Emit the `gen_ai.client.operation.exception` event when a client operation fails with an exception.
+Emit GenAI exception events when an operation fails with an exception.

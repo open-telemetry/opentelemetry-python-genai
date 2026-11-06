@@ -195,12 +195,12 @@ To suppress these events while keeping a ``LoggerProvider`` active, configure yo
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
-When a client operation (inference, embeddings, retrieval, fetch response, or remote agent
-invocation) fails with an exception, the package also emits a ``gen_ai.client.operation.exception``
-event (with ``WARN`` severity) carrying ``exception.type``, ``exception.message``, and
-``exception.stacktrace``. ``exception.message`` may contain sensitive information. The event is not
-emitted for failures reported without an exception, or for a ``BaseException`` that is not an
-``Exception``, such as cancellation.
+When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
+operation fails with an exception, the package also emits the operation's exception event (for
+example ``gen_ai.client.inference.exception``) with ``WARN`` severity, carrying ``exception.type``,
+``exception.message``, and ``exception.stacktrace``. ``exception.message`` may contain sensitive
+information. The event is not emitted for failures reported without an exception, or for a
+``BaseException`` that is not an ``Exception``, such as cancellation.
 
 Completion Hook / Upload
 ^^^^^^^^^^^^^^^^^^^^^^^^

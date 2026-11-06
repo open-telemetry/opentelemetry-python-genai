@@ -52,7 +52,7 @@ class EmbeddingInvocation(GenAIInvocation):
     Use handler.embedding(provider) rather than constructing this directly.
     """
 
-    _exception_event_name = "gen_ai.client.operation.exception"
+    _exception_event_name = "gen_ai.client.embeddings.exception"
 
     def __init__(
         self,

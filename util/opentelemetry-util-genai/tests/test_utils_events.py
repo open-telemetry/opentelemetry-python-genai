@@ -42,7 +42,7 @@ from .test_utils import (
     _normalize_to_list,
 )
 
-EXCEPTION_EVENT = "gen_ai.client.operation.exception"
+INFERENCE_EXCEPTION_EVENT = "gen_ai.client.inference.exception"
 
 
 class RateLimitError(Exception):
@@ -559,23 +559,30 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             SeverityNumber.DEBUG,
         )
 
-    def _exception_events(self, event_name=EXCEPTION_EVENT):
+    def _exception_events(self, event_name=INFERENCE_EXCEPTION_EVENT):
         return [
             log.log_record
             for log in self.log_exporter.get_finished_logs()
             if log.log_record.event_name == event_name
         ]
 
-    def test_failed_client_operation_emits_exception_event(self):
+    def _any_exception_events(self):
+        return [
+            log.log_record
+            for log in self.log_exporter.get_finished_logs()
+            if (log.log_record.event_name or "").endswith(".exception")
+        ]
+
+    def test_failed_operation_emits_its_exception_event(self):
         handler = self.telemetry_handler
         operations = {
             "inference": (
                 lambda: handler.inference("provider"),
-                "gen_ai.client.operation.exception",
+                "gen_ai.client.inference.exception",
             ),
             "embedding": (
                 lambda: handler.embedding("provider"),
-                "gen_ai.client.operation.exception",
+                "gen_ai.client.embeddings.exception",
             ),
             "retrieval": (
                 lambda: handler.retrieval(provider="provider"),
@@ -585,11 +592,19 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                 lambda: handler.fetch_response(
                     "provider", response_id="resp_1"
                 ),
-                "gen_ai.client.operation.exception",
+                "gen_ai.client.fetch_response.exception",
             ),
             "invoke_remote_agent": (
                 lambda: handler.invoke_remote_agent("provider"),
-                "gen_ai.client.operation.exception",
+                "gen_ai.client.invoke_agent.exception",
+            ),
+            "tool": (
+                lambda: handler.tool("get_weather"),
+                "gen_ai.execute_tool.exception",
+            ),
+            "invoke_local_agent": (
+                lambda: handler.invoke_local_agent(),
+                "gen_ai.invoke_agent.exception",
             ),
         }
         for name, (start, event_name) in operations.items():
@@ -600,7 +615,8 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                     with start():
                         _raise_rate_limit()
 
-                (event,) = self._exception_events(event_name)
+                (event,) = self._any_exception_events()
+                self.assertEqual(event.event_name, event_name)
                 span = _get_single_span(self.span_exporter)
                 self.assertEqual(event.severity_number, SeverityNumber.WARN)
                 self.assertEqual(event.trace_id, span.context.trace_id)
@@ -621,21 +637,12 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                     stacktrace.endswith("RateLimitError: rate limit reached\n")
                 )
 
-    def test_failed_internal_operation_emits_no_exception_event(self):
-        handler = self.telemetry_handler
-        operations = {
-            "tool": lambda: handler.tool("get_weather"),
-            "workflow": lambda: handler.workflow("workflow"),
-            "invoke_local_agent": lambda: handler.invoke_local_agent(),
-        }
-        for name, start in operations.items():
-            with self.subTest(operation=name):
-                self.log_exporter.clear()
-                with self.assertRaises(RateLimitError):
-                    with start():
-                        _raise_rate_limit()
+    def test_failed_workflow_emits_no_exception_event(self):
+        with self.assertRaises(RateLimitError):
+            with self.telemetry_handler.workflow("workflow"):
+                _raise_rate_limit()
 
-                self.assertEqual(self._exception_events(), [])
+        self.assertEqual(self._any_exception_events(), [])
 
     def test_no_exception_event_without_a_raised_exception(self):
         failures = {
@@ -656,7 +663,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
                 else:
                     invocation.fail(error)
 
-                self.assertEqual(self._exception_events(), [])
+                self.assertEqual(self._any_exception_events(), [])
 
     def test_abandoned_stream_emits_exception_event(self):
         invocation = self.telemetry_handler.inference("provider")
@@ -707,7 +714,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             nested = self.telemetry_handler.inference("provider")
             nested.fail(RateLimitError("rate limit reached"))
 
-        self.assertEqual(self._exception_events(), [])
+        self.assertEqual(self._any_exception_events(), [])
 
     def test_failing_twice_emits_one_exception_event(self):
         invocation = self.telemetry_handler.inference("provider")
@@ -739,5 +746,5 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         self.assertEqual(len(self.log_exporter.get_finished_logs()), 0)
         _, kwargs = enabled_mock.call_args
-        self.assertEqual(kwargs.get("event_name"), EXCEPTION_EVENT)
+        self.assertEqual(kwargs.get("event_name"), INFERENCE_EXCEPTION_EVENT)
         self.assertEqual(kwargs.get("severity_number"), SeverityNumber.WARN)
