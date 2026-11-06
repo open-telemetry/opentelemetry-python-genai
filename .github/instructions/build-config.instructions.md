@@ -28,6 +28,11 @@ these, not just the first:
 The uv workspace picks up new packages via the `instrumentation/*` glob in root `pyproject.toml`,
 so no edit is needed there.
 
+A new package must also be wired into releases, and start at the repo's current version series
+(compare `version.py` with an existing package). Flag a package missing from `eachdist.ini` or
+from the package lists in `.github/workflows/prepare-release.yml`, `release-package.yml`, or
+`prepare-backport-patch.yml`.
+
 ## 2. Lower bounds
 
 The `oldest` factor sets `UV_RESOLUTION=lowest-direct`, so lower bounds come from

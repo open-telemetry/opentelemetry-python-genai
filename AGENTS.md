@@ -60,6 +60,8 @@ own `pyproject.toml` and `tests/`. The util package follows the equivalent layou
 - Avoid pinning versions to exact patch ranges (like `== x.y.z` or `~= x.y.z`) in `pyproject.toml` unless strictly necessary.
 - Keep version requirements for shared OpenTelemetry packages (e.g., `opentelemetry-api`, `opentelemetry-instrumentation`, and `opentelemetry-semantic-conventions`) consistent across all packages.
 - For OpenTelemetry-owned beta/pre-release packages (e.g., `opentelemetry-instrumentation`, `opentelemetry-semantic-conventions`, `opentelemetry-util-genai`), use `>=` specifiers and pin the upper boundary to the next major version (e.g., `>= 0.64b0, <1` for `0.x` packages, or `>= 1.0b0, <2` for `1.x` packages) rather than using `~=`.
+- To use an API newer than the declared floor, import it conditionally and no-op on older
+  versions. Don't keep shims for versions below the floor.
 
 
 ## Before adding a new instrumentation
@@ -107,6 +109,11 @@ Copy the shape from an existing package — paths in `tox.ini` are repo-root-rel
   *progressively* as a package gets fully typed. When a package is in `include`, also add its
   `<pkg>/tests/**/*.py` and `<pkg>/examples/**/*.py` to `exclude` — tests and examples stay
   untyped; `src/**` is never excluded.
+- **Version**: start at the repo's current version series - copy `version.py` from an existing
+  package.
+- **Release wiring**: add the package to `eachdist.ini` and to the package lists in
+  `.github/workflows/prepare-release.yml`, `release-package.yml`, and
+  `prepare-backport-patch.yml`.
 
 ## Commands
 
@@ -154,6 +161,19 @@ run silently uses the previously installed versions.
 - Annotate function signatures (parameters and return types) and class attributes. Prefer `from __future__ import annotations` over runtime-quoted strings.
 - Avoid `Any` in the public API of `opentelemetry-util-genai` (anything not under a `_`-prefixed
   module). Use the narrowest type that fits: the semconv model's type where one exists, union, `AttributeValues`.
+- Avoid `Any` and `object` in instrumentation code too. Type wrapped arguments, results, and
+  stream chunks with the instrumented library's types (import them under `TYPE_CHECKING` if
+  needed).
+- Don't use `getattr`/`hasattr` on objects whose type is known; access attributes directly or
+  narrow with `isinstance`. Don't read fields or call methods without checking they exist in
+  every supported library version.
+- Before writing a helper, look for an existing one in the package and in
+  `opentelemetry-util-genai`. Share setup/finalize code across sync/async and
+  streaming/non-streaming wrappers instead of copy-pasting it.
+- Remove code your change makes dead: unused parameters, fields, aliases, imports, helpers, and
+  tests that only exercise them.
+- Don't add guards for cases the library never produces, or `try`/`except` around calls that
+  don't raise (util telemetry calls don't).
 - When a file uses `from __future__ import annotations`, do not quote type annotations just to
   avoid forward references. Keep quotes only for expressions still evaluated at runtime, such as
   `typing.cast(...)`, unless the referenced type is imported at runtime.
@@ -167,15 +187,22 @@ Write for someone reading the code as it is now, with no knowledge of the change
   requirements, upstream bugs worked around). 1-2 sentences max.
 - Never restate what the code does, describe what it used to do, or justify a change - the last one
   belongs in the PR description or a PR comment.
+- Update or delete comments and docstrings your change makes stale.
+
+## User-facing docs
+
+Applies to `README.rst`, public API docstrings, and changelog fragments.
+
+- Describe user-visible behavior concisely. No private names, implementation details, or
+  boilerplate.
+- Keep them accurate: update them when the behavior they describe changes.
 
 ## Self-review before opening a PR
 
-Once the change implementation is complete and tests pass, review the diff in a **new session**. Look for:
-
-- Test coverage gaps - sync/async variants, error paths, streaming, edge cases. Add the missing
-  tests.
-- Instrumentation of layers not owned by the target library (LLM spans reported by agentic framework).
-- Functional issues
+Once the change is complete and tests pass, review the diff in a **new session** against the
+review rules Copilot uses: [.github/copilot-instructions.md](.github/copilot-instructions.md) and
+the `.github/instructions/*.instructions.md` files whose `applyTo` matches the changed paths.
+Start with their "Top checks" sections.
 
 Fix the findings, keeping the PR scoped to the original change; for anything outside that scope,
 suggest an issue or a separate PR. Do not open a PR with unresolved major issues or test gaps.
@@ -188,6 +215,9 @@ This repo uses [towncrier](https://towncrier.readthedocs.io/) to manage changelo
 - For changes with user-visible impact, add a fragment at `<package>/.changelog/<PR_NUMBER>.<type>`
   containing a one-line description. Types: `added`, `changed`, `deprecated`, `removed`, `fixed`.
 - Don't include the PR number in the body — towncrier appends it from the filename.
+- Describe the user-visible effect in one short line (see [User-facing docs](#user-facing-docs)).
+- No fragment for test-only, tooling, or internal refactoring changes - use the `Skip Changelog`
+  label instead, approver or maintainer will apply one if needed.
 - Preview locally with `uv run tox -e changelog-preview`.
 
 ## Instrumentation and Util rules

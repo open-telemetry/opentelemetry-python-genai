@@ -21,7 +21,38 @@ and a duplicate review comment is noise:
 
 Review the things a gate cannot decide: whether the change is correct, whether it matches the
 GenAI semantic conventions, whether it actually achieves what the PR claims, and whether it
-weakens or bypasses a gate. Style opinions that ruff does not enforce are not review comments.
+weakens or bypasses a gate. Formatting is not review comments. Dead code,
+duplication, stale or restating comments, and untyped code are.
+
+## Top checks (all PRs)
+
+- **Duplication.** Flag blocks of ~5+ lines copy-pasted across modules, wrappers, or sync/async
+  variants, and helpers re-implemented when the package or `opentelemetry-util-genai` already
+  has one.
+- **Dead code.** Flag unused parameters, fields, aliases, imports, and helpers; tests that only
+  exercise dead code; and attributes set again after being passed to a `handler.*()` factory.
+  ```python
+  # Flag
+  inv = handler.inference(provider, model, server_address=host)
+  inv.request_model = model  # already passed to the factory
+  ```
+- **Comments and docs.** Flag comments that restate the code, describe history ("previously",
+  "now we"), justify the change, or no longer match the code.
+  ```python
+  # Flag
+  # Set the model on the invocation
+  invocation.request_model = model
+  ```
+- **Types.** Flag `Any`/`object` annotations and `getattr`/`hasattr` on objects whose type is
+  known. Pyright does not catch these.
+- **User-facing docs** (`README.rst`, public API docstrings, changelog fragments). Flag text
+  that is verbose, mentions private names or implementation details, contains boilerplate, or no
+  longer matches the behavior. Changelog fragments are one short line; flag fragments for
+  test-only/tooling/internal changes (use the `Skip Changelog` label instead).
+- **Scope.** Flag changes unrelated to the PR's stated goal, reverts of recently merged unrelated
+  changes (stale branch), and titles/descriptions/changelogs that don't match the diff.
+- **Version-specific code.** Flag branches for specific dependency versions (conditional
+  imports, no-op fallbacks) that no test in the `oldest` or `latest` env exercises.
 
 ## 1. Shared configuration
 
