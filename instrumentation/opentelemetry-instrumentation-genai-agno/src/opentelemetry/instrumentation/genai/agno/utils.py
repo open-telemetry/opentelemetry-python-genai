@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import mimetypes
 import os
 from collections.abc import Callable, Iterable, Sequence
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
+from opentelemetry.util.genai.invocation import InferenceInvocation
 from opentelemetry.util.genai.types import (
     BlobPart,
     FilePart,
@@ -46,6 +46,7 @@ from opentelemetry.util.genai.utils import (
     get_argument,
     image_from_url,
     object_to_any_value,
+    tool_arguments_to_any_value,
 )
 
 
@@ -67,6 +68,58 @@ def safe_float(val: Any) -> float | None:
         return float(val)
     except (ValueError, TypeError):
         return None
+
+
+def extract_model_id(instance: Any) -> str | None:
+    """Extract request model identifier from an Agno model or embedder instance."""
+    model = (
+        getattr(instance, "id", None)
+        or getattr(instance, "model", None)
+        or getattr(instance, "name", None)
+    )
+    return str(model) if model is not None else None
+
+
+def populate_provider_data(
+    invocation: InferenceInvocation,
+    provider_data: Any,
+) -> None:
+    """Populate response_id and response_model_name from provider_data dict."""
+    if not isinstance(provider_data, dict):
+        return
+    if (
+        resp_id := _get_property_value(provider_data, "id")
+    ) is not None and not invocation.response_id:
+        invocation.response_id = str(resp_id)
+    if (
+        resp_model := _get_property_value(provider_data, "model")
+    ) is not None and not invocation.response_model_name:
+        invocation.response_model_name = str(resp_model)
+
+
+def record_model_token_usage(
+    invocation: InferenceInvocation,
+    metrics: Any,
+) -> None:
+    """Populate token usage fields on an InferenceInvocation from Agno metrics."""
+    if metrics is None:
+        return
+    if (tok := safe_int(getattr(metrics, "input_tokens", None))) is not None:
+        invocation.input_tokens = tok
+    if (tok := safe_int(getattr(metrics, "output_tokens", None))) is not None:
+        invocation.output_tokens = tok
+    if (
+        tok := safe_int(getattr(metrics, "cache_read_tokens", None))
+    ) is not None and tok > 0:
+        invocation.cache_read_input_tokens = tok
+    if (
+        tok := safe_int(getattr(metrics, "cache_write_tokens", None))
+    ) is not None and tok > 0:
+        invocation.cache_write_input_tokens = tok
+    if (
+        tok := safe_int(getattr(metrics, "reasoning_tokens", None))
+    ) is not None and tok > 0:
+        invocation.thinking_tokens = tok
 
 
 def format_retrieval_document(doc: Document) -> RetrievalDocument:
@@ -300,18 +353,10 @@ _KNOWN_PROVIDERS: dict[str, str] = {
     "ollama": "ollama",
     "fireworks": "fireworks",
     "together": "together",
-    "voyage": "voyageai",
-    "voyageai": "voyageai",
-    "voyage_ai": "voyageai",
-    "fastembed": "fastembed",
-    "sentence_transformer": "sentence_transformer",
-    "sentence_transformers": "sentence_transformer",
-    "sentence-transformers": "sentence_transformer",
     "huggingface": "huggingface",
     "langdb": "langdb",
     "nebius": "nebius",
     "vllm": "vllm",
-    "jina": "jina",
     "cerebras": "cerebras",
     "cloudflare": "cloudflare",
     "dashscope": "dashscope",
@@ -350,36 +395,12 @@ _CLASS_NAME_TO_PROVIDER: dict[str, str] = {
 }
 
 
-def resolve_embedder_provider(embedder: Embedder) -> str:
-    """Resolve the ``gen_ai.provider.name`` value for an Agno embedder instance."""
-    for cls in type(embedder).__mro__:
-        name = cls.__name__
-        if name in ("GeminiEmbedder", "GoogleEmbedder"):
-            vertexai = (
-                getattr(embedder, "vertexai", False)
-                or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower()
-                == "true"
-            )
-            return (
-                GenAiProviderNameValues.GCP_VERTEX_AI.value
-                if vertexai
-                else GenAiProviderNameValues.GCP_GEMINI.value
-            )
-        if name in ("OpenAILikeEmbedder", "Embedder"):
-            break
-        if name in _CLASS_NAME_TO_PROVIDER:
-            return _CLASS_NAME_TO_PROVIDER[name]
-    return _UNKNOWN_PROVIDER
-
-
 def _resolve_provider(
-    instance: Model,
+    instance: Model | Embedder,
     *,
     class_name_to_provider: dict[str, str],
     google_classes: tuple[str, ...],
     stop_classes: tuple[str, ...],
-    module_prefix: str,
-    ignored_submodules: tuple[str, ...],
 ) -> str:
     google_provider = (
         GenAiProviderNameValues.GCP_VERTEX_AI.value
@@ -402,62 +423,38 @@ def _resolve_provider(
         if cls_name in google_classes:
             return google_provider
         if cls_name in stop_classes:
+            if getattr(instance, "provider", None) == getattr(
+                cls, "provider", None
+            ):
+                return _UNKNOWN_PROVIDER
             break
         if cls_name in class_name_to_provider:
             return class_name_to_provider[cls_name]
 
     # 2. Explicit provider attribute on the instance
     provider_attr = getattr(instance, "provider", None)
-    if provider_attr is not None:
-        if isinstance(provider_attr, str):
-            p_name = provider_attr.strip().lower()
-            if p_name in ("google", "gemini"):
-                return google_provider
-            if p_name in _KNOWN_PROVIDERS:
-                return _KNOWN_PROVIDERS[p_name]
-            p_clean = "".join(c for c in p_name if c.isalnum())
-            if p_clean in _KNOWN_PROVIDERS:
-                return _KNOWN_PROVIDERS[p_clean]
-            if p_name and p_name != "none":
-                return p_name
-        else:
-            cls_name = provider_attr.__class__.__name__.lower()
-            if "provider" in cls_name and cls_name != "provider":
-                p_name = cls_name.removesuffix("provider")
-                if p_name in ("google", "gemini"):
-                    return google_provider
-                if p_name in _KNOWN_PROVIDERS:
-                    return _KNOWN_PROVIDERS[p_name]
-                if p_name:
-                    return p_name
+    if isinstance(provider_attr, str) and provider_attr.strip():
+        p_name = provider_attr.strip().lower()
+        if p_name in ("google", "gemini"):
+            return google_provider
+        p_clean = "".join(c for c in p_name if c.isalnum())
+        return (
+            _KNOWN_PROVIDERS.get(p_name)
+            or _KNOWN_PROVIDERS.get(p_clean)
+            or p_name
+        )
 
-    # 3. Check module name if in <module_prefix><submodule>
-    module = getattr(instance, "__module__", "")
-    if module_prefix in module:
-        sub = module.split(module_prefix)[-1].split(".")[0]
-        if sub not in ignored_submodules:
-            if sub in ("google", "gemini", "vertexai"):
-                if sub == "vertexai":
-                    return GenAiProviderNameValues.GCP_VERTEX_AI.value
-                return google_provider
-            if sub in _KNOWN_PROVIDERS:
-                return _KNOWN_PROVIDERS[sub]
-
-    # 4. Check model/id prefix if it has provider/model format
-    model_id = (
-        getattr(instance, "id", None)
-        or getattr(instance, "model", None)
-        or getattr(instance, "name", None)
-    )
-    if model_id is not None and isinstance(model_id, str):
-        model_str = model_id.strip()
-        if "/" in model_str:
-            prefix = model_str.split("/")[0].strip().lower()
-            if prefix in _KNOWN_PROVIDERS:
-                return _KNOWN_PROVIDERS[prefix]
-
-    # 5. Unresolved - fallback to unknown
     return _UNKNOWN_PROVIDER
+
+
+def resolve_embedder_provider(embedder: Embedder) -> str:
+    """Resolve the ``gen_ai.provider.name`` value for an Agno embedder instance."""
+    return _resolve_provider(
+        embedder,
+        class_name_to_provider=_CLASS_NAME_TO_PROVIDER,
+        google_classes=("GeminiEmbedder", "GoogleEmbedder"),
+        stop_classes=("OpenAILikeEmbedder", "Embedder"),
+    )
 
 
 # Mapping of known model class names to provider values.
@@ -517,15 +514,6 @@ def resolve_model_provider(model: Model) -> str:
         class_name_to_provider=_MODEL_CLASS_NAME_TO_PROVIDER,
         google_classes=("Gemini", "Google", "GeminiInteractions"),
         stop_classes=("OpenAILike", "OpenResponses", "Model"),
-        module_prefix="agno.models.",
-        ignored_submodules=(
-            "base",
-            "openai_like",
-            "message",
-            "response",
-            "utils",
-            "fallback",
-        ),
     )
 
 
@@ -762,12 +750,7 @@ def _extract_tool_call_parts(
         target = fn or tc
         fn_name_val = target.get("name")
         fn_name = str(fn_name_val) if fn_name_val else ""
-        fn_args = target.get("arguments")
-        if isinstance(fn_args, str):
-            try:
-                fn_args = json.loads(fn_args)
-            except Exception:
-                pass
+        fn_args = tool_arguments_to_any_value(target.get("arguments"))
         parts.append(
             ToolCallRequestPart(
                 id=str(tc_id) if tc_id is not None else None,

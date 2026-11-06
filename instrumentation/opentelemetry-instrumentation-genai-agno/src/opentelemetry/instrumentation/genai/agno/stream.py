@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
@@ -24,6 +24,8 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     format_content,
     format_model_output_message,
     has_model_output_content,
+    populate_provider_data,
+    record_model_token_usage,
     safe_int,
 )
 from opentelemetry.util.genai.invocation import (
@@ -364,24 +366,13 @@ class _ModelStreamMixin:
                 if formatted:
                     self._self_accumulated_chunks.append(formatted)
 
-        provider_data = getattr(chunk, "provider_data", None)
-        if isinstance(provider_data, dict):
-            provider_dict = cast(dict[str, Any], provider_data)
-            if (
-                "model" in provider_dict
-                and not self._self_invocation.response_model_name
-            ):
-                self._self_invocation.response_model_name = str(
-                    cast(object, provider_dict["model"])
-                )
-            if "id" in provider_dict and not self._self_invocation.response_id:
-                self._self_invocation.response_id = str(
-                    cast(object, provider_dict["id"])
-                )
+        populate_provider_data(
+            self._self_invocation, getattr(chunk, "provider_data", None)
+        )
 
         usage = getattr(chunk, "response_usage", None)
         if usage is not None:
-            self._record_metrics(usage)
+            record_model_token_usage(self._self_invocation, usage)
         else:
             in_tok = safe_int(getattr(chunk, "input_tokens", None))
             out_tok = safe_int(getattr(chunk, "output_tokens", None))
@@ -397,40 +388,16 @@ class _ModelStreamMixin:
                 if self._self_invocation.output_tokens is None:
                     self._self_invocation.output_tokens = out_tok
 
-    def _record_metrics(self, metrics: Any) -> None:
-        if metrics is None:
-            return
-        if (
-            tok := safe_int(getattr(metrics, "input_tokens", None))
-        ) is not None:
-            self._self_invocation.input_tokens = tok
-        if (
-            tok := safe_int(getattr(metrics, "output_tokens", None))
-        ) is not None:
-            self._self_invocation.output_tokens = tok
-        if (
-            tok := safe_int(getattr(metrics, "cache_read_tokens", None))
-        ) is not None and tok > 0:
-            self._self_invocation.cache_read_input_tokens = tok
-        if (
-            tok := safe_int(getattr(metrics, "cache_write_tokens", None))
-        ) is not None and tok > 0:
-            self._self_invocation.cache_write_input_tokens = tok
-        if (
-            tok := safe_int(getattr(metrics, "reasoning_tokens", None))
-        ) is not None and tok > 0:
-            self._self_invocation.thinking_tokens = tok
-
     def _finalize_telemetry(self, error: BaseException | None = None) -> None:
         metrics = getattr(self._self_assistant_message, "metrics", None)
         if _has_usage(metrics):
-            self._record_metrics(metrics)
+            record_model_token_usage(self._self_invocation, metrics)
         elif self._self_stream_data is not None:
             sd_metrics = getattr(
                 self._self_stream_data, "response_metrics", None
             )
             if _has_usage(sd_metrics):
-                self._record_metrics(sd_metrics)
+                record_model_token_usage(self._self_invocation, sd_metrics)
 
         provider_data = getattr(
             self._self_assistant_message, "provider_data", None
@@ -439,19 +406,7 @@ class _ModelStreamMixin:
             provider_data = getattr(
                 self._self_stream_data, "provider_data", None
             )
-        if isinstance(provider_data, dict):
-            provider_dict = cast(dict[str, Any], provider_data)
-            if (
-                "model" in provider_dict
-                and not self._self_invocation.response_model_name
-            ):
-                self._self_invocation.response_model_name = str(
-                    cast(object, provider_dict["model"])
-                )
-            if "id" in provider_dict and not self._self_invocation.response_id:
-                self._self_invocation.response_id = str(
-                    cast(object, provider_dict["id"])
-                )
+        populate_provider_data(self._self_invocation, provider_data)
 
         finish_reasons = (
             ["error"]
