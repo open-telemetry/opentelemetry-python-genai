@@ -669,6 +669,12 @@ def extract_invoke_model_response(
             )
         )
 
+        invocation.input_tokens = _total_input_tokens(
+            invocation.input_tokens,
+            invocation.cache_read_input_tokens,
+            invocation.cache_write_input_tokens,
+        )
+
     if invocation.input_tokens is None and "inputTextTokenCount" in body:
         invocation.input_tokens = _safe_int(body.get("inputTextTokenCount"))
 
