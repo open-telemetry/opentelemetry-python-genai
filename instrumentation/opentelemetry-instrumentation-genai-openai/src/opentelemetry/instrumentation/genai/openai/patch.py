@@ -22,7 +22,12 @@ from opentelemetry.util.genai.invocation import (
 )
 
 from ._raw_response import ParsableResponse, wrap_stream_result
-from .chat_wrappers import AsyncChatStreamWrapper, ChatStreamWrapper
+from .chat_wrappers import (
+    AsyncChatStreamManagerWrapper,
+    AsyncChatStreamWrapper,
+    ChatStreamManagerWrapper,
+    ChatStreamWrapper,
+)
 from .utils import (
     _prepare_output_messages,
     create_chat_invocation,
@@ -120,6 +125,16 @@ def async_chat_completions_create_v_new(
             raise
 
     return traced_method
+
+
+def chat_completions_stream(wrapped, instance, args, kwargs):
+    """Wrap the manager returned by `Completions.stream`."""
+    return ChatStreamManagerWrapper(wrapped(*args, **kwargs))
+
+
+def async_chat_completions_stream(wrapped, instance, args, kwargs):
+    """Wrap the manager returned by `AsyncCompletions.stream`."""
+    return AsyncChatStreamManagerWrapper(wrapped(*args, **kwargs))
 
 
 def embeddings_create(handler: TelemetryHandler):

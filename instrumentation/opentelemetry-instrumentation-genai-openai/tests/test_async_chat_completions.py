@@ -1399,6 +1399,29 @@ async def test_async_chat_completion_stream_helper_not_complete(
 
 
 @pytest.mark.asyncio()
+async def test_async_chat_completion_stream_helper_user_exception(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    if not hasattr(async_openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    with vcr.use_cassette(
+        "test_async_chat_completion_streaming_not_complete.yaml"
+    ):
+        with pytest.raises(RuntimeError, match="user failure"):
+            async with async_openai_client.chat.completions.stream(
+                model=DEFAULT_MODEL, messages=USER_ONLY_PROMPT
+            ):
+                raise RuntimeError("user failure")
+
+        spans = span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert (
+            spans[0].attributes[ErrorAttributes.ERROR_TYPE] == "RuntimeError"
+        )
+
+
+@pytest.mark.asyncio()
 async def test_async_chat_completion_multiple_choices_streaming(
     span_exporter,
     log_exporter,
