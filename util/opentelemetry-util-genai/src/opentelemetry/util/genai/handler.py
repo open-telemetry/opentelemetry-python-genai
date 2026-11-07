@@ -90,7 +90,10 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     ErrorTypeResolver,
 )
-from opentelemetry.util.genai.utils import get_content_capturing_mode
+from opentelemetry.util.genai.utils import (
+    _CONTENT_CAPTURING_MODE_KEY,
+    get_content_capturing_mode,
+)
 from opentelemetry.util.genai.version import __version__
 
 
@@ -156,14 +159,14 @@ class TelemetryHandler:
             )
         else:
             self._completion_hook = _SafeCompletionHook(completion_hook)
-        self._capture_content = (
-            self._content_capturing_mode
-            in (
-                ContentCapturingMode.SPAN_ONLY,
-                ContentCapturingMode.EVENT_ONLY,
-                ContentCapturingMode.SPAN_AND_EVENT,
-            )
-        ) or not isinstance(self._completion_hook, _NoOpCompletionHook)
+
+    def _resolve_content_capturing_mode(
+        self, context: Context | None = None
+    ) -> ContentCapturingMode:
+        override = get_value(_CONTENT_CAPTURING_MODE_KEY, context=context)
+        if isinstance(override, ContentCapturingMode):
+            return override
+        return self._content_capturing_mode
 
     def should_capture_content(self) -> bool:
         """Returns True when message content should be captured by the instrumentation library.
@@ -181,7 +184,11 @@ class TelemetryHandler:
         Content should be captured when the content capturing mode requires it, or
         when a real completion hook is configured (not a no-op).
         """
-        return self._capture_content
+        return self._resolve_content_capturing_mode() in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        ) or not isinstance(self._completion_hook, _NoOpCompletionHook)
 
     def retrieval(
         self,
@@ -223,7 +230,9 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
         )
@@ -274,7 +283,9 @@ class TelemetryHandler:
             server_port=server_port,
             operation_name=operation_name,
             error_type_resolver=error_type_resolver,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
@@ -318,7 +329,9 @@ class TelemetryHandler:
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
         )
@@ -369,7 +382,9 @@ class TelemetryHandler:
             server_address=server_address,
             server_port=server_port,
             error_type_resolver=error_type_resolver,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
         )
@@ -413,7 +428,9 @@ class TelemetryHandler:
             agent_name=agent_name,
             tool_call_id=tool_call_id,
             tool_description=tool_description,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
         )
@@ -450,7 +467,9 @@ class TelemetryHandler:
             self._completion_hook,
             request_model=request_model,
             agent_name=agent_name,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
@@ -494,7 +513,9 @@ class TelemetryHandler:
             agent_name=agent_name,
             server_address=server_address,
             server_port=server_port,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
@@ -528,7 +549,9 @@ class TelemetryHandler:
             self._logger,
             self._completion_hook,
             name,
-            content_capturing_mode=self._content_capturing_mode,
+            content_capturing_mode=self._resolve_content_capturing_mode(
+                context
+            ),
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,

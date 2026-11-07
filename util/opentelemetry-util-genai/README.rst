@@ -193,6 +193,20 @@ Set the environment variable ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTEN
 - ``EVENT_ONLY``: Capture message content in events only.
 - ``SPAN_AND_EVENT``: Capture message content in both spans and events.
 
+To use a different mode for some requests only, run them inside
+``override_content_capturing_mode``. Operations started inside the block use the given mode in
+every instrumentation; operations started outside it keep the configured mode. A configured
+completion hook still receives the content.
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.types import ContentCapturingMode
+    from opentelemetry.util.genai.utils import override_content_capturing_mode
+
+    # Record the prompts of one request while capture is off for the rest of the app
+    with override_content_capturing_mode(ContentCapturingMode.SPAN_ONLY):
+        client.chat(...)
+
 When a ``LoggerProvider`` is configured, the package emits ``gen_ai.client.inference.operation.details``
 events (with ``DEBUG`` severity) regardless of the content capturing mode. Message content is
 included (as dictionaries instead of JSON strings) only in ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode.
