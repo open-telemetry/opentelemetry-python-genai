@@ -702,7 +702,7 @@ class _HelperStream:
         pass
 
     def _texts(self) -> Iterator[str]:
-        for text in ("Hel", "lo"):
+        for text in ("hello", " world"):
             _assert_invocation_current(self._invocation)
             yield text
 
@@ -734,7 +734,7 @@ class _AsyncHelperStream:
         pass
 
     async def _texts(self) -> AsyncIterator[str]:
-        for text in ("Hel", "lo"):
+        for text in ("hello", " world"):
             await asyncio.sleep(0)
             _assert_invocation_current(self._invocation)
             yield text
@@ -769,7 +769,7 @@ def test_sync_text_stream_activates_per_chunk(
     for text in texts:
         assert context.get_current() is before
         collected.append(text)
-    assert collected == ["Hel", "lo"]
+    assert collected == ["hello", " world"]
     assert context.get_current() is before
 
 
@@ -807,7 +807,7 @@ async def test_async_text_stream_activates_per_chunk(
             collected.append(text)
         return collected
 
-    assert await asyncio.create_task(drain()) == ["Hel", "lo"]
+    assert await asyncio.create_task(drain()) == ["hello", " world"]
     assert context.get_current() is before
 
 
