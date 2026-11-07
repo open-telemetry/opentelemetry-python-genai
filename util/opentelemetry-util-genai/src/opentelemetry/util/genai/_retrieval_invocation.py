@@ -21,7 +21,9 @@ from opentelemetry.util.genai._invocation import (
     _ContextData,
     _resolve_suppressed_content_and_hook,
 )
-from opentelemetry.util.genai.completion_hook import CompletionHook
+from opentelemetry.util.genai.completion_hook import (
+    _NoOpCompletionHook,
+)
 from opentelemetry.util.genai.types import RetrievalDocument
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
@@ -78,7 +80,6 @@ class RetrievalInvocation(GenAIInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -114,7 +115,7 @@ class RetrievalInvocation(GenAIInvocation):
             tracer,
             instruments,
             logger,
-            completion_hook,
+            _NoOpCompletionHook(),
             operation_name=_operation_name,
             span_name=f"{_operation_name} {data_source_id}"
             if data_source_id
@@ -297,7 +298,6 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
         tracer: Tracer,
         instruments: _Instruments,
         logger: Logger,
-        completion_hook: CompletionHook,
         *,
         data_source_id: str | None = None,
         provider: str | None = None,
@@ -313,15 +313,14 @@ class SuppressedRetrievalInvocation(RetrievalInvocation):
             self._capture_content_to_context,
             _upload_completion,
             effective_content_mode,
-            effective_completion_hook,
+            _effective_completion_hook,
         ) = _resolve_suppressed_content_and_hook(
-            ctx_data, content_capturing_mode, completion_hook
+            ctx_data, content_capturing_mode, None
         )
         super().__init__(
             tracer,
             instruments,
             logger,
-            effective_completion_hook,
             data_source_id=data_source_id,
             provider=provider,
             request_model=request_model,
