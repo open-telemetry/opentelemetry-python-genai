@@ -57,3 +57,25 @@ def test_tool_calls_with_index_keep_their_slots():
         ("call_1", "get_weather", "{}"),
         ("call_2", "get_time", "{}"),
     ]
+
+
+def test_new_id_with_repeated_index_opens_a_new_call():
+    # Gemini via Portkey: index is the position inside each chunk.
+    buffer = ChoiceBuffer(0)
+    buffer.append_tool_call(_delta("call_1", "get_weather", '{"city":"A"}', 0))
+    buffer.append_tool_call(_delta("call_2", "get_weather", '{"city":"B"}', 0))
+
+    assert _calls(buffer) == [
+        ("call_1", "get_weather", '{"city":"A"}'),
+        ("call_2", "get_weather", '{"city":"B"}'),
+    ]
+
+
+def test_interleaved_repeated_ids_without_index_stay_two_calls():
+    buffer = ChoiceBuffer(0)
+    buffer.append_tool_call(_delta("call_1", "f", "{"))
+    buffer.append_tool_call(_delta("call_2", "g", "{"))
+    buffer.append_tool_call(_delta("call_1", None, "}"))
+    buffer.append_tool_call(_delta("call_2", None, "}"))
+
+    assert _calls(buffer) == [("call_1", "f", "{}"), ("call_2", "g", "{}")]
