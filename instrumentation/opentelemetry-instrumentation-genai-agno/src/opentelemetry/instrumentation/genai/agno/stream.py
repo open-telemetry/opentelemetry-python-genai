@@ -6,13 +6,30 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agno.agent import RunOutput
+    from agno.models.base import MessageData
+    from agno.models.message import Message
+    from agno.models.response import ModelResponse
+    from agno.run.workflow import WorkflowRunOutput
+    from agno.team import TeamRunOutput
+
+    AgnoRunOutput = RunOutput | TeamRunOutput | WorkflowRunOutput
 
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
+    extract_model_finish_reasons,
     format_content,
+    format_model_output_message,
+    has_model_output_content,
+    populate_provider_data,
+    record_model_token_usage,
+    safe_int,
 )
 from opentelemetry.util.genai.invocation import (
+    InferenceInvocation,
     LocalAgentInvocation,
     WorkflowInvocation,
 )
@@ -22,6 +39,7 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
+    Role,
     TextPart,
 )
 
@@ -319,3 +337,161 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_completed_content = None
         self._self_finish_reason = "stop"
         self._self_on_close = on_close
+
+
+def _has_usage(metrics: Any) -> bool:
+    if metrics is None:
+        return False
+    in_tok = safe_int(getattr(metrics, "input_tokens", None))
+    out_tok = safe_int(getattr(metrics, "output_tokens", None))
+    tot_tok = safe_int(getattr(metrics, "total_tokens", None))
+    return bool(
+        (in_tok is not None and in_tok > 0)
+        or (out_tok is not None and out_tok > 0)
+        or (tot_tok is not None and tot_tok > 0)
+    )
+
+
+class _ModelStreamMixin:
+    _self_invocation: InferenceInvocation
+    _self_assistant_message: Message | None
+    _self_stream_data: MessageData | None
+    _self_accumulated_chunks: list[str]
+
+    def _process_chunk(self, chunk: ModelResponse) -> None:
+        if self._self_invocation.should_capture_content:
+            content = getattr(chunk, "content", None)
+            if content is not None:
+                formatted = format_content(content)
+                if formatted:
+                    self._self_accumulated_chunks.append(formatted)
+
+        populate_provider_data(
+            self._self_invocation, getattr(chunk, "provider_data", None)
+        )
+
+        usage = getattr(chunk, "response_usage", None)
+        if usage is not None:
+            record_model_token_usage(self._self_invocation, usage)
+        else:
+            in_tok = safe_int(getattr(chunk, "input_tokens", None))
+            out_tok = safe_int(getattr(chunk, "output_tokens", None))
+            if in_tok is not None and in_tok > 0:
+                if self._self_invocation.input_tokens is None:
+                    self._self_invocation.input_tokens = in_tok
+                if (
+                    out_tok is not None
+                    and self._self_invocation.output_tokens is None
+                ):
+                    self._self_invocation.output_tokens = out_tok
+            elif out_tok is not None and out_tok > 0:
+                if self._self_invocation.output_tokens is None:
+                    self._self_invocation.output_tokens = out_tok
+
+    def _finalize_telemetry(self, error: BaseException | None = None) -> None:
+        metrics = getattr(self._self_assistant_message, "metrics", None)
+        if _has_usage(metrics):
+            record_model_token_usage(self._self_invocation, metrics)
+        elif self._self_stream_data is not None:
+            sd_metrics = getattr(
+                self._self_stream_data, "response_metrics", None
+            )
+            if _has_usage(sd_metrics):
+                record_model_token_usage(self._self_invocation, sd_metrics)
+
+        provider_data = getattr(
+            self._self_assistant_message, "provider_data", None
+        )
+        if not provider_data and self._self_stream_data is not None:
+            provider_data = getattr(
+                self._self_stream_data, "provider_data", None
+            )
+        populate_provider_data(self._self_invocation, provider_data)
+
+        finish_reasons = (
+            ["error"]
+            if error is not None
+            else extract_model_finish_reasons(
+                self._self_assistant_message, self._self_stream_data
+            )
+        )
+        self._self_invocation.finish_reasons = finish_reasons
+
+        if self._self_invocation.should_capture_content:
+            has_stream_data_content = (
+                self._self_stream_data is not None
+                and bool(
+                    self._self_stream_data.response_content
+                    or self._self_stream_data.response_reasoning_content
+                    or self._self_stream_data.response_tool_calls
+                )
+            )
+            if self._self_assistant_message is not None and (
+                has_model_output_content(self._self_assistant_message)
+                or has_stream_data_content
+            ):
+                self._self_invocation.output_messages = [
+                    format_model_output_message(
+                        self._self_assistant_message,
+                        finish_reason=finish_reasons[0]
+                        if finish_reasons
+                        else "stop",
+                        stream_data=self._self_stream_data,
+                    )
+                ]
+            elif self._self_accumulated_chunks:
+                text = "".join(self._self_accumulated_chunks)
+                self._self_invocation.output_messages = [
+                    OutputMessage(
+                        role=Role.ASSISTANT.value,
+                        parts=[TextPart(content=text)],
+                        finish_reason=finish_reasons[0]
+                        if finish_reasons
+                        else "stop",
+                    )
+                ]
+
+        if error is not None:
+            self._self_invocation.fail(error)
+        else:
+            self._self_invocation.stop()
+
+    def _on_stream_end(self) -> None:
+        self._finalize_telemetry()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._finalize_telemetry(error)
+
+
+class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
+    """Stream wrapper for synchronous Agno model responses."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        assistant_message: Message | None = None,
+        stream_data: MessageData | None = None,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        invocation.suspend()
+        self._self_assistant_message = assistant_message
+        self._self_stream_data = stream_data
+        self._self_accumulated_chunks = []
+
+
+class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
+    """Stream wrapper for asynchronous Agno model responses."""
+
+    def __init__(
+        self,
+        stream: Any,
+        invocation: InferenceInvocation,
+        assistant_message: Message | None = None,
+        stream_data: MessageData | None = None,
+    ) -> None:
+        super().__init__(stream, invocation=invocation)
+        invocation.suspend()
+        self._self_assistant_message = assistant_message
+        self._self_stream_data = stream_data
+        self._self_accumulated_chunks = []

@@ -36,6 +36,7 @@ The instrumentation automatically traces:
 * ``FunctionCall.execute`` and ``FunctionCall.aexecute``
 * ``Knowledge.search`` and ``Knowledge.asearch``
 * ``Embedder.get_embedding``, ``Embedder.get_embedding_and_usage``, ``Embedder.async_get_embedding``, and ``Embedder.async_get_embedding_and_usage``
+* ``Model.response``, ``Model.aresponse``, ``Model.response_stream``, and ``Model.aresponse_stream`` emitting GenAI ``chat`` spans
 
 Configuration
 -------------
