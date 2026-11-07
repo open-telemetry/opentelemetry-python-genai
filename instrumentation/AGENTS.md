@@ -123,7 +123,8 @@ as the reference:
 
 ### Capturing properties that may contain iterators
 
-- Use `opentelemetry.util.genai.iterator_capture.IteratorCapture` for captured request properties
+- Use `opentelemetry.util.genai.iterator_capture.IteratorCapture` (requires declaring
+  `opentelemetry-util-genai[wrapt]` in `pyproject.toml`) for captured request properties
   that may contain iterators, including nested values. Wrap those properties, not all `kwargs`.
   Don't drain or replay them for telemetry.
 - Use one instance per named property: `IteratorCapture.from_property(kwargs, "messages", enabled=capture_content)`.
@@ -173,7 +174,8 @@ Full transparency isn't always reachable — prefer the least intrusive option t
 
 ### Streaming responses
 
-Follow [Streaming responses](../util/opentelemetry-util-genai/AGENTS.md#streaming-responses): subclass
+Follow [Streaming responses](../util/opentelemetry-util-genai/AGENTS.md#streaming-responses): declare
+`opentelemetry-util-genai[wrapt]` in `pyproject.toml`, subclass
 `SyncStreamWrapper` / `AsyncStreamWrapper`, call `invocation.suspend()` before returning the stream,
 and don't call `invocation.stop()` when the SDK returns the stream.
 
