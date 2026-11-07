@@ -967,3 +967,54 @@ async def test_async_response_aclose_finalizes_inside_invocation(
     assert len(seen) == 2
     _assert_all_in_invocation(seen, invocation)
     assert len(span_exporter.get_finished_spans()) == 1
+
+
+def _count_activations(invocation: Any) -> list[int]:
+    calls = [0]
+    activate = invocation.activate
+
+    def counting() -> Any:
+        calls[0] += 1
+        return activate()
+
+    invocation.activate = counting
+    return calls
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_sync_raw_body_iteration_defers_to_stream_wrapper(
+    tracer_provider, logger_provider, meter_provider, wrapped
+) -> None:
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    proxy = _body_proxy(invocation, _ObservedStream([]))
+    if wrapped:
+        proxy._self_stream_wrapper = MessagesStreamWrapper(
+            iter(()), invocation, False
+        )
+    calls = _count_activations(invocation)
+
+    chunks = proxy.http_response.iter_raw()
+    next(chunks)
+    next(chunks)
+
+    assert calls[0] == (0 if wrapped else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_async_raw_body_iteration_defers_to_stream_wrapper(
+    tracer_provider, logger_provider, meter_provider, wrapped
+) -> None:
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    proxy = _body_proxy(invocation, _ObservedAsyncStream([]))
+    if wrapped:
+        proxy._self_stream_wrapper = AsyncMessagesStreamWrapper(
+            _aevents(invocation, _start_event(), None), invocation, False
+        )
+    calls = _count_activations(invocation)
+
+    chunks = proxy.http_response.aiter_raw()
+    await anext(chunks)
+    await anext(chunks)
+
+    assert calls[0] == (0 if wrapped else 2)

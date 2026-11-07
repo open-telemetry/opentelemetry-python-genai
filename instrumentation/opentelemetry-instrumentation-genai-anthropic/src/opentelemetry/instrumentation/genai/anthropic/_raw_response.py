@@ -9,6 +9,7 @@ import functools
 import inspect
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
+from contextlib import AbstractContextManager, nullcontext
 from typing import TYPE_CHECKING, Any, cast
 
 try:
@@ -146,6 +147,11 @@ class RawResponseProxy(_ObjectProxy):
             if original is not None:
                 setattr(http_response, name, wrap(original))
 
+    def _activate_unless_wrapped(self) -> AbstractContextManager[None]:
+        if self._self_stream_wrapper is not None:
+            return nullcontext()
+        return self._self_invocation.activate()
+
     def _wrap_sync_iter(
         self, original: Callable[..., Generator[bytes, None, None]]
     ) -> Callable[..., Generator[bytes, None, None]]:
@@ -156,7 +162,7 @@ class RawResponseProxy(_ObjectProxy):
             iterator = original(*args, **kwargs)
             try:
                 while True:
-                    with self._self_invocation.activate():
+                    with self._activate_unless_wrapped():
                         try:
                             chunk = next(iterator)
                         except StopIteration:
@@ -178,7 +184,7 @@ class RawResponseProxy(_ObjectProxy):
             iterator = original(*args, **kwargs)
             try:
                 while True:
-                    with self._self_invocation.activate():
+                    with self._activate_unless_wrapped():
                         try:
                             chunk = await anext(iterator)
                         except StopAsyncIteration:
