@@ -10,7 +10,8 @@ import math
 import os
 import urllib.parse
 from base64 import b64decode, b64encode
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
@@ -18,6 +19,7 @@ from functools import lru_cache, partial
 from typing import Any, cast
 from uuid import UUID
 
+from opentelemetry.context import attach, create_key, detach, set_value
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -50,6 +52,36 @@ def get_content_capturing_mode() -> ContentCapturingMode:
             ", ".join(e.name for e in ContentCapturingMode),
         )
         return ContentCapturingMode.NO_CONTENT
+
+
+_CONTENT_CAPTURING_MODE_KEY = create_key(
+    "opentelemetry.util.genai.content_capturing_mode"
+)
+
+
+@contextmanager
+def override_content_capturing_mode(
+    mode: ContentCapturingMode,
+) -> Iterator[None]:
+    """Use ``mode`` for GenAI operations started inside the ``with`` block.
+
+    ``mode`` takes precedence over
+    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` for every
+    instrumentation built on ``TelemetryHandler``, including
+    ``TelemetryHandler.should_capture_content()``. An operation keeps the mode
+    it started with, so a stream read after the block ends still uses ``mode``.
+    A configured completion hook still receives the content.
+
+    Example::
+
+        with override_content_capturing_mode(ContentCapturingMode.SPAN_ONLY):
+            client.chat(...)
+    """
+    token = attach(set_value(_CONTENT_CAPTURING_MODE_KEY, mode))
+    try:
+        yield
+    finally:
+        detach(token)
 
 
 def decode_base64(data: str) -> bytes | None:
