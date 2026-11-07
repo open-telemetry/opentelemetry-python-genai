@@ -149,10 +149,12 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
   capture path — never as unconditional span/log attributes.
 - Adding attributes to invocations produced by the util is fine.
 - Flag captured request iterators that bypass `IteratorCapture`, eager consumption or replay,
-  wrapping unrelated arguments, capture when disabled, and snapshots taken before SDK consumption.
+  wrapping unrelated arguments, capture when disabled, snapshots taken before SDK consumption,
+  or missing the `opentelemetry-util-genai[wrapt]` extra in `pyproject.toml`.
   See [request property capture](../../instrumentation/AGENTS.md#capturing-properties-that-may-contain-iterators).
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
-  `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`). Flag hand-rolled stream wrappers, and
+  `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`, requiring `opentelemetry-util-genai[wrapt]`
+  in `pyproject.toml`). Flag hand-rolled stream wrappers, and
   invocation-backed wrappers that do not pass the invocation to `super().__init__(stream, invocation)`
   or do not `invocation.suspend()` before the stream is returned. Flag an `_execution_context()`
   override on an invocation-backed wrapper: the base wrapper already activates a suspended
