@@ -20,9 +20,9 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._invocation import (
+    ContextData,
     Error,
     GenAIInvocation,
-    _ContextData,
     _resolve_suppressed_content_and_hook,
     get_content_attributes,
 )
@@ -87,7 +87,7 @@ CLIENT_INFERENCE_CONTEXT_KEY: Final[str] = (
 
 
 @dataclass
-class InferenceData(_ContextData):
+class InferenceData(ContextData):
     """Typed data passed from inner inference invocations to the outer invocation."""
 
     conversation_id: str | None = None
@@ -852,7 +852,7 @@ class InferenceInvocation(GenAIInvocation):
         attrs.update({k: v for k, v in optional_attrs if v is not None})
         return attrs
 
-    def enrich_from_context(self, data: InferenceData) -> None:
+    def _enrich_from_context(self, data: InferenceData) -> None:
         """Enrich invocation attributes from context data published by inner invocations.
 
         Outer (root) attributes take precedence over inner values. Inner
@@ -864,7 +864,7 @@ class InferenceInvocation(GenAIInvocation):
         prompt_variable = self.data.prompt_variable
         tool_definitions = self.data.tool_definitions
 
-        self.data.merge(data, overwrite=False)
+        self._merge_context_data(self.data, data)
 
         if data.capture_content:
             self.data.input_messages = (
@@ -908,14 +908,23 @@ class InferenceInvocation(GenAIInvocation):
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        if self.data.usage_input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = (
-                self.data.usage_input_tokens
-            )
-        if self.data.usage_output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
-                self.data.usage_output_tokens
-            )
+        input_tokens = self.data.usage_input_tokens
+        if input_tokens is None:
+            raw_input = self.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS)
+            if isinstance(raw_input, int) and not isinstance(raw_input, bool):
+                input_tokens = raw_input
+        if input_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = input_tokens
+
+        output_tokens = self.data.usage_output_tokens
+        if output_tokens is None:
+            raw_output = self.attributes.get(GenAI.GEN_AI_USAGE_OUTPUT_TOKENS)
+            if isinstance(raw_output, int) and not isinstance(
+                raw_output, bool
+            ):
+                output_tokens = raw_output
+        if output_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = output_tokens
         return counts
 
     def _apply_finish(self, error: Error | None = None) -> None:
@@ -925,7 +934,7 @@ class InferenceInvocation(GenAIInvocation):
             CLIENT_INFERENCE_CONTEXT_KEY, context=self._span_context
         )
         if isinstance(ctx_data, InferenceData):
-            self.enrich_from_context(ctx_data)
+            self._enrich_from_context(ctx_data)
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
         if self._request_stream is not None:
