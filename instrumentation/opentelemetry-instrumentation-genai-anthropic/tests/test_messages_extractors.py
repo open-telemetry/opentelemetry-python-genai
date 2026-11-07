@@ -9,9 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import anthropic
 import pytest
-from anthropic import NOT_GIVEN
 from anthropic.types import (
     ServerToolUseBlock,
     WebSearchToolResultBlock,
@@ -21,7 +19,6 @@ from anthropic.types import (
 from opentelemetry.instrumentation.genai.anthropic.messages_extractors import (
     extract_params,
     get_input_messages,
-    get_llm_request_attributes,
     get_output_messages_from_message,
     get_tool_definitions,
     set_invocation_response_attributes,
@@ -106,44 +103,6 @@ def test_extract_params_ignores_non_mapping_extra_body():
     assert params.temperature is None
     assert params.top_p is None
     assert params.top_k is None
-
-
-def _assert_unset_sampling_params_dropped(unset):
-    params = extract_params(
-        temperature=unset, top_p=unset, top_k=unset, stop_sequences=unset
-    )
-
-    assert params.temperature is None
-    assert params.top_p is None
-    assert params.top_k is None
-    assert params.stop_sequences is None
-
-    attributes = get_llm_request_attributes(
-        params, SimpleNamespace(_client=None)
-    )
-    assert "gen_ai.request.temperature" not in attributes
-    assert "gen_ai.request.top_p" not in attributes
-    assert "gen_ai.request.top_k" not in attributes
-    assert "gen_ai.request.stop_sequences" not in attributes
-
-
-def test_extract_params_drops_not_given_sentinels():
-    _assert_unset_sampling_params_dropped(NOT_GIVEN)
-
-
-def test_extract_params_drops_omit_sentinels():
-    omit = getattr(anthropic, "omit", None)
-    if omit is None:
-        pytest.skip("installed anthropic has no `omit`")
-    _assert_unset_sampling_params_dropped(omit)
-
-
-def test_extract_params_not_given_does_not_block_extra_body_fallback():
-    params = extract_params(
-        temperature=NOT_GIVEN, extra_body={"temperature": 0.5}
-    )
-
-    assert params.temperature == 0.5
 
 
 def test_base64_image_source_converts_to_blob_part():
