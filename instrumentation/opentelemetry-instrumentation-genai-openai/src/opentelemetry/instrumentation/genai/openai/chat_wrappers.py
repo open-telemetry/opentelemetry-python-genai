@@ -7,6 +7,7 @@ import json
 import logging
 from contextvars import ContextVar
 from types import TracebackType
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from openai import AsyncStream, Stream
 from openai.types import CompletionUsage
@@ -37,7 +38,17 @@ from .utils import (
     set_chat_usage,
 )
 
+if TYPE_CHECKING:
+    from openai.lib.streaming.chat import (  # pylint: disable=no-name-in-module
+        AsyncChatCompletionStream,
+        AsyncChatCompletionStreamManager,
+        ChatCompletionStream,
+        ChatCompletionStreamManager,
+    )
+
 _logger = logging.getLogger(__name__)
+
+ResponseFormatT = TypeVar("ResponseFormatT")
 
 # Collects the stream wrappers the patched create() builds while a
 # chat.completions.stream() manager is being entered.
@@ -271,22 +282,27 @@ class AsyncChatStreamWrapper(
         )
 
 
-class ChatStreamManagerWrapper(ObjectProxy):
+class ChatStreamManagerWrapper(ObjectProxy, Generic[ResponseFormatT]):
     """Wrapper for the manager returned by ``chat.completions.stream()``.
 
     The SDK manager's ``__exit__`` only closes the stream and drops the
     caller's exception, so it is recorded on the chat stream wrapper first.
     """
 
-    def __init__(self, manager: object) -> None:
+    def __init__(
+        self, manager: ChatCompletionStreamManager[ResponseFormatT]
+    ) -> None:
         super().__init__(manager)
         self._self_stream_wrapper: ChatStreamWrapper | None = None
 
-    def __enter__(self) -> object:
+    def __enter__(self) -> ChatCompletionStream[ResponseFormatT]:
         entered: list[ChatStreamWrapper | AsyncChatStreamWrapper] = []
         token = _entered_chat_streams.set(entered)
         try:
-            stream = self.__wrapped__.__enter__()
+            stream = cast(
+                "ChatCompletionStream[ResponseFormatT]",
+                self.__wrapped__.__enter__(),
+            )
         finally:
             _entered_chat_streams.reset(token)
         if entered and isinstance(entered[0], ChatStreamWrapper):
@@ -306,18 +322,23 @@ class ChatStreamManagerWrapper(ObjectProxy):
         return self.__wrapped__.__exit__(exc_type, exc_val, exc_tb)
 
 
-class AsyncChatStreamManagerWrapper(ObjectProxy):
+class AsyncChatStreamManagerWrapper(ObjectProxy, Generic[ResponseFormatT]):
     """Async counterpart of ``ChatStreamManagerWrapper``."""
 
-    def __init__(self, manager: object) -> None:
+    def __init__(
+        self, manager: AsyncChatCompletionStreamManager[ResponseFormatT]
+    ) -> None:
         super().__init__(manager)
         self._self_stream_wrapper: AsyncChatStreamWrapper | None = None
 
-    async def __aenter__(self) -> object:
+    async def __aenter__(self) -> AsyncChatCompletionStream[ResponseFormatT]:
         entered: list[ChatStreamWrapper | AsyncChatStreamWrapper] = []
         token = _entered_chat_streams.set(entered)
         try:
-            stream = await self.__wrapped__.__aenter__()
+            stream = cast(
+                "AsyncChatCompletionStream[ResponseFormatT]",
+                await self.__wrapped__.__aenter__(),
+            )
         finally:
             _entered_chat_streams.reset(token)
         if entered and isinstance(entered[0], AsyncChatStreamWrapper):

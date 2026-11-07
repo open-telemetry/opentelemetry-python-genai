@@ -1378,6 +1378,65 @@ async def test_async_chat_completion_streaming_not_complete(
 
 
 @pytest.mark.asyncio()
+async def test_async_chat_completion_stream_helper(
+    span_exporter,
+    log_exporter,
+    async_openai_client,
+    instrument_with_content,
+    vcr,
+):
+    if not hasattr(async_openai_client.chat.completions, "stream"):
+        pytest.skip("chat.completions.stream() not available")
+
+    latest_experimental_enabled = is_experimental_mode()
+    llm_model_value = "gpt-4"
+    with vcr.use_cassette("test_async_chat_completion_streaming.yaml"):
+        async with async_openai_client.chat.completions.stream(
+            model=llm_model_value,
+            messages=USER_ONLY_PROMPT,
+            stream_options={"include_usage": True},
+        ) as stream:
+            completion = await stream.get_final_completion()
+
+    response_stream_result = completion.choices[0].message.content
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_all_attributes(
+        spans[0],
+        llm_model_value,
+        latest_experimental_enabled,
+        completion.id,
+        completion.model,
+        completion.usage.prompt_tokens,
+        completion.usage.completion_tokens,
+    )
+
+    logs = log_exporter.get_finished_logs()
+    if latest_experimental_enabled:
+        assert_messages_attribute(
+            spans[0].attributes["gen_ai.input.messages"],
+            USER_ONLY_EXPECTED_INPUT_MESSAGES,
+        )
+        assert_messages_attribute(
+            spans[0].attributes["gen_ai.output.messages"],
+            format_simple_expected_output_message(response_stream_result),
+        )
+    else:
+        assert len(logs) == 2
+        choice_event = {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {
+                "role": "assistant",
+                "content": response_stream_result,
+            },
+        }
+        assert_message_in_logs(
+            logs[1], "gen_ai.choice", choice_event, spans[0]
+        )
+
+
+@pytest.mark.asyncio()
 async def test_async_chat_completion_stream_helper_not_complete(
     span_exporter, async_openai_client, instrument_with_content, vcr
 ):
