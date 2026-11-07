@@ -29,6 +29,7 @@ from .utils import (
     get_server_address_and_port,
     get_value,
     is_streaming,
+    map_finish_reason,
     set_chat_usage,
 )
 
@@ -176,7 +177,7 @@ def _set_response_properties(
     if getattr(result, "choices", None):
         finish_reasons = []
         for choice in result.choices:
-            finish_reasons.append(choice.finish_reason or "error")
+            finish_reasons.append(map_finish_reason(choice.finish_reason))
 
         chat_invocation.finish_reasons = finish_reasons
 
