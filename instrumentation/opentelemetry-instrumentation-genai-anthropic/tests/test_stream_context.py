@@ -1018,3 +1018,66 @@ async def test_async_raw_body_iteration_defers_to_stream_wrapper(
     await anext(chunks)
 
     assert calls[0] == (0 if wrapped else 2)
+
+
+# --- raw response, parse() returns a Message ---------------------------------
+
+
+class _ParsingRaw:
+    def __init__(self, response: Any) -> None:
+        self.http_response = response
+
+    def parse(self) -> Message:
+        return _start_event().message
+
+
+class _AsyncParsingRaw:
+    def __init__(self, response: Any) -> None:
+        self.http_response = response
+
+    async def parse(self) -> Message:
+        await asyncio.sleep(0)
+        return _start_event().message
+
+
+def test_sync_raw_response_parse_message_stops_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    finish_seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, finish_seen)
+    response = _http_lib.Response(
+        200, stream=_ObservedStream([]), request=_REQUEST
+    )
+    proxy = wrap_raw_response(_ParsingRaw(response), invocation, False)
+
+    message = proxy.parse()
+
+    assert isinstance(message, Message)
+    assert context.get_current() is before
+    _assert_all_in_invocation(finish_seen, invocation)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
+
+
+@pytest.mark.asyncio
+async def test_async_raw_response_parse_message_stops_inside_invocation(
+    tracer_provider, logger_provider, meter_provider, span_exporter
+) -> None:
+    before = context.get_current()
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    finish_seen: list[trace.SpanContext] = []
+    _record_current_span_on_finish(invocation, finish_seen)
+    response = _http_lib.Response(
+        200, stream=_ObservedAsyncStream([]), request=_REQUEST
+    )
+    proxy = wrap_raw_response(_AsyncParsingRaw(response), invocation, False)
+
+    message = await asyncio.create_task(proxy.parse())
+
+    assert isinstance(message, Message)
+    assert context.get_current() is before
+    _assert_all_in_invocation(finish_seen, invocation)
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id

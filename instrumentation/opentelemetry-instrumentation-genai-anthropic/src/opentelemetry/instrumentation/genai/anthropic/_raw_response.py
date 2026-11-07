@@ -349,7 +349,8 @@ class RawResponseProxy(_ObjectProxy):
         # ``stop()`` is not idempotent, so finalize at most once.
         if self._self_span_open:
             self._self_span_open = False
-            self._self_invocation.stop()
+            with self._self_invocation.activate():
+                self._self_invocation.stop()
 
     def parse(self, *args: Any, **kwargs: Any) -> object:
         # The SDK caches per cast target, so every call is delegated and the
