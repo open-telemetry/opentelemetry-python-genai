@@ -184,13 +184,33 @@ def test_http_inference(
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("explicit", [False, True], ids=["list", "request"])
 @pytest.mark.parametrize("engine", ENGINES)
-def test_http_without_instrumentation(
+def test_http_after_uninstrumentation(
     mock_server: MockServer,
+    tracer_provider: Any,
+    logger_provider: Any,
+    meter_provider: Any,
     span_exporter: Any,
     asynchronous: bool,
     explicit: bool,
     engine: str,
 ) -> None:
+    with instrument(
+        DSPyInstrumentor(),
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+    ):
+        result = call_lm(
+            make_lm(mock_server, engine),
+            asynchronous=asynchronous,
+            explicit=explicit,
+        )
+        assert_result(result, explicit)
+        assert_http(mock_server)
+        assert len(span_exporter.get_finished_spans()) == 1
+
+    span_exporter.clear()
+    mock_server.requests.clear()
     result = call_lm(
         make_lm(mock_server, engine),
         asynchronous=asynchronous,
