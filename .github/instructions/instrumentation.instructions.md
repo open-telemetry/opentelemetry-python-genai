@@ -4,6 +4,100 @@ applyTo: "instrumentation/**"
 
 Review rules for PRs touching `instrumentation/**`. Flag violations with a link to the rule.
 
+## Top checks
+
+Go through these on every PR before the detailed sections below.
+
+**Tests.** For every new or changed instrumented method, list which of these are missing and flag
+the PR. Only count variants the API actually has and paths that apply to it: sync | async |
+streaming | provider error | stream closed early | content capture on | content capture off
+(content absent).
+- For a fix or behavior change, flag tests that would pass without it (no assertion on the
+  changed value). Tests that only add coverage are fine. Require exact values when the value is
+  the contract; presence, absence, length, or substring checks are appropriate when those are
+  the behavior under test.
+- Flag tests that call `_private` helpers or hand-built SDK mocks instead of the instrumented
+  client public API.
+
+**Types and speculative code.**
+- Flag `Any`/`object` in signatures and `getattr`/`hasattr` on known SDK types. Flag reads of
+  fields, params, or methods that don't exist in every supported library version, and guards for
+  cases the library never produces.
+  ```python
+  # Flag
+  def _set_response(inv, response: Any) -> None:
+      inv.response_model_name = getattr(response, "model", None)
+
+
+  # Prefer
+  def _set_response(inv: InferenceInvocation, response: ChatCompletion) -> None:
+      inv.response_model_name = response.model
+  ```
+
+**Semconv values.**
+- Flag `gen_ai.provider.name` fallbacks other than `unknown` (e.g. the framework name),
+  `gen_ai.agent.id` set from a local object id or name, finish reasons defaulted instead of
+  mapped, and spans/metric points emitted per retry.
+- Flag sampling-relevant values (agent name, conversation id) set after the `handler.*()` call.
+
+**Values and finalization.**
+- Flag `x or default` / `if x:` on numeric or boolean telemetry values, and placeholder `''`/`0`
+  for missing values.
+  ```python
+  # Flag
+  inv.temperature = kwargs.get("temperature") or None
+  # Prefer
+  if (temperature := kwargs.get("temperature")) is not None:
+      inv.temperature = temperature
+  ```
+- Flag code paths that start an invocation without reaching `stop()`/`fail()`.
+
+**Messages and content.**
+- Flag `json.dumps`/`str()` results assigned to util message or tool fields,
+  `TextPart(content=str(block))` or `GenericPart` for non-text blocks, and branches that
+  silently drop block types the library documents.
+- Flag message parts, tool definitions, or streamed text built when content capture is disabled.
+- Flag any deprecated util API (e.g. `LLMInvocation`, deprecated part aliases or fields), such as `GenericPart` and `get_telemetry_handler()`.
+
+**Versions.**
+- Flag patches of optional or version-specific symbols that break `instrument()` or uninstrument
+  when the symbol is missing, patches applied to re-exporting modules instead of the defining
+  class, and version-specific branches no `oldest`/`latest` test reaches.
+
+**Performance.** Flag per-call work that can run once at instrument time (imports, signature
+inspection, feature checks - binding each call's arguments is per-call work), per-chunk stream
+processing that re-joins or re-parses everything accumulated so far, and blocking work on async
+code paths.
+
+**Errors.** Flag telemetry code that can raise into the user's call or import (e.g. unguarded
+base64/JSON parsing). Also flag broad `try`/`except` around whole wrappers or around util calls -
+extraction should be typed so it can't raise, with narrow `try`/`except` only around parsing
+untyped data.
+
+**Spans.** Flag duplicate spans when one wrapped entry point calls another for the same logical
+operation (distinct nested operations like agent tool calls or nested workflows keep their
+spans), and code that disables or alters the library's own telemetry by default.
+
+**Util helpers.** Flag package-local copies of provider-agnostic helpers (base64/data URLs,
+provider-name maps) that exist in, or belong in, the util.
+
+**Conformance.** Every semconv operation the package emits needs a scenario. Flag new attributes,
+modes, or streaming variants not exercised by a scenario, and `expected_metrics` not updated when
+the util adds a signal.
+
+**Return contract.** Flag wrappers that change the returned type or shape (`isinstance` breaks, a
+coroutine becomes a value), trigger work early (`raw_response.parse()`, reading request bodies,
+iterating inputs before the SDK), alter values the library receives (transparent pass-through
+wrappers like `IteratorCapture` are fine), or replace functions without `@functools.wraps`.
+
+**Context.** Flag paths where the invocation's span stays current in the caller's context after
+the call returns (streams, tool streams, raw responses, early returns); async invocations started
+when the coroutine is created instead of inside it; and suppressed context detach errors.
+
+**Parity.** Check affected sync/async counterparts and callers of changed shared helpers for
+the same bug or inconsistent behavior. Unrelated pre-existing bugs in sibling instrumentations
+are nonblocking follow-ups, not reasons to expand the PR or require a tracking issue.
+
 ## 0. Reviewer mindset
 
 Review as long-term maintainer.
@@ -57,7 +151,7 @@ prefer opt-in or additive. Breaking changes need explicit justification in the P
 - Flag captured request iterators that bypass `IteratorCapture`, eager consumption or replay,
   wrapping unrelated arguments, capture when disabled, snapshots taken before SDK consumption,
   or missing the `opentelemetry-util-genai[wrapt]` extra in `pyproject.toml`.
-  See [request property capture](../../AGENTS.md#capturing-properties-that-may-contain-iterators).
+  See [request property capture](../../instrumentation/AGENTS.md#capturing-properties-that-may-contain-iterators).
 - Streaming responses must be instrumented by subclassing the util's `SyncStreamWrapper` /
   `AsyncStreamWrapper` (`opentelemetry.util.genai.stream`, requiring `opentelemetry-util-genai[wrapt]`
   in `pyproject.toml`). Flag hand-rolled stream wrappers, and

@@ -1,0 +1,1 @@
+Record `tool_call` instead of `tool_calls`/`function_call` in `gen_ai.response.finish_reasons`.
