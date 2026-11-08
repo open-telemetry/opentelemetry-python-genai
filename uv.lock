@@ -4931,7 +4931,7 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", marker = "extra == 'instruments'", specifier = ">=0.1.18,<1" },
+    { name = "claude-agent-sdk", marker = "extra == 'instruments'", specifier = ">=0.1.19,<1" },
     { name = "opentelemetry-api", specifier = "~=1.45" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
