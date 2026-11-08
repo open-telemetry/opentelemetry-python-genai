@@ -14,7 +14,9 @@ summed only as a fallback for runs that end without a ``ResultMessage``
 
 from __future__ import annotations
 
+import contextvars
 import importlib
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from wrapt import FunctionWrapper
@@ -24,6 +26,13 @@ from opentelemetry.util.genai.stream import AsyncStreamWrapper
 from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 PROVIDER = "anthropic"
+
+# ``receive_response`` iterates ``receive_messages`` internally, so wrapping both
+# would report two spans for one turn. The flag makes the inner call a plain
+# pass-through.
+_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "claude_agent_sdk_instrumented", default=False
+)
 
 
 def _usage_of(message: Any) -> dict[str, Any]:
@@ -66,6 +75,9 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
         self._self_completed = False
         # tool_use id -> ToolInvocation, for tools executed outside this process
         self._self_pending_tools: dict[str, Any] = {}
+        # Set when a ResultMessage closes the turn; a multi-turn stream keeps
+        # going after that, so the wrapper has to stop at this point.
+        self._self_turn_done = False
 
     def _process_chunk(self, chunk: Any) -> None:
         # Newer util releases scope the invocation around this hook; older ones
@@ -104,6 +116,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
 
         if kind == "ResultMessage":
             self._self_completed = True
+            self._self_turn_done = True
             usage = _usage_of(chunk)
             if usage:
                 self._self_result_usage = usage
@@ -180,11 +193,15 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             OutputMessage(role="assistant", parts=[TextPart(content=text)])
         ]
 
-    def _on_stream_end(self) -> None:
+    def end_turn(self) -> None:
+        """Finalize this turn's span; the underlying stream stays open."""
         self._apply_usage()
         self._finalize_pending_tools()
         self._apply_output()
         self._self_agent.stop()
+
+    def _on_stream_end(self) -> None:
+        self.end_turn()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._apply_usage()
@@ -224,9 +241,85 @@ def _patch(module_name: str, attr: str, handler: TelemetryHandler) -> None:
     _PATCHED.append((module, attr, original))
 
 
+async def _multi_turn_messages(
+    stream: Any, handler: TelemetryHandler, options: Any, token: Any
+) -> AsyncIterator[Any]:
+    """One span per turn: ``receive_messages`` covers a whole session.
+
+    The underlying iterator is pulled directly so that no invocation is
+    created for a turn that never produces a message.
+    """
+    aiter = stream.__aiter__()
+    wrapper: ClaudeAgentStreamWrapper | None = None
+    try:
+        while True:
+            try:
+                chunk = await aiter.__anext__()
+            except StopAsyncIteration:
+                if wrapper is not None:
+                    wrapper.end_turn()
+                return
+            if wrapper is None:
+                invocation = handler.invoke_local_agent(
+                    request_model=getattr(options, "model", None),
+                    agent_name="claude-agent-sdk",
+                )
+                wrapper = ClaudeAgentStreamWrapper(aiter, invocation, handler)
+            wrapper._process_chunk(chunk)
+            yield chunk
+            if wrapper._self_turn_done:
+                wrapper.end_turn()
+                wrapper = None
+    except BaseException as error:
+        if wrapper is not None:
+            try:
+                wrapper._on_stream_error(error)
+            except Exception:
+                pass
+        raise
+    finally:
+        if wrapper is not None:
+            try:
+                wrapper.end_turn()
+            except Exception:
+                pass
+        _ACTIVE.reset(token)
+
+
+def _wrap_client_iterator(handler: TelemetryHandler) -> Any:
+    """Wrap a ``ClaudeSDKClient`` message iterator once, without nesting."""
+
+    def wrapper(
+        wrapped: Any,
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        stream = wrapped(*args, **kwargs)
+        if _ACTIVE.get():
+            return stream
+        token = _ACTIVE.set(True)
+        return _multi_turn_messages(
+            stream, handler, getattr(instance, "options", None), token
+        )
+
+    return wrapper
+
+
 def instrument(handler: TelemetryHandler) -> None:
     for module_name in ("claude_agent_sdk.query", "claude_agent_sdk"):
         _patch(module_name, "query", handler)
+    client = importlib.import_module("claude_agent_sdk")
+    for attr in ("receive_response", "receive_messages"):
+        original = getattr(client.ClaudeSDKClient, attr)
+        if isinstance(original, FunctionWrapper):
+            continue
+        setattr(
+            client.ClaudeSDKClient,
+            attr,
+            FunctionWrapper(original, _wrap_client_iterator(handler)),
+        )
+        _PATCHED.append((client.ClaudeSDKClient, attr, original))
 
 
 def uninstrument() -> None:

@@ -17,7 +17,7 @@ import claude_agent_sdk
 import pytest
 from claude_agent_sdk.types import ClaudeAgentOptions
 
-from ._replay import ReplayTransport, single_turn
+from ._replay import ReplayTransport, single_turn, two_turns
 
 AGENT_SPAN = "invoke_agent claude-agent-sdk"
 
@@ -147,6 +147,61 @@ def test_caller_closing_early_ends_span(
     assert len(spans) == 1
     # Early-close semantics are tracked upstream; pin today's behaviour only.
     assert spans[0].status.status_code.name == "UNSET"
+
+
+def test_multi_turn_emits_one_span_per_turn(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # ``receive_messages`` covers a whole session, so the wrapper has to split
+    # the stream at each ResultMessage.
+    async def _run() -> None:
+        client = claude_agent_sdk.ClaudeSDKClient(
+            options=ClaudeAgentOptions(),
+            transport=ReplayTransport(
+                two_turns(first_usage=(32, 38), second_usage=(10, 9))
+            ),
+        )
+        await client.connect()
+        await client.query("first")
+        seen_results = 0
+        async for message in client.receive_messages():
+            if isinstance(message, claude_agent_sdk.ResultMessage):
+                seen_results += 1
+                if seen_results == 2:
+                    break
+        await client.disconnect()
+
+    anyio.run(_run)
+
+    spans = agent_spans(span_exporter)
+    assert len(spans) == 2
+    assert [
+        span.attributes["gen_ai.usage.input_tokens"] for span in spans
+    ] == [32, 10]
+    assert [
+        span.attributes["gen_ai.usage.output_tokens"] for span in spans
+    ] == [38, 9]
+
+
+def test_receive_response_does_not_double_instrument(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # ``receive_response`` iterates ``receive_messages`` internally; wrapping
+    # both would report two spans for one turn.
+    async def _run() -> None:
+        client = claude_agent_sdk.ClaudeSDKClient(
+            options=ClaudeAgentOptions(),
+            transport=ReplayTransport(single_turn()),
+        )
+        await client.connect()
+        await client.query("first")
+        async for _ in client.receive_response():
+            pass
+        await client.disconnect()
+
+    anyio.run(_run)
+
+    assert len(agent_spans(span_exporter)) == 1
 
 
 def test_output_messages_captured_when_enabled(
