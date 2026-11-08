@@ -1081,3 +1081,57 @@ async def test_async_raw_response_parse_message_stops_inside_invocation(
     _assert_all_in_invocation(finish_seen, invocation)
     (span,) = span_exporter.get_finished_spans()
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID] == message.id
+
+
+class _IterOnlyResponse:
+    """Exposes only the raw iterators, so closing one triggers no close hook."""
+
+    def iter_raw(self) -> Iterator[bytes]:
+        yield from _BODY
+
+    async def aiter_raw(self) -> AsyncIterator[bytes]:
+        for chunk in _BODY:
+            yield chunk
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_sync_raw_body_iterator_close_defers_to_stream_wrapper(
+    tracer_provider, logger_provider, meter_provider, wrapped
+) -> None:
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    proxy = wrap_raw_response(
+        SimpleNamespace(http_response=_IterOnlyResponse()), invocation, False
+    )
+    if wrapped:
+        proxy._self_stream_wrapper = MessagesStreamWrapper(
+            iter(()), invocation, False
+        )
+    chunks = proxy.http_response.iter_raw()
+    next(chunks)
+    calls = _count_activations(invocation)
+
+    chunks.close()
+
+    assert calls[0] == (0 if wrapped else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_async_raw_body_iterator_close_defers_to_stream_wrapper(
+    tracer_provider, logger_provider, meter_provider, wrapped
+) -> None:
+    invocation = _invocation(tracer_provider, logger_provider, meter_provider)
+    proxy = wrap_raw_response(
+        SimpleNamespace(http_response=_IterOnlyResponse()), invocation, False
+    )
+    if wrapped:
+        proxy._self_stream_wrapper = AsyncMessagesStreamWrapper(
+            _aevents(invocation, _start_event(), None), invocation, False
+        )
+    chunks = proxy.http_response.aiter_raw()
+    await anext(chunks)
+    calls = _count_activations(invocation)
+
+    await chunks.aclose()
+
+    assert calls[0] == (0 if wrapped else 1)

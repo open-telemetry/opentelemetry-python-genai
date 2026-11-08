@@ -169,7 +169,7 @@ class RawResponseProxy(_ObjectProxy):
                             return
                     yield chunk
             finally:
-                with self._self_invocation.activate():
+                with self._activate_unless_wrapped():
                     iterator.close()
 
         return _iter
@@ -191,7 +191,7 @@ class RawResponseProxy(_ObjectProxy):
                             return
                     yield chunk
             finally:
-                with self._self_invocation.activate():
+                with self._activate_unless_wrapped():
                     await iterator.aclose()
 
         return _aiter
