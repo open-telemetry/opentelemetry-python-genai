@@ -66,6 +66,21 @@ def _create_mock_response(
     return resp
 
 
+def _create_mock_batch_response(
+    embeddings: list[list[float]], usage: dict[str, Any] | None = None
+) -> MagicMock:
+    resp = MagicMock(
+        data=[MagicMock(embedding=embedding) for embedding in embeddings]
+    )
+    if usage is not None:
+        mock_usage = MagicMock()
+        mock_usage.model_dump.return_value = usage
+        resp.usage = mock_usage
+    else:
+        resp.usage = None
+    return resp
+
+
 def test_embedder_get_embedding_sync(
     instrument_agno,
     span_exporter,
@@ -184,6 +199,89 @@ def test_embedder_async_get_embedding_and_usage(
     span = spans[0]
     assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 5
     assert span.attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
+
+
+def test_embedder_async_get_embeddings_batch_and_usage(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Batch embeddings emit one span and count usage once per request."""
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=[
+            _create_mock_batch_response(
+                [[0.1, 0.2], [0.3, 0.4]], {"prompt_tokens": 7}
+            ),
+            _create_mock_batch_response([[0.5, 0.6]], {"prompt_tokens": 4}),
+        ]
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="async-batch-model",
+        async_client=mock_client,
+        batch_size=2,
+    )
+
+    async def _test() -> None:
+        (
+            embeddings,
+            usage,
+        ) = await embedder.async_get_embeddings_batch_and_usage(
+            ["first", "second", "third"]
+        )
+        assert embeddings == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        assert usage == [
+            {"prompt_tokens": 7},
+            {"prompt_tokens": 7},
+            {"prompt_tokens": 4},
+        ]
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "embeddings async-batch-model"
+    assert spans[0].attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
+    assert spans[0].attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 11
+
+
+def test_embedder_async_batch_fallback_suppresses_individual_spans(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Per-text fallback calls enrich the batch span without duplicating it."""
+    mock_client = MagicMock()
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=[
+            ValueError("batch failed"),
+            _create_mock_response([0.1, 0.2], {"prompt_tokens": 2}),
+            _create_mock_response([0.3, 0.4], {"prompt_tokens": 3}),
+        ]
+    )
+    embedder = OpenAIEmbedder(
+        api_key="fake",
+        id="async-batch-fallback-model",
+        async_client=mock_client,
+        batch_size=2,
+    )
+
+    async def _test() -> None:
+        (
+            embeddings,
+            usage,
+        ) = await embedder.async_get_embeddings_batch_and_usage(
+            ["first", "second"]
+        )
+        assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
+        assert usage == [{"prompt_tokens": 2}, {"prompt_tokens": 3}]
+
+    asyncio.run(_test())
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "embeddings async-batch-fallback-model"
+    assert spans[0].attributes.get(GEN_AI_EMBEDDINGS_DIMENSION_COUNT) == 2
+    assert spans[0].attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 5
 
 
 def test_embedder_nested_call_suppression_sync(
