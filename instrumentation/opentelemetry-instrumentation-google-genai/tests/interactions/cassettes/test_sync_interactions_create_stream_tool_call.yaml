@@ -1,0 +1,127 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "gemini-3.8-flash",
+        "input": "What is the weather in Paris right now?",
+        "stream": true,
+        "tools": [
+          {
+            "description": "Get the current weather for a city.",
+            "name": "get_weather",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ]
+            },
+            "type": "function"
+          }
+        ]
+      }
+    headers:
+      accept:
+      - text/event-stream
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '286'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 internal v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.31.0 gl-python/3.14.7
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: |+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        : keep-alive
+
+        event: interaction.created
+        data: {"interaction":{"id":"v1_ChdkOFBhYXNqeEpmR2EwLWtQeDRpQ2lRVRIXZDhQYWFzanhKZkdhMC1rUHg0aUNpUVU","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.created"}
+
+        event: interaction.status_update
+        data: {"interaction_id":"v1_ChdkOFBhYXNqeEpmR2EwLWtQeDRpQ2lRVRIXZDhQYWFzanhKZkdhMC1rUHg0aUNpUVU","status":"in_progress","event_type":"interaction.status_update"}
+
+        event: step.start
+        data: {"index":0,"step":{"type":"thought"},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":0,"delta":{"signature":"EqwCCqkCAWkUfRNa+PToMyMcjCIzgT6vO1ZH2A9Q8aJ1i87JsoQQZ+jT2oZxPWfiy6ivgitpqSr308kpxRF9X0dPxVgE+FLspmI7k3+qARDwdlyJ2yKZ+JKmF2MbC6i3NHnBP6MY269yJqgsZSb/DbsdXOjgkfYZUWWvVn/PcQIzj7kNyzNZRi6b4bW0CjeyH/dky2y97bO8eUnbbZ/vrW/QjLM/VDakU9aTn4Nsv7LCDG/ffKSPg0MoeUTpnNnALSQcqlRAAQogNGysk6JPWmpMomAz+K8tdXxDH3FoRn6ZyjqnipdOkvVNnsfShcSOFXKAfGTmdRyTgwTlN6azLmPIZ3xD9BxJAhQpTIHsUHmst8qgWBtZMXcEgANioGp2pJI2IT2plztCdTksnwp1","type":"thought_signature"},"event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":0,"event_type":"step.stop"}
+
+        event: step.start
+        data: {"index":1,"step":{"id":"call_240509","signature":"AWkUfRNa+PToMyMcjCIzgT6vO1ZH2A9Q8aJ1i87JsoQQZ+jT2oZxPWfiy6ivgitpqSr308kpxRF9X0dPxVgE+FLspmI7k3+qARDwdlyJ2yKZ+JKmF2MbC6i3NHnBP6MY269yJqgsZSb/DbsdXOjgkfYZUWWvVn/PcQIzj7kNyzNZRi6b4bW0CjeyH/dky2y97bO8eUnbbZ/vrW/QjLM/VDakU9aTn4Nsv7LCDG/ffKSPg0MoeUTpnNnALSQcqlRAAQogNGysk6JPWmpMomAz+K8tdXxDH3FoRn6ZyjqnipdOkvVNnsfShcSOFXKAfGTmdRyTgwTlN6azLmPIZ3xD9BxJAhQpTIHsUHmst8qgWBtZMXcEgANioGp2pJI2IT2plztCdTksnwp1","type":"function_call","name":"get_weather","arguments":{}},"event_type":"step.start"}
+
+        event: step.delta
+        data: {"index":1,"delta":{"arguments":"{\"city\":\"Paris\"}","type":"arguments_delta"},"event_type":"step.delta"}
+
+        event: step.stop
+        data: {"index":1,"event_type":"step.stop"}
+
+        event: interaction.completed
+        data: {"interaction":{"id":"v1_ChdkOFBhYXNqeEpmR2EwLWtQeDRpQ2lRVRIXZDhQYWFzanhKZkdhMC1rUHg0aUNpUVU","status":"requires_action","usage":{"total_tokens":112,"total_input_tokens":55,"input_tokens_by_modality":[{"modality":"text","tokens":55}],"total_cached_tokens":0,"total_output_tokens":16,"total_tool_use_tokens":0,"total_thought_tokens":41},"created":"2026-10-23T02:19:04Z","updated":"2026-10-23T02:19:04Z","service_tier":"standard","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.completed"}
+
+        event: done
+        data: [DONE]
+
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '2554'
+      content-type:
+      - text/event-stream
+      date:
+      - Fri, 23 Oct 2026 02:16:38 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=15096
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

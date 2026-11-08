@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import array
+import base64
 import logging
 
 from openai.types import CreateEmbeddingResponse
@@ -27,6 +29,7 @@ from .utils import (
     get_server_address_and_port,
     get_value,
     is_streaming,
+    map_finish_reason,
     set_chat_usage,
 )
 
@@ -174,7 +177,7 @@ def _set_response_properties(
     if getattr(result, "choices", None):
         finish_reasons = []
         for choice in result.choices:
-            finish_reasons.append(choice.finish_reason or "error")
+            finish_reasons.append(map_finish_reason(choice.finish_reason))
 
         chat_invocation.finish_reasons = finish_reasons
 
@@ -227,7 +230,19 @@ def _set_embeddings_response_properties(
     if getattr(result, "data", None) and len(result.data) > 0:
         first_embedding = result.data[0]
         if getattr(first_embedding, "embedding", None):
-            invocation.dimension_count = len(first_embedding.embedding)
+            embedding = first_embedding.embedding
+            if isinstance(embedding, str):
+                try:
+                    embedding = array.array("f", base64.b64decode(embedding))
+                except ValueError:
+                    _logger.debug(
+                        "Failed to decode base64 embedding dimensions",
+                        exc_info=True,
+                    )
+                else:
+                    invocation.dimension_count = len(embedding)
+            else:
+                invocation.dimension_count = len(embedding)
 
     # Embeddings only have input tokens; output tokens are not applicable.
     if getattr(result, "usage", None):

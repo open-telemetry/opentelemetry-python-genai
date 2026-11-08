@@ -34,7 +34,13 @@ if TYPE_CHECKING:
         def __init__(self, wrapped: object) -> None: ...
 
 else:
-    from wrapt import ObjectProxy as _ObjectProxy
+    try:
+        from wrapt import ObjectProxy as _ObjectProxy
+    except ModuleNotFoundError as exc:
+        raise ImportError(
+            "opentelemetry.util.genai.stream requires the 'wrapt' extra. "
+            "Install it with: pip install 'opentelemetry-util-genai[wrapt]'"
+        ) from exc
 
 
 ChunkT = TypeVar("ChunkT")
@@ -50,13 +56,19 @@ _ChunkT_co = TypeVar("_ChunkT_co", covariant=True)
 _logger = logging.getLogger(__name__)
 
 
-class _StreamTimingInvocation(Protocol):
-    def _on_stream_chunk(self, chunk_at: float) -> None: ...
-
+class _StreamInvocation(Protocol):
     def activate(self) -> AbstractContextManager[None]: ...
 
 
-class _StreamingInvocation(_StreamTimingInvocation, Protocol):
+class _StreamTimingInvocation(Protocol):
+    def _on_stream_chunk(self, chunk_at: float) -> None: ...
+
+
+def _records_stream_telemetry(invocation: object) -> bool:
+    return bool(getattr(invocation, "_records_stream_telemetry", False))
+
+
+class _StreamingInvocation(_StreamInvocation, Protocol):
     def fail(self, error: Error | BaseException) -> None: ...
 
 
@@ -180,12 +192,12 @@ class SyncStreamWrapper(
     def __init__(
         self,
         stream: _SyncStream[ChunkT],
-        invocation: _StreamTimingInvocation | None = None,
+        invocation: _StreamInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if invocation is not None and hasattr(invocation, "_request_stream"):
+        if _records_stream_telemetry(invocation):
             setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
@@ -274,12 +286,16 @@ class SyncStreamWrapper(
                 raise
             invocation = self._self_invocation
             chunk_at = (
-                timeit.default_timer() if invocation is not None else None
+                timeit.default_timer()
+                if _records_stream_telemetry(invocation)
+                else None
             )
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if invocation is not None and chunk_at is not None:
-                invocation._on_stream_chunk(chunk_at)
+            if chunk_at is not None:
+                cast(_StreamTimingInvocation, invocation)._on_stream_chunk(
+                    chunk_at
+                )
             return chunk
 
 
@@ -308,12 +324,12 @@ class AsyncStreamWrapper(
     def __init__(
         self,
         stream: _AsyncStream[ChunkT],
-        invocation: _StreamTimingInvocation | None = None,
+        invocation: _StreamInvocation | None = None,
     ):
         super().__init__(stream)
         self._self_finalized = False
         self._self_invocation = invocation
-        if invocation is not None and hasattr(invocation, "_request_stream"):
+        if _records_stream_telemetry(invocation):
             setattr(invocation, "_request_stream", True)
         self._bind_stream(stream)
 
@@ -488,12 +504,16 @@ class AsyncStreamWrapper(
 
             invocation = self._self_invocation
             chunk_at = (
-                timeit.default_timer() if invocation is not None else None
+                timeit.default_timer()
+                if _records_stream_telemetry(invocation)
+                else None
             )
             self._process_chunk(chunk)
             # Record after _process_chunk so response.model is on the metrics.
-            if invocation is not None and chunk_at is not None:
-                invocation._on_stream_chunk(chunk_at)
+            if chunk_at is not None:
+                cast(_StreamTimingInvocation, invocation)._on_stream_chunk(
+                    chunk_at
+                )
             return chunk
 
 

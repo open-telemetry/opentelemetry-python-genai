@@ -359,6 +359,43 @@ class TelemetryHandlerMetricsTest(TestBase):
         (span,) = self.get_finished_spans()
         self.assertIs(span.attributes[GenAI.GEN_AI_REQUEST_STREAM], True)
 
+    def test_record_stream_chunk_is_noop_for_non_inference_operations(
+        self,
+    ) -> None:
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+        factories = {
+            "local_agent": lambda: handler.invoke_local_agent(
+                agent_name="agent"
+            ),
+            "remote_agent": lambda: handler.invoke_remote_agent(
+                "prov", agent_name="agent"
+            ),
+            "workflow": lambda: handler.workflow("flow"),
+            "tool": lambda: handler.tool("tool"),
+            "fetch_response": lambda: handler.fetch_response(
+                "prov", response_id="resp-1"
+            ),
+        }
+        for name, factory in factories.items():
+            with self.subTest(name):
+                invocation = factory()
+                invocation.record_stream_chunk()
+                invocation.record_stream_chunk()
+                invocation.stop()
+
+        metrics = self._harvest_metrics()
+        self.assertNotIn(
+            "gen_ai.client.operation.time_to_first_chunk", metrics
+        )
+        self.assertNotIn(
+            "gen_ai.client.operation.time_per_output_chunk", metrics
+        )
+        for span in self.get_finished_spans():
+            self.assertNotIn(GenAI.GEN_AI_REQUEST_STREAM, span.attributes)
+
     def test_no_streaming_timing_metrics_without_chunks(self) -> None:
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,

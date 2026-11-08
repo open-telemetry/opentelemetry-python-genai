@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import array
+import base64
 import functools
 import logging
 import sys
@@ -19,16 +21,35 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from agno.knowledge.document.base import Document
+    from agno.knowledge.embedder.base import Embedder
     from agno.knowledge.knowledge import Knowledge
     from agno.models.response import ToolExecution
     from agno.tools.function import FunctionCall, FunctionExecutionResult
+    from wrapt import BoundFunctionWrapper, FunctionWrapper
 
-from wrapt import register_post_import_hook, wrap_function_wrapper
+    _BoundFunctionWrapperBase = BoundFunctionWrapper[..., Any]
+    _FunctionWrapperBase = FunctionWrapper[..., Any]
+else:
+    from wrapt import (
+        BoundFunctionWrapper as _BoundFunctionWrapperBase,
+    )
+    from wrapt import (
+        FunctionWrapper as _FunctionWrapperBase,
+    )
 
+from wrapt import (
+    register_post_import_hook,
+    wrap_function_wrapper,
+    wrap_object,
+)
+
+from opentelemetry.context import attach, detach, get_current
 from opentelemetry.instrumentation.genai.agno.stream import (
     AgnoAgentStreamWrapper,
     AgnoWorkflowStreamWrapper,
@@ -41,6 +62,8 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     format_content,
     format_retrieval_document,
     prepare_tool_definitions,
+    resolve_embedder_provider,
+    safe_int,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.semconv._incubating.attributes.error_attributes import (
@@ -48,6 +71,7 @@ from opentelemetry.semconv._incubating.attributes.error_attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
+    EmbeddingInvocation,
     LocalAgentInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -66,7 +90,11 @@ from opentelemetry.util.genai.types import (
     TextPart,
     ToolCallResponsePart,
 )
-from opentelemetry.util.genai.utils import get_argument, object_to_any_value
+from opentelemetry.util.genai.utils import (
+    bind_arguments,
+    get_argument,
+    object_to_any_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +109,73 @@ _WORKFLOW_CLASS = "Workflow"
 _AGNO_KNOWLEDGE_MODULE = "agno.knowledge.knowledge"
 _KNOWLEDGE_CLASS = "Knowledge"
 
+_ACTIVE_WORKFLOW_RUN_IDS: set[str] = set()
+_KNOWN_EMBEDDERS: tuple[tuple[str, str], ...] = (
+    ("agno.knowledge.embedder.base", "Embedder"),
+    ("agno.knowledge.embedder.openai", "OpenAIEmbedder"),
+    ("agno.knowledge.embedder.azure_openai", "AzureOpenAIEmbedder"),
+    ("agno.knowledge.embedder.aws_bedrock", "AwsBedrockEmbedder"),
+    ("agno.knowledge.embedder.google", "GoogleEmbedder"),
+    ("agno.knowledge.embedder.google", "GeminiEmbedder"),
+    ("agno.knowledge.embedder.ollama", "OllamaEmbedder"),
+    ("agno.knowledge.embedder.mistral", "MistralEmbedder"),
+    ("agno.knowledge.embedder.cohere", "CohereEmbedder"),
+    ("agno.knowledge.embedder.fireworks", "FireworksEmbedder"),
+    ("agno.knowledge.embedder.jina", "JinaEmbedder"),
+    ("agno.knowledge.embedder.together", "TogetherEmbedder"),
+    ("agno.knowledge.embedder.voyageai", "VoyageAIEmbedder"),
+    ("agno.knowledge.embedder.fastembed", "FastEmbedEmbedder"),
+    (
+        "agno.knowledge.embedder.sentence_transformer",
+        "SentenceTransformerEmbedder",
+    ),
+    ("agno.knowledge.embedder.huggingface", "HuggingfaceCustomEmbedder"),
+    ("agno.knowledge.embedder.langdb", "LangDBEmbedder"),
+    ("agno.knowledge.embedder.nebius", "NebiusEmbedder"),
+    ("agno.knowledge.embedder.openai_like", "OpenAILikeEmbedder"),
+    ("agno.knowledge.embedder.vllm", "VLLMEmbedder"),
+)
+
+
+def _release_run_id(run_id: str | None) -> None:
+    if run_id:
+        _ACTIVE_WORKFLOW_RUN_IDS.discard(run_id)
+
 
 # wrapt has no unregister API for post-import hooks; monotonic generations
 # invalidate deferred hooks registered during prior instrumentation cycles.
 _instrumentation_generation: int = 0
 _is_instrumented: bool = False
+_in_async_embedding: ContextVar[bool] = ContextVar(
+    "_in_async_embedding", default=False
+)
+
+
+class _ContextPreservingBoundWrapper(_BoundFunctionWrapperBase):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._self_bind_context = (
+            get_current() if _in_async_embedding.get() else None
+        )
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        # Local embedders (e.g. FastEmbedEmbedder, SentenceTransformerEmbedder,
+        # VLLMEmbedder) implement async_get_embedding by passing
+        # self.get_embedding to loop.run_in_executor, which binds the method on
+        # the event-loop thread and invokes it on a worker thread without
+        # propagating contextvars. Only attach when bound inside an async
+        # embedder call and the worker thread has no active context of its own.
+        if self._self_bind_context is not None and not get_current():
+            token = attach(self._self_bind_context)
+            try:
+                return super().__call__(*args, **kwargs)
+            finally:
+                detach(token)
+        return super().__call__(*args, **kwargs)
+
+
+class _ContextPreservingFunctionWrapper(_FunctionWrapperBase):
+    __bound_function_wrapper__ = _ContextPreservingBoundWrapper
 
 
 def _safe_wrap_function(
@@ -93,6 +183,8 @@ def _safe_wrap_function(
     target_name: str,
     wrapper: Callable[..., Any],
     generation: int,
+    *,
+    preserve_bind_context: bool = False,
 ) -> None:
     """Safely wrap a method if it exists, deferring if module is not yet imported."""
 
@@ -109,7 +201,15 @@ def _safe_wrap_function(
             return
         if hasattr(curr, "__wrapped__"):
             return
-        wrap_function_wrapper(mod, target_name, wrapper)
+        if preserve_bind_context:
+            wrap_object(
+                mod,
+                target_name,
+                _ContextPreservingFunctionWrapper,
+                (wrapper,),
+            )
+        else:
+            wrap_function_wrapper(mod, target_name, wrapper)
 
     if target_module in sys.modules:
         _apply(sys.modules[target_module])
@@ -210,6 +310,24 @@ def patch_agent(handler: TelemetryHandler) -> None:
         _workflow_arun(handler, is_continue=True),
         current_generation,
     )
+    _safe_wrap_function(
+        _AGNO_WORKFLOW_MODULE,
+        f"{_WORKFLOW_CLASS}._aexecute",
+        _workflow_aexecute(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_WORKFLOW_MODULE,
+        f"{_WORKFLOW_CLASS}._aexecute_stream",
+        _workflow_aexecute_stream(handler),
+        current_generation,
+    )
+    _safe_wrap_function(
+        _AGNO_WORKFLOW_MODULE,
+        f"{_WORKFLOW_CLASS}._aexecute_workflow_agent",
+        _workflow_aexecute_workflow_agent(handler),
+        current_generation,
+    )
     # Knowledge.retrieve and aretrieve delegate to search and asearch, so wrapping
     # search/asearch avoids duplicate spans.
     _safe_wrap_function(
@@ -225,18 +343,41 @@ def patch_agent(handler: TelemetryHandler) -> None:
         current_generation,
     )
 
+    embedder_wrappers = [
+        (method_name, factory(handler))
+        for method_name, factory in _EMBEDDER_METHOD_FACTORIES
+    ]
+    for mod_name, cls_name in _KNOWN_EMBEDDERS:
+        for method_name, wrapper_fn in embedder_wrappers:
+            _safe_wrap_function(
+                mod_name,
+                f"{cls_name}.{method_name}",
+                wrapper_fn,
+                current_generation,
+                preserve_bind_context=not method_name.startswith("async_"),
+            )
+
 
 def unpatch_agent() -> None:
     """Remove patches from Agno class methods."""
     global _instrumentation_generation, _is_instrumented
     _instrumentation_generation += 1
     _is_instrumented = False
+    _ACTIVE_WORKFLOW_RUN_IDS.clear()
 
     def _safe_unwrap(target: Any, attr: str) -> None:
         try:
             unwrap(target, attr)
         except (AttributeError, ValueError):
             pass
+
+    for mod_name, cls_name in _KNOWN_EMBEDDERS:
+        if mod_name in sys.modules:
+            mod = sys.modules[mod_name]
+            cls = getattr(mod, cls_name, None)
+            if cls is not None:
+                for method_name, _ in _EMBEDDER_METHOD_FACTORIES:
+                    _safe_unwrap(cls, method_name)
 
     if _AGNO_MODULE in sys.modules:
         try:
@@ -266,7 +407,15 @@ def unpatch_agent() -> None:
         try:
             import agno.workflow.workflow
 
-            for attr in ("run", "arun", "continue_run", "acontinue_run"):
+            for attr in (
+                "run",
+                "arun",
+                "continue_run",
+                "acontinue_run",
+                "_aexecute",
+                "_aexecute_stream",
+                "_aexecute_workflow_agent",
+            ):
                 _safe_unwrap(agno.workflow.workflow.Workflow, attr)
         except ImportError:
             pass
@@ -278,6 +427,154 @@ def unpatch_agent() -> None:
                 _safe_unwrap(agno.knowledge.knowledge.Knowledge, attr)
         except ImportError:
             pass
+
+
+def _extract_embedder_model(embedder: Embedder) -> str | None:
+    model = (
+        getattr(embedder, "id", None)
+        or getattr(embedder, "model", None)
+        or getattr(embedder, "name", None)
+    )
+    return str(model) if model is not None else None
+
+
+def _extract_embedder_input_tokens(usage: Mapping[str, Any]) -> int | None:
+    for key in ("prompt_tokens", "input_tokens", "total_tokens"):
+        if (tok := safe_int(usage.get(key))) is not None:
+            return tok
+    return None
+
+
+def _start_embedding(
+    handler: TelemetryHandler,
+    instance: Embedder,
+) -> EmbeddingInvocation:
+    provider = resolve_embedder_provider(instance)
+    request_model = _extract_embedder_model(instance)
+    invocation = handler.embedding(
+        provider=provider,
+        request_model=request_model,
+    )
+    if encoding_format := getattr(instance, "encoding_format", None):
+        invocation.encoding_formats = [str(encoding_format)]
+    return invocation
+
+
+def _set_embedding_attributes(
+    invocation: EmbeddingInvocation,
+    instance: Embedder,
+    embedding: Sequence[float] | str | None,
+    usage: Mapping[str, Any] | None = None,
+) -> None:
+    if isinstance(embedding, str) and embedding:
+        try:
+            embedding = array.array("f", base64.b64decode(embedding))
+        except ValueError:
+            logger.debug(
+                "Failed to decode base64 embedding dimensions",
+                exc_info=True,
+            )
+            embedding = None
+
+    if embedding:
+        invocation.dimension_count = len(embedding)
+    else:
+        invocation.dimension_count = safe_int(instance.dimensions)
+
+    if isinstance(usage, Mapping):
+        invocation.input_tokens = _extract_embedder_input_tokens(usage)
+
+
+def _embedder_get_embedding(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[..., Sequence[float] | str],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Sequence[float] | str:
+        with _start_embedding(handler, instance) as invocation:
+            result = wrapped(*args, **kwargs)
+            _set_embedding_attributes(invocation, instance, result)
+            return result
+
+    return traced_method
+
+
+def _embedder_get_embedding_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    def traced_method(
+        wrapped: Callable[
+            ..., tuple[Sequence[float] | str, dict[str, Any] | None]
+        ],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Sequence[float] | str, dict[str, Any] | None]:
+        with _start_embedding(handler, instance) as invocation:
+            result = wrapped(*args, **kwargs)
+            embedding, usage = result
+            _set_embedding_attributes(invocation, instance, embedding, usage)
+            return result
+
+    return traced_method
+
+
+def _embedder_async_get_embedding(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[..., Awaitable[Sequence[float] | str]],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Sequence[float] | str:
+        with _start_embedding(handler, instance) as invocation:
+            token = _in_async_embedding.set(True)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _in_async_embedding.reset(token)
+            _set_embedding_attributes(invocation, instance, result)
+            return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
+def _embedder_async_get_embedding_and_usage(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    async def traced_method(
+        wrapped: Callable[
+            ..., Awaitable[tuple[Sequence[float] | str, dict[str, Any] | None]]
+        ],
+        instance: Embedder,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Sequence[float] | str, dict[str, Any] | None]:
+        with _start_embedding(handler, instance) as invocation:
+            token = _in_async_embedding.set(True)
+            try:
+                result = await wrapped(*args, **kwargs)
+            finally:
+                _in_async_embedding.reset(token)
+            embedding, usage = result
+            _set_embedding_attributes(invocation, instance, embedding, usage)
+            return result
+
+    return cast(Callable[..., Any], traced_method)
+
+
+_EMBEDDER_METHOD_FACTORIES: tuple[
+    tuple[str, Callable[[TelemetryHandler], Callable[..., Any]]], ...
+] = (
+    ("get_embedding", _embedder_get_embedding),
+    ("get_embedding_and_usage", _embedder_get_embedding_and_usage),
+    ("async_get_embedding", _embedder_async_get_embedding),
+    ("async_get_embedding_and_usage", _embedder_async_get_embedding_and_usage),
+)
 
 
 def _extract_input_content(input_val: Any) -> str:
@@ -664,16 +961,19 @@ def _agent_run(
         )
         try:
             result = wrapped(*args, **kwargs)
+            if isinstance(result, Iterator):
+                return AgnoAgentStreamWrapper(
+                    result,
+                    invocation,
+                    capture_content,
+                )
+
+            _set_invocation_output(invocation, result, capture_content)
+            invocation.stop()
+            return result
         except BaseException as error:
             invocation.fail(error)
             raise
-
-        if isinstance(result, Iterator):
-            return AgnoAgentStreamWrapper(result, invocation, capture_content)
-
-        _set_invocation_output(invocation, result, capture_content)
-        invocation.stop()
-        return result
 
     return traced_method
 
@@ -717,7 +1017,9 @@ def _agent_arun(
                 is_continue=is_continue,
             )
             return AsyncAgnoAgentStreamWrapper(
-                result, invocation, capture_content
+                result,
+                invocation,
+                capture_content,
             )
 
         if isinstance(result, Awaitable):
@@ -738,7 +1040,9 @@ def _agent_arun(
                     response: object = await awaitable
                     if isinstance(response, AsyncIterator):
                         return AsyncAgnoAgentStreamWrapper(
-                            response, invocation, capture_content
+                            response,
+                            invocation,
+                            capture_content,
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
@@ -832,7 +1136,7 @@ def _tool_call_aexecute(
             raise
         return _handle_tool_result(invocation, instance, result)
 
-    return cast(Callable[..., Any], traced_method)
+    return traced_method
 
 
 def _start_workflow_invocation(
@@ -887,20 +1191,52 @@ def _workflow_run(
         )
         try:
             result = wrapped(*args, **kwargs)
+            if isinstance(result, Iterator):
+                return AgnoWorkflowStreamWrapper(
+                    result,
+                    invocation,
+                    capture_content,
+                )
+
+            _set_invocation_output(invocation, result, capture_content)
+            invocation.stop()
+            return result
         except BaseException as error:
             invocation.fail(error)
             raise
 
-        if isinstance(result, Iterator):
-            return AgnoWorkflowStreamWrapper(
-                result, invocation, capture_content
-            )
-
-        _set_invocation_output(invocation, result, capture_content)
-        invocation.stop()
-        return result
-
     return traced_method
+
+
+def _is_background_requested(
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> bool:
+    return bool(get_argument("background", wrapped, args, kwargs))
+
+
+def _extract_workflow_run_id(
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> str | None:
+    try:
+        bound = bind_arguments(wrapped, args, kwargs)
+    except Exception:
+        bound = kwargs
+    if run_id := bound.get("run_id"):
+        return str(run_id)
+    if run_context := bound.get("run_context"):
+        if run_id := getattr(run_context, "run_id", None):
+            return str(run_id)
+    if run_resp := bound.get("workflow_run_response"):
+        if run_id := getattr(run_resp, "run_id", None):
+            return str(run_id)
+    if run_resp := bound.get("run_response"):
+        if run_id := getattr(run_resp, "run_id", None):
+            return str(run_id)
+    return None
 
 
 def _workflow_arun(
@@ -916,9 +1252,27 @@ def _workflow_arun(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
+        # If background execution is requested, skip wrapping here.
+        # Agno returns a pending placeholder immediately and runs execution
+        # in a background task via _aexecute / _aexecute_stream.
+        if not is_continue and _is_background_requested(wrapped, args, kwargs):
+            return wrapped(*args, **kwargs)
+
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if not run_id:
+            # Matches what agno does internally when no run id is set.
+            run_id = str(uuid4())
+            # Do not inject run_id on continue runs; Agno requires the caller
+            # to supply run_response or run_id and fails validation otherwise.
+            if not is_continue:
+                kwargs["run_id"] = run_id
+
+        _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
+
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
+            _release_run_id(run_id)
             invocation = _start_workflow_invocation(
                 handler,
                 instance,
@@ -942,7 +1296,10 @@ def _workflow_arun(
                 is_continue=is_continue,
             )
             return AsyncAgnoWorkflowStreamWrapper(
-                result, invocation, capture_content
+                result,
+                invocation,
+                capture_content,
+                on_close=functools.partial(_release_run_id, run_id),
             )
 
         if isinstance(result, Awaitable):
@@ -958,12 +1315,19 @@ def _workflow_arun(
                     wrapped=wrapped,
                     is_continue=is_continue,
                 )
+                discard_on_exit = True
                 try:
                     awaitable = cast(Awaitable[object], result)
                     response: object = await awaitable
                     if isinstance(response, AsyncIterator):
+                        discard_on_exit = False
                         return AsyncAgnoWorkflowStreamWrapper(
-                            response, invocation, capture_content
+                            response,
+                            invocation,
+                            capture_content,
+                            on_close=functools.partial(
+                                _release_run_id, run_id
+                            ),
                         )
                     _set_invocation_output(
                         invocation, response, capture_content
@@ -973,21 +1337,250 @@ def _workflow_arun(
                 except BaseException as error:
                     invocation.fail(error)
                     raise
+                finally:
+                    if discard_on_exit:
+                        _release_run_id(run_id)
 
             return _await_result()
 
-        invocation = _start_workflow_invocation(
-            handler,
-            instance,
-            args,
-            kwargs,
-            capture_content,
-            wrapped=wrapped,
-            is_continue=is_continue,
+        try:
+            invocation = _start_workflow_invocation(
+                handler,
+                instance,
+                args,
+                kwargs,
+                capture_content,
+                wrapped=wrapped,
+                is_continue=is_continue,
+            )
+            _set_invocation_output(invocation, result, capture_content)
+            invocation.stop()
+            return result
+        finally:
+            _release_run_id(run_id)
+
+    return traced_method
+
+
+def _start_background_workflow_invocation(
+    handler: TelemetryHandler,
+    instance: Any,
+    wrapped: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    capture_content: bool,
+) -> WorkflowInvocation:
+    bound_args = bind_arguments(wrapped, args, kwargs)
+    run_resp = bound_args.get("workflow_run_response")
+    session_obj = bound_args.get("session")
+    session_id_val = (
+        bound_args.get("session_id")
+        or getattr(run_resp, "session_id", None)
+        or getattr(session_obj, "session_id", None)
+    )
+    session_id = (
+        str(session_id_val)
+        if session_id_val is not None
+        else extract_session_id(instance, args, kwargs, wrapped=wrapped)
+    )
+    exec_input = bound_args.get("execution_input")
+    input_val = getattr(exec_input, "input", None) or getattr(
+        run_resp, "input", None
+    )
+
+    workflow_name = getattr(instance, "name", None)
+    invocation = handler.workflow(
+        name=workflow_name,
+        conversation_id=session_id,
+    )
+
+    if capture_content and input_val is not None:
+        content_str = _extract_input_content(input_val)
+        if content_str:
+            invocation.input_messages = [
+                InputMessage(
+                    role=Role.USER.value,
+                    parts=[TextPart(content=content_str)],
+                )
+            ]
+
+    return invocation
+
+
+def _workflow_aexecute(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
+    async def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if run_id and run_id in _ACTIVE_WORKFLOW_RUN_IDS:
+            return await wrapped(*args, **kwargs)
+
+        if run_id:
+            _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
+        invocation = _start_background_workflow_invocation(
+            handler, instance, wrapped, args, kwargs, capture_content
         )
-        _set_invocation_output(invocation, result, capture_content)
-        invocation.stop()
-        return result
+        try:
+            result = await wrapped(*args, **kwargs)
+            _set_invocation_output(invocation, result, capture_content)
+            invocation.stop()
+            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        finally:
+            _release_run_id(run_id)
+
+    return traced_method
+
+
+def _workflow_aexecute_stream(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if run_id and run_id in _ACTIVE_WORKFLOW_RUN_IDS:
+            return wrapped(*args, **kwargs)
+
+        if run_id:
+            _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
+        invocation = _start_background_workflow_invocation(
+            handler, instance, wrapped, args, kwargs, capture_content
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+            if isinstance(result, AsyncIterator):
+                return AsyncAgnoWorkflowStreamWrapper(
+                    result,
+                    invocation,
+                    capture_content,
+                    on_close=functools.partial(_release_run_id, run_id),
+                )
+            _release_run_id(run_id)
+            _set_invocation_output(invocation, result, capture_content)
+            invocation.stop()
+            return result
+        except BaseException as error:
+            _release_run_id(run_id)
+            invocation.fail(error)
+            raise
+
+    return traced_method
+
+
+def _workflow_aexecute_workflow_agent(
+    handler: TelemetryHandler,
+) -> Callable[..., Any]:
+    capture_content = handler.should_capture_content()
+
+    def traced_method(
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        run_id = _extract_workflow_run_id(wrapped, args, kwargs)
+        if run_id and run_id in _ACTIVE_WORKFLOW_RUN_IDS:
+            return wrapped(*args, **kwargs)
+
+        bound_args = bind_arguments(wrapped, args, kwargs)
+        user_input = bound_args.get("user_input")
+        run_context = bound_args.get("run_context")
+        session_id = (
+            str(sid)
+            if (sid := getattr(run_context, "session_id", None)) is not None
+            else extract_session_id(instance, args, kwargs, wrapped=wrapped)
+        )
+
+        workflow_name = getattr(instance, "name", None)
+        invocation = handler.workflow(
+            name=workflow_name,
+            conversation_id=session_id,
+        )
+
+        if capture_content and user_input is not None:
+            content_str = _extract_input_content(user_input)
+            if content_str:
+                invocation.input_messages = [
+                    InputMessage(
+                        role=Role.USER.value,
+                        parts=[TextPart(content=content_str)],
+                    )
+                ]
+
+        if run_id:
+            _ACTIVE_WORKFLOW_RUN_IDS.add(run_id)
+
+        try:
+            result = wrapped(*args, **kwargs)
+        except BaseException as error:
+            _release_run_id(run_id)
+            invocation.fail(error)
+            raise
+
+        if isinstance(result, AsyncIterator):
+            return AsyncAgnoWorkflowStreamWrapper(
+                result,
+                invocation,
+                capture_content,
+                on_close=functools.partial(_release_run_id, run_id),
+            )
+
+        if isinstance(result, Awaitable):
+
+            @functools.wraps(wrapped)
+            async def _await_result() -> object:
+                discard_on_exit = True
+                try:
+                    awaitable = cast(Awaitable[object], result)
+                    response: object = await awaitable
+                    if isinstance(response, AsyncIterator):
+                        discard_on_exit = False
+                        return AsyncAgnoWorkflowStreamWrapper(
+                            response,
+                            invocation,
+                            capture_content,
+                            on_close=functools.partial(
+                                _release_run_id, run_id
+                            ),
+                        )
+                    _set_invocation_output(
+                        invocation, response, capture_content
+                    )
+                    invocation.stop()
+                    return response
+                except BaseException as error:
+                    invocation.fail(error)
+                    raise
+                finally:
+                    if discard_on_exit:
+                        _release_run_id(run_id)
+
+            return _await_result()
+
+        try:
+            _set_invocation_output(invocation, result, capture_content)
+            invocation.stop()
+            return result
+        except BaseException as error:
+            invocation.fail(error)
+            raise
+        finally:
+            _release_run_id(run_id)
 
     return traced_method
 
@@ -1113,4 +1706,4 @@ def _knowledge_asearch(
         invocation.stop()
         return result
 
-    return cast(Callable[..., Any], traced_method)
+    return traced_method

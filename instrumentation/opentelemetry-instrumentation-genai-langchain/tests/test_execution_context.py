@@ -278,17 +278,7 @@ def _child(child: ReadableSpan, parent: ReadableSpan) -> None:
 def _assert_cancellation(
     error: BaseException, original: BaseException
 ) -> None:
-    # langchain-core awaits a tool or stream body in a task of its own. On
-    # Python 3.10 a task re-raises its cancellation as a new CancelledError
-    # chained to the original; 3.11 re-raises the original (bpo-45390).
-    if sys.version_info >= (3, 11):
-        assert error is original
-        return
-    assert isinstance(error, asyncio.CancelledError)
-    cause: BaseException | None = error
-    while cause is not None and cause is not original:
-        cause = cause.__context__
-    assert cause is original
+    assert error is original
 
 
 @pytest.mark.asyncio
@@ -654,7 +644,8 @@ async def test_task_cancellation_finalizes_tool_once(
             await asyncio.gather(task, return_exceptions=True)
 
     assert handler._invocation_manager._invocations == {}
-    assert other_errors == []
+    # langchain-core >= 1.7.5 reports the cancellation to callbacks itself.
+    assert other_errors in ([], errors)
     handler.on_tool_error(errors[0], run_id=run_id)
     (tool_span,) = _spans(span_exporter, _LC_SCOPE)
     (http,) = _spans(span_exporter, _HTTP_SCOPE)
