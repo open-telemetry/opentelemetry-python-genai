@@ -1,0 +1,1 @@
+The inference span is no longer current in the caller's context while a streamed completion is unconsumed.

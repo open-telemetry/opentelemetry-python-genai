@@ -53,13 +53,16 @@ def test_custom_hook_is_called(
     assert kwargs["outputs"]
     assert kwargs["span"] is not None
 
-    # Content goes to the hook only — not to span attributes or log records
+    # Content goes to the hook only - not to span or log record attributes
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span_attrs = spans[0].attributes or {}
     assert "gen_ai.input.messages" not in span_attrs
     assert "gen_ai.output.messages" not in span_attrs
-    assert log_exporter.get_finished_logs() == ()
+    (log,) = log_exporter.get_finished_logs()
+    log_attrs = log.log_record.attributes or {}
+    assert "gen_ai.input.messages" not in log_attrs
+    assert "gen_ai.output.messages" not in log_attrs
 
 
 @patch.dict(

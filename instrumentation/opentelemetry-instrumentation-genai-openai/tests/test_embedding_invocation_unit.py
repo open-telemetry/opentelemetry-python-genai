@@ -35,6 +35,9 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
+from opentelemetry.semconv._incubating.metrics import (
+    gen_ai_metrics as GenAIMetrics,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 
 
@@ -215,6 +218,82 @@ def test_response_derived_dimension_count_lands_on_span(
                         GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
                         not in point.attributes
                     )
+
+
+@pytest.mark.parametrize(
+    "embedding",
+    ["AQID", "AQI"],
+    ids=["unaligned-floats", "invalid-base64"],
+)
+@pytest.mark.parametrize("dimensions", [None, 256])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_invalid_base64_embedding_preserves_token_usage(
+    handler,
+    span_exporter,
+    metric_reader,
+    caplog,
+    embedding,
+    dimensions,
+    is_async,
+):
+    response = _fake_embedding_response()
+    response.data[0].embedding = embedding
+    kwargs: dict[str, Any] = {"model": "m", "encoding_format": "base64"}
+    if dimensions is not None:
+        kwargs["dimensions"] = dimensions
+    caplog.set_level(
+        "DEBUG",
+        logger="opentelemetry.instrumentation.genai.openai.patch",
+    )
+
+    if is_async:
+
+        async def wrapped(*_args, **_kwargs):
+            return response
+
+        result = asyncio.run(
+            async_embeddings_create(handler)(
+                wrapped, _make_client(), (), kwargs
+            )
+        )
+    else:
+
+        def wrapped(*_args, **_kwargs):
+            return response
+
+        result = embeddings_create(handler)(
+            wrapped, _make_client(), (), kwargs
+        )
+
+    assert result is response
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
+        == response.usage.prompt_tokens
+    )
+    if dimensions is None:
+        assert (
+            GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT
+            not in span.attributes
+        )
+    else:
+        assert (
+            span.attributes[GenAIAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT]
+            == dimensions
+        )
+    metrics = metric_reader.get_metrics_data().resource_metrics
+    token_metric = next(
+        metric
+        for metric in metrics[0].scope_metrics[0].metrics
+        if metric.name == GenAIMetrics.GEN_AI_CLIENT_TOKEN_USAGE
+    )
+    (point,) = token_metric.data.data_points
+    assert (
+        point.attributes[GenAIAttributes.GEN_AI_TOKEN_TYPE]
+        == GenAIAttributes.GenAiTokenTypeValues.INPUT.value
+    )
+    assert point.sum == response.usage.prompt_tokens
+    assert "Failed to decode base64 embedding dimensions" in caplog.text
 
 
 def test_extraction_error_is_swallowed_and_does_not_break_wrapped_call(

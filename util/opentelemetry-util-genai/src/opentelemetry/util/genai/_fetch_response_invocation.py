@@ -105,6 +105,8 @@ class FetchResponseInvocation(GenAIInvocation):
     failed.
     """
 
+    _exception_event_name = "gen_ai.client.fetch_response.exception"
+
     def __init__(
         self,
         tracer: Tracer,
@@ -435,10 +437,6 @@ class SuppressedFetchResponseInvocation(FetchResponseInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
         )
-
-    def _on_stream_chunk(self, chunk_at: float) -> None:
-        super()._on_stream_chunk(chunk_at)
-        self._data.request_stream = True
 
     def publish_to_context(self, data: FetchResponseData) -> None:
         """Publish invocation attributes to the active fetch response context."""
