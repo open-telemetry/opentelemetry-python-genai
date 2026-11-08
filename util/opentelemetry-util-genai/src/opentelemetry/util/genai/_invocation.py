@@ -10,11 +10,9 @@ from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
 from dataclasses import asdict, dataclass, field, fields
 from types import TracebackType
-from typing import Any, TypeAlias, cast
+from typing import Any, ClassVar, Self, TypeAlias, cast
 
-from typing_extensions import Self
-
-from opentelemetry._logs import Logger, LogRecord
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.context import (
     Context,
     attach,
@@ -192,6 +190,12 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
     workflow, tool) rather than constructing invocations directly.
     """
 
+    _records_stream_telemetry: ClassVar[bool] = False
+    """Whether stream wrappers mark this invocation as streamed and record chunk timing."""
+
+    _exception_event_name: ClassVar[str | None] = None
+    """Name of the event emitted when the operation fails with an exception, if any."""
+
     def __init__(
         self,
         # Individual components instead of TelemetryHandler to avoid a circular
@@ -285,13 +289,6 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
             self._attach_to_context = False
             self._context_token = None
         self._monotonic_start_s: float = timeit.default_timer()
-        # Streaming state, set when the invocation is handed to a stream
-        # wrapper. ``_request_stream`` marks the request as streamed
-        # (gen_ai.request.stream); the timing fields are populated by
-        # ``_on_stream_chunk`` as each chunk arrives.
-        self._request_stream: bool | None = None
-        self._ttfc_seconds: float | None = None
-        self._stream_last_chunk_at: float | None = None
         self._finished: bool = False
 
     @property
@@ -364,48 +361,13 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         return {}
 
     def record_stream_chunk(self) -> None:
-        """Mark the request as streamed and record one output chunk arriving."""
-        if self._finished:
-            return
-        self._request_stream = True
-        self._on_stream_chunk(timeit.default_timer())
+        """Record one output chunk arriving.
 
-    def _on_stream_chunk(self, chunk_at: float) -> None:
-        """Record streaming timing for one output chunk as it arrives.
-
-        The first chunk's delta from the invocation start is the
-        time-to-first-chunk; each later chunk's delta from the previous one is
-        the inter-chunk gap. Called by the stream wrapper for any invocation
-        type handed to it.
+        .. deprecated:: 1.4b0
+            Only ``InferenceInvocation`` records stream chunks. On other
+            invocation types this is a no-op, since semconv defines chunk
+            timing for inference only.
         """
-        last_chunk_at = (
-            self._stream_last_chunk_at
-            if self._stream_last_chunk_at is not None
-            else self._monotonic_start_s
-        )
-
-        self._stream_last_chunk_at = chunk_at
-        delta = max(chunk_at - last_chunk_at, 0.0)
-        is_first_chunk = self._ttfc_seconds is None
-        if is_first_chunk:
-            self._ttfc_seconds = delta
-
-        if not self._start_span:
-            return
-
-        attributes = self._get_metric_attributes()
-        if is_first_chunk:
-            self._instruments.time_to_first_chunk.record(
-                delta,
-                attributes=attributes,
-                context=self._span_context,
-            )
-        else:
-            self._instruments.time_per_output_chunk.record(
-                delta,
-                attributes=attributes,
-                context=self._span_context,
-            )
 
     def _record_client_metrics(self) -> None:
         """Record gen_ai.client.operation.duration and gen_ai.client.token.usage."""
@@ -476,6 +438,8 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         self._finished = True
         try:
             self._apply_finish(error)
+            if error is not None:
+                self._emit_exception_event(error)
         finally:
             self.suspend()
             self.span.end()
@@ -483,6 +447,35 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
                 self._span_context = set_value(
                     self._context_key, None, context=self._span_context
                 )
+
+    def _emit_exception_event(self, error: Error) -> None:
+        """Emit the invocation's exception event for a raised exception.
+
+        Only invocations with an ``_exception_event_name`` report it. Errors
+        built without an exception have nothing to report, and, as in the SDK's
+        ``use_span``, a ``BaseException`` that is not an ``Exception`` (such as
+        cancellation) is not treated as one. The SDK fills ``exception.type``,
+        ``exception.message`` and ``exception.stacktrace`` from the exception.
+
+        For more details, see the semantic convention documentation:
+        https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-exceptions.md
+        """
+        event_name = self._exception_event_name
+        exception = error.exception
+        if event_name is None or not isinstance(exception, Exception):
+            return
+        if not self._logger.enabled(
+            context=self._span_context,
+            severity_number=SeverityNumber.WARN,
+            event_name=event_name,
+        ):
+            return
+        self._logger.emit(
+            event_name=event_name,
+            exception=exception,
+            context=self._span_context,
+            severity_number=SeverityNumber.WARN,
+        )
 
     def stop(self) -> None:
         """Finalize the invocation successfully and end its span."""

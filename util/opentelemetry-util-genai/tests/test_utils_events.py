@@ -1,11 +1,13 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import os
 import unittest
 from unittest.mock import patch
 
+from opentelemetry._logs import SeverityNumber
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -19,11 +21,15 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.semconv.attributes import (
+    error_attributes,
+    exception_attributes,
+)
 from opentelemetry.util.genai._inference_invocation import (
     InferenceInvocation,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.stream import AbandonedStreamError
 from opentelemetry.util.genai.types import ContentCapturingMode, Error
 
 from .test_utils import (
@@ -35,6 +41,16 @@ from .test_utils import (
     _normalize_to_dict,
     _normalize_to_list,
 )
+
+INFERENCE_EXCEPTION_EVENT = "gen_ai.client.inference.exception"
+
+
+class RateLimitError(Exception):
+    pass
+
+
+def _raise_rate_limit():
+    raise RateLimitError("rate limit reached")
 
 
 class TestTelemetryHandlerEvents(unittest.TestCase):
@@ -63,7 +79,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event(self):
@@ -91,10 +106,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         log_record = logs[0].log_record
 
-        # Verify event name
+        # Verify event name and severity
         self.assertEqual(
             log_record.event_name, "gen_ai.client.inference.operation.details"
         )
+        self.assertEqual(log_record.severity_number, SeverityNumber.DEBUG)
 
         # Verify event attributes
         attrs = log_record.attributes
@@ -155,7 +171,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_and_span(self):
@@ -218,7 +233,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emits_llm_event_with_error(self):
@@ -258,37 +272,11 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
-        },
-    )
-    def test_does_not_emit_llm_event_when_emit_event_false(self):
-        handler = TelemetryHandler(
-            tracer_provider=self.tracer_provider,
-            logger_provider=self.logger_provider,
-        )
-        message = _create_input_message("emit false test")
-        chat_generation = _create_output_message("emit false response")
-
-        invocation = handler.inference(
-            "test-provider", request_model="emit-false-model"
-        )
-        invocation.input_messages = [message]
-        invocation.output_messages = [chat_generation]
-        invocation.stop()
-
-        # Check no event was emitted
-        logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
-
-    @patch.dict(
-        os.environ,
-        {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
         },
     )
-    def test_does_not_emit_llm_event_by_default_for_no_content(self):
-        """Test that event is not emitted by default when content_capturing is NO_CONTENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+    def test_emits_llm_event_without_messages_for_no_content(self):
+        """Test that event is emitted but messages are omitted when content_capturing is NO_CONTENT."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -302,9 +290,14 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         ]
         invocation.stop()
 
-        # Check that no event was emitted (NO_CONTENT defaults to False)
         logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
+        self.assertEqual(len(logs), 1)
+        log_record = logs[0].log_record
+        self.assertEqual(
+            log_record.event_name, "gen_ai.client.inference.operation.details"
+        )
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, log_record.attributes)
 
     @patch.dict(
         os.environ,
@@ -312,8 +305,8 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
         },
     )
-    def test_does_not_emit_llm_event_by_default_for_span_only(self):
-        """Test that event is not emitted by default when content_capturing is SPAN_ONLY and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+    def test_emits_llm_event_without_messages_for_span_only(self):
+        """Test that event is emitted but messages are on span only when content_capturing is SPAN_ONLY."""
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -327,9 +320,18 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         ]
         invocation.stop()
 
-        # Check that no event was emitted (SPAN_ONLY defaults to False)
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+        self.assertIn(GenAI.GEN_AI_INPUT_MESSAGES, span_attrs)
+
         logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
+        self.assertEqual(len(logs), 1)
+        log_record = logs[0].log_record
+        self.assertEqual(
+            log_record.event_name, "gen_ai.client.inference.operation.details"
+        )
+        self.assertNotIn(GenAI.GEN_AI_INPUT_MESSAGES, log_record.attributes)
+        self.assertNotIn(GenAI.GEN_AI_OUTPUT_MESSAGES, log_record.attributes)
 
     @patch.dict(
         os.environ,
@@ -366,7 +368,7 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         },
     )
     def test_emits_llm_event_by_default_for_span_and_event(self):
-        """Test that event is emitted by default when content_capturing is SPAN_AND_EVENT and OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT is not set."""
+        """Test that event is emitted when content_capturing is SPAN_AND_EVENT."""
         message = _create_input_message("span and event test")
         chat_generation = _create_output_message("span and event response")
         system_instruction = _create_system_instruction("System prompt")
@@ -401,7 +403,6 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         os.environ,
         {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true",
         },
     )
     def test_emit_event_determined_at_construction_time(self):
@@ -417,23 +418,56 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
 
         # Changing os.environ after construction should have no effect
         with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false"}
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"
+            },
         ):
             invocation.stop()
 
         logs = self.log_exporter.get_finished_logs()
         self.assertEqual(len(logs), 1)
 
+    def test_inference_invocation_derives_emit_event_from_logger_enabled(
+        self,
+    ):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger_enabled = self.logger_provider.get_logger("test-enabled")
+        logger_enabled.enabled = unittest.mock.MagicMock(return_value=True)
+
+        inv_enabled = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger_enabled,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+        )
+        self.assertTrue(inv_enabled._emit_event)
+
+        logger_disabled = self.logger_provider.get_logger("test-disabled")
+        logger_disabled.enabled = unittest.mock.MagicMock(return_value=False)
+
+        inv_disabled = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger_disabled,
+            handler._completion_hook,
+            provider="test-provider",
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
+        )
+        self.assertFalse(inv_disabled._emit_event)
+
     @patch.dict(
         os.environ,
         {
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
-            "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
         },
     )
-    def test_emit_event_disabled_at_construction_time_not_affected_by_env_change(
-        self,
-    ):
+    def test_emits_llm_event_with_debug_severity(self):
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
@@ -441,41 +475,276 @@ class TestTelemetryHandlerEvents(unittest.TestCase):
         invocation = handler.inference(
             "test-provider", request_model="event-model"
         )
-        invocation.input_messages = [_create_input_message("test")]
-        invocation.output_messages = [_create_output_message("response")]
-
-        # Changing os.environ after construction should not cause event emission
-        with patch.dict(
-            os.environ, {"OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "true"}
-        ):
-            invocation.stop()
+        invocation.stop()
 
         logs = self.log_exporter.get_finished_logs()
-        self.assertEqual(len(logs), 0)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(
+            logs[0].log_record.severity_number, SeverityNumber.DEBUG
+        )
 
-    def test_inference_invocation_derives_emit_event_from_content_capturing_mode(
-        self,
-    ):
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        },
+    )
+    def test_event_not_emitted_when_logger_disabled(self):
         handler = TelemetryHandler(
             tracer_provider=self.tracer_provider,
             logger_provider=self.logger_provider,
         )
-        inv_enabled = InferenceInvocation(
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=False)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
             self.tracer_provider.get_tracer("test"),
             handler._instruments,
-            self.logger_provider.get_logger("test"),
+            logger,
             handler._completion_hook,
             provider="test-provider",
             content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
         )
-        self.assertTrue(inv_enabled._emit_event)
+        inv.stop()
 
-        inv_disabled = InferenceInvocation(
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 0)
+        enabled_mock.assert_called_once()
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(
+            kwargs.get("event_name"),
+            "gen_ai.client.inference.operation.details",
+        )
+        self.assertEqual(
+            kwargs.get("severity_number"),
+            SeverityNumber.DEBUG,
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        },
+    )
+    def test_event_emitted_when_logger_enabled(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=True)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
             self.tracer_provider.get_tracer("test"),
             handler._instruments,
-            self.logger_provider.get_logger("test"),
+            logger,
             handler._completion_hook,
             provider="test-provider",
-            content_capturing_mode=ContentCapturingMode.NO_CONTENT,
+            content_capturing_mode=ContentCapturingMode.EVENT_ONLY,
         )
-        self.assertFalse(inv_disabled._emit_event)
+        inv.stop()
+
+        logs = self.log_exporter.get_finished_logs()
+        self.assertEqual(len(logs), 1)
+        enabled_mock.assert_called_once()
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(
+            kwargs.get("event_name"),
+            "gen_ai.client.inference.operation.details",
+        )
+        self.assertEqual(
+            kwargs.get("severity_number"),
+            SeverityNumber.DEBUG,
+        )
+
+    def _exception_events(self, event_name=INFERENCE_EXCEPTION_EVENT):
+        return [
+            log.log_record
+            for log in self.log_exporter.get_finished_logs()
+            if log.log_record.event_name == event_name
+        ]
+
+    def _any_exception_events(self):
+        return [
+            log.log_record
+            for log in self.log_exporter.get_finished_logs()
+            if (log.log_record.event_name or "").endswith(".exception")
+        ]
+
+    def test_failed_operation_emits_its_exception_event(self):
+        handler = self.telemetry_handler
+        operations = {
+            "inference": (
+                lambda: handler.inference("provider"),
+                "gen_ai.client.inference.exception",
+            ),
+            "embedding": (
+                lambda: handler.embedding("provider"),
+                "gen_ai.client.embeddings.exception",
+            ),
+            "retrieval": (
+                lambda: handler.retrieval(provider="provider"),
+                "gen_ai.client.operation.exception",
+            ),
+            "fetch_response": (
+                lambda: handler.fetch_response(
+                    "provider", response_id="resp_1"
+                ),
+                "gen_ai.client.fetch_response.exception",
+            ),
+            "invoke_remote_agent": (
+                lambda: handler.invoke_remote_agent("provider"),
+                "gen_ai.client.invoke_agent.exception",
+            ),
+            "tool": (
+                lambda: handler.tool("get_weather"),
+                "gen_ai.execute_tool.exception",
+            ),
+            "invoke_local_agent": (
+                lambda: handler.invoke_local_agent(),
+                "gen_ai.invoke_agent.exception",
+            ),
+        }
+        for name, (start, event_name) in operations.items():
+            with self.subTest(operation=name):
+                self.span_exporter.clear()
+                self.log_exporter.clear()
+                with self.assertRaises(RateLimitError):
+                    with start():
+                        _raise_rate_limit()
+
+                (event,) = self._any_exception_events()
+                self.assertEqual(event.event_name, event_name)
+                span = _get_single_span(self.span_exporter)
+                self.assertEqual(event.severity_number, SeverityNumber.WARN)
+                self.assertEqual(event.trace_id, span.context.trace_id)
+                self.assertEqual(event.span_id, span.context.span_id)
+                self.assertEqual(
+                    event.attributes[exception_attributes.EXCEPTION_TYPE],
+                    f"{__name__}.RateLimitError",
+                )
+                self.assertEqual(
+                    event.attributes[exception_attributes.EXCEPTION_MESSAGE],
+                    "rate limit reached",
+                )
+                stacktrace = event.attributes[
+                    exception_attributes.EXCEPTION_STACKTRACE
+                ]
+                self.assertIn("in _raise_rate_limit", stacktrace)
+                self.assertTrue(
+                    stacktrace.endswith("RateLimitError: rate limit reached\n")
+                )
+
+    def test_failed_workflow_emits_no_exception_event(self):
+        with self.assertRaises(RateLimitError):
+            with self.telemetry_handler.workflow("workflow"):
+                _raise_rate_limit()
+
+        self.assertEqual(self._any_exception_events(), [])
+
+    def test_no_exception_event_without_a_raised_exception(self):
+        failures = {
+            "success": None,
+            "error_without_exception": Error(
+                type="response.failed", message="server error"
+            ),
+            "cancelled": asyncio.CancelledError(),
+            "keyboard_interrupt": KeyboardInterrupt(),
+            "generator_exit": GeneratorExit(),
+        }
+        for name, error in failures.items():
+            with self.subTest(failure=name):
+                self.log_exporter.clear()
+                invocation = self.telemetry_handler.inference("provider")
+                if error is None:
+                    invocation.stop()
+                else:
+                    invocation.fail(error)
+
+                self.assertEqual(self._any_exception_events(), [])
+
+    def test_abandoned_stream_emits_exception_event(self):
+        invocation = self.telemetry_handler.inference("provider")
+        invocation.fail(AbandonedStreamError())
+
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_TYPE],
+            "opentelemetry.util.genai.stream.AbandonedStreamError",
+        )
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_MESSAGE],
+            "abandoned stream",
+        )
+
+    def test_exception_event_type_is_not_the_resolved_error_type(self):
+        invocation = self.telemetry_handler.inference(
+            "provider", error_type_resolver=lambda _: "rate_limited"
+        )
+        invocation.fail(RateLimitError("rate limit reached"))
+
+        span = _get_single_span(self.span_exporter)
+        self.assertEqual(
+            span.attributes[error_attributes.ERROR_TYPE], "rate_limited"
+        )
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_TYPE],
+            f"{__name__}.RateLimitError",
+        )
+
+    def test_exception_event_for_builtin_exception_not_raised(self):
+        invocation = self.telemetry_handler.inference("provider")
+        invocation.fail(ValueError("bad request"))
+
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_TYPE],
+            "ValueError",
+        )
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_STACKTRACE],
+            "ValueError: bad request\n",
+        )
+
+    def test_suppressed_inference_emits_no_exception_event(self):
+        with self.telemetry_handler.inference("framework"):
+            nested = self.telemetry_handler.inference("provider")
+            nested.fail(RateLimitError("rate limit reached"))
+
+        self.assertEqual(self._any_exception_events(), [])
+
+    def test_failing_twice_emits_one_exception_event(self):
+        invocation = self.telemetry_handler.inference("provider")
+        invocation.fail(RateLimitError("first"))
+        invocation.fail(RateLimitError("second"))
+
+        (event,) = self._exception_events()
+        self.assertEqual(
+            event.attributes[exception_attributes.EXCEPTION_MESSAGE], "first"
+        )
+
+    def test_exception_event_not_emitted_when_logger_disabled(self):
+        handler = TelemetryHandler(
+            tracer_provider=self.tracer_provider,
+            logger_provider=self.logger_provider,
+        )
+        logger = self.logger_provider.get_logger("test")
+        enabled_mock = unittest.mock.MagicMock(return_value=False)
+        logger.enabled = enabled_mock
+
+        inv = InferenceInvocation(
+            self.tracer_provider.get_tracer("test"),
+            handler._instruments,
+            logger,
+            handler._completion_hook,
+            provider="test-provider",
+        )
+        inv.fail(RateLimitError("rate limit reached"))
+
+        self.assertEqual(len(self.log_exporter.get_finished_logs()), 0)
+        _, kwargs = enabled_mock.call_args
+        self.assertEqual(kwargs.get("event_name"), INFERENCE_EXCEPTION_EVENT)
+        self.assertEqual(kwargs.get("severity_number"), SeverityNumber.WARN)

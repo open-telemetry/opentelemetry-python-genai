@@ -57,6 +57,7 @@ from .test_utils import (
     WEATHER_TOOL_PROMPT,
     assert_all_attributes,
     assert_cache_attributes,
+    assert_inference_event_without_content,
     assert_message_in_logs,
     assert_messages_attribute,
     assert_reasoning_attributes,
@@ -349,7 +350,7 @@ def test_chat_completion_no_content(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
         assert "gen_ai.input.messages" not in spans[0].attributes
         assert "gen_ai.output.messages" not in spans[0].attributes
     else:
@@ -812,7 +813,7 @@ def test_chat_completion_with_raw_response_streaming(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
 
         assert_messages_attribute(
             spans[0].attributes["gen_ai.input.messages"],
@@ -1079,6 +1080,9 @@ def chat_completion_tool_call(
         response_0.usage.prompt_tokens,
         response_0.usage.completion_tokens,
     )
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
     assert_all_attributes(
         spans[1],
         DEFAULT_MODEL,
@@ -1834,7 +1838,7 @@ def test_chat_completion_with_context_manager_streaming(
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
-        assert len(logs) == 0
+        assert_inference_event_without_content(logs)
 
         assert_messages_attribute(
             spans[0].attributes["gen_ai.input.messages"],
@@ -1922,6 +1926,10 @@ def chat_completion_multiple_tools_streaming(
         response_stream_usage.prompt_tokens,
         response_stream_usage.completion_tokens,
     )
+
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:
