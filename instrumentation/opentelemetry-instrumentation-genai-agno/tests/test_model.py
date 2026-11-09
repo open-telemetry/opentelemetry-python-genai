@@ -584,7 +584,7 @@ def test_model_response_stream_early_close(
     instrument_agno,
     span_exporter,
 ) -> None:
-    """Test that closing a sync response stream before it is drained finalizes the span once."""
+    """Test that closing a sync response stream before it is drained finalizes the span once with interrupted finish reason."""
 
     class MultiChunkStreamModel(MockModel):
         def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
@@ -607,6 +607,37 @@ def test_model_response_stream_early_close(
     span = spans[0]
     assert span.name == "chat early-close-model"
     assert span.status.status_code != StatusCode.ERROR
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("interrupted",)
+
+
+def test_model_response_stream_early_close_keeps_finish_reason(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that closing a stream early preserves provider finish_reason on stream_data."""
+
+    class _LengthStream(MockModel):
+        def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+            yield ModelResponse(
+                content="partial",
+                provider_data={"id": "resp-1", "finish_reason": "length"},
+            )
+            yield ModelResponse(content="more")
+
+    stream = _LengthStream(id="m", provider="OpenAI").process_response_stream(
+        messages=[Message(role="user", content="hi")],
+        assistant_message=Message(role="assistant"),
+        stream_data=MessageData(),
+    )
+    next(stream)
+    stream.close()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("length",)
 
 
 def test_model_aresponse_stream_error_stream_side(
@@ -713,6 +744,9 @@ def test_model_aresponse_stream_early_close(
     span = spans[0]
     assert span.name == "chat async-early-close-model"
     assert span.status.status_code != StatusCode.ERROR
+    assert span.attributes.get(
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ) == ("interrupted",)
 
 
 def test_model_tool_call_arguments_json_decoding_and_fallback(

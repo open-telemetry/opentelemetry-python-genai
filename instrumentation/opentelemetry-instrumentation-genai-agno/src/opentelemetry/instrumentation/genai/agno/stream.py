@@ -39,7 +39,6 @@ from opentelemetry.util.genai.stream import (
 )
 from opentelemetry.util.genai.types import (
     OutputMessage,
-    Role,
     TextPart,
 )
 
@@ -356,37 +355,9 @@ class _ModelStreamMixin:
     _self_invocation: InferenceInvocation
     _self_assistant_message: Message | None
     _self_stream_data: MessageData | None
-    _self_accumulated_chunks: list[str]
 
     def _process_chunk(self, chunk: ModelResponse) -> None:
-        if self._self_invocation.should_capture_content:
-            content = getattr(chunk, "content", None)
-            if content is not None:
-                formatted = format_content(content)
-                if formatted:
-                    self._self_accumulated_chunks.append(formatted)
-
-        populate_provider_data(
-            self._self_invocation, getattr(chunk, "provider_data", None)
-        )
-
-        usage = getattr(chunk, "response_usage", None)
-        if usage is not None:
-            record_model_token_usage(self._self_invocation, usage)
-        else:
-            in_tok = safe_int(getattr(chunk, "input_tokens", None))
-            out_tok = safe_int(getattr(chunk, "output_tokens", None))
-            if in_tok is not None and in_tok > 0:
-                if self._self_invocation.input_tokens is None:
-                    self._self_invocation.input_tokens = in_tok
-                if (
-                    out_tok is not None
-                    and self._self_invocation.output_tokens is None
-                ):
-                    self._self_invocation.output_tokens = out_tok
-            elif out_tok is not None and out_tok > 0:
-                if self._self_invocation.output_tokens is None:
-                    self._self_invocation.output_tokens = out_tok
+        populate_provider_data(self._self_invocation, chunk.provider_data)
 
     def _finalize_telemetry(self, error: BaseException | None = None) -> None:
         metrics = getattr(self._self_assistant_message, "metrics", None)
@@ -398,15 +369,6 @@ class _ModelStreamMixin:
             )
             if _has_usage(sd_metrics):
                 record_model_token_usage(self._self_invocation, sd_metrics)
-
-        provider_data = getattr(
-            self._self_assistant_message, "provider_data", None
-        )
-        if not provider_data and self._self_stream_data is not None:
-            provider_data = getattr(
-                self._self_stream_data, "provider_data", None
-            )
-        populate_provider_data(self._self_invocation, provider_data)
 
         finish_reasons = (
             ["error"]
@@ -439,17 +401,6 @@ class _ModelStreamMixin:
                         stream_data=self._self_stream_data,
                     )
                 ]
-            elif self._self_accumulated_chunks:
-                text = "".join(self._self_accumulated_chunks)
-                self._self_invocation.output_messages = [
-                    OutputMessage(
-                        role=Role.ASSISTANT.value,
-                        parts=[TextPart(content=text)],
-                        finish_reason=finish_reasons[0]
-                        if finish_reasons
-                        else "stop",
-                    )
-                ]
 
         if error is not None:
             self._self_invocation.fail(error)
@@ -477,7 +428,6 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         invocation.suspend()
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
-        self._self_accumulated_chunks = []
 
 
 class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
@@ -494,4 +444,3 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         invocation.suspend()
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
-        self._self_accumulated_chunks = []
