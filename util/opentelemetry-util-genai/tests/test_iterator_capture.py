@@ -411,3 +411,24 @@ def test_cycles_do_not_break_the_request() -> None:
     assert kwargs["value"] is value
     assert capture.snapshot() == [UNCONSUMED]
     assert not capture.complete
+
+
+def test_missing_wrapt_raises_helpful_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util  # pylint: disable=import-outside-toplevel
+    import sys  # pylint: disable=import-outside-toplevel
+
+    import opentelemetry.util.genai.iterator_capture as mod  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setitem(sys.modules, "wrapt", None)
+    spec = importlib.util.spec_from_file_location(
+        "_test_iterator_capture_no_wrapt", mod.__file__
+    )
+    assert spec is not None and spec.loader is not None
+    fresh_module = importlib.util.module_from_spec(spec)
+    with pytest.raises(
+        ImportError,
+        match=r"opentelemetry\.util\.genai\.iterator_capture requires the 'wrapt' extra",
+    ):
+        spec.loader.exec_module(fresh_module)

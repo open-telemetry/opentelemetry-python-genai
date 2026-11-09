@@ -1,0 +1,62 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen2.5:0.5b",
+        "stream": false,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello in three words."
+          }
+        ],
+        "tools": []
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '117'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/chat
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen2.5:0.5b",
+          "created_at": "2026-10-29T14:37:18.9239569Z",
+          "message": {
+            "role": "assistant",
+            "content": "Hello, how are you today?"
+          },
+          "done": true,
+          "done_reason": "stop",
+          "total_duration": 203343200,
+          "load_duration": 3817600,
+          "prompt_eval_count": 35,
+          "prompt_eval_cached_count": 34,
+          "prompt_eval_duration": 34698000,
+          "eval_count": 8,
+          "eval_duration": 162099000
+        }
+    headers:
+      content-length:
+      - '347'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Thu, 29 Oct 2026 14:37:18 GMT
+    status:
+      code: 200
+      message: OK
+version: 1
