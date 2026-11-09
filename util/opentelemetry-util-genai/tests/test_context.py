@@ -1187,7 +1187,7 @@ class TestInferenceContext(BaseContextTest):
             event_attrs.get(GenAI.GEN_AI_RESPONSE_MODEL), "inner-resp-model"
         )
 
-        # Metrics preserve outer typed fields and record token usage from raw attributes
+        # Metrics preserve outer typed fields
         metrics = self._harvest_metrics()
         duration_point = metrics["gen_ai.client.operation.duration"][0]
         self.assertEqual(
@@ -1205,20 +1205,6 @@ class TestInferenceContext(BaseContextTest):
         self.assertEqual(
             duration_point.attributes.get(server_attributes.SERVER_ADDRESS),
             "api.openai.com",
-        )
-        token_points = metrics["gen_ai.client.token.usage"]
-        token_by_type = {
-            p.attributes[GenAI.GEN_AI_TOKEN_TYPE]: p for p in token_points
-        }
-        self.assertAlmostEqual(
-            token_by_type[GenAI.GenAiTokenTypeValues.INPUT.value].sum,
-            15.0,
-            places=3,
-        )
-        self.assertAlmostEqual(
-            token_by_type[GenAI.GenAiTokenTypeValues.OUTPUT.value].sum,
-            25.0,
-            places=3,
         )
 
     def test_enrich_from_context_does_not_freeze_typed_fields(self) -> None:
@@ -2207,15 +2193,6 @@ class TestEmbeddingContext(BaseContextTest):
         self.assertEqual(
             duration_point.attributes.get(server_attributes.SERVER_ADDRESS),
             "api.openai.com",
-        )
-        token_points = metrics["gen_ai.client.token.usage"]
-        token_by_type = {
-            p.attributes[GenAI.GEN_AI_TOKEN_TYPE]: p for p in token_points
-        }
-        self.assertAlmostEqual(
-            token_by_type[GenAI.GenAiTokenTypeValues.INPUT.value].sum,
-            15.0,
-            places=3,
         )
 
 

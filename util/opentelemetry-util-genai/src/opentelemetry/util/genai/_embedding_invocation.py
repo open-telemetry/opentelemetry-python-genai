@@ -188,13 +188,10 @@ class EmbeddingInvocation(GenAIInvocation):
         return attrs
 
     def _get_metric_token_counts(self) -> dict[str, int]:
-        input_tokens = self._data.usage_input_tokens
-        if input_tokens is None:
-            raw_input = self.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS)
-            if isinstance(raw_input, int) and not isinstance(raw_input, bool):
-                input_tokens = raw_input
-        if input_tokens is not None:
-            return {GenAI.GenAiTokenTypeValues.INPUT.value: input_tokens}
+        if self._data.usage_input_tokens is not None:
+            return {
+                GenAI.GenAiTokenTypeValues.INPUT.value: self._data.usage_input_tokens
+            }
         return {}
 
     def _get_attributes(self) -> dict[str, AttributeValue]:

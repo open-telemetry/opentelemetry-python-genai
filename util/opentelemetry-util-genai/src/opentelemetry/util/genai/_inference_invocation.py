@@ -908,23 +908,14 @@ class InferenceInvocation(GenAIInvocation):
 
     def _get_metric_token_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        input_tokens = self.data.usage_input_tokens
-        if input_tokens is None:
-            raw_input = self.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS)
-            if isinstance(raw_input, int) and not isinstance(raw_input, bool):
-                input_tokens = raw_input
-        if input_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = input_tokens
-
-        output_tokens = self.data.usage_output_tokens
-        if output_tokens is None:
-            raw_output = self.attributes.get(GenAI.GEN_AI_USAGE_OUTPUT_TOKENS)
-            if isinstance(raw_output, int) and not isinstance(
-                raw_output, bool
-            ):
-                output_tokens = raw_output
-        if output_tokens is not None:
-            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = output_tokens
+        if self.data.usage_input_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.INPUT.value] = (
+                self.data.usage_input_tokens
+            )
+        if self.data.usage_output_tokens is not None:
+            counts[GenAI.GenAiTokenTypeValues.OUTPUT.value] = (
+                self.data.usage_output_tokens
+            )
         return counts
 
     def _apply_finish(self, error: Error | None = None) -> None:

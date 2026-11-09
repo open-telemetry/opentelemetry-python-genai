@@ -68,7 +68,6 @@ __all__ = [
     "ContextData",
     "ContextToken",
     "GenAIInvocation",
-    "_ContextData",
     "_resolve_suppressed_content_and_hook",
     "get_content_attributes",
 ]
@@ -121,9 +120,6 @@ class ContextData:
                 self.metric_attributes.setdefault(k, v)
 
 
-_ContextData = ContextData
-
-
 def _is_active_completion_hook(hook: CompletionHook | None) -> bool:
     if hook is None:
         return False
@@ -155,7 +151,7 @@ def _resolve_suppressed_content_and_hook(
         if content_capturing_mode is None
         else content_capturing_mode
     )
-    is_context_data = isinstance(context_data, _ContextData)
+    is_context_data = isinstance(context_data, ContextData)
     allow_content_capture = is_context_data and context_data.capture_content
     env_allows_content_capture = (
         resolved_content_mode != ContentCapturingMode.NO_CONTENT
@@ -222,10 +218,10 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         content_capturing_mode: ContentCapturingMode | None = None,
         start_span: bool = True,
         context_key: str | None = None,
-        dataclass_class_object: Callable[[], _ContextData] | None = None,
+        dataclass_class_object: Callable[[], ContextData] | None = None,
     ) -> None:
         self._context_key: str | None = context_key
-        self._dataclass_class_object: Callable[[], _ContextData] | None = (
+        self._dataclass_class_object: Callable[[], ContextData] | None = (
             dataclass_class_object
         )
         self._tracer = tracer
@@ -370,8 +366,7 @@ class GenAIInvocation(AbstractContextManager["GenAIInvocation"]):
         """Merge inner context data into ``target`` while preserving outer precedence.
 
         Inner raw ``attributes`` and ``metric_attributes`` are ignored for keys
-        already set on the outer invocation (via either typed fields or raw
-        dicts), without copying outer typed values into ``self.attributes``.
+        already set on the outer invocation via either typed fields or raw dicts.
         """
         outer_typed_attrs = (
             self._start_attributes.keys() | self._get_attributes().keys()
