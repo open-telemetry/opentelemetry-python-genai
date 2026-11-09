@@ -1124,20 +1124,20 @@ def test_agent_stream_empty_session_id_not_set() -> None:
     )
 
     mixin = _AgentStreamMixin()
-    mixin._self_invocation = MagicMock()
-    mixin._self_invocation.conversation_id = None
-    mixin._init_agent_state()
+    invocation = MagicMock()
+    invocation.conversation_id = None
+    mixin._init_agent_state(invocation)
 
     class FakeChunk:
         session_id = ""
         event = ""
 
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_invocation.conversation_id is None
+    assert invocation.conversation_id is None
 
     FakeChunk.session_id = "sess-123"
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_invocation.conversation_id == "sess-123"
+    assert invocation.conversation_id == "sess-123"
 
 
 def test_workflow_stream_empty_session_id_not_set() -> None:
@@ -1149,20 +1149,20 @@ def test_workflow_stream_empty_session_id_not_set() -> None:
     )
 
     mixin = _WorkflowStreamMixin()
-    mixin._self_invocation = MagicMock()
-    mixin._self_invocation.conversation_id = None
-    mixin._init_workflow_state(None)
+    invocation = MagicMock()
+    invocation.conversation_id = None
+    mixin._init_workflow_state(invocation, None)
 
     class FakeChunk:
         session_id = ""
         event = ""
 
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_invocation.conversation_id is None
+    assert invocation.conversation_id is None
 
     FakeChunk.session_id = "wf-sess-456"
     mixin._process_chunk(FakeChunk())
-    assert mixin._self_invocation.conversation_id == "wf-sess-456"
+    assert invocation.conversation_id == "wf-sess-456"
 
 
 def test_agent_run_stream_records_finish_reasons(

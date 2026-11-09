@@ -28,7 +28,7 @@ from opentelemetry.instrumentation.genai.qwen_agent.utils import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import LocalAgentInvocation
-from opentelemetry.util.genai.stream import SyncAgentStreamWrapper
+from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.utils import (
     bind_arguments,
     get_argument,
@@ -37,7 +37,7 @@ from opentelemetry.util.genai.utils import (
 )
 
 
-class _AgentRunStreamWrapper(SyncAgentStreamWrapper[Any]):
+class _AgentRunStreamWrapper(SyncStreamWrapper[Any]):
     """Wraps the generator returned by ``Agent.run()``.
 
     Each yielded item is the (growing) response message list; the last item
@@ -46,20 +46,23 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[Any]):
 
     def __init__(self, stream: Any, invocation: LocalAgentInvocation) -> None:
         super().__init__(stream, invocation)
+        invocation.suspend()
+        self._self_agent_invocation = invocation
         self._self_last_response: Any = None
 
     def _process_chunk(self, chunk: Any) -> None:
         self._self_last_response = chunk
 
     def _on_stream_end(self) -> None:
-        if (
-            self._self_last_response
-            and self._self_invocation.should_capture_content
-        ):
-            self._set_output_messages(
-                convert_to_final_output_messages(self._self_last_response)
+        invocation = self._self_agent_invocation
+        if self._self_last_response and invocation.should_capture_content:
+            invocation.output_messages = convert_to_final_output_messages(
+                self._self_last_response
             )
-        super()._on_stream_end()
+        invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_agent_invocation.fail(error)
 
 
 def wrap_agent_run(

@@ -1,16 +1,16 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Agent invocations streamed through the base stream wrappers."""
+
 from __future__ import annotations
 
 import asyncio
 import gc
-import json
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import PurePosixPath
-from unittest.mock import patch
 
 import pytest
 
@@ -26,42 +26,26 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import get_current_span
-from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
-    WorkflowInvocation,
-)
 from opentelemetry.util.genai.stream import (
-    AsyncAgentStreamWrapper,
-    SyncAgentStreamWrapper,
-)
-from opentelemetry.util.genai.types import (
-    ContentCapturingMode,
-    OutputMessage,
-    TextPart,
+    AsyncStreamWrapper,
+    SyncStreamWrapper,
 )
 from opentelemetry.util.genai.utils import content_to_text
 
 
 class _Telemetry:
-    def __init__(self, mode: ContentCapturingMode) -> None:
+    def __init__(self) -> None:
         self.span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.span_exporter)
         )
         self.metric_reader = InMemoryMetricReader()
-        with patch(
-            "opentelemetry.util.genai.handler.get_content_capturing_mode",
-            return_value=mode,
-        ):
-            self.handler = TelemetryHandler(
-                tracer_provider=tracer_provider,
-                meter_provider=MeterProvider(
-                    metric_readers=[self.metric_reader]
-                ),
-            )
+        self.handler = TelemetryHandler(
+            tracer_provider=tracer_provider,
+            meter_provider=MeterProvider(metric_readers=[self.metric_reader]),
+        )
         self.tracer = tracer_provider.get_tracer(__name__)
 
     def span(self, name: str) -> ReadableSpan:
@@ -89,83 +73,37 @@ class _Telemetry:
 
 @pytest.fixture(name="telemetry")
 def fixture_telemetry() -> _Telemetry:
-    return _Telemetry(ContentCapturingMode.SPAN_ONLY)
+    return _Telemetry()
 
 
-@pytest.fixture(name="telemetry_no_content")
-def fixture_telemetry_no_content() -> _Telemetry:
-    return _Telemetry(ContentCapturingMode.NO_CONTENT)
-
-
-def _output_messages(span: ReadableSpan) -> list[dict[str, object]]:
-    value = (span.attributes or {})[GenAI.GEN_AI_OUTPUT_MESSAGES]
-    assert isinstance(value, str)
-    return [
-        {key: val for key, val in message.items() if val is not None}
-        for message in json.loads(value)
-    ]
-
-
-def _assistant_text(text: str) -> list[dict[str, object]]:
-    return [
-        {
-            "role": "assistant",
-            "parts": [{"type": "text", "content": text}],
-        }
-    ]
-
-
-class _DeltaStream(SyncAgentStreamWrapper[object]):
+class _AgentStream(SyncStreamWrapper[object]):
     def __init__(self, stream, invocation):
         super().__init__(stream, invocation)
-        self._self_seen: list[object] = []
+        invocation.suspend()
 
     def _process_chunk(self, chunk: object) -> None:
-        self._self_seen.append(chunk)
-        self._add_output(chunk)
-
-
-class _AsyncDeltaStream(AsyncAgentStreamWrapper[object]):
-    def _process_chunk(self, chunk: object) -> None:
-        self._add_output(chunk)
-
-
-class _FinalStream(SyncAgentStreamWrapper[tuple[str, bool]]):
-    def _process_chunk(self, chunk: tuple[str, bool]) -> None:
-        text, is_final = chunk
-        if is_final:
-            self._set_output(text)
-        else:
-            self._add_output(text)
-
-
-class _MessagesStream(SyncAgentStreamWrapper[str]):
-    def _process_chunk(self, chunk: str) -> None:
-        self._add_output(chunk)
-        self._set_output_messages(
-            [
-                OutputMessage(
-                    role="assistant", parts=[TextPart(content=chunk.upper())]
-                )
-            ]
-        )
-
-
-class _UsageStream(SyncAgentStreamWrapper[str]):
-    def _process_chunk(self, chunk: str) -> None:
-        self._add_output(chunk)
+        pass
 
     def _on_stream_end(self) -> None:
-        invocation = self._self_invocation
-        assert isinstance(invocation, AgentInvocation)
-        invocation.finish_reasons = ["stop"]
-        super()._on_stream_end()
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
 
 
-@dataclass
-class _Answer:
-    city: str
-    temperature: int
+class _AsyncAgentStream(AsyncStreamWrapper[object]):
+    def __init__(self, stream, invocation):
+        super().__init__(stream, invocation)
+        invocation.suspend()
+
+    def _process_chunk(self, chunk: object) -> None:
+        pass
+
+    def _on_stream_end(self) -> None:
+        self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_invocation.fail(error)
 
 
 def _chunks(*items: object) -> Iterator[object]:
@@ -177,134 +115,21 @@ async def _achunks(*items: object) -> AsyncIterator[object]:
         yield item
 
 
-def test_sync_agent_stream_joins_streamed_output(telemetry):
+def test_agent_stream_records_no_inference_stream_telemetry(telemetry):
     invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    wrapper = _DeltaStream(_chunks("Hello", ", ", "world"), invocation)
-
-    assert list(wrapper) == ["Hello", ", ", "world"]
+    list(_AgentStream(_chunks("a", "b"), invocation))
 
     span = telemetry.span("invoke_agent writer")
-    assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("Hello, world")
     assert GenAI.GEN_AI_REQUEST_STREAM not in (span.attributes or {})
-
-
-def test_sync_agent_stream_records_no_inference_stream_metrics(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    list(_DeltaStream(_chunks("a", "b"), invocation))
-
     assert telemetry.metric_names() == {"gen_ai.invoke_agent.duration"}
 
 
-def test_sync_agent_stream_serializes_structured_output(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    list(
-        _DeltaStream(
-            _chunks(_Answer(city="Paris", temperature=21)), invocation
-        )
-    )
+def test_workflow_stream_records_no_inference_stream_telemetry(telemetry):
+    invocation = telemetry.handler.workflow("pipeline")
+    list(_AgentStream(_chunks("a"), invocation))
 
-    span = telemetry.span("invoke_agent writer")
-    (message,) = _output_messages(span)
-    (part,) = message["parts"]
-    assert part["type"] == "text"
-    assert json.loads(part["content"]) == {"city": "Paris", "temperature": 21}
-
-
-def test_sync_agent_stream_final_output_replaces_streamed_pieces(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    list(
-        _FinalStream(
-            _chunks(("Hi", False), (" there", False), ("Hello there", True)),
-            invocation,
-        )
-    )
-
-    span = telemetry.span("invoke_agent writer")
-    assert _output_messages(span) == _assistant_text("Hello there")
-
-
-def test_sync_agent_stream_output_messages_take_precedence(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    list(_MessagesStream(_chunks("a", "b"), invocation))
-
-    span = telemetry.span("invoke_agent writer")
-    assert _output_messages(span) == _assistant_text("B")
-
-
-def test_sync_agent_stream_subclass_can_extend_finalization(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    list(_UsageStream(_chunks("ok"), invocation))
-
-    attrs = telemetry.span("invoke_agent writer").attributes or {}
-    assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
-    assert _output_messages(
-        telemetry.span("invoke_agent writer")
-    ) == _assistant_text("ok")
-
-
-def test_sync_agent_stream_skips_output_when_content_disabled(
-    telemetry_no_content,
-):
-    telemetry = telemetry_no_content
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    wrapper = _DeltaStream(_chunks("a", "b"), invocation)
-
-    assert list(wrapper) == ["a", "b"]
-    assert wrapper._self_seen == ["a", "b"]
-    assert wrapper._self_output_parts == []
-
-    attrs = telemetry.span("invoke_agent writer").attributes or {}
-    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
-
-
-def test_sync_agent_stream_empty_output_sets_no_messages(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    list(_DeltaStream(_chunks(), invocation))
-
-    attrs = telemetry.span("invoke_agent writer").attributes or {}
-    assert GenAI.GEN_AI_OUTPUT_MESSAGES not in attrs
-
-
-def test_sync_agent_stream_error_records_partial_output(telemetry):
-    def failing() -> Iterator[str]:
-        yield "partial"
-        raise ConnectionError("dropped")
-
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    wrapper = _DeltaStream(failing(), invocation)
-
-    with pytest.raises(ConnectionError, match="dropped"):
-        list(wrapper)
-
-    span = telemetry.span("invoke_agent writer")
-    assert span.status.status_code == StatusCode.ERROR
-    assert (span.attributes or {})[ERROR_TYPE] == "ConnectionError"
-    assert _output_messages(span) == _assistant_text("partial")
-
-
-def test_sync_agent_stream_caller_error_in_with_block(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-
-    with pytest.raises(ValueError, match="caller"):
-        with _DeltaStream(_chunks("a", "b"), invocation) as wrapper:
-            next(wrapper)
-            raise ValueError("caller")
-
-    span = telemetry.span("invoke_agent writer")
-    assert (span.attributes or {})[ERROR_TYPE] == "ValueError"
-    assert _output_messages(span) == _assistant_text("a")
-
-
-def test_sync_agent_stream_close_finalizes_successfully(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    wrapper = _DeltaStream(_chunks("a", "b"), invocation)
-    next(wrapper)
-    wrapper.close()
-
-    span = telemetry.span("invoke_agent writer")
-    assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("a")
+    span = telemetry.span("invoke_workflow pipeline")
+    assert GenAI.GEN_AI_REQUEST_STREAM not in (span.attributes or {})
 
 
 def test_sync_agent_stream_scopes_context_to_agent_code(telemetry):
@@ -318,105 +143,10 @@ def test_sync_agent_stream_scopes_context_to_agent_code(telemetry):
         inside.append(get_current_span())
         yield "b"
 
-    wrapper = _DeltaStream(agent_body(), invocation)
-    assert get_current_span() is caller_span
-
-    for _ in wrapper:
+    for _ in _AgentStream(agent_body(), invocation):
         assert get_current_span() is caller_span
 
     assert inside == [invocation.span, invocation.span]
-
-
-def test_sync_agent_stream_abandoned_does_not_parent_caller_work(telemetry):
-    def run() -> None:
-        invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        # Keep the stream referenced so it outlives the loop, as a caller
-        # holding it would; otherwise it is finalized at ``break``.
-        stream = _DeltaStream(_chunks("a", "b"), invocation)
-        for _ in stream:
-            break
-        with telemetry.tracer.start_as_current_span("caller-work"):
-            pass
-        del stream
-
-    run()
-    gc.collect()
-
-    agent = telemetry.span("invoke_agent writer")
-    assert telemetry.span("caller-work").parent is None
-    assert agent.status.status_code == StatusCode.ERROR
-    assert (agent.attributes or {})[ERROR_TYPE] == "_OTHER"
-    assert _output_messages(agent) == _assistant_text("a")
-
-
-def test_sync_agent_stream_supports_workflow_invocation(telemetry):
-    invocation = telemetry.handler.workflow("pipeline")
-    assert isinstance(invocation, WorkflowInvocation)
-    list(_DeltaStream(_chunks("done"), invocation))
-
-    span = telemetry.span("invoke_workflow pipeline")
-    assert _output_messages(span) == _assistant_text("done")
-
-
-def test_async_agent_stream_joins_streamed_output(telemetry):
-    async def exercise() -> list[object]:
-        invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        wrapper = _AsyncDeltaStream(_achunks("Hello", " world"), invocation)
-        return [chunk async for chunk in wrapper]
-
-    assert asyncio.run(exercise()) == ["Hello", " world"]
-
-    span = telemetry.span("invoke_agent writer")
-    assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("Hello world")
-    assert telemetry.metric_names() == {"gen_ai.invoke_agent.duration"}
-
-
-def test_async_agent_stream_aclose_finalizes_successfully(telemetry):
-    async def exercise() -> None:
-        invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        wrapper = _AsyncDeltaStream(_achunks("a", "b"), invocation)
-        await wrapper.__anext__()
-        await wrapper.aclose()
-
-    asyncio.run(exercise())
-
-    span = telemetry.span("invoke_agent writer")
-    assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("a")
-
-
-def test_async_agent_stream_error_records_partial_output(telemetry):
-    async def failing() -> AsyncIterator[str]:
-        yield "partial"
-        raise ConnectionError("dropped")
-
-    async def exercise() -> None:
-        invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        async for _ in _AsyncDeltaStream(failing(), invocation):
-            pass
-
-    with pytest.raises(ConnectionError, match="dropped"):
-        asyncio.run(exercise())
-
-    span = telemetry.span("invoke_agent writer")
-    assert (span.attributes or {})[ERROR_TYPE] == "ConnectionError"
-    assert _output_messages(span) == _assistant_text("partial")
-
-
-def test_async_agent_stream_caller_error_in_async_with_block(telemetry):
-    async def exercise() -> None:
-        invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        async with _AsyncDeltaStream(_achunks("a", "b"), invocation) as w:
-            await w.__anext__()
-            raise ValueError("caller")
-
-    with pytest.raises(ValueError, match="caller"):
-        asyncio.run(exercise())
-
-    span = telemetry.span("invoke_agent writer")
-    assert (span.attributes or {})[ERROR_TYPE] == "ValueError"
-    assert _output_messages(span) == _assistant_text("a")
 
 
 def test_async_agent_stream_scopes_context_to_agent_code(telemetry):
@@ -431,9 +161,7 @@ def test_async_agent_stream_scopes_context_to_agent_code(telemetry):
     async def exercise() -> object:
         caller_span = get_current_span()
         invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        wrapper = _AsyncDeltaStream(agent_body(), invocation)
-        assert get_current_span() is caller_span
-        async for _ in wrapper:
+        async for _ in _AsyncAgentStream(agent_body(), invocation):
             assert get_current_span() is caller_span
         return invocation.span
 
@@ -441,11 +169,31 @@ def test_async_agent_stream_scopes_context_to_agent_code(telemetry):
     assert inside == [agent_span, agent_span]
 
 
-def test_async_agent_stream_abandoned_does_not_parent_caller_work(telemetry):
+def test_sync_held_agent_stream_does_not_parent_caller_work(telemetry):
+    def run() -> None:
+        invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
+        # Keep the stream referenced so it outlives the loop, as a caller
+        # holding it would; otherwise it is finalized at ``break``.
+        stream = _AgentStream(_chunks("a", "b"), invocation)
+        for _ in stream:
+            break
+        with telemetry.tracer.start_as_current_span("caller-work"):
+            pass
+        del stream
+
+    run()
+    gc.collect()
+
+    assert telemetry.span("caller-work").parent is None
+    agent = telemetry.span("invoke_agent writer")
+    assert (agent.attributes or {})[ERROR_TYPE] == "_OTHER"
+
+
+def test_async_held_agent_stream_does_not_parent_caller_work(telemetry):
     async def exercise() -> None:
         invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-        # See test_sync_agent_stream_abandoned_does_not_parent_caller_work.
-        stream = _AsyncDeltaStream(_achunks("a", "b"), invocation)
+        # See test_sync_held_agent_stream_does_not_parent_caller_work.
+        stream = _AsyncAgentStream(_achunks("a", "b"), invocation)
         async for _ in stream:
             break
         with telemetry.tracer.start_as_current_span("caller-work"):
@@ -455,70 +203,53 @@ def test_async_agent_stream_abandoned_does_not_parent_caller_work(telemetry):
     asyncio.run(exercise())
     gc.collect()
 
-    agent = telemetry.span("invoke_agent writer")
     assert telemetry.span("caller-work").parent is None
+    agent = telemetry.span("invoke_agent writer")
     assert (agent.attributes or {})[ERROR_TYPE] == "_OTHER"
+
+
+def test_sync_stream_tells_exhaustion_from_early_close(telemetry):
+    drained = _AgentStream(
+        _chunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
+    )
+    list(drained)
+    closed = _AgentStream(
+        _chunks("a", "b"), telemetry.handler.invoke_local_agent(agent_name="b")
+    )
+    next(closed)
+    closed.close()
+
+    assert drained._self_exhausted is True
+    assert closed._self_exhausted is False
+
+
+def test_async_stream_tells_exhaustion_from_early_close(telemetry):
+    async def exercise() -> tuple[bool, bool]:
+        drained = _AsyncAgentStream(
+            _achunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
+        )
+        async for _ in drained:
+            pass
+        closed = _AsyncAgentStream(
+            _achunks("a", "b"),
+            telemetry.handler.invoke_local_agent(agent_name="b"),
+        )
+        await closed.__anext__()
+        await closed.aclose()
+        return drained._self_exhausted, closed._self_exhausted
+
+    assert asyncio.run(exercise()) == (True, False)
+
+
+@dataclass
+class _Answer:
+    city: str
+    temperature: int
 
 
 class _Unserializable:
     def __str__(self) -> str:
         raise RuntimeError("no str")
-
-
-def test_sync_agent_stream_skips_unserializable_and_none_output(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    chunks = ["a", _Unserializable(), None, "b"]
-    wrapper = _DeltaStream(_chunks(*chunks), invocation)
-
-    assert list(wrapper) == chunks
-
-    span = telemetry.span("invoke_agent writer")
-    assert span.status.status_code == StatusCode.UNSET
-    assert _output_messages(span) == _assistant_text("ab")
-
-
-def test_sync_agent_stream_stops_text_accumulation_after_messages(telemetry):
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-    wrapper = _MessagesStream(_chunks("a", "b", "c"), invocation)
-    next(wrapper)
-
-    assert wrapper._self_output_parts == []
-    list(wrapper)
-    assert wrapper._self_output_parts == []
-
-
-class _UniterableStream:
-    def __iter__(self) -> Iterator[str]:
-        raise TypeError("not iterable")
-
-    def __aiter__(self) -> AsyncIterator[str]:
-        raise TypeError("not iterable")
-
-
-def test_sync_agent_stream_init_failure_fails_invocation(telemetry):
-    caller_span = get_current_span()
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-
-    with pytest.raises(TypeError, match="not iterable"):
-        _DeltaStream(_UniterableStream(), invocation)
-    gc.collect()
-
-    span = telemetry.span("invoke_agent writer")
-    assert (span.attributes or {})[ERROR_TYPE] == "TypeError"
-    assert get_current_span() is caller_span
-
-
-def test_async_agent_stream_init_failure_fails_invocation(telemetry):
-    caller_span = get_current_span()
-    invocation = telemetry.handler.invoke_local_agent(agent_name="writer")
-
-    with pytest.raises(TypeError, match="not iterable"):
-        _AsyncDeltaStream(_UniterableStream(), invocation)
-    gc.collect()
-
-    span = telemetry.span("invoke_agent writer")
-    assert (span.attributes or {})[ERROR_TYPE] == "TypeError"
-    assert get_current_span() is caller_span
 
 
 @pytest.mark.parametrize(
@@ -539,36 +270,3 @@ def test_async_agent_stream_init_failure_fails_invocation(telemetry):
 )
 def test_content_to_text(content, expected):
     assert content_to_text(content) == expected
-
-
-def test_agent_stream_tells_exhaustion_from_early_close(telemetry):
-    drained = _DeltaStream(
-        _chunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
-    )
-    list(drained)
-    closed = _DeltaStream(
-        _chunks("a", "b"), telemetry.handler.invoke_local_agent(agent_name="b")
-    )
-    next(closed)
-    closed.close()
-
-    assert drained._self_exhausted is True
-    assert closed._self_exhausted is False
-
-
-def test_async_agent_stream_tells_exhaustion_from_early_close(telemetry):
-    async def exercise() -> tuple[bool, bool]:
-        drained = _AsyncDeltaStream(
-            _achunks("a"), telemetry.handler.invoke_local_agent(agent_name="a")
-        )
-        async for _ in drained:
-            pass
-        closed = _AsyncDeltaStream(
-            _achunks("a", "b"),
-            telemetry.handler.invoke_local_agent(agent_name="b"),
-        )
-        await closed.__anext__()
-        await closed.aclose()
-        return drained._self_exhausted, closed._self_exhausted
-
-    assert asyncio.run(exercise()) == (True, False)

@@ -33,14 +33,10 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
-    AgentInvocation,
     InferenceInvocation,
     LocalAgentInvocation,
 )
-from opentelemetry.util.genai.stream import (
-    SyncAgentStreamWrapper,
-    SyncStreamWrapper,
-)
+from opentelemetry.util.genai.stream import SyncStreamWrapper
 from opentelemetry.util.genai.types import OutputMessage, Role, TextPart
 from opentelemetry.util.genai.utils import bind_arguments
 
@@ -389,7 +385,7 @@ def model_generate_stream(handler: TelemetryHandler) -> _Wrapper[Model]:
 
 
 def _record_run_answer(
-    invocation: AgentInvocation,
+    invocation: LocalAgentInvocation,
     agent: MultiStepAgent,
     output: object,
     *,
@@ -417,7 +413,7 @@ def _record_run_answer(
         ]
 
 
-class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
+class _AgentRunStreamWrapper(SyncStreamWrapper[_RunStreamChunk]):
     def __init__(
         self,
         stream: Generator[_RunStreamChunk, None, None],
@@ -425,6 +421,8 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
         agent: MultiStepAgent,
     ) -> None:
         super().__init__(stream, invocation)
+        invocation.suspend()
+        self._self_agent_invocation = invocation
         self._self_agent = agent
         self._self_final_output: object = None
         self._self_saw_final = False
@@ -455,11 +453,9 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
             self._finalize_success()
 
     def _on_stream_end(self) -> None:
-        invocation = self._self_invocation
+        invocation = self._self_agent_invocation
         try:
-            if self._self_saw_final and isinstance(
-                invocation, AgentInvocation
-            ):
+            if self._self_saw_final:
                 _record_run_answer(
                     invocation,
                     self._self_agent,
@@ -471,7 +467,10 @@ class _AgentRunStreamWrapper(SyncAgentStreamWrapper[_RunStreamChunk]):
                 "Failed to record smolagents run answer", exc_info=True
             )
         finally:
-            super()._on_stream_end()
+            invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._self_agent_invocation.fail(error)
 
 
 def _record_agent(

@@ -17,9 +17,11 @@ from opentelemetry.util.genai.invocation import (
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.stream import (
-    AsyncAgentStreamWrapper,
-    SyncAgentStreamWrapper,
+    AsyncStreamWrapper,
+    SyncStreamWrapper,
 )
+from opentelemetry.util.genai.types import OutputMessage, TextPart
+from opentelemetry.util.genai.utils import content_to_text
 
 _AGENT_COMPLETED_EVENTS = frozenset(
     {
@@ -91,30 +93,62 @@ def _set_conversation_id(
         invocation.conversation_id = str(session_id)
 
 
-class _OutputHooks:
+class _StreamOutput:
+    """Output and finalization shared by the agent and workflow stream wrappers."""
+
+    _self_agent_invocation: AgentInvocation | WorkflowInvocation
+    _self_output_parts: list[str]
+
     if TYPE_CHECKING:
-        _self_invocation: AgentInvocation | WorkflowInvocation
         _self_exhausted: bool
 
-        def _add_output(self, content: object) -> None: ...
+    def _start(self, invocation: AgentInvocation | WorkflowInvocation) -> None:
+        self._self_agent_invocation = invocation
+        self._self_output_parts = []
+        invocation.suspend()
 
-        def _set_output(self, content: object) -> None: ...
+    def _add_output(self, content: object) -> None:
+        if not self._self_agent_invocation.should_capture_content:
+            return
+        text = content_to_text(content)
+        if text is not None:
+            self._self_output_parts.append(text)
 
-        def _on_stream_end(self) -> None: ...
+    def _set_output(self, content: object) -> None:
+        # Content that cannot be converted keeps the text captured so far.
+        if not self._self_agent_invocation.should_capture_content:
+            return
+        text = content_to_text(content)
+        if text is not None:
+            self._self_output_parts = [text]
 
-        def _on_stream_error(self, error: BaseException) -> None: ...
+    def _apply_output(self) -> None:
+        text = "".join(self._self_output_parts)
+        if text:
+            self._self_agent_invocation.output_messages = [
+                OutputMessage(role="assistant", parts=[TextPart(content=text)])
+            ]
+
+    def _on_stream_end(self) -> None:
+        self._apply_output()
+        self._self_agent_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        self._apply_output()
+        self._self_agent_invocation.fail(error)
 
 
-class _AgentStreamMixin(_OutputHooks):
+class _AgentStreamMixin(_StreamOutput):
     _self_completed: bool
     _self_finish_reason: str | None
 
-    def _init_agent_state(self) -> None:
+    def _init_agent_state(self, invocation: LocalAgentInvocation) -> None:
+        self._start(invocation)
         self._self_completed = False
         self._self_finish_reason = None
 
     def _process_chunk(self, chunk: Any) -> None:
-        invocation = self._self_invocation
+        invocation = self._self_agent_invocation
         _set_conversation_id(invocation, chunk)
 
         metrics = getattr(chunk, "metrics", None)
@@ -152,8 +186,8 @@ class _AgentStreamMixin(_OutputHooks):
                 self._add_output(content)
 
     def _set_finish_reason(self, reason: str) -> None:
-        if isinstance(self._self_invocation, AgentInvocation):
-            self._self_invocation.finish_reasons = [reason]
+        if isinstance(self._self_agent_invocation, AgentInvocation):
+            self._self_agent_invocation.finish_reasons = [reason]
 
     def _on_stream_end(self) -> None:
         # A run the caller closed before it completed has no finish reason.
@@ -168,36 +202,37 @@ class _AgentStreamMixin(_OutputHooks):
         super()._on_stream_error(error)
 
 
-class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncAgentStreamWrapper[Any]):
+class AgnoAgentStreamWrapper(_AgentStreamMixin, SyncStreamWrapper[Any]):
     """Synchronous stream wrapper for Agno Agent and Team runs."""
 
     def __init__(self, stream: Any, invocation: LocalAgentInvocation) -> None:
         super().__init__(stream, invocation)
-        self._init_agent_state()
+        self._init_agent_state(invocation)
 
 
-class AsyncAgnoAgentStreamWrapper(
-    _AgentStreamMixin, AsyncAgentStreamWrapper[Any]
-):
+class AsyncAgnoAgentStreamWrapper(_AgentStreamMixin, AsyncStreamWrapper[Any]):
     """Asynchronous stream wrapper for Agno Agent and Team runs."""
 
     def __init__(self, stream: Any, invocation: LocalAgentInvocation) -> None:
         super().__init__(stream, invocation)
-        self._init_agent_state()
+        self._init_agent_state(invocation)
 
 
-class _WorkflowStreamMixin(_OutputHooks):
+class _WorkflowStreamMixin(_StreamOutput):
     _self_completed: bool
     _self_on_close: Callable[[], None] | None
 
     def _init_workflow_state(
-        self, on_close: Callable[[], None] | None
+        self,
+        invocation: WorkflowInvocation,
+        on_close: Callable[[], None] | None,
     ) -> None:
+        self._start(invocation)
         self._self_completed = False
         self._self_on_close = on_close
 
     def _process_chunk(self, chunk: Any) -> None:
-        _set_conversation_id(self._self_invocation, chunk)
+        _set_conversation_id(self._self_agent_invocation, chunk)
 
         event_name = str(getattr(chunk, "event", ""))
         chunk_type = type(chunk).__name__
@@ -243,9 +278,7 @@ class _WorkflowStreamMixin(_OutputHooks):
             self._release()
 
 
-class AgnoWorkflowStreamWrapper(
-    _WorkflowStreamMixin, SyncAgentStreamWrapper[Any]
-):
+class AgnoWorkflowStreamWrapper(_WorkflowStreamMixin, SyncStreamWrapper[Any]):
     """Synchronous stream wrapper for Agno Workflow runs."""
 
     def __init__(
@@ -255,11 +288,11 @@ class AgnoWorkflowStreamWrapper(
         on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream, invocation)
-        self._init_workflow_state(on_close)
+        self._init_workflow_state(invocation, on_close)
 
 
 class AsyncAgnoWorkflowStreamWrapper(
-    _WorkflowStreamMixin, AsyncAgentStreamWrapper[Any]
+    _WorkflowStreamMixin, AsyncStreamWrapper[Any]
 ):
     """Asynchronous stream wrapper for Agno Workflow runs."""
 
@@ -270,4 +303,4 @@ class AsyncAgnoWorkflowStreamWrapper(
         on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(stream, invocation)
-        self._init_workflow_state(on_close)
+        self._init_workflow_state(invocation, on_close)
