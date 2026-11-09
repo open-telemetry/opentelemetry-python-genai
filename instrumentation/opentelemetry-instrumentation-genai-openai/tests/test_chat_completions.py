@@ -1079,6 +1079,9 @@ def chat_completion_tool_call(
         response_0.usage.prompt_tokens,
         response_0.usage.completion_tokens,
     )
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
     assert_all_attributes(
         spans[1],
         DEFAULT_MODEL,
@@ -1922,6 +1925,10 @@ def chat_completion_multiple_tools_streaming(
         response_stream_usage.prompt_tokens,
         response_stream_usage.completion_tokens,
     )
+
+    assert spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_call",)
 
     logs = log_exporter.get_finished_logs()
     if latest_experimental_enabled:

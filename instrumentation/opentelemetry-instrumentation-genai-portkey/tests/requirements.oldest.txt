@@ -25,4 +25,5 @@
 # anyio>=4.15) push resolution past the declared portkey-ai floor.
 typing-extensions==4.7.1
 
--e util/opentelemetry-util-genai
+# Drop this once opentelemetry-util-genai 1.4b0 is published.
+-e util/opentelemetry-util-genai[wrapt]
