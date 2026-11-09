@@ -526,7 +526,7 @@ def extract_model_finish_reasons(
     if assistant_message is not None:
         provider_data = _get_property_value(assistant_message, "provider_data")
     if not provider_data and stream_data is not None:
-        provider_data = _get_property_value(stream_data, "provider_data")
+        provider_data = stream_data.response_provider_data
 
     if isinstance(provider_data, dict):
         raw_reason = _get_property_value(
@@ -555,6 +555,10 @@ def extract_model_finish_reasons(
     )
     if tool_calls:
         return ["tool_call"]
+    if stream_data is not None and not has_model_output_content(
+        assistant_message
+    ):
+        return ["interrupted"]
     return ["stop"]
 
 
