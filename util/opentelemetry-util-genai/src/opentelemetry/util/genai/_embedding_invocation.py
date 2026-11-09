@@ -277,7 +277,15 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
         """Publish invocation attributes to the active embedding context."""
         self._data.attributes = self.attributes
         self._data.metric_attributes = self.metric_attributes
+        existing_input_tokens = data.usage_input_tokens
         data.merge(self._data, overwrite=True)
+        if (
+            existing_input_tokens is not None
+            and self._data.usage_input_tokens is not None
+        ):
+            data.usage_input_tokens = (
+                existing_input_tokens + self._data.usage_input_tokens
+            )
 
     def _finish(self, error: Error | None = None) -> None:
         if self._finished:

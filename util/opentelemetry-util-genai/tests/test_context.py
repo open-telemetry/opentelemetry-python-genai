@@ -1858,6 +1858,25 @@ class TestEmbeddingContext(BaseContextTest):
         self.assertEqual(attrs.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 50)
         self.assertEqual(attrs.get("custom.attr"), "inner-val")
 
+    def test_nested_embedding_sibling_usage_is_aggregated(self) -> None:
+        with self.handler.embedding(
+            "root-provider", request_model="root-model"
+        ):
+            with self.handler.embedding(
+                "inner-provider", request_model="root-model"
+            ) as first:
+                first.input_tokens = 5
+
+            with self.handler.embedding(
+                "inner-provider", request_model="root-model"
+            ) as second:
+                second.input_tokens = 4
+
+        (span,) = self.span_exporter.get_finished_spans()
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 9
+        )
+
     def test_root_precedence_over_nested_embedding(self) -> None:
         with self.handler.embedding(
             "root-provider",
