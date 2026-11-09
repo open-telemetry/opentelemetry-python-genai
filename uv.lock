@@ -4921,7 +4921,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-semantic-conventions" },
-    { name = "opentelemetry-util-genai" },
+    { name = "opentelemetry-util-genai", extra = ["wrapt"] },
 ]
 
 [package.optional-dependencies]
@@ -4931,11 +4931,11 @@ instruments = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", marker = "extra == 'instruments'", specifier = ">=0.1.14,<1" },
+    { name = "claude-agent-sdk", marker = "extra == 'instruments'", specifier = ">=0.1.19,<1" },
     { name = "opentelemetry-api", specifier = "~=1.45" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.64b0,<1" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.64b0,<1" },
-    { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
+    { name = "opentelemetry-util-genai", extras = ["wrapt"], editable = "util/opentelemetry-util-genai" },
 ]
 provides-extras = ["instruments"]
 

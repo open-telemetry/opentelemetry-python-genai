@@ -6,8 +6,13 @@ OpenTelemetry Claude Agent SDK Instrumentation
 .. |pypi| image:: https://badge.fury.io/py/opentelemetry-instrumentation-genai-claude-agent-sdk.svg
    :target: https://pypi.org/project/opentelemetry-instrumentation-genai-claude-agent-sdk/
 
-This library allows tracing LLM requests made by the
+This library allows tracing the runs started by the
 `Claude Agent SDK <https://github.com/anthropics/claude-agent-sdk-python>`_.
+
+Each ``query()`` stream is reported as one ``invoke_agent`` span, and every tool
+call observed in that stream as an ``execute_tool`` span. This is agent-level
+tracing: LLM requests the CLI makes internally are not reported here. Only
+``claude_agent_sdk.query`` is instrumented today; ``ClaudeSDKClient`` is not.
 
 Installation
 ------------
@@ -29,10 +34,13 @@ Check out the `manual example <examples/manual>`_ for more details.
 
 .. code-block:: python
 
+    import claude_agent_sdk
+    from claude_agent_sdk import ClaudeAgentOptions, AgentDefinition, AssistantMessage, TextBlock
     from opentelemetry.instrumentation.genai.claude_agent_sdk import ClaudeAgentSDKInstrumentor
-    from claude_agent_sdk import ClaudeAgentOptions, AgentDefinition, AssistantMessage, TextBlock, query
 
-    # Instrument Claude Agent SDK
+    # Instrument Claude Agent SDK first: query() is patched as a module
+    # attribute, so a ``from claude_agent_sdk import query`` taken before this
+    # line would keep calling the uninstrumented function.
     ClaudeAgentSDKInstrumentor().instrument()
 
     # Use Claude Agent SDK as normal
@@ -50,7 +58,7 @@ Check out the `manual example <examples/manual>`_ for more details.
             },
         )
 
-        async for message in query(
+        async for message in claude_agent_sdk.query(
             prompt="Hello, Claude!",
             options=options,
         ):
