@@ -27,6 +27,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     MessagePart,
     Modality,
+    ModalityTokens,
     OutputMessage,
     ReasoningPart,
     TextPart,
@@ -882,6 +883,23 @@ def _get_field(obj: object, key: str) -> Any:
     return getattr(obj, key, None)
 
 
+def _modality_tokens(
+    details: object,
+    *,
+    audio_fallback: object = None,
+) -> ModalityTokens | None:
+    audio_tokens = _get_field(details, "audio_tokens")
+    if audio_tokens is None:
+        audio_tokens = audio_fallback
+    if details is None and audio_tokens is None:
+        return None
+    return (
+        (Modality.TEXT, safe_int(_get_field(details, "text_tokens"))),
+        (Modality.IMAGE, safe_int(_get_field(details, "image_tokens"))),
+        (Modality.AUDIO, safe_int(audio_tokens)),
+    )
+
+
 def apply_usage_to_invocation(
     invocation: InferenceInvocation,
     usage: Mapping[str, object] | object,
@@ -927,65 +945,26 @@ def apply_usage_to_invocation(
         cache_write = _get_field(prompt_details, "cache_write_tokens")
         if cache_write is None:
             cache_write = _get_field(prompt_details, "cache_creation_tokens")
-        if cache_write is None:
-            cache_write = _get_field(
-                prompt_details, "cache_creation_input_tokens"
-            )
     invocation.cache_write_input_tokens = safe_int(cache_write)
 
+    invocation.set_input_tokens(
+        _modality_tokens(
+            prompt_details,
+            audio_fallback=_get_field(usage, "input_audio_tokens"),
+        )
+    )
     if prompt_details is not None:
-        invocation.set_input_tokens(
-            (
-                (
-                    Modality.TEXT,
-                    safe_int(_get_field(prompt_details, "text_tokens")),
-                ),
-                (
-                    Modality.IMAGE,
-                    safe_int(_get_field(prompt_details, "image_tokens")),
-                ),
-                (
-                    Modality.AUDIO,
-                    safe_int(_get_field(prompt_details, "audio_tokens")),
-                ),
+        invocation.set_cache_read_input_tokens(
+            _modality_tokens(
+                _get_field(prompt_details, "cached_tokens_details")
             )
         )
-        cached_details = _get_field(prompt_details, "cached_tokens_details")
-        if cached_details is not None:
-            invocation.set_cache_read_input_tokens(
-                (
-                    (
-                        Modality.TEXT,
-                        safe_int(_get_field(cached_details, "text_tokens")),
-                    ),
-                    (
-                        Modality.IMAGE,
-                        safe_int(_get_field(cached_details, "image_tokens")),
-                    ),
-                    (
-                        Modality.AUDIO,
-                        safe_int(_get_field(cached_details, "audio_tokens")),
-                    ),
-                )
-            )
-
-    if completion_details is not None:
-        invocation.set_output_tokens(
-            (
-                (
-                    Modality.TEXT,
-                    safe_int(_get_field(completion_details, "text_tokens")),
-                ),
-                (
-                    Modality.IMAGE,
-                    safe_int(_get_field(completion_details, "image_tokens")),
-                ),
-                (
-                    Modality.AUDIO,
-                    safe_int(_get_field(completion_details, "audio_tokens")),
-                ),
-            )
+    invocation.set_output_tokens(
+        _modality_tokens(
+            completion_details,
+            audio_fallback=_get_field(usage, "output_audio_tokens"),
         )
+    )
 
 
 def extract_input_content(input_args: Mapping[str, object]) -> str:

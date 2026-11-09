@@ -7,12 +7,21 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Mapping
 from typing import Any
 from unittest import mock
 
 import dspy
 import pytest
 from dspy.utils import DummyLM
+from litellm.types.utils import (
+    CachedTokensDetails,
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetailsWrapper,
+)
+from litellm.types.utils import (
+    Usage as LiteLLMUsage,
+)
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.instrumentation.genai.dspy.utils import (
@@ -261,7 +270,16 @@ def test_lm_call_typed_response(
         meter_provider=meter_provider,
         content_capture="SPAN_ONLY",
     ):
-        lm = FakeLM(responses=["Rome"])
+        lm = DetailedUsageLM(
+            responses=["Rome"],
+            usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "prompt_tokens_details": {"audio_tokens": 2},
+                "completion_tokens_details": {"audio_tokens": 3},
+            },
+        )
         if hasattr(dspy, "lm15"):
             req = dspy.lm15.Request(
                 model="openai/gpt-4o",
@@ -287,6 +305,8 @@ def test_lm_call_typed_response(
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
     assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
     assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes["gen_ai.usage.audio.input_tokens"] == 2
+    assert span.attributes["gen_ai.usage.audio.output_tokens"] == 3
 
     output_messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
     assert len(output_messages) == 1
@@ -450,7 +470,16 @@ async def test_lm_acall_async_typed_response(
     instrument_dspy: DSPyInstrumentor,
     span_exporter,
 ) -> None:
-    lm = FakeLM(responses=["Ottawa"])
+    lm = DetailedUsageLM(
+        responses=["Ottawa"],
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": {"audio_tokens": 2},
+            "completion_tokens_details": {"audio_tokens": 3},
+        },
+    )
     if hasattr(dspy, "lm15"):
         req = dspy.lm15.Request(
             model="openai/gpt-4o",
@@ -473,6 +502,10 @@ async def test_lm_acall_async_typed_response(
     span = spans[0]
 
     assert span.attributes[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
+    assert span.attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] == 10
+    assert span.attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    assert span.attributes["gen_ai.usage.audio.input_tokens"] == 2
+    assert span.attributes["gen_ai.usage.audio.output_tokens"] == 3
 
 
 @pytest.mark.anyio
@@ -1437,38 +1470,36 @@ def test_lm15_tool_result_id(instrument_dspy) -> None:
 
 class DetailedUsageLM(FakeLM):
     def __init__(
-        self, usage: dict[str, Any] | None = None, **kwargs: Any
+        self, usage: Mapping[str, Any] | object | None = None, **kwargs: Any
     ) -> None:
         super().__init__(**kwargs)
-        self._usage = usage or {
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-            "prompt_tokens_details": AttrDict(
-                {
-                    "cached_tokens": 4,
-                    "cache_write_tokens": 2,
-                    "text_tokens": 6,
-                    "image_tokens": 3,
-                    "audio_tokens": 1,
-                    "cached_tokens_details": AttrDict(
-                        {
-                            "text_tokens": 2,
-                            "image_tokens": 1,
-                            "audio_tokens": 1,
-                        }
+        self._usage = (
+            usage
+            if usage is not None
+            else LiteLLMUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                prompt_tokens_details=PromptTokensDetailsWrapper(
+                    cached_tokens=4,
+                    cache_write_tokens=2,
+                    text_tokens=6,
+                    image_tokens=3,
+                    audio_tokens=1,
+                    cached_tokens_details=CachedTokensDetails(
+                        text_tokens=2,
+                        image_tokens=1,
+                        audio_tokens=1,
                     ),
-                }
-            ),
-            "completion_tokens_details": AttrDict(
-                {
-                    "reasoning_tokens": 3,
-                    "text_tokens": 4,
-                    "image_tokens": 1,
-                    "audio_tokens": 2,
-                }
-            ),
-        }
+                ),
+                completion_tokens_details=CompletionTokensDetailsWrapper(
+                    reasoning_tokens=3,
+                    text_tokens=4,
+                    image_tokens=1,
+                    audio_tokens=2,
+                ),
+            )
+        )
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         response = super().forward(*args, **kwargs)
@@ -1506,21 +1537,17 @@ class DetailedUsageLM(FakeLM):
             {
                 "input_tokens": 12,
                 "output_tokens": 7,
-                "input_tokens_details": AttrDict(
-                    {
-                        "cached_tokens": 5,
-                        "cache_creation_tokens": 3,
-                        "text_tokens": 8,
-                        "image_tokens": 4,
-                    }
-                ),
-                "output_tokens_details": AttrDict(
-                    {
-                        "thinking_tokens": 2,
-                        "text_tokens": 5,
-                        "audio_tokens": 2,
-                    }
-                ),
+                "input_tokens_details": {
+                    "cached_tokens": 5,
+                    "cache_creation_tokens": 3,
+                    "text_tokens": 8,
+                    "image_tokens": 4,
+                },
+                "output_tokens_details": {
+                    "thinking_tokens": 2,
+                    "text_tokens": 5,
+                    "audio_tokens": 2,
+                },
             },
             {
                 GenAI.GEN_AI_USAGE_INPUT_TOKENS: 12,
@@ -1561,20 +1588,16 @@ class DetailedUsageLM(FakeLM):
             {
                 "input_tokens": 8,
                 "output_tokens": 3,
-                "input_tokens_details": AttrDict(
-                    {
-                        "cached_tokens": 0,
-                        "cache_creation_input_tokens": 2,
-                        "text_tokens": 0,
-                        "image_tokens": None,
-                    }
-                ),
-                "output_tokens_details": AttrDict(
-                    {
-                        "reasoning_tokens": 0,
-                        "text_tokens": 0,
-                    }
-                ),
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 2,
+                    "text_tokens": 0,
+                    "image_tokens": None,
+                },
+                "output_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "text_tokens": 0,
+                },
             },
             {
                 GenAI.GEN_AI_USAGE_INPUT_TOKENS: 8,
@@ -1596,7 +1619,7 @@ async def test_lm_call_cached_and_reasoning_tokens(
     instrument_dspy,
     span_exporter,
     use_async: bool,
-    usage: dict[str, Any] | None,
+    usage: Mapping[str, Any] | object | None,
     expected_attrs: dict[str, int],
     omitted_attrs: tuple[str, ...],
 ) -> None:
