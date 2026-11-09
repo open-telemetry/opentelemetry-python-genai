@@ -42,4 +42,4 @@ google-genai==2.34.0
 # Install locally from the folder. This path is relative to the
 # root directory, given invocation from "tox" at root level.
 -e instrumentation/opentelemetry-instrumentation-google-genai
--e util/opentelemetry-util-genai[upload]
+-e util/opentelemetry-util-genai[upload,wrapt]

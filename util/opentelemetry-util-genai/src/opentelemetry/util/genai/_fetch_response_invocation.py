@@ -105,6 +105,8 @@ class FetchResponseInvocation(GenAIInvocation):
     failed.
     """
 
+    _exception_event_name = "gen_ai.client.fetch_response.exception"
+
     def __init__(
         self,
         tracer: Tracer,
