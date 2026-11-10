@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+from importlib.metadata import Distribution, PackageNotFoundError
 from types import ModuleType
+
+import pytest
 
 from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 
@@ -51,3 +54,23 @@ def test_instrument_uninstrument_roundtrip(
         meter_provider=meter_provider,
     )
     instrumentor.uninstrument()
+
+
+def test_instrument_uninstrument_without_qwenpaw_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from_name = Distribution.from_name
+
+    def from_name_without_qwenpaw(name: str) -> Distribution:
+        if name == "qwenpaw":
+            raise PackageNotFoundError(name)
+        return from_name(name)
+
+    monkeypatch.setattr(Distribution, "from_name", from_name_without_qwenpaw)
+
+    instrumentor = QwenPawInstrumentor()
+    instrumentor.instrument(skip_dep_check=True)
+    try:
+        assert instrumentor.is_instrumented_by_opentelemetry
+    finally:
+        instrumentor.uninstrument()

@@ -52,7 +52,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection
 from importlib import import_module
-from importlib.metadata import version as distribution_version
+from importlib.util import find_spec
 from typing import Any
 
 from wrapt import wrap_function_wrapper
@@ -76,7 +76,12 @@ _RUNTIME_MODULE = "qwenpaw.runtime.runtime"
 
 
 def _runtime_v2() -> bool:
-    return int(distribution_version("qwenpaw").split(".")[0]) >= 2
+    try:
+        return find_spec(_RUNTIME_MODULE) is not None
+    except ModuleNotFoundError as error:
+        if error.name not in ("qwenpaw", "qwenpaw.runtime"):
+            raise
+        return False
 
 
 class QwenPawInstrumentor(BaseInstrumentor):

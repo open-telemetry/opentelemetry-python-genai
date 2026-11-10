@@ -58,7 +58,9 @@ def _json_value(value: object) -> object:
     return value
 
 
-def _part(block: object, message_type: object) -> MessagePart | None:
+def _part(
+    block: object, message_type: object, *, parse_arguments: bool = True
+) -> MessagePart | None:
     kind = _field(block, "type")
     text = _field(block, "text")
     if kind == "text" and isinstance(text, str):
@@ -71,10 +73,13 @@ def _part(block: object, message_type: object) -> MessagePart | None:
         if message_type in ("function_call", "mcp_tool_call", "plugin_call"):
             name = non_empty_str(_field(data, "name"))
             if name:
+                arguments = _field(data, "arguments")
                 return ToolCallRequestPart(
                     name=name,
                     id=call_id,
-                    arguments=_json_value(_field(data, "arguments")),
+                    arguments=_json_value(arguments)
+                    if parse_arguments
+                    else arguments,
                 )
         if message_type in (
             "function_call_output",
@@ -189,6 +194,26 @@ def observe_context_build(
     return wrapped(*args, **kwargs)
 
 
+class _ContentBlock:
+    def __init__(self, part: MessagePart) -> None:
+        self.part: MessagePart = part
+        self.deltas: list[str] = []
+
+    def finish(self) -> MessagePart:
+        part = self.part
+        if isinstance(part, ToolCallRequestPart):
+            arguments = part.arguments
+            if self.deltas:
+                prefix = arguments if isinstance(arguments, str) else ""
+                arguments = prefix + "".join(self.deltas)
+            return ToolCallRequestPart(
+                name=part.name, id=part.id, arguments=_json_value(arguments)
+            )
+        if self.deltas and isinstance(part, (TextPart, ReasoningPart)):
+            return type(part)(content=part.content + "".join(self.deltas))
+        return part
+
+
 class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
     """Track envelope snapshots and deltas while preserving the lazy stream."""
 
@@ -199,11 +224,11 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
     ) -> None:
         super().__init__(stream, pending)
         self._self_pending = pending
-        self._self_messages: dict[str, OutputMessage] = {}
-        self._self_blocks: dict[str, dict[object, MessagePart]] = {}
+        self._self_blocks: dict[
+            str, dict[tuple[object, object], _ContentBlock]
+        ] = {}
         self._self_message_types: dict[str, object] = {}
         self._self_message_roles: dict[str, str] = {}
-        self._self_tool_arguments: dict[str, str] = {}
         self._self_complete = False
         self._self_error: Error | None = None
 
@@ -237,75 +262,66 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         message_id = non_empty_str(_field(message, "id"))
         if message_id is None:
             return
-        blocks: dict[object, MessagePart] = {}
+        message_type = _field(message, "type")
+        blocks: dict[tuple[object, object], _ContentBlock] = {}
         for position, block in enumerate(_items(_field(message, "content"))):
-            part = _part(block, _field(message, "type"))
+            part = _part(block, message_type, parse_arguments=False)
             if part is not None:
                 index = _field(block, "index")
                 key = (
                     _field(block, "type"),
                     position if index is None else index,
                 )
-                blocks[key] = part
+                blocks[key] = _ContentBlock(part)
         # Snapshots order completed blocks but can omit an unfinished block.
         for key, part in self._self_blocks.get(message_id, {}).items():
             blocks.setdefault(key, part)
-        self._self_blocks[message_id] = blocks
         if blocks:
-            self._self_messages[message_id] = OutputMessage(
-                role=str(role), parts=list(blocks.values())
-            )
-        self._self_message_types[message_id] = _field(message, "type")
+            self._self_blocks[message_id] = blocks
+        self._self_message_types[message_id] = message_type
         self._self_message_roles[message_id] = str(role)
 
     def _capture_content(self, content: object) -> None:
         message_id = non_empty_str(_field(content, "msg_id"))
         if message_id is None:
             return
-        blocks = self._self_blocks.setdefault(message_id, {})
         # QwenPaw numbers text separately from media, so their indexes can collide.
-        index = (_field(content, "type"), _field(content, "index", 0))
-        previous = blocks.get(index)
-        part = _part(content, self._self_message_types.get(message_id))
-        if (
-            isinstance(previous, ToolCallRequestPart)
-            and _field(content, "delta") is True
-        ):
-            delta = _field(_field(content, "data"), "arguments")
+        key = (_field(content, "type"), _field(content, "index", 0))
+        blocks = self._self_blocks.get(message_id)
+        previous = blocks.get(key) if blocks is not None else None
+        if previous is not None and _field(content, "delta") is True:
+            delta = None
+            if isinstance(previous.part, ToolCallRequestPart):
+                delta = _field(_field(content, "data"), "arguments")
+            elif isinstance(previous.part, (TextPart, ReasoningPart)):
+                delta = _field(content, "text")
             if isinstance(delta, str):
-                arguments = (
-                    self._self_tool_arguments.get(message_id, "") + delta
-                )
-                self._self_tool_arguments[message_id] = arguments
-                part = ToolCallRequestPart(
-                    name=previous.name,
-                    id=previous.id,
-                    arguments=_json_value(arguments),
-                )
-        elif isinstance(part, ToolCallRequestPart):
-            arguments = _field(_field(content, "data"), "arguments")
-            if isinstance(arguments, str):
-                self._self_tool_arguments[message_id] = arguments
-        if part is None:
-            return
-        if (
-            _field(content, "delta") is True
-            and isinstance(part, (TextPart, ReasoningPart))
-            and isinstance(previous, (TextPart, ReasoningPart))
-            and part.type == previous.type
-        ):
-            part = type(part)(content=previous.content + part.content)
-        blocks[index] = part
-        self._self_messages[message_id] = OutputMessage(
-            role=self._self_message_roles.get(message_id, "assistant"),
-            parts=list(blocks.values()),
+                previous.deltas.append(delta)
+                return
+        part = _part(
+            content,
+            self._self_message_types.get(message_id),
+            parse_arguments=False,
         )
+        if part is not None:
+            self._self_blocks.setdefault(message_id, {})[key] = _ContentBlock(
+                part
+            )
+
+    def _output_messages(self) -> list[OutputMessage]:
+        return [
+            OutputMessage(
+                role=self._self_message_roles.get(message_id, "assistant"),
+                parts=[block.finish() for block in blocks.values()],
+            )
+            for message_id, blocks in self._self_blocks.items()
+        ]
 
     def _on_stream_end(self) -> None:
         invocation = self._self_pending.invocation
         if invocation is None:
             return
-        invocation.output_messages = list(self._self_messages.values())
+        invocation.output_messages = self._output_messages()
         if self._self_error is not None:
             invocation.fail(self._self_error)
         else:
@@ -319,7 +335,7 @@ class RuntimeStreamWrapper(AsyncStreamWrapper[object]):
         ):
             return
         invocation = self._self_pending.start(self._self_pending.request)
-        invocation.output_messages = list(self._self_messages.values())
+        invocation.output_messages = self._output_messages()
         invocation.fail(error)
 
 

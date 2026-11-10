@@ -45,8 +45,8 @@ QwenPaw >= 1.1.0, < 3.0.0. Version 1.x uses the agent runner; version
 tool calls/results, and image/audio/video/file content from request messages and
 streamed SSE envelopes. Request normalization and span creation remain lazy;
 SDK-generated session IDs propagate to nested GenAI invocations.
-Version 2.x support requires ``opentelemetry-util-genai`` 1.4b0 or newer
-(``1.4b0.dev`` from this workspace during development). QwenPaw 2.x requires Python >= 3.11,
+Version 2.x support requires ``opentelemetry-util-genai`` 1.4b0 or newer.
+QwenPaw 2.x requires Python >= 3.11,
 < 3.14. Both entry points produce one internal ``invoke_agent`` span per
 turn; model and tool execution remain owned by the underlying libraries.
 

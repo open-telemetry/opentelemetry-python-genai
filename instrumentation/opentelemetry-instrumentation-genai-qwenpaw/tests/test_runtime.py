@@ -473,12 +473,13 @@ async def test_output_message_parts(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "part_kind", ["reasoning", "tool_call", "tool_result"]
+    "part_kind", ["reasoning", "partial_tool_call", "tool_call", "tool_result"]
 )
 async def test_real_envelope_parts(
     instrument_with_content: Any,
     tracer_provider: Any,
     span_exporter: Any,
+    monkeypatch: pytest.MonkeyPatch,
     part_kind: str,
 ) -> None:
     from types import SimpleNamespace
@@ -486,9 +487,10 @@ async def test_real_envelope_parts(
     from agentscope.event import EventType
     from qwenpaw.runtime.envelope import Envelope
 
-    from opentelemetry.instrumentation.genai.qwenpaw.runtime import (
-        make_runtime_wrapper,
-    )
+    from opentelemetry.instrumentation.genai.qwenpaw import runtime
+
+    parse_arguments = MagicMock(wraps=runtime._json_value)
+    monkeypatch.setattr(runtime, "_json_value", parse_arguments)
 
     if part_kind == "reasoning":
         event_fields = [
@@ -527,14 +529,15 @@ async def test_real_envelope_parts(
                 yield chunk
 
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    stream = make_runtime_wrapper(handler)(
+    stream = runtime.make_runtime_wrapper(handler)(
         events, make_runtime(), (runtime_request(),), {}
     )
     if part_kind == "tool_result":
         await drain(stream)
     else:
-        for _ in range(3):
+        for _ in range(4 if part_kind == "tool_call" else 3):
             await anext(stream)
+        parse_arguments.assert_not_called()
         await stream.aclose()
     (span,) = span_exporter.get_finished_spans()
     messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
@@ -542,12 +545,18 @@ async def test_real_envelope_parts(
     if part_kind == "reasoning":
         assert parts == [{"type": "reasoning", "content": "hello world"}]
     else:
+        arguments = (
+            '{"city":'
+            if part_kind == "partial_tool_call"
+            else '{"city":"Paris"}'
+        )
+        parse_arguments.assert_called_once_with(arguments)
         assert parts[0] == {
             "type": "tool_call",
             "name": "weather",
             "id": "call-1",
             "arguments": {"city": "Paris"}
-            if part_kind == "tool_result"
+            if part_kind != "partial_tool_call"
             else '{"city":',
         }
         if part_kind == "tool_result":
