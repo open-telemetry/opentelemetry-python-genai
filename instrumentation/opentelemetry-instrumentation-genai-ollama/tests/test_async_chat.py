@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 import ollama
 import pytest
@@ -15,6 +14,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.semconv.attributes import error_attributes
+from opentelemetry.test_util_genai.content import get_content_attribute
 from opentelemetry.trace import StatusCode
 
 from .conftest import CHAT_MODEL, HOST
@@ -36,7 +36,7 @@ async def test_async_chat_records_a_chat_span(
     assert attrs[GenAI.GEN_AI_OPERATION_NAME] == "chat"
     assert attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS] == ("stop",)
     assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == response.eval_count
-    (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    (output,) = get_content_attribute(attrs, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert output["parts"] == [
         {"type": "text", "content": response.message.content}
     ]
@@ -58,7 +58,7 @@ async def test_async_chat_stream_records_the_drained_response(
     attrs = span.attributes
     assert attrs[GenAI.GEN_AI_REQUEST_STREAM] is True
     assert attrs[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] == chunks[-1].eval_count
-    (output,) = json.loads(attrs[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    (output,) = get_content_attribute(attrs, GenAI.GEN_AI_OUTPUT_MESSAGES)
     assert output["parts"] == [
         {
             "type": "text",
