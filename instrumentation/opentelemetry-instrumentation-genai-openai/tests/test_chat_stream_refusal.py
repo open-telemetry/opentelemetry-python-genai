@@ -76,6 +76,5 @@ async def test_streamed_refusal_is_captured_in_output_messages(
                 }
             ],
             "finish_reason": "stop",
-            "name": None,
         }
     ]

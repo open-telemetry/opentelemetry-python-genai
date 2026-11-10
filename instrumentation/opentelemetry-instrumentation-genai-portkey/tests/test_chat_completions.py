@@ -1331,13 +1331,11 @@ def test_chat_completions_image_parts(
         assert input_messages[0]["parts"] == [
             {"content": "Describe these images:", "type": "text"},
             {
-                "mime_type": None,
                 "modality": "image",
                 "type": "uri",
                 "uri": "https://example.com/remote.png",
             },
             {
-                "mime_type": None,
                 "modality": "image",
                 "type": "uri",
                 "uri": "https://example.com/nested.png",
@@ -1351,7 +1349,6 @@ def test_chat_completions_image_parts(
         ]
         assert input_messages[1]["parts"] == [
             {
-                "mime_type": None,
                 "modality": "image",
                 "type": "uri",
                 "uri": "https://example.com/single.png",
@@ -1443,7 +1440,6 @@ def test_chat_completions_image_parts(
                 {
                     "type": "uri",
                     "modality": "image",
-                    "mime_type": None,
                     "uri": "https://example.com/obj.png",
                 }
             ],

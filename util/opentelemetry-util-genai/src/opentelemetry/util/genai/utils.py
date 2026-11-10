@@ -11,11 +11,13 @@ import os
 import urllib.parse
 from base64 import b64decode, b64encode
 from collections.abc import Callable, Iterable, Mapping
+from copy import deepcopy
 from dataclasses import asdict, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from functools import lru_cache, partial
-from typing import Any, cast
+from types import UnionType
+from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 from opentelemetry.util.genai.environment_variables import (
@@ -124,6 +126,44 @@ def fq_exception_type(exception: BaseException) -> str:
     if module and module != "builtins":
         return f"{module}.{qualname}"
     return qualname
+
+
+@lru_cache(maxsize=128)
+def _optional_field_names(cls: type) -> frozenset[str]:
+    return frozenset(
+        name
+        for name, hint in get_type_hints(cls).items()
+        if get_origin(hint) in (Union, UnionType)
+        and type(None) in get_args(hint)
+    )
+
+
+def _asdict_without_optional_none(value: object) -> object:
+    """Copy dataclass content, omitting None only for optional dataclass fields."""
+    if is_dataclass(value) and not isinstance(value, type):
+        optional = _optional_field_names(type(value))
+        return {
+            field.name: _asdict_without_optional_none(item)
+            for field in fields(value)
+            if (item := getattr(value, field.name)) is not None
+            or field.name not in optional
+        }
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        return {
+            _asdict_without_optional_none(key): _asdict_without_optional_none(
+                item
+            )
+            for key, item in mapping.items()
+        }
+    if isinstance(value, (list, tuple)):
+        sequence = cast("list[object] | tuple[object, ...]", value)
+        items = [_asdict_without_optional_none(item) for item in sequence]
+        factory = cast(Any, type(sequence))
+        if isinstance(sequence, tuple) and hasattr(sequence, "_fields"):
+            return factory(*items)
+        return factory(items)
+    return deepcopy(value)
 
 
 class _GenAiJsonEncoder(json.JSONEncoder):

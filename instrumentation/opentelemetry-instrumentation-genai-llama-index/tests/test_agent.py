@@ -67,6 +67,18 @@ from opentelemetry.util.genai.types import (
 )
 
 
+def _input_messages(value: str) -> list[dict]:
+    # Released util 1.3b0 includes unset names; the local util omits them.
+    return [
+        {
+            key: item
+            for key, item in message.items()
+            if key != "name" or item is not None
+        }
+        for message in json.loads(value)
+    ]
+
+
 def _spans_named(span_exporter, name: str):
     return [s for s in span_exporter.get_finished_spans() if s.name == name]
 
@@ -296,12 +308,13 @@ async def test_agent_run_span(
         "Answers math questions."
     )
     assert isinstance(attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL], str)
-    input_messages = json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES])
+    input_messages = _input_messages(
+        attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    )
     assert input_messages == [
         {
             "parts": [{"content": "What is two plus two?", "type": "text"}],
             "role": "user",
-            "name": None,
         }
     ]
     output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
@@ -367,13 +380,12 @@ async def test_agent_run_captures_chat_message_input(
     )
 
     span = _spans_named(span_exporter, "invoke_agent chat-message-agent")[0]
-    assert json.loads(
+    assert _input_messages(
         span.attributes[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     ) == [
         {
             "parts": [{"content": "Hello from a ChatMessage", "type": "text"}],
             "role": "user",
-            "name": None,
         }
     ]
 
@@ -539,11 +551,10 @@ async def test_react_agent_run_span(
         "Answers math questions with ReAct reasoning."
     )
     assert isinstance(attrs[GenAIAttributes.GEN_AI_REQUEST_MODEL], str)
-    assert json.loads(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
+    assert _input_messages(attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
         {
             "parts": [{"content": "What is two plus two?", "type": "text"}],
             "role": "user",
-            "name": None,
         }
     ]
     output_messages = json.loads(attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])
@@ -1231,23 +1242,23 @@ async def test_agent_workflow_captures_content(
     agent_span = _spans_named(span_exporter, "invoke_agent content-agent")[0]
     workflow_attrs = dict(workflow_span.attributes or {})
     agent_attrs = dict(agent_span.attributes or {})
-    assert json.loads(
+    assert _input_messages(
         workflow_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
     ) == [
         {
             "role": "user",
             "parts": [{"type": "text", "content": "Run the workflow"}],
-            "name": None,
         }
     ]
     assert json.loads(workflow_attrs[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])[
         0
     ]["parts"] == [{"type": "text", "content": "workflow complete"}]
-    assert json.loads(agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]) == [
+    assert _input_messages(
+        agent_attrs[GenAIAttributes.GEN_AI_INPUT_MESSAGES]
+    ) == [
         {
             "role": "user",
             "parts": [{"type": "text", "content": "Run the workflow"}],
-            "name": None,
         }
     ]
     assert json.loads(

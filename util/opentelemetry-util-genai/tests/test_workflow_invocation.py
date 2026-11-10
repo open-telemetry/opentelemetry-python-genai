@@ -1,6 +1,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,31 @@ class TestWorkflowInvocation(unittest.TestCase):
             SimpleSpanProcessor(self.span_exporter)
         )
         self.handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+
+    @patch.dict(
+        os.environ,
+        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "SPAN_ONLY"},
+    )
+    def test_optional_message_fields(self):
+        handler = TelemetryHandler(tracer_provider=self.tracer_provider)
+        for name in (None, "x"):
+            invocation = handler.workflow(name="test")
+            invocation.input_messages = [
+                InputMessage(role="user", parts=[], name=name)
+            ]
+            invocation.output_messages = [
+                OutputMessage(role="assistant", parts=[], name=name)
+            ]
+            invocation.stop()
+            attrs = self.span_exporter.get_finished_spans()[-1].attributes
+            for key, role in (
+                (GenAI.GEN_AI_INPUT_MESSAGES, "user"),
+                (GenAI.GEN_AI_OUTPUT_MESSAGES, "assistant"),
+            ):
+                expected = {"role": role, "parts": []}
+                if name is not None:
+                    expected["name"] = name
+                self.assertEqual(json.loads(attrs[key]), [expected])
 
     def test_default_values(self):
         invocation = self.handler.workflow(name=None)

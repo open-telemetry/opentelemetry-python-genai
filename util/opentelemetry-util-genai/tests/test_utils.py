@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import unittest
+from collections import namedtuple
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
@@ -43,6 +44,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    FunctionToolDefinition,
     GenericPart,
     InputMessage,
     MessagePart,
@@ -51,13 +53,18 @@ from opentelemetry.util.genai.types import (
     Reasoning,
     ReasoningPart,
     Role,
+    ServerToolCallPart,
+    ServerToolCallResponsePart,
     SystemInstructionPart,
     Text,
     TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     Uri,
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    _asdict_without_optional_none,
     bind_arguments,
     decode_base64,
     gen_ai_json_dumps,
@@ -1581,6 +1588,134 @@ class TestModality(unittest.TestCase):
 
 
 class TestMessageModels(unittest.TestCase):
+    def test_optional_fields_on_span_and_event_paths(self):
+        from opentelemetry.util.genai._invocation import get_content_attributes
+
+        generic = GenericPart(type="custom")
+        generic.extra = None
+        parts = [
+            ToolCallRequestPart(
+                arguments={"a": None, "items": [None]}, name="tool", id=None
+            ),
+            ToolCallResponsePart(response=None, id=None),
+            ServerToolCallPart(name="server", server_tool_call=None),
+            ServerToolCallResponsePart(server_tool_call_response=None),
+            UriPart(
+                mime_type=None, modality="image", uri="https://example.com"
+            ),
+            generic,
+        ]
+        for name in (None, "x"):
+            for mode in (
+                ContentCapturingMode.SPAN_ONLY,
+                ContentCapturingMode.EVENT_ONLY,
+                ContentCapturingMode.SPAN_AND_EVENT,
+            ):
+                for for_span in (True, False):
+                    if mode == ContentCapturingMode.SPAN_ONLY and not for_span:
+                        continue
+                    if mode == ContentCapturingMode.EVENT_ONLY and for_span:
+                        continue
+                    attrs = get_content_attributes(
+                        input_messages=[
+                            InputMessage(role="user", parts=parts, name=name)
+                        ],
+                        output_messages=[
+                            OutputMessage(
+                                role="assistant", parts=parts, name=name
+                            )
+                        ],
+                        system_instruction=[generic],
+                        tool_definitions=[
+                            FunctionToolDefinition(
+                                name="tool", description=None, parameters=None
+                            )
+                        ],
+                        for_span=for_span,
+                        content_capturing_mode=mode,
+                    )
+                    if for_span:
+                        attrs = {
+                            key: json.loads(value)
+                            for key, value in attrs.items()
+                        }
+                    for key in (
+                        "gen_ai.input.messages",
+                        "gen_ai.output.messages",
+                    ):
+                        message = attrs[key][0]
+                        self.assertEqual("name" in message, name is not None)
+                        if name is not None:
+                            self.assertEqual(message["name"], name)
+                        self.assertNotIn("finish_reason", message)
+                        self.assertEqual(
+                            message["parts"],
+                            [
+                                {
+                                    "arguments": {"a": None, "items": [None]},
+                                    "name": "tool",
+                                    "type": "tool_call",
+                                },
+                                {
+                                    "response": None,
+                                    "type": "tool_call_response",
+                                },
+                                {
+                                    "name": "server",
+                                    "server_tool_call": None,
+                                    "type": "server_tool_call",
+                                },
+                                {
+                                    "server_tool_call_response": None,
+                                    "type": "server_tool_call_response",
+                                },
+                                {
+                                    "modality": "image",
+                                    "uri": "https://example.com",
+                                    "type": "uri",
+                                },
+                                {"type": "custom"},
+                            ],
+                        )
+                    self.assertEqual(
+                        attrs["gen_ai.system_instructions"],
+                        [{"type": "custom"}],
+                    )
+                    self.assertEqual(
+                        attrs["gen_ai.tool.definitions"],
+                        [
+                            {
+                                "name": "tool",
+                                "parameters": None,
+                                "type": "function",
+                            }
+                        ],
+                    )
+
+    def test_namedtuple_payload(self):
+        Pair = namedtuple("Pair", "first second")
+        payload = Pair(TextPart(content="hello"), None)
+        copied = _asdict_without_optional_none(payload)
+        self.assertIsInstance(copied, Pair)
+        self.assertEqual(
+            copied, Pair({"content": "hello", "type": "text"}, None)
+        )
+
+    def test_optional_annotation_forms(self):
+        @dataclass
+        class Payload:
+            legacy: str | None = None
+            modern: str | None = None
+            arbitrary: Any = None
+
+        self.assertEqual(
+            _asdict_without_optional_none(Payload()), {"arbitrary": None}
+        )
+        self.assertEqual(
+            _asdict_without_optional_none(Payload("", "x")),
+            {"legacy": "", "modern": "x", "arbitrary": None},
+        )
+
     def test_output_message_optional_finish_reason(self):
         message = OutputMessage(
             role=Role.ASSISTANT,

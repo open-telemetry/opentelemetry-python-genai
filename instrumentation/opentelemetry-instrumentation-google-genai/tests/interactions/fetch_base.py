@@ -577,7 +577,7 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Fetched response!","type":"text"}],"finish_reason":null,"name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Fetched response!","type":"text"}]}]',
         )
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_SYSTEM_INSTRUCTIONS],
@@ -753,7 +753,7 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Hello there.","type":"text"}],"finish_reason":null,"name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Hello there.","type":"text"}]}]',
         )
 
     @patch.dict(
@@ -800,7 +800,7 @@ class TestCase(CommonTestCaseBase):
         span = self.otel.get_span_named(_SPAN_NAME)
         self.assertEqual(
             span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"resumed text.","type":"text"}],"finish_reason":null,"name":null}]',
+            '[{"role":"assistant","parts":[{"content":"resumed text.","type":"text"}]}]',
         )
 
     @patch.dict(

@@ -118,7 +118,6 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
     }
     assert parts[2] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "image",
         "uri": "https://example.com/image.png",
     }
@@ -130,7 +129,6 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
     }
     assert parts[4] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "document",
         "uri": "https://example.com/document.pdf",
     }
@@ -146,7 +144,6 @@ def assert_multimodal_input(span: ReadableSpan) -> None:
     }
     assert parts[7] == {
         "type": "uri",
-        "mime_type": None,
         "modality": "image",
         "uri": "https://example.com/nested.png",
     }

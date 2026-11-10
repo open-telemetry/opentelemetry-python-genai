@@ -233,7 +233,7 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}]}]',
         )
 
     def test_empty_tuple_contents_mimics_sdk_error(self):
@@ -267,7 +267,7 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}],"name":null}]',
+            '[{"role":"user","parts":[{"content":"Hello","type":"text"},{"content":"world","type":"text"}]}]',
         )
 
     def test_generates_span(self):
@@ -594,7 +594,6 @@ class NonStreamingTestCase(TestCase):
                 {
                     "role": "user",
                     "parts": ({"content": "Some input", "type": "text"},),
-                    "name": None,
                 },
             ),
         )
@@ -607,7 +606,6 @@ class NonStreamingTestCase(TestCase):
                         {"content": "Some response content", "type": "text"},
                     ),
                     "finish_reason": "",
-                    "name": None,
                 },
             ),
         )
@@ -709,11 +707,11 @@ class NonStreamingTestCase(TestCase):
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_INPUT_MESSAGES],
-            '[{"role":"user","parts":[{"content":"Some input","type":"text"}],"name":null}]',
+            '[{"role":"user","parts":[{"content":"Some input","type":"text"}]}]',
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Some response content","type":"text"}],"finish_reason":"","name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Some response content","type":"text"}],"finish_reason":""}]',
         )
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS],
@@ -748,7 +746,7 @@ class NonStreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertEqual(
             span.attributes[gen_ai_attributes.GEN_AI_OUTPUT_MESSAGES],
-            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":"","name":null}]',
+            '[{"role":"assistant","parts":[{"content":"Let me think.","type":"reasoning"},{"content":"It is sunny.","type":"text"}],"finish_reason":""}]',
         )
 
     def test_log_has_extra_genai_attributes(self):
