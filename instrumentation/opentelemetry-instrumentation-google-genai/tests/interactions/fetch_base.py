@@ -221,11 +221,21 @@ class TestCase(CommonTestCaseBase):
                         {
                             "event_type": "step.start",
                             "index": 1,
+                            "step": {
+                                "type": "function_result",
+                                "call_id": "call-1",
+                                "name": "lookup",
+                                "result": "OTel docs",
+                            },
+                        },
+                        {
+                            "event_type": "step.start",
+                            "index": 2,
                             "step": {"type": "model_output"},
                         },
                         {
                             "event_type": "step.delta",
-                            "index": 1,
+                            "index": 2,
                             "delta": {
                                 "type": "text",
                                 "text": "An observability framework.",
@@ -621,6 +631,49 @@ class TestCase(CommonTestCaseBase):
         self.assertEqual(
             span.attributes["gen_ai.tool.definitions"],
             '[{"name":"dict_tool","description":"Dict tool desc","parameters":null,"type":"function"}]',
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY"},
+    )
+    def test_fetched_interaction_excludes_function_result_from_output(
+        self,
+    ) -> None:
+        from opentelemetry.instrumentation.google_genai.interactions import (
+            Interaction,
+        )
+
+        self._install()
+        self._interaction = Interaction.model_validate(
+            {
+                "id": "abc-123",
+                "model": "gemini-2.5-flash",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "output_text": "It is 22C and Sunny.",
+                "steps": [
+                    {
+                        "type": "function_result",
+                        "call_id": "call-1",
+                        "name": "get_weather",
+                        "result": "22C and Sunny",
+                    },
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {"type": "text", "text": "It is 22C and Sunny."}
+                        ],
+                    },
+                ],
+            }
+        )
+        self.run_fetch("abc-123")
+        span = self.otel.get_span_named(_SPAN_NAME)
+        self.assertEqual(
+            span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],
+            '[{"role":"assistant","parts":[{"content":"It is 22C and Sunny.","type":"text"}],"finish_reason":null,"name":null}]',
         )
 
     def test_fetch_exception_records_error(self) -> None:

@@ -218,3 +218,142 @@ class TestInteractionsParser(unittest.TestCase):
             },
         )
         self.assertEqual(parts[2], TextPart(content="Search complete"))
+
+    def test_response_to_messages_tool_call_only_no_trailing_empty_text(
+        self,
+    ) -> None:
+        interaction = Interaction.model_validate(
+            {
+                "id": "interaction-tool-only",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "requires_action",
+                "output_text": "",
+                "steps": [
+                    {
+                        "type": "function_call",
+                        "id": "call-1",
+                        "name": "get_weather",
+                        "arguments": {"city": "Paris"},
+                    }
+                ],
+            }
+        )
+
+        messages = _interactions_response_to_messages(interaction)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].finish_reason, "stop")
+        self.assertEqual(
+            messages[0].parts,
+            [
+                ToolCallRequestPart(
+                    id="call-1",
+                    name="get_weather",
+                    arguments={"city": "Paris"},
+                )
+            ],
+        )
+
+    def test_response_to_messages_empty_returns_empty_list(self) -> None:
+        interaction = Interaction.model_validate(
+            {
+                "id": "interaction-empty",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "in_progress",
+                "output_text": "",
+                "steps": [],
+            }
+        )
+
+        self.assertEqual(_interactions_response_to_messages(interaction), [])
+
+    def test_response_to_messages_excludes_function_result_input_step(
+        self,
+    ) -> None:
+        interaction = Interaction.model_validate(
+            {
+                "id": "interaction-fetched-followup",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "output_text": "It is 22C and Sunny.",
+                "steps": [
+                    {
+                        "type": "function_result",
+                        "call_id": "call-1",
+                        "name": "get_weather",
+                        "result": "22C and Sunny",
+                    },
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {"type": "text", "text": "It is 22C and Sunny."}
+                        ],
+                    },
+                ],
+            }
+        )
+
+        messages = _interactions_response_to_messages(interaction)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(
+            messages[0].parts,
+            [TextPart(content="It is 22C and Sunny.")],
+        )
+
+    def test_input_to_messages_user_input_step(self) -> None:
+        steps = [
+            {
+                "type": "user_input",
+                "content": [
+                    {"type": "text", "text": "Hello from user_input"},
+                    {
+                        "type": "document",
+                        "mime_type": "application/pdf",
+                        "uri": "https://example.com/doc.pdf",
+                    },
+                ],
+            }
+        ]
+        messages = _interactions_input_to_messages(steps)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(
+            messages[0].parts,
+            [
+                TextPart(content="Hello from user_input"),
+                UriPart(
+                    modality="document",
+                    mime_type="application/pdf",
+                    uri="https://example.com/doc.pdf",
+                ),
+            ],
+        )
+
+    def test_input_to_messages_function_result_with_sdk_models(self) -> None:
+        interaction = Interaction.model_validate(
+            {
+                "id": "interaction-func-result",
+                "created": "2026-06-24T18:51:26Z",
+                "updated": "2026-06-24T18:51:26Z",
+                "status": "completed",
+                "steps": [
+                    {
+                        "type": "function_result",
+                        "call_id": "call-123",
+                        "name": "get_weather",
+                        "result": [{"type": "text", "text": "22C and Sunny"}],
+                    }
+                ],
+            }
+        )
+        messages = _interactions_input_to_messages(interaction.steps)
+        self.assertEqual(len(messages), 1)
+        part = messages[0].parts[0]
+        self.assertIsInstance(part, ToolCallResponsePart)
+        self.assertEqual(part.id, "call-123")
+        self.assertIsInstance(part.response, list)
+        self.assertIsInstance(part.response[0], dict)
+        self.assertEqual(part.response[0]["text"], "22C and Sunny")
