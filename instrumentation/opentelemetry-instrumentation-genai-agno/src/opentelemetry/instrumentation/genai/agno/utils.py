@@ -97,6 +97,12 @@ def populate_provider_data(
         invocation.response_model_name = str(resp_model)
 
 
+_GOOGLE_PROVIDERS = (
+    GenAiProviderNameValues.GCP_GEMINI.value,
+    GenAiProviderNameValues.GCP_VERTEX_AI.value,
+)
+
+
 def record_model_token_usage(
     invocation: InferenceInvocation,
     metrics: Any,
@@ -106,8 +112,14 @@ def record_model_token_usage(
         return
     if (tok := safe_int(getattr(metrics, "input_tokens", None))) is not None:
         invocation.input_tokens = tok
-    if (tok := safe_int(getattr(metrics, "output_tokens", None))) is not None:
-        invocation.output_tokens = tok
+    output_tokens = safe_int(getattr(metrics, "output_tokens", None))
+    reasoning_tokens = safe_int(getattr(metrics, "reasoning_tokens", None))
+    if reasoning_tokens is not None and reasoning_tokens > 0:
+        invocation.thinking_tokens = reasoning_tokens
+        if invocation.provider in _GOOGLE_PROVIDERS:
+            output_tokens = (output_tokens or 0) + reasoning_tokens
+    if output_tokens is not None:
+        invocation.output_tokens = output_tokens
     if (
         tok := safe_int(getattr(metrics, "cache_read_tokens", None))
     ) is not None and tok > 0:
@@ -117,9 +129,13 @@ def record_model_token_usage(
     ) is not None and tok > 0:
         invocation.cache_write_input_tokens = tok
     if (
-        tok := safe_int(getattr(metrics, "reasoning_tokens", None))
+        tok := safe_int(getattr(metrics, "audio_input_tokens", None))
     ) is not None and tok > 0:
-        invocation.thinking_tokens = tok
+        invocation.audio_input_tokens = tok
+    if (
+        tok := safe_int(getattr(metrics, "audio_output_tokens", None))
+    ) is not None and tok > 0:
+        invocation.audio_output_tokens = tok
 
 
 def format_retrieval_document(doc: Document) -> RetrievalDocument:
