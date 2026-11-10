@@ -120,12 +120,18 @@ class InteractionsServerToolCallingScenario(Scenario):
             p for p in parts if p["type"] == "server_tool_call_response"
         ]
         assert len(calls) == 1
-        assert calls[0]["name"] == "google_search"
-        assert calls[0]["server_tool_call"]["type"] == "google_search"
-        assert calls[0]["server_tool_call"]["search_type"] == "web_search"
-        assert calls[0]["server_tool_call"]["arguments"]["queries"]
+        assert calls[0] == {
+            "type": "server_tool_call",
+            "id": "zpsqtr34",
+            "name": "google_search",
+            "server_tool_call": {
+                "type": "google_search",
+                "search_type": "web_search",
+                "arguments": {"queries": ["OpenTelemetry"]},
+            },
+        }
         assert len(responses) == 1
-        assert responses[0]["id"] == calls[0]["id"]
+        assert responses[0]["id"] == "zpsqtr34"
         assert (
             responses[0]["server_tool_call_response"]["type"]
             == "google_search"

@@ -44,11 +44,17 @@ class ServerToolCallingScenario(Scenario):
             p for p in parts if p["type"] == "server_tool_call_response"
         ]
         assert len(calls) == 1
-        assert calls[0]["name"] == "web_search"
-        assert calls[0]["server_tool_call"]["type"] == "web_search"
-        assert calls[0]["server_tool_call"]["input"]["query"]
+        assert calls[0] == {
+            "type": "server_tool_call",
+            "id": "srvtoolu_01MKJreRr9gZQLEfMAkq8FBN",
+            "name": "web_search",
+            "server_tool_call": {
+                "type": "web_search",
+                "input": {"query": "OpenTelemetry"},
+            },
+        }
         assert len(responses) == 1
-        assert responses[0]["id"] == calls[0]["id"]
+        assert responses[0]["id"] == "srvtoolu_01MKJreRr9gZQLEfMAkq8FBN"
         assert (
             responses[0]["server_tool_call_response"]["type"] == "web_search"
         )
