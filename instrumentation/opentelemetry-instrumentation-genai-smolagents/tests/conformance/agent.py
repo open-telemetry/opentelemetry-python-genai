@@ -48,9 +48,9 @@ class AgentScenario(Scenario):
         ):
             with vcr.use_cassette("agent_with_image.yaml"):
                 model = OpenAIModel(
-                    model_id="gemini-2.5-flash",
-                    api_key=os.getenv("GOOGLE_API_KEY", "test_openai_api_key"),
-                    api_base="https://generativelanguage.googleapis.com/v1beta/openai",
+                    model_id="gpt-4o",
+                    api_key=os.getenv("OPENAI_API_KEY", "test_openai_api_key"),
+                    api_base="https://api.openai.com/v1",
                 )
                 agent = ToolCallingAgent(tools=[], model=model, max_steps=3)
                 agent.run(

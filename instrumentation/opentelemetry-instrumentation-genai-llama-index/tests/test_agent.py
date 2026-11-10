@@ -470,7 +470,7 @@ async def test_delegated_inference_is_not_reemitted(
 
     with vcr.use_cassette("inference.yaml"):
         result = await agent.run(user_msg="Hello!")
-    assert result.response.content
+    assert result.response.content == "Hello! How can I assist you today?"
 
     spans = span_exporter.get_finished_spans()
     assert [span.name for span in spans] == ["invoke_agent provider-agent"]
@@ -648,14 +648,11 @@ async def test_agent_max_iterations_re_raises(
 
 @pytest.mark.asyncio
 async def test_react_agent_malformed_response_reaches_max_iterations(
-    span_exporter,
-    instrument_llama_index,
-    gemini_openai_llm_without_retries,
-    vcr,
+    span_exporter, instrument_llama_index, openai_llm_without_retries, vcr
 ) -> None:
     agent = ReActAgent(
         name="malformed-react-agent",
-        llm=gemini_openai_llm_without_retries,
+        llm=openai_llm_without_retries,
         streaming=False,
     )
 

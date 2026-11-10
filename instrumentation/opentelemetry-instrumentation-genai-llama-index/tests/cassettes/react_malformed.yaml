@@ -12,7 +12,7 @@ interactions:
             "content": "Reply with only the single word 'hello' and nothing else (do not include Thought: or Answer:)."
           }
         ],
-        "model": "gemini-2.5-flash",
+        "model": "gpt-4o-mini",
         "stream": false,
         "temperature": 0.1
       }
@@ -26,11 +26,11 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '2300'
+      - '2295'
       content-type:
       - application/json
       host:
-      - generativelanguage.googleapis.com
+      - api.openai.com
       user-agent:
       - AsyncOpenAI/Python 2.54.0
       x-stainless-arch:
@@ -52,63 +52,96 @@ interactions:
       x-stainless-runtime-version:
       - 3.14.3
     method: POST
-    uri: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+    uri: https://api.openai.com/v1/chat/completions
   response:
     body:
       string: |-
         {
+          "id": "chatcmpl-EiibJEnldEPYUXlyphRgL2ZIToAU8",
+          "object": "chat.completion",
+          "created": 1794326585,
+          "model": "gpt-4o-mini-2024-07-18",
           "choices": [
             {
-              "finish_reason": "stop",
               "index": 0,
               "message": {
+                "role": "assistant",
                 "content": "hello",
-                "role": "assistant"
-              }
+                "refusal": null,
+                "annotations": []
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
             }
           ],
-          "created": 1794257734,
-          "id": "RjPyauj_AevYytMP-fveUQ",
-          "model": "gemini-2.5-flash",
-          "object": "chat.completion",
           "usage": {
+            "prompt_tokens": 468,
             "completion_tokens": 1,
-            "prompt_tokens": 484,
-            "total_tokens": 518
-          }
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          },
+          "service_tier": "default",
+          "system_fingerprint": "fp_3a3c79652c"
         }
     headers:
-      cache-control:
-      - private
+      access-control-expose-headers:
+      - X-Request-ID
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a58649033e755886-IAD
+      connection:
+      - keep-alive
       content-length:
-      - '273'
+      - '813'
       content-type:
       - application/json
       date:
-      - Mon, 09 Nov 2026 20:55:34 GMT
-      expires:
-      - Mon, 09 Nov 2026 20:55:34 GMT
+      - Tue, 10 Nov 2026 16:03:05 GMT
       openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '383'
       openai-project: test_openai_project_id
-      p3p:
-      - CP="This is not a P3P policy! See g.co/p3phelp for more info."
+      openai-version:
+      - '2020-10-01'
       server:
-      - scaffolding on HTTPServer2
-      server-timing:
-      - gfet4t7; dur=743
+      - cloudflare
       set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
       transfer-encoding:
       - chunked
-      vary:
-      - Origin
-      - X-Origin
-      - Referer
       x-content-type-options:
       - nosniff
-      x-frame-options:
-      - SAMEORIGIN
-      x-xss-protection:
-      - '0'
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '2000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '1999470'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 15ms
+      x-request-id:
+      - req_8024f00d2e574ec7a642b4723334b8e7
     status:
       code: 200
       message: OK

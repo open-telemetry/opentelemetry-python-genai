@@ -2,28 +2,28 @@ interactions:
 - request:
     body: |-
       {
-        "messages": [
+        "include": [],
+        "input": [
           {
-            "role": "user",
-            "content": "Call _failing_tool now."
+            "content": "run tool",
+            "role": "user"
           }
         ],
-        "model": "gemini-2.5-flash",
+        "model": "gpt-4o-mini",
+        "prompt_cache_key": "agents-sdk:run:d1de16be43254bab898798ce6941407d",
         "tools": [
           {
+            "name": "_failing_tool",
+            "parameters": {
+              "properties": {},
+              "title": "_failing_tool_args",
+              "type": "object",
+              "additionalProperties": false,
+              "required": []
+            },
+            "strict": true,
             "type": "function",
-            "function": {
-              "name": "_failing_tool",
-              "description": "",
-              "parameters": {
-                "properties": {},
-                "title": "_failing_tool_args",
-                "type": "object",
-                "additionalProperties": false,
-                "required": []
-              },
-              "strict": true
-            }
+            "description": ""
           }
         ]
       }
@@ -37,11 +37,11 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '309'
+      - '355'
       content-type:
       - application/json
       host:
-      - generativelanguage.googleapis.com
+      - api.openai.com
       user-agent:
       - Agents/Python 0.20.0
       x-stainless-arch:
@@ -63,119 +63,204 @@ interactions:
       x-stainless-runtime-version:
       - 3.14.3
     method: POST
-    uri: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+    uri: https://api.openai.com/v1/responses
   response:
     body:
       string: |-
         {
-          "choices": [
+          "id": "resp_06b44615f84a5789006af33f9a8d1c87d29360ab857f6936da",
+          "object": "response",
+          "created_at": 1794326426,
+          "status": "completed",
+          "access_programs": null,
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1794326427,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "image": {
+            "context_compression": "disabled"
+          },
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
             {
-              "finish_reason": "tool_calls",
-              "index": 0,
-              "message": {
-                "role": "assistant",
-                "tool_calls": [
-                  {
-                    "function": {
-                      "arguments": "{}",
-                      "name": "_failing_tool"
-                    },
-                    "id": "function-call-17494489892450546264",
-                    "type": "function"
-                  }
-                ]
-              }
+              "id": "fc_06b44615f84a5789006af33f9bb6f887d2b5ee7b71b983bffe",
+              "type": "function_call",
+              "status": "completed",
+              "arguments": "{}",
+              "call_id": "call_kgILf35ue3wMpYu9kIkCnpRT",
+              "name": "_failing_tool"
             }
           ],
-          "created": 1794257600,
-          "id": "wDLyavLyEa_i0_gPrcqB6As",
-          "model": "gemini-2.5-flash",
-          "object": "chat.completion",
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": "agents-sdk:run:d1de16be43254bab898798ce6941407d",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "function",
+              "description": null,
+              "name": "_failing_tool",
+              "output_schema": null,
+              "parameters": {
+                "properties": {},
+                "title": "_failing_tool_args",
+                "type": "object",
+                "additionalProperties": false,
+                "required": []
+              },
+              "strict": true
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
           "usage": {
-            "completion_tokens": 11,
-            "prompt_tokens": 32,
-            "total_tokens": 73
-          }
+            "input_tokens": 29,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 13,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 42
+          },
+          "user": null,
+          "metadata": {}
         }
     headers:
-      cache-control:
-      - private
+      access-control-expose-headers:
+      - X-Request-ID, Server-Timing-Total
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a58645213bc55886-IAD
+      connection:
+      - keep-alive
       content-length:
-      - '391'
+      - '2358'
       content-type:
       - application/json
       date:
-      - Mon, 09 Nov 2026 20:53:20 GMT
-      expires:
-      - Mon, 09 Nov 2026 20:53:20 GMT
+      - Tue, 10 Nov 2026 16:00:27 GMT
       openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1331'
       openai-project: test_openai_project_id
-      p3p:
-      - CP="This is not a P3P policy! See g.co/p3phelp for more info."
+      openai-version:
+      - '2020-10-01'
       server:
-      - scaffolding on HTTPServer2
-      server-timing:
-      - gfet4t7; dur=782
+      - cloudflare
       set-cookie: test_set_cookie
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
       transfer-encoding:
       - chunked
-      vary:
-      - Origin
-      - X-Origin
-      - Referer
       x-content-type-options:
       - nosniff
-      x-frame-options:
-      - SAMEORIGIN
-      x-xss-protection:
-      - '0'
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '2000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '1999754'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 7ms
+      x-request-id:
+      - req_567951920f4e4f2ba3811b9b077fc1ce
     status:
       code: 200
       message: OK
 - request:
     body: |-
       {
-        "messages": [
+        "include": [],
+        "input": [
           {
-            "role": "user",
-            "content": "Call _failing_tool now."
+            "content": "run tool",
+            "role": "user"
           },
           {
-            "role": "assistant",
-            "content": null,
-            "tool_calls": [
-              {
-                "id": "function-call-17494489892450546264",
-                "type": "function",
-                "function": {
-                  "name": "_failing_tool",
-                  "arguments": "{}"
-                }
-              }
-            ]
+            "arguments": "{}",
+            "call_id": "call_kgILf35ue3wMpYu9kIkCnpRT",
+            "name": "_failing_tool",
+            "type": "function_call",
+            "id": "fc_06b44615f84a5789006af33f9bb6f887d2b5ee7b71b983bffe",
+            "status": "completed"
           },
           {
-            "role": "tool",
-            "tool_call_id": "function-call-17494489892450546264",
-            "content": "An error occurred while running the tool. Please try again. Error: database connection failed"
+            "call_id": "call_kgILf35ue3wMpYu9kIkCnpRT",
+            "output": "An error occurred while running the tool. Please try again. Error: database connection failed",
+            "type": "function_call_output"
           }
         ],
-        "model": "gemini-2.5-flash",
+        "model": "gpt-4o-mini",
+        "prompt_cache_key": "agents-sdk:run:d1de16be43254bab898798ce6941407d",
         "tools": [
           {
+            "name": "_failing_tool",
+            "parameters": {
+              "properties": {},
+              "title": "_failing_tool_args",
+              "type": "object",
+              "additionalProperties": false,
+              "required": []
+            },
+            "strict": true,
             "type": "function",
-            "function": {
-              "name": "_failing_tool",
-              "description": "",
-              "parameters": {
-                "properties": {},
-                "title": "_failing_tool_args",
-                "type": "object",
-                "additionalProperties": false,
-                "required": []
-              },
-              "strict": true
-            }
+            "description": ""
           }
         ]
       }
@@ -189,13 +274,13 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '649'
+      - '723'
       content-type:
       - application/json
       cookie:
       - test_cookie
       host:
-      - generativelanguage.googleapis.com
+      - api.openai.com
       user-agent:
       - Agents/Python 0.20.0
       x-stainless-arch:
@@ -217,63 +302,169 @@ interactions:
       x-stainless-runtime-version:
       - 3.14.3
     method: POST
-    uri: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+    uri: https://api.openai.com/v1/responses
   response:
     body:
       string: |-
         {
-          "choices": [
+          "id": "resp_06b44615f84a5789006af33f9c3a1c87d2a9d884cac28eb4f1",
+          "object": "response",
+          "created_at": 1794326428,
+          "status": "completed",
+          "access_programs": null,
+          "background": false,
+          "billing": {
+            "payer": "developer"
+          },
+          "completed_at": 1794326429,
+          "error": null,
+          "frequency_penalty": 0.0,
+          "image": {
+            "context_compression": "disabled"
+          },
+          "incomplete_details": null,
+          "instructions": null,
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-4o-mini-2024-07-18",
+          "moderation": null,
+          "output": [
             {
-              "finish_reason": "stop",
-              "index": 0,
-              "message": {
-                "content": "An error occurred while calling the tool: database connection failed. Please try again.",
-                "role": "assistant"
-              }
+              "id": "msg_06b44615f84a5789006af33f9cfc2087d2a09b4157f2882d34",
+              "type": "message",
+              "status": "completed",
+              "content": [
+                {
+                  "type": "output_text",
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "It seems there was an error while trying to run the tool. If you have a specific task or question, feel free to provide details and I'll do my best to assist you!"
+                }
+              ],
+              "role": "assistant"
             }
           ],
-          "created": 1794257601,
-          "id": "wTLyata9BPH8wbUPxMOf6Qk",
-          "model": "gemini-2.5-flash",
-          "object": "chat.completion",
+          "parallel_tool_calls": true,
+          "presence_penalty": 0.0,
+          "previous_response_id": null,
+          "prompt_cache_key": "agents-sdk:run:d1de16be43254bab898798ce6941407d",
+          "prompt_cache_retention": "in_memory",
+          "reasoning": {
+            "context": null,
+            "effort": null,
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "default",
+          "store": true,
+          "temperature": 1.0,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "medium"
+          },
+          "tool_choice": "auto",
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          },
+          "tools": [
+            {
+              "type": "function",
+              "description": null,
+              "name": "_failing_tool",
+              "output_schema": null,
+              "parameters": {
+                "properties": {},
+                "title": "_failing_tool_args",
+                "type": "object",
+                "additionalProperties": false,
+                "required": []
+              },
+              "strict": true
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
           "usage": {
-            "completion_tokens": 16,
-            "prompt_tokens": 77,
-            "total_tokens": 128
-          }
+            "input_tokens": 69,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 38,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 107
+          },
+          "user": null,
+          "metadata": {}
         }
     headers:
-      cache-control:
-      - private
+      Set-Cookie: test_set_cookie
+      access-control-expose-headers:
+      - X-Request-ID, Server-Timing-Total
+      - CF-Ray
+      - CF-Ray
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a586452fba995886-IAD
+      connection:
+      - keep-alive
       content-length:
-      - '356'
+      - '2594'
       content-type:
       - application/json
       date:
-      - Mon, 09 Nov 2026 20:53:21 GMT
-      expires:
-      - Mon, 09 Nov 2026 20:53:21 GMT
+      - Tue, 10 Nov 2026 16:00:29 GMT
       openai-organization: test_openai_org_id
+      openai-processing-ms:
+      - '1426'
       openai-project: test_openai_project_id
-      p3p:
-      - CP="This is not a P3P policy! See g.co/p3phelp for more info."
+      openai-version:
+      - '2020-10-01'
       server:
-      - scaffolding on HTTPServer2
-      server-timing:
-      - gfet4t7; dur=904
-      set-cookie: test_set_cookie
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
       transfer-encoding:
       - chunked
-      vary:
-      - Origin
-      - X-Origin
-      - Referer
       x-content-type-options:
       - nosniff
-      x-frame-options:
-      - SAMEORIGIN
-      x-xss-protection:
-      - '0'
+      x-ratelimit-limit-requests:
+      - '5000'
+      x-ratelimit-limit-tokens:
+      - '2000000'
+      x-ratelimit-remaining-requests:
+      - '4999'
+      x-ratelimit-remaining-tokens:
+      - '1999714'
+      x-ratelimit-reset-requests:
+      - 12ms
+      x-ratelimit-reset-tokens:
+      - 8ms
+      x-request-id:
+      - req_60fa2ec959314d86b70f98c354b9115f
     status:
       code: 200
       message: OK

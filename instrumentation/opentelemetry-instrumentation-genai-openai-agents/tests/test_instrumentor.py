@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock
@@ -12,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, NonCallableMock
 import agents
 import agents.tracing
 import pytest
-from openai import AsyncOpenAI
 from openai.types.responses import Response, ResponseCompletedEvent
 
 from opentelemetry.instrumentation.genai.openai_agents import (
@@ -297,19 +295,12 @@ async def test_runner_failing_tool_records_span_error(
         meter_provider=meter_provider,
         content_capture="SPAN_ONLY",
     ):
-        model = agents.OpenAIChatCompletionsModel(
-            model="gemini-2.5-flash",
-            openai_client=AsyncOpenAI(
-                api_key=os.getenv("GOOGLE_API_KEY", "test_openai_api_key"),
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            ),
-        )
         agent = agents.Agent(
             name="test_agent",
-            model=model,
+            model="gpt-4o-mini",
             tools=[_failing_tool],
         )
-        result = await agents.Runner.run(agent, "Call _failing_tool now.")
+        result = await agents.Runner.run(agent, "run tool")
 
     tool_outputs = [
         item.output
