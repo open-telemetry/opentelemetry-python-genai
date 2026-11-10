@@ -272,7 +272,7 @@ async def test_async_messages_create_captures_multimodal_content(
         "test_async_messages_create_captures_multimodal_content.yaml"
     ):
         await async_anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=100,
             messages=[multimodal_input_message()],
         )
@@ -502,7 +502,7 @@ async def test_async_messages_create_streaming_captures_multimodal_content(
         "test_async_messages_create_streaming_captures_multimodal_content.yaml"
     ):
         stream = await async_anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=100,
             messages=[multimodal_input_message()],
             stream=True,
@@ -1007,7 +1007,7 @@ async def test_async_messages_create_captures_thinking_content(
     span_exporter, async_anthropic_client, instrument_with_content
 ):
     """Test that async thinking blocks are captured as reasoning parts."""
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     messages = [{"role": "user", "content": "What is 17*19? Think first."}]
 
     response = await async_anthropic_client.messages.create(
@@ -2740,7 +2740,7 @@ async def test_async_beta_messages_create_streaming(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
-        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+        == "msg_011CguRn3RBxnQAzs9GYn8Tn"
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
@@ -2786,7 +2786,7 @@ async def test_async_beta_messages_stream(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
-        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+        == "msg_011CguRn7w3qnVkqNC5UJYht"
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
@@ -2884,7 +2884,7 @@ async def test_async_beta_messages_with_streaming_response(
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == model
     assert (
         span.attributes[GenAIAttributes.GEN_AI_RESPONSE_ID]
-        == "msg_01VY8H3oPFs4WWVnJXFDxNhU"
+        == "msg_011CguRn3RBxnQAzs9GYn8Tn"
     )
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == model
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
@@ -3020,7 +3020,7 @@ async def test_async_beta_messages_create_streaming_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 
@@ -3059,7 +3059,7 @@ async def test_async_beta_messages_stream_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 

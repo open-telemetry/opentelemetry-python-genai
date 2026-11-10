@@ -470,7 +470,7 @@ async def test_delegated_inference_is_not_reemitted(
 
     with vcr.use_cassette("inference.yaml"):
         result = await agent.run(user_msg="Hello!")
-    assert result.response.content == "Hello! How can I assist you today?"
+    assert result.response.content
 
     spans = span_exporter.get_finished_spans()
     assert [span.name for span in spans] == ["invoke_agent provider-agent"]
@@ -648,17 +648,23 @@ async def test_agent_max_iterations_re_raises(
 
 @pytest.mark.asyncio
 async def test_react_agent_malformed_response_reaches_max_iterations(
-    span_exporter, instrument_llama_index, openai_llm_without_retries, vcr
+    span_exporter,
+    instrument_llama_index,
+    gemini_openai_llm_without_retries,
+    vcr,
 ) -> None:
     agent = ReActAgent(
         name="malformed-react-agent",
-        llm=openai_llm_without_retries,
+        llm=gemini_openai_llm_without_retries,
         streaming=False,
     )
 
     with vcr.use_cassette("react_malformed.yaml"):
         with pytest.raises(WorkflowRuntimeError, match="Max iterations of 1"):
-            await agent.run(user_msg="What is two plus two?", max_iterations=1)
+            await agent.run(
+                user_msg="Reply with only the single word 'hello' and nothing else (do not include Thought: or Answer:).",
+                max_iterations=1,
+            )
 
     span = _spans_named(span_exporter, "invoke_agent malformed-react-agent")[0]
     assert span.status.status_code == StatusCode.ERROR

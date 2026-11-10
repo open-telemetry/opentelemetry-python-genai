@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from google.genai import Client
@@ -29,10 +30,6 @@ class ToolCallingScenario(Scenario):
         "gen_ai.client.token.usage",
     )
     expected_violations = (
-        ExpectedViolation(
-            advice_id="genai_expected_attribute_missing",
-            message_substring="gen_ai.response.id",
-        ),
         # The SDK invokes the tool with its arguments only, and the Gemini API
         # does not return a function call id here.
         ExpectedViolation(
@@ -62,7 +59,10 @@ class ToolCallingScenario(Scenario):
         ):
             with vcr.use_cassette("tool_calling_conformance.yaml"):
                 client = Client(
-                    api_key="test_google_genai_api_key", vertexai=False
+                    api_key=os.getenv(
+                        "GOOGLE_API_KEY", "test_google_genai_api_key"
+                    ),
+                    vertexai=False,
                 )
                 client.models.generate_content(
                     model="gemini-2.5-flash",

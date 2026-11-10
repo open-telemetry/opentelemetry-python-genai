@@ -40,7 +40,7 @@ _REAL_PNG_B64 = (
 )
 
 # An Anthropic Files API image reference. Pinned to the recorded cassette.
-_ANTHROPIC_FILE_ID = "file_011CNhaGCM5eyZmDsFmQJVQe"
+_ANTHROPIC_FILE_ID = "file_01Y2U724wHRo2D9zsfYpvQhK"
 
 
 class OpenAIMultimodalScenario(Scenario):
@@ -148,9 +148,10 @@ class AnthropicMultimodalScenario(Scenario):
                 content_capture="SPAN_ONLY",
             ):
                 llm = ChatAnthropic(
-                    model="claude-sonnet-4-5",
+                    model="claude-sonnet-4-6",
                     temperature=0.1,
                     max_tokens=1024,
+                    default_headers={"anthropic-beta": "files-api-2025-04-14"},
                 )
                 messages = [
                     HumanMessage(
@@ -350,9 +351,10 @@ class AnthropicFileRefMultimodalScenario(Scenario):
                 content_capture="SPAN_ONLY",
             ):
                 llm = ChatAnthropic(
-                    model="claude-sonnet-4-5",
+                    model="claude-sonnet-4-6",
                     temperature=0.1,
                     max_tokens=1024,
+                    default_headers={"anthropic-beta": "files-api-2025-04-14"},
                 )
                 messages = [
                     HumanMessage(

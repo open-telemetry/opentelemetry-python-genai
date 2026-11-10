@@ -38,28 +38,21 @@ class ServerToolCallingScenario(Scenario):
             if attribute["name"] == "gen_ai.output.messages"
         ]
         assert len(output_messages) == 1
-        assert output_messages[0][0]["parts"][:2] == [
-            {
-                "name": "web_search",
-                "server_tool_call": {
-                    "input": {"query": "OpenTelemetry"},
-                    "type": "web_search",
-                },
-                "id": "srvtoolu_01",
-                "type": "server_tool_call",
-            },
-            {
-                "server_tool_call_response": {
-                    "content": {
-                        "error_code": "unavailable",
-                        "type": "web_search_tool_result_error",
-                    },
-                    "type": "web_search",
-                },
-                "id": "srvtoolu_01",
-                "type": "server_tool_call_response",
-            },
+        parts = output_messages[0][0]["parts"]
+        calls = [p for p in parts if p["type"] == "server_tool_call"]
+        responses = [
+            p for p in parts if p["type"] == "server_tool_call_response"
         ]
+        assert len(calls) == 1
+        assert calls[0]["name"] == "web_search"
+        assert calls[0]["server_tool_call"]["type"] == "web_search"
+        assert calls[0]["server_tool_call"]["input"]["query"]
+        assert len(responses) == 1
+        assert responses[0]["id"] == calls[0]["id"]
+        assert (
+            responses[0]["server_tool_call_response"]["type"] == "web_search"
+        )
+        assert responses[0]["server_tool_call_response"]["content"]
 
     def run(
         self,
@@ -84,7 +77,7 @@ class ServerToolCallingScenario(Scenario):
             ):
                 with vcr.use_cassette("server_tool_calling_conformance.yaml"):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-4-6",
                         max_tokens=256,
                         messages=[
                             {

@@ -1,52 +1,282 @@
 interactions:
 - request:
-    body: '{"contents": [{"parts": [{"text": "What is the weather in Boston?"}], "role":
-      "user"}], "tools": [{"functionDeclarations": [{"description": "Get weather for
-      location", "name": "get_weather", "parameters": {"properties": {"location":
-      {"type": "STRING"}}, "required": ["location"], "type": "OBJECT"}}]}]}'
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "What is the weather in Boston?"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "description": "Get weather for location",
+                "name": "get_weather",
+                "parameters_json_schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "location"
+                  ]
+                },
+                "response_json_schema": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {}
+      }
     headers:
       accept:
       - '*/*'
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '382'
       content-type:
       - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.34.0+afc gl-python/3.14.3
+      x-goog-api-client:
+      - google-genai-sdk/2.34.0+afc gl-python/3.14.3
+      x-goog-api-key:
+      - test_google_genai_api_key
     method: POST
     uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
   response:
     body:
-      string: '{"candidates": [{"content": {"parts": [{"functionCall": {"args": {"location":
-        "Boston"}, "name": "get_weather"}}], "role": "model"}, "finishReason": "STOP",
-        "index": 0}], "modelVersion": "gemini-2.5-flash", "usageMetadata": {"candidatesTokenCount":
-        5, "promptTokenCount": 10, "totalTokenCount": 15}}'
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "functionCall": {
+                      "name": "get_weather",
+                      "args": {
+                        "location": "Boston"
+                      }
+                    },
+                    "thoughtSignature": "Co8CAWkUfROdEC9/KfgPZHzxt/Kcs6vRJzz8+7VP44Ww90fOk013gCqr5ggliHbA77LWkxW42ypOuU2SL4zxAyRY94kiuafJICyZmcUIekIORrl/3dC6pYteNlhqwznVi/+O4nPGyRMIYSFy4OiEqme2fgi4SP7DjUaJKD5sa89lPhM9y8JKaZNA+gsM0e3eGArG6ylkrReUyMjmsmJoerxH4Tr8Ytml55+Ho5UDkecyqT/X+FAyKHaYxCpRFQ7CHUd0fdkJ27EwcCCQWgUCe5sezxNYHJZb6kOkQNodudrPoV0+hG/PglacOOhPbGNQRXav9pw1LANgiaRrJEIwyYCg6EPp17a+uQq5StNQ6dpCqg=="
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0,
+              "finishMessage": "Model generated function call(s)."
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 44,
+            "candidatesTokenCount": 15,
+            "totalTokenCount": 117,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 44
+              }
+            ],
+            "thoughtsTokenCount": 58,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "SDDyari6N5-o5NoPoc-H2AU"
+        }
     headers:
+      Set-Cookie: test_set_cookie
+      content-length:
+      - '1173'
       content-type:
-      - application/json
+      - application/json; charset=UTF-8
+      date:
+      - Mon, 09 Nov 2026 20:42:49 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=881
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-goog-api-key: test_google_genai_api_key
+      x-xss-protection:
+      - '0'
     status:
       code: 200
       message: OK
 - request:
-    body: '{"contents": [{"parts": [{"text": "What is the weather in Boston?"}], "role":
-      "user"}, {"parts": [{"functionCall": {"args": {"location": "Boston"}, "name":
-      "get_weather"}}], "role": "model"}, {"parts": [{"functionResponse": {"name":
-      "get_weather", "response": {"result": "sunny"}}}], "role": "user"}], "tools":
-      [{"functionDeclarations": [{"description": "Get weather for location", "name":
-      "get_weather", "parameters": {"properties": {"location": {"type": "STRING"}},
-      "required": ["location"], "type": "OBJECT"}}]}]}'
+    body: |-
+      {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "What is the weather in Boston?"
+              }
+            ],
+            "role": "user"
+          },
+          {
+            "parts": [
+              {
+                "functionCall": {
+                  "args": {
+                    "location": "Boston"
+                  },
+                  "name": "get_weather"
+                },
+                "thoughtSignature": "Co8CAWkUfROdEC9_KfgPZHzxt_Kcs6vRJzz8-7VP44Ww90fOk013gCqr5ggliHbA77LWkxW42ypOuU2SL4zxAyRY94kiuafJICyZmcUIekIORrl_3dC6pYteNlhqwznVi_-O4nPGyRMIYSFy4OiEqme2fgi4SP7DjUaJKD5sa89lPhM9y8JKaZNA-gsM0e3eGArG6ylkrReUyMjmsmJoerxH4Tr8Ytml55-Ho5UDkecyqT_X-FAyKHaYxCpRFQ7CHUd0fdkJ27EwcCCQWgUCe5sezxNYHJZb6kOkQNodudrPoV0-hG_PglacOOhPbGNQRXav9pw1LANgiaRrJEIwyYCg6EPp17a-uQq5StNQ6dpCqg=="
+              }
+            ],
+            "role": "model"
+          },
+          {
+            "parts": [
+              {
+                "functionResponse": {
+                  "name": "get_weather",
+                  "response": {
+                    "result": "sunny"
+                  }
+                }
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "description": "Get weather for location",
+                "name": "get_weather",
+                "parameters_json_schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "location"
+                  ]
+                },
+                "response_json_schema": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        ],
+        "generationConfig": {}
+      }
     headers:
       accept:
       - '*/*'
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '988'
       content-type:
       - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.34.0+afc gl-python/3.14.3
+      x-goog-api-client:
+      - google-genai-sdk/2.34.0+afc gl-python/3.14.3
+      x-goog-api-key:
+      - test_google_genai_api_key
     method: POST
     uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
   response:
     body:
-      string: '{"candidates": [{"content": {"parts": [{"text": "The weather in Boston
-        is sunny."}], "role": "model"}, "finishReason": "STOP", "index": 0}], "modelVersion":
-        "gemini-2.5-flash", "usageMetadata": {"candidatesTokenCount": 10, "promptTokenCount":
-        20, "totalTokenCount": 30}}'
+      string: |-
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "The weather in Boston is sunny."
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 74,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 81,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 74
+              }
+            ],
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-2.5-flash",
+          "responseId": "STDyaoPFMfzMytMP4p6H6AU"
+        }
     headers:
+      Set-Cookie: test_set_cookie
+      content-length:
+      - '573'
       content-type:
-      - application/json
+      - application/json; charset=UTF-8
+      date:
+      - Mon, 09 Nov 2026 20:42:50 GMT
+      server:
+      - scaffolding on HTTPServer2
+      server-timing:
+      - gfet4t7; dur=461
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-goog-api-key: test_google_genai_api_key
+      x-xss-protection:
+      - '0'
     status:
       code: 200
       message: OK

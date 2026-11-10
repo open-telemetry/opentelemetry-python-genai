@@ -33,13 +33,31 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def openai_llm() -> OpenAI:
-    return OpenAI(model="gpt-4o-mini", temperature=0.1)
+    return OpenAI(
+        model="gpt-4o-mini",
+        temperature=0.1,
+        api_key=os.getenv("GOOGLE_API_KEY", "test_openai_api_key"),
+        api_base="https://generativelanguage.googleapis.com/v1beta/openai",
+        additional_kwargs={"model": "gemini-2.5-flash"},
+    )
 
 
 @pytest.fixture
 def openai_llm_without_retries() -> OpenAI:
     # The default three retries would replay an error cassette four times.
     return OpenAI(model="gpt-4o-mini", temperature=0.1, max_retries=0)
+
+
+@pytest.fixture
+def gemini_openai_llm_without_retries() -> OpenAI:
+    return OpenAI(
+        model="gpt-4o-mini",
+        temperature=0.1,
+        max_retries=0,
+        api_key=os.getenv("GOOGLE_API_KEY", "test_openai_api_key"),
+        api_base="https://generativelanguage.googleapis.com/v1beta/openai",
+        additional_kwargs={"model": "gemini-2.5-flash"},
+    )
 
 
 @pytest.fixture

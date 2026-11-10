@@ -522,7 +522,7 @@ def test_sync_messages_create_captures_multimodal_content(
         "test_sync_messages_create_captures_multimodal_content.yaml"
     ):
         anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=100,
             messages=[multimodal_input_message()],
         )
@@ -984,7 +984,7 @@ def test_sync_messages_create_streaming_captures_multimodal_content(
         "test_sync_messages_create_streaming_captures_multimodal_content.yaml"
     ):
         with anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=100,
             messages=[multimodal_input_message()],
             stream=True,
@@ -1497,7 +1497,7 @@ def test_sync_messages_create_captures_thinking_content(
 ):
     """Test that thinking blocks are captured as reasoning parts."""
     _skip_if_cassette_missing_and_no_real_key(request)
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     messages = [{"role": "user", "content": "What is 17*19? Think first."}]
 
     response = anthropic_client.messages.create(
@@ -3127,7 +3127,7 @@ def test_sync_beta_messages_create_streaming(
     assert_span_attributes(
         span,
         request_model=model,
-        response_id="msg_01VY8H3oPFs4WWVnJXFDxNhU",
+        response_id="msg_011CguRmWJwJAMwdge784Cjh",
         response_model=model,
         input_tokens=13,
         output_tokens=5,
@@ -3162,7 +3162,7 @@ def test_sync_beta_messages_stream(
     assert_span_attributes(
         span,
         request_model=model,
-        response_id="msg_01VY8H3oPFs4WWVnJXFDxNhU",
+        response_id="msg_011CguRmdF9p6D4p4jS9WwM1",
         response_model=model,
         input_tokens=13,
         output_tokens=5,
@@ -3231,7 +3231,7 @@ def test_sync_beta_messages_with_streaming_response(
     assert_span_attributes(
         spans[0],
         request_model=model,
-        response_id="msg_01VY8H3oPFs4WWVnJXFDxNhU",
+        response_id="msg_011CguRmWJwJAMwdge784Cjh",
         response_model=model,
         input_tokens=13,
         output_tokens=5,
@@ -3359,7 +3359,7 @@ def test_sync_beta_messages_create_streaming_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 
@@ -3397,7 +3397,7 @@ def test_sync_beta_messages_stream_with_content(
     assert input_messages[0]["role"] == "user"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"] == [
-        {"type": "text", "content": "Hello"}
+        {"type": "text", "content": "Hello!"}
     ]
 
 

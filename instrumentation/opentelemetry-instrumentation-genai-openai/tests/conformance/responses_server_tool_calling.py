@@ -41,16 +41,19 @@ class ResponsesServerToolCallingScenario(Scenario):
                 "name": "web_search",
                 "server_tool_call": {
                     "action": {
-                        "query": "OpenTelemetry",
+                        "queries": ["OpenTelemetry overview and features"],
+                        "query": "OpenTelemetry overview and features",
                         "type": "search",
                     },
                     "status": "completed",
                     "type": "web_search",
                 },
-                "id": "ws_1",
+                "id": "ws_06c917418b3ed119006af335ca865487d28a7b3cc64c107d7b",
                 "type": "server_tool_call",
             }
         ]
+        assert output_messages[0][1]["parts"][0]["type"] == "text"
+        assert "OpenTelemetry" in output_messages[0][1]["parts"][0]["content"]
 
     def run(
         self,

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 from typing import Any
 
@@ -47,9 +48,9 @@ class AgentScenario(Scenario):
         ):
             with vcr.use_cassette("agent_with_image.yaml"):
                 model = OpenAIModel(
-                    model_id="gpt-4o",
-                    api_key="test_openai_api_key",
-                    api_base="https://api.openai.com/v1",
+                    model_id="gemini-2.5-flash",
+                    api_key=os.getenv("GOOGLE_API_KEY", "test_openai_api_key"),
+                    api_base="https://generativelanguage.googleapis.com/v1beta/openai",
                 )
                 agent = ToolCallingAgent(tools=[], model=model, max_steps=3)
                 agent.run(

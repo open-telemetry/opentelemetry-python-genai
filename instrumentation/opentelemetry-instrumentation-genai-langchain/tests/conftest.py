@@ -167,27 +167,31 @@ def fixture_us_amazon_nova_lite_v1_0():
         provider="amazon",
         temperature=0.1,
         max_tokens=100,
+        beta_use_converse_api=True,
     )
     yield llm
 
 
 @pytest.fixture(scope="function", name="chat_anthropic_claude_sonnet")
 def fixture_chat_anthropic_claude_sonnet():
-    llm_model_value = "claude-sonnet-4-5"
+    llm_model_value = "claude-sonnet-4-6"
     llm = ChatAnthropic(
         model=llm_model_value,
-        api_key="test_key",
+        api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         temperature=0.1,
         max_tokens=1024,
+        default_headers={"anthropic-beta": "files-api-2025-04-14"},
     )
     yield llm
 
 
 @pytest.fixture(scope="function", name="gemini")
 def fixture_gemini():
-    llm_model_value = "gemini-2.5-pro"
+    llm_model_value = "gemini-2.5-flash"
     llm = ChatGoogleGenerativeAI(
-        model=llm_model_value, api_key="test_key", transport="rest"
+        model=llm_model_value,
+        api_key=os.getenv("GOOGLE_API_KEY", "test_key"),
+        transport="rest",
     )
     yield llm
 
@@ -296,7 +300,9 @@ def vcr_config():
             ("openai-organization", "test_openai_org_id"),
             ("openai-project", "test_openai_project_id"),
             ("x-api-key", "test_key"),
+            ("x-goog-api-key", "test_key"),
         ],
+        "filter_query_parameters": [("key", "test_key")],
         "decode_compressed_response": True,
         "before_record_response": _scrub_response,
         "match_on": ["method", "scheme", "host", "port", "path", "body"],

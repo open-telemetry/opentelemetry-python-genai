@@ -58,16 +58,13 @@ class InvokeModelScenario(Scenario):
                     "bedrock-runtime", region_name="us-east-1"
                 )
                 response = client.invoke_model(
-                    modelId="amazon.titan-text-express-v1",
+                    modelId="meta.llama3-8b-instruct-v1:0",
                     body=json.dumps(
                         {
-                            "inputText": "Say this is a test",
-                            "textGenerationConfig": {
-                                "maxTokenCount": 10,
-                                "temperature": 0.8,
-                                "topP": 1.0,
-                                "stopSequences": ["|"],
-                            },
+                            "prompt": "Say this is a test",
+                            "max_gen_len": 10,
+                            "temperature": 0.8,
+                            "top_p": 0.9,
                         }
                     ),
                 )
