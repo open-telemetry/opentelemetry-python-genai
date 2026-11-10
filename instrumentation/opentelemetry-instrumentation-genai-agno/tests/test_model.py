@@ -1343,3 +1343,41 @@ def test_model_async_tool_loop_does_not_reuse_previous_call_data(
         str(second.attributes.get(GenAIAttributes.GEN_AI_OUTPUT_MESSAGES))
     )
     assert output_msgs[0]["parts"] == [{"type": "text", "content": "done"}]
+
+
+def test_gemini_reasoning_tokens_added_to_output_tokens_and_max_output_tokens(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test Gemini adds reasoning_tokens to output_tokens and captures max_output_tokens and audio tokens."""
+
+    class _GeminiLikeModel(MockModel):
+        max_output_tokens: int | None = 512
+
+        def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+            return ModelResponse(
+                content="579",
+                response_usage=MessageMetrics(
+                    input_tokens=31,
+                    output_tokens=20,
+                    reasoning_tokens=54,
+                    audio_input_tokens=5,
+                    audio_output_tokens=10,
+                ),
+            )
+
+    model = _GeminiLikeModel(id="gemini-2.5-flash", provider="Google")
+    model.response(messages=[Message(role="user", content="Add 123 and 456")])
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    attrs = spans[0].attributes
+    assert attrs.get(GenAIAttributes.GEN_AI_PROVIDER_NAME) == "gcp.gemini"
+    assert attrs.get(GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS) == 512
+    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 31
+    assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 74
+    assert (
+        attrs.get(GenAIAttributes.GEN_AI_USAGE_REASONING_OUTPUT_TOKENS) == 54
+    )
+    assert attrs.get("gen_ai.usage.audio.input_tokens") == 5
+    assert attrs.get("gen_ai.usage.audio.output_tokens") == 10

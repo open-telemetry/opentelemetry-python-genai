@@ -1813,6 +1813,7 @@ def _start_model_inference(
     invocation.max_tokens = safe_int(
         getattr(instance, "max_tokens", None)
         or getattr(instance, "max_completion_tokens", None)
+        or getattr(instance, "max_output_tokens", None)
     )
     invocation.frequency_penalty = safe_float(
         getattr(instance, "frequency_penalty", None)
@@ -1864,6 +1865,8 @@ def _populate_model_response_telemetry(
                 "cache_read_tokens",
                 "cache_write_tokens",
                 "reasoning_tokens",
+                "audio_input_tokens",
+                "audio_output_tokens",
             )
         ):
             record_model_token_usage(invocation, metrics)
