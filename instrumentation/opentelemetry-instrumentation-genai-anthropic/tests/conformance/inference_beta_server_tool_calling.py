@@ -46,7 +46,7 @@ class InferenceBetaServerToolCallingScenario(Scenario):
         assert len(calls) == 1
         assert calls[0] == {
             "type": "server_tool_call",
-            "id": "srvtoolu_014Fg5LJHr6fZwE2vCf1sjGk",
+            "id": "srvtoolu_01PKGW51KPFgUP7K4kSeMtPw",
             "name": "web_search",
             "server_tool_call": {
                 "type": "web_search",
@@ -54,7 +54,7 @@ class InferenceBetaServerToolCallingScenario(Scenario):
             },
         }
         assert len(responses) == 1
-        assert responses[0]["id"] == "srvtoolu_014Fg5LJHr6fZwE2vCf1sjGk"
+        assert responses[0]["id"] == "srvtoolu_01PKGW51KPFgUP7K4kSeMtPw"
         assert (
             responses[0]["server_tool_call_response"]["type"] == "web_search"
         )
@@ -85,7 +85,7 @@ class InferenceBetaServerToolCallingScenario(Scenario):
                     "inference_beta_server_tool_calling_conformance.yaml"
                 ):
                     Anthropic().beta.messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {

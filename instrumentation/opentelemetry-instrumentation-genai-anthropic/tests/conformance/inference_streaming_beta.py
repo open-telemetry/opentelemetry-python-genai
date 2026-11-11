@@ -75,7 +75,7 @@ class InferenceBetaStreamingScenario(Scenario):
                     "test_sync_messages_beta_create_streaming.yaml"
                 ):
                     with Anthropic().beta.messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=100,
                         messages=[
                             {

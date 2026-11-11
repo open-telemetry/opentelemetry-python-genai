@@ -84,7 +84,7 @@ class MultimodalScenario(Scenario):
                     "test_chat_anthropic_multimodal_image_llm_call.yaml"
                 ):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=100,
                         messages=[msg],
                         extra_headers={

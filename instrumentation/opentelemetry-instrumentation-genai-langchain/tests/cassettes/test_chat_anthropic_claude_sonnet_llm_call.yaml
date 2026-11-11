@@ -9,9 +9,8 @@ interactions:
             "content": "What is the capital of France?"
           }
         ],
-        "model": "claude-sonnet-4-6",
-        "system": "You are a helpful assistant!",
-        "temperature": 0.1
+        "model": "claude-sonnet-5-5",
+        "system": "You are a helpful assistant!"
       }
     headers:
       accept:
@@ -25,15 +24,15 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '177'
+      - '159'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       traceparent:
-      - 00-80d99e1ec66a5f1644c7cb35b718ee95-d073838ba4b00b21-03
+      - 00-a0523d1266861ffa2f772993a43b0924-f3eb433d2b8e5266-03
       user-agent:
-      - langchain-anthropic/1.7.10
+      - langchain-anthropic/1.7.9
       x-api-key:
       - test_key
       x-stainless-arch:
@@ -62,14 +61,14 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguSYKNcUk7wach8aFKat",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwiPAf7kcbTPenKuKX1P",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "text",
-              "text": "The capital of France is **Paris**. It is the country's largest city and serves as its political, cultural, and economic center."
+              "text": "The capital of France is **Paris**. It's also the country's largest city and a major center for art, fashion, gastronomy, and culture."
             }
           ],
           "container": null,
@@ -77,14 +76,17 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 21,
+            "input_tokens": 27,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 31,
+            "output_tokens": 44,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
             "inference_geo": "global",
             "speed": "standard"
@@ -98,51 +100,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T14:55:42Z'
+      - '2026-11-11T19:44:38Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T14:55:42Z'
+      - '2026-11-11T19:44:39Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T14:55:42Z'
+      - '2026-11-11T19:44:38Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T14:55:42Z'
+      - '2026-11-11T19:44:38Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585e64ddd39a568-IAD
+      - a58fcaeeda83af78-IAD
       connection:
       - keep-alive
-      content-length:
-      - '625'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 14:55:43 GMT
+      - Wed, 11 Nov 2026 19:44:39 GMT
       openai-organization: test_openai_org_id
       openai-project: test_openai_project_id
       request-id:
-      - req_011CguSYJ3kAfb5ySfHEsRXN
+      - req_011CgwiP9rkCjzcSt5bryRmv
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=1207
+      - x-originResponse;dur=1234
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-0956f4a3a02a865062d0abaafa8abf25-1b3861ffb82bc4e2-01
+      - 00-9547dceb254f6bd1124b2991b75a5465-c7b43cba915ae411-01
       transfer-encoding:
       - chunked
       vary:

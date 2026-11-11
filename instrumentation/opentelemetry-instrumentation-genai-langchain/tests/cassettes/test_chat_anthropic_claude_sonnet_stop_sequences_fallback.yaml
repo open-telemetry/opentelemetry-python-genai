@@ -9,11 +9,10 @@ interactions:
             "content": "Say hi"
           }
         ],
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5-5",
         "stop_sequences": [
           "STOP"
-        ],
-        "temperature": 0.1
+        ]
       }
     headers:
       accept:
@@ -27,15 +26,15 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '139'
+      - '121'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       traceparent:
-      - 00-dbb552691f74208251874b832e7358d1-cc4baa1f3fdf6a94-03
+      - 00-e01f1e09b2a4888cd52abde90ac39d57-4669a7a9468b784c-03
       user-agent:
-      - langchain-anthropic/1.7.10
+      - langchain-anthropic/1.7.9
       x-api-key:
       - test_key
       x-stainless-arch:
@@ -64,14 +63,14 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguSZ2TAS84o6ekuQeBSF",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwiPgv2eV8TUTwRreaxM",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "text",
-              "text": "Hi there! \ud83d\udc4b How are you doing? Is there something I can help you with today?"
+              "text": "Hi there! \ud83d\udc4b How can I help you today?"
             }
           ],
           "container": null,
@@ -79,14 +78,17 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 9,
+            "input_tokens": 12,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 25,
+            "output_tokens": 18,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
             "inference_geo": "global",
             "speed": "standard"
@@ -100,51 +102,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T14:55:52Z'
+      - '2026-11-11T19:44:45Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T14:55:52Z'
+      - '2026-11-11T19:44:46Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T14:55:51Z'
+      - '2026-11-11T19:44:45Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T14:55:52Z'
+      - '2026-11-11T19:44:45Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585e68bbc8da568-IAD
+      - a58fcb1be938af78-IAD
       connection:
       - keep-alive
-      content-length:
-      - '575'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 14:55:52 GMT
+      - Wed, 11 Nov 2026 19:44:46 GMT
       openai-organization: test_openai_org_id
       openai-project: test_openai_project_id
       request-id:
-      - req_011CguSZ28Zpv3muJ5LdHCuX
+      - req_011CgwiPgdAv3ezJHGEibC23
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=1061
+      - x-originResponse;dur=1043
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-4bed0f2075f289a69d0bd9171c9ed9b9-b85856fe703dd77c-01
+      - 00-5197c7ffdaf2f3b521f5abf630253e03-4fce325bc4ab6720-01
       transfer-encoding:
       - chunked
       vary:

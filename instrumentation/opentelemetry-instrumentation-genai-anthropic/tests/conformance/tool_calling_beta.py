@@ -51,7 +51,7 @@ class ToolCallingBetaScenario(Scenario):
             ):
                 with vcr.use_cassette("tool_calling_beta_conformance.yaml"):
                     Anthropic().beta.messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {
@@ -70,5 +70,4 @@ class ToolCallingBetaScenario(Scenario):
                                 },
                             }
                         ],
-                        tool_choice={"type": "tool", "name": "get_weather"},
                     )

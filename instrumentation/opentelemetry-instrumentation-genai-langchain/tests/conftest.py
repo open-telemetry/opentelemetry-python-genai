@@ -190,11 +190,10 @@ def fixture_meta_llama3_8b_instruct():
 
 @pytest.fixture(scope="function", name="chat_anthropic_claude_sonnet")
 def fixture_chat_anthropic_claude_sonnet():
-    llm_model_value = "claude-sonnet-4-6"
+    llm_model_value = "claude-sonnet-5-5"
     llm = ChatAnthropic(
         model=llm_model_value,
         api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
-        temperature=0.1,
         max_tokens=1024,
         default_headers={"anthropic-beta": "files-api-2025-04-14"},
     )

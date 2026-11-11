@@ -6,13 +6,12 @@ interactions:
         "messages": [
           {
             "role": "user",
-            "content": "What is 17*19? Think first."
+            "content": "Solve 347 * 892 + 519 * 743 step by step. Think carefully first."
           }
         ],
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5-5",
         "thinking": {
-          "type": "enabled",
-          "budget_tokens": 10000
+          "type": "adaptive"
         }
       }
     headers:
@@ -21,19 +20,19 @@ interactions:
       accept-encoding:
       - gzip, deflate, zstd
       anthropic-version:
-      - '2026-10-21'
-      authorization:
-      - Bearer test_anthropic_api_key
+      - '2023-06-01'
       connection:
       - keep-alive
       content-length:
-      - '169'
+      - '185'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       user-agent:
-      - Anthropic/Python 2.3.0
+      - Anthropic/Python 1.17.0
+      x-api-key:
+      - test_anthropic_api_key
       x-stainless-arch:
       - x64
       x-stainless-async:
@@ -43,7 +42,7 @@ interactions:
       x-stainless-os:
       - Linux
       x-stainless-package-version:
-      - 2.3.0
+      - 1.17.0
       x-stainless-read-timeout:
       - '600'
       x-stainless-retry-count:
@@ -60,19 +59,19 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguSC9JpjWDEUJNUTGE4b",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwiQExbcwqXXFaLrdVou",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "thinking",
-              "thinking": "17 * 19 = 17 * 20 - 17 = 340 - 17 = 323",
-              "signature": "ErICCqgBCBMYAipAhoXL073XkGth5nNxDJ6bHfl5ONlMmJGCLjFh6At6Zk4jWcAmaCUQG1mTJQk+UgtE+xunpfPSwG3m7eCY8Lbw1DIRY2xhdWRlLXNvbm5ldC00LTY4AEIIdGhpbmtpbmdaJDFhNmJiMTY5LTM0MGItNDFhYi04ZDQzLWI5ODRlZjM1YWFhYpoBEwoRY2xhdWRlLXNvbm5ldC00LTaoAd3ezNcGEgxMC1Diwoyupw2IRwwaDF7k1o/LFkuZ6ETinSIw5IZysFKEkX/iqPgTveJa/UlRuLHYeSkkMirSML8tz1wKiTfCy8hNgBC87tMs5e3bKjf7Db9vx/MTvKt3RmbQuXbB2j6msOsom2Hdyld+tstTDChSviLyLNYQrrJqRL3UlUg8Zp3R5QXhGAE="
+              "thinking": "",
+              "signature": "CAQSnAYKEAgTGAI4AUIIdGhpbmtpbmcSDF4BYuUhuhAG1HrF8RoMcdT+RF7BNv++hOCwIjAPDP7AkIy/Cbg1b5s1A6oWTXhlxqDWllQXTo2Rj9wxawiwSn3sAYHx1cD8xyNuo+MquQUmEyu7b078oJLpn4g50cK8TE9negfKKzgzjBeFSizLn7Z/zahi2qYvcmrNw9THrJwkMHqAm7Cm4iI/hWhb5BKSRSNS6wvTQ4tAqLQKRSugtgBSi+FOzumSdTJfVgYp3tQJ+3HMASsW83a21WH5c+V89E/lmepm8H057fXdesF+GTKXFYzx8yvmSLI0veDBr3CFdwBxlynWf+BXQWUNrR9YLHUf4dkEH5i88j0RAiGUNKv2Na7CiAfYPUn5VNu9uBVsOBN4JJ09ImPr7OW41XH1ZFJnYWZrW9H1jkwEiYlSYrYkSd37AsZ3YTEfVtmFyIcVcLSiCZcRDnCuu7NKide61qvLts7OLJ0tyBGbJQLtDjeyMiSCwMDIfymVJRsZJB7ru3LR6vhbORUIItdxm8KhbXs5tqZvkpzQ8jMPgQQXwBdBjpJehlTVIh65kBP3Z4pXveR0mr7gn0tOUJtxv3Gju9FXIdNKf59xvlo1Jy4Xjog7jZCDfqH8kBst20Jz8xDkU9Cq5wbFPFtOOwp/0qAKO2NdgD87hAFO5x80072ReZCxvBT0ddDcNpgdvHF3YDnVMXQCC5VYCuAE9hyX32KQQg2cbyJ1THKM0VMkpky6gQd0fisHP6hZcyc/wZxCXWNqG5+SNymI8GqKANWVcHBZ9M/Jh4Yk8drW+XjjzBqMP0/4MaYpAfuBSan/PI3K+eKqhiYS0rAcCUceWrlxeo42coNHQ6XOfAQfhUWjHvSxt9keZ+f37mIR10zG64QUWxSFwSjZaSVR2EeY8/BfFtP0lB31MexoH37mN2qMsKa1dbaev3MbeTQRq29mckZamyZ7e6B4pHNa4rBTF4HBHJryiSA9jU1/C5ILGXTCWXvBbXl1Jly+t4g0SSGcyzQGngNKoLwTKI5+ch+/nMeKuokKh7DBflt9RFmnGAE="
             },
             {
               "type": "text",
-              "text": "## Working it out\n\nI'll use a convenient breakdown:\n\n**17 \u00d7 19 = 17 \u00d7 (20 - 1)**\n\n- 17 \u00d7 20 = 340\n- 340 - 17 = **323**\n\nThe answer is **323**."
+              "text": "**Step 1: 347 \u00d7 892**\n- 347 \u00d7 900 = 312,300\n- 347 \u00d7 8 = 2,776\n- 347 \u00d7 892 = 312,300 \u2212 2,776 = **309,524**\n\n**Step 2: 519 \u00d7 743**\n- 519 \u00d7 700 = 363,300\n- 519 \u00d7 40 = 20,760\n- 519 \u00d7 3 = 1,557\n- 519 \u00d7 743 = 363,300 + 20,760 + 1,557 = **385,617**\n\n**Step 3: Add the results**\n- 309,524 + 385,617 = **695,141**\n\n**Answer: 695,141**"
             }
           ],
           "container": null,
@@ -80,16 +79,16 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 46,
+            "input_tokens": 37,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 104,
+            "output_tokens": 310,
             "output_tokens_details": {
-              "thinking_tokens": 35
+              "thinking_tokens": 109
             },
             "service_tier": "standard",
             "inference_geo": "global",
@@ -103,49 +102,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T14:51:09Z'
+      - '2026-11-11T19:44:53Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T14:51:10Z'
+      - '2026-11-11T19:44:55Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T14:51:08Z'
+      - '2026-11-11T19:44:53Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T14:51:09Z'
+      - '2026-11-11T19:44:53Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585dfa10bdbbba5-IAD
+      - a58fcb4aa99f0598-IAD
       connection:
       - keep-alive
       content-length:
-      - '1203'
+      - '2017'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 14:51:10 GMT
+      - Wed, 11 Nov 2026 19:44:55 GMT
       request-id:
-      - req_011CguSC8uG3Hha8ycbUeuhC
+      - req_011CgwiQEckz7uBWTJmgN77p
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=2296
+      - x-originResponse;dur=2313
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-f880a9079559c66dfcf504db129d6195-2752333db814b3a0-01
+      - 00-803458ab62447752a84d0dc13651fa3e-f96eef65d8bf61ca-01
       transfer-encoding:
       - chunked
       vary:

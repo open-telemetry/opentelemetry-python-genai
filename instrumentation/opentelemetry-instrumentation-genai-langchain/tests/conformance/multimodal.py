@@ -148,8 +148,7 @@ class AnthropicMultimodalScenario(Scenario):
                 content_capture="SPAN_ONLY",
             ):
                 llm = ChatAnthropic(
-                    model="claude-sonnet-4-6",
-                    temperature=0.1,
+                    model="claude-sonnet-5-5",
                     max_tokens=1024,
                     default_headers={"anthropic-beta": "files-api-2025-04-14"},
                 )
@@ -351,8 +350,7 @@ class AnthropicFileRefMultimodalScenario(Scenario):
                 content_capture="SPAN_ONLY",
             ):
                 llm = ChatAnthropic(
-                    model="claude-sonnet-4-6",
-                    temperature=0.1,
+                    model="claude-sonnet-5-5",
                     max_tokens=1024,
                     default_headers={"anthropic-beta": "files-api-2025-04-14"},
                 )

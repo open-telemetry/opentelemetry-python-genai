@@ -670,7 +670,7 @@ def test_chat_anthropic_claude_sonnet_llm_call(
     span = spans[0]
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
-        == "claude-sonnet-4-6"
+        == "claude-sonnet-5-5"
     )
 
     assert (
@@ -704,7 +704,7 @@ def test_chat_anthropic_claude_sonnet_tool_call(
     span = spans[0]
     assert (
         span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL)
-        == "claude-sonnet-4-6"
+        == "claude-sonnet-5-5"
     )
     assert span.attributes.get(
         gen_ai_attributes.GEN_AI_RESPONSE_FINISH_REASONS
@@ -838,7 +838,7 @@ def test_chat_anthropic_multimodal_image_llm_call(
     span = spans[0]
 
     assert span.attributes.get(gen_ai_attributes.GEN_AI_REQUEST_MODEL) == (
-        "claude-sonnet-4-6"
+        "claude-sonnet-5-5"
     )
 
     input_message = span.attributes.get(
@@ -1160,7 +1160,7 @@ def test_chat_anthropic_captures_top_k(
     logger_provider,
 ):
     model = ChatAnthropic(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         max_tokens=32,
         top_k=40,
@@ -1702,7 +1702,7 @@ def test_chat_anthropic_claude_sonnet_stop_sequences_constructor_fallback(
     span_exporter, start_instrumentation
 ):
     model = ChatAnthropic(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5-5",
         api_key=os.getenv("ANTHROPIC_API_KEY", "test_key"),
         max_tokens=1024,
         stop_sequences=["STOP"],

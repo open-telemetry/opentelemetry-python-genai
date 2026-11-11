@@ -9,7 +9,7 @@ interactions:
             "content": "Say hello in one word."
           }
         ],
-        "model": "claude-sonnet-4-6"
+        "model": "claude-sonnet-5-5"
       }
     headers:
       accept:
@@ -56,8 +56,8 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguRmw6SwhAPc2qZ3iADe",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwhcAuVbQqQ1b8RaCRGn",
           "type": "message",
           "role": "assistant",
           "content": [
@@ -71,14 +71,17 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 13,
+            "input_tokens": 16,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 5,
+            "output_tokens": 6,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
             "inference_geo": "global",
             "speed": "standard"
@@ -91,49 +94,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T14:45:40Z'
+      - '2026-11-11T19:34:29Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T14:45:41Z'
+      - '2026-11-11T19:34:29Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T14:45:40Z'
+      - '2026-11-11T19:34:28Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T14:45:40Z'
+      - '2026-11-11T19:34:29Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585d79c6d26398b-IAD
+      - a58fbc08a8068c55-IAD
       connection:
       - keep-alive
       content-length:
-      - '502'
+      - '548'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 14:45:41 GMT
+      - Wed, 11 Nov 2026 19:34:29 GMT
       request-id:
-      - req_011CguRmvn6PZsAbPx8NvWbK
+      - req_011CgwhcAcsWmAv2qxvp2HUn
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=1146
+      - x-originResponse;dur=1155
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-d3d4273cbeedec012c8b94541355048b-9a97be7950d25975-01
+      - 00-12dadbefccfb430183c05e939c60dde7-3ab598fb234e419a-01
       transfer-encoding:
       - chunked
       vary:

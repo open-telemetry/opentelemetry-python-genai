@@ -73,7 +73,7 @@ interactions:
             ]
           }
         ],
-        "model": "claude-sonnet-4-6"
+        "model": "claude-sonnet-5-5"
       }
     headers:
       accept:
@@ -81,7 +81,9 @@ interactions:
       accept-encoding:
       - gzip, deflate, zstd
       anthropic-version:
-      - '2023-06-01'
+      - '2026-10-21'
+      authorization:
+      - Bearer test_anthropic_api_key
       connection:
       - keep-alive
       content-length:
@@ -91,9 +93,7 @@ interactions:
       host:
       - api.anthropic.com
       user-agent:
-      - AsyncAnthropic/Python 1.17.0
-      x-api-key:
-      - test_anthropic_api_key
+      - AsyncAnthropic/Python 2.3.0
       x-stainless-arch:
       - x64
       x-stainless-async:
@@ -103,7 +103,7 @@ interactions:
       x-stainless-os:
       - Linux
       x-stainless-package-version:
-      - 1.17.0
+      - 2.3.0
       x-stainless-read-timeout:
       - '600'
       x-stainless-retry-count:
@@ -120,14 +120,14 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguT1BRdQQ3XijqFACZCC",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwhboxfNCxUp5engi3yD",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "text",
-              "text": "Here are descriptions of the images provided:\n\n---\n\n### Image 1 (Small icon):\nA small, simple graphic featuring a **yellow square centered on a blue background**. It resembles a minimalist flag or icon design.\n\n---\n\n### Image 2 (Standalone image) & Document 4 (Nested image):\nBoth display the **Google logo** in its well-known, colorful wordmark style:\n- **G** \u2013 Blue"
+              "text": "Here is a description of each item.\n\n## Standalone images\n\n**Image 1:** A small square graphic with a yellow or gold square in the center, surrounded by a blue border on a lighter blue background. It looks like a simple icon or placeholder.\n\n**Image 2:** The Google logo, written in its multicolor wordm"
             }
           ],
           "container": null,
@@ -135,7 +135,7 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 3478,
+            "input_tokens": 3502,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
@@ -143,6 +143,9 @@ interactions:
               "ephemeral_1h_input_tokens": 0
             },
             "output_tokens": 100,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
             "inference_geo": "global",
             "speed": "standard"
@@ -155,49 +158,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T15:01:47Z'
+      - '2026-11-11T19:34:23Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T15:01:49Z'
+      - '2026-11-11T19:34:24Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T15:01:46Z'
+      - '2026-11-11T19:34:23Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T15:01:47Z'
+      - '2026-11-11T19:34:23Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585ef352b01d68f-IAD
+      - a58fbbe9fb09c95c-IAD
       connection:
       - keep-alive
       content-length:
-      - '882'
+      - '857'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 15:01:49 GMT
+      - Wed, 11 Nov 2026 19:34:24 GMT
       request-id:
-      - req_011CguT1B2ZiFtTbbz69MX8N
+      - req_011Cgwhboe4Q1VNT7yrAVkai
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=3439
+      - x-originResponse;dur=1444
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-5a68063a106792a39679a0619ea219ca-fc16b60a4b4b9a4a-01
+      - 00-99a7dd9bbe77657e6d3ba095022b9b9f-16474859d7748840-01
       transfer-encoding:
       - chunked
       vary:

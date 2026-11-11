@@ -22,8 +22,7 @@ interactions:
             ]
           }
         ],
-        "model": "claude-sonnet-4-6",
-        "temperature": 0.1
+        "model": "claude-sonnet-5-5"
       }
     headers:
       accept:
@@ -37,15 +36,15 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '405'
+      - '387'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       traceparent:
-      - 00-f25105621c3fc68987b2f79f103d388a-40b7c26948458bb9-03
+      - 00-5479ec7993d95a153df9dc8076384888-a9141a64a93acca3-03
       user-agent:
-      - langchain-anthropic/1.7.10
+      - langchain-anthropic/1.7.9
       x-api-key:
       - test_key
       x-stainless-arch:
@@ -74,14 +73,14 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguSYd5yFgy3k1SiWwPuY",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwiPNL6Cgdm2P2aSq44T",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "text",
-              "text": "The image shows a **yellow square** centered on a **blue background**.\n\nIt's a simple geometric graphic with two colors:\n- \ud83d\udfe6 **Blue** background/border\n- \ud83d\udfe8 **Yellow** square in the middle"
+              "text": "This image is a simple geometric graphic: a **yellow square centered inside a larger blue square**, so the blue forms a border around the yellow. It is a very small image with flat, solid colors and no other details, text, or patterns."
             }
           ],
           "container": null,
@@ -89,14 +88,17 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 20,
+            "input_tokens": 21,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 56,
+            "output_tokens": 73,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
             "inference_geo": "global",
             "speed": "standard"
@@ -110,51 +112,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T14:55:46Z'
+      - '2026-11-11T19:44:41Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T14:55:48Z'
+      - '2026-11-11T19:44:42Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T14:55:46Z'
+      - '2026-11-11T19:44:41Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T14:55:46Z'
+      - '2026-11-11T19:44:41Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585e6699c4da568-IAD
+      - a58fcb00aeb9af78-IAD
       connection:
       - keep-alive
-      content-length:
-      - '694'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 14:55:48 GMT
+      - Wed, 11 Nov 2026 19:44:42 GMT
       openai-organization: test_openai_org_id
       openai-project: test_openai_project_id
       request-id:
-      - req_011CguSYcn8C4vRXKCKvmUYb
+      - req_011CgwiPN1UzTYRwRZpWyLXW
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=2125
+      - x-originResponse;dur=1638
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-f7269f958a3f36acb9bcfff216bc6cc7-356bd6967d14aaa2-01
+      - 00-70f625e9b5fe7813c9d8822eb4356e0d-9bb2456691f58be9-01
       transfer-encoding:
       - chunked
       vary:

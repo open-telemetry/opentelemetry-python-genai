@@ -46,7 +46,7 @@ class ServerToolCallingScenario(Scenario):
         assert len(calls) == 1
         assert calls[0] == {
             "type": "server_tool_call",
-            "id": "srvtoolu_01MKJreRr9gZQLEfMAkq8FBN",
+            "id": "srvtoolu_012xr2gm6choezHECLKxENA3",
             "name": "web_search",
             "server_tool_call": {
                 "type": "web_search",
@@ -54,7 +54,7 @@ class ServerToolCallingScenario(Scenario):
             },
         }
         assert len(responses) == 1
-        assert responses[0]["id"] == "srvtoolu_01MKJreRr9gZQLEfMAkq8FBN"
+        assert responses[0]["id"] == "srvtoolu_012xr2gm6choezHECLKxENA3"
         assert (
             responses[0]["server_tool_call_response"]["type"] == "web_search"
         )
@@ -83,7 +83,7 @@ class ServerToolCallingScenario(Scenario):
             ):
                 with vcr.use_cassette("server_tool_calling_conformance.yaml"):
                     Anthropic().messages.create(
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5-5",
                         max_tokens=256,
                         messages=[
                             {

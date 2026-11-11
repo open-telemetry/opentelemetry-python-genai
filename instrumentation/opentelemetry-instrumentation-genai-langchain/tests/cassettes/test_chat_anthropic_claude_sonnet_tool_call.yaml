@@ -9,7 +9,7 @@ interactions:
             "content": "What's the weather in Seattle?"
           }
         ],
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5-5",
         "tools": [
           {
             "name": "get_current_weather",
@@ -26,8 +26,7 @@ interactions:
             },
             "description": "Get the current weather in a given location."
           }
-        ],
-        "temperature": 0.1
+        ]
       }
     headers:
       accept:
@@ -41,15 +40,15 @@ interactions:
       connection:
       - keep-alive
       content-length:
-      - '340'
+      - '322'
       content-type:
       - application/json
       host:
       - api.anthropic.com
       traceparent:
-      - 00-9cd45fa9fcf94b774b6f98be7fb70748-8b63ea15fbaf1d93-03
+      - 00-f953d3678a1d3ed23572685bf1c255a2-32a9e821ea1bb854-03
       user-agent:
-      - langchain-anthropic/1.7.10
+      - langchain-anthropic/1.7.9
       x-api-key:
       - test_key
       x-stainless-arch:
@@ -78,14 +77,14 @@ interactions:
     body:
       string: |-
         {
-          "model": "claude-sonnet-4-6",
-          "id": "msg_011CguSYS6RtivebcEx3R4tE",
+          "model": "claude-sonnet-5-5",
+          "id": "msg_011CgwiPFr9kLivYhe7sq8WC",
           "type": "message",
           "role": "assistant",
           "content": [
             {
               "type": "tool_use",
-              "id": "toolu_01QyvWTuk9v8HfzGiiqppLiA",
+              "id": "toolu_01SSrN1NGEx5wa9EYkAHcsgT",
               "name": "get_current_weather",
               "input": {
                 "location": "Seattle"
@@ -100,14 +99,17 @@ interactions:
           "stop_sequence": null,
           "stop_details": null,
           "usage": {
-            "input_tokens": 569,
+            "input_tokens": 380,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "cache_creation": {
               "ephemeral_5m_input_tokens": 0,
               "ephemeral_1h_input_tokens": 0
             },
-            "output_tokens": 56,
+            "output_tokens": 53,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
             "service_tier": "standard",
             "inference_geo": "global",
             "speed": "standard"
@@ -121,51 +123,49 @@ interactions:
       anthropic-ratelimit-input-tokens-remaining:
       - '10000000'
       anthropic-ratelimit-input-tokens-reset:
-      - '2026-11-10T14:55:45Z'
+      - '2026-11-11T19:44:40Z'
       anthropic-ratelimit-output-tokens-limit:
       - '2000000'
       anthropic-ratelimit-output-tokens-remaining:
       - '2000000'
       anthropic-ratelimit-output-tokens-reset:
-      - '2026-11-10T14:55:46Z'
+      - '2026-11-11T19:44:41Z'
       anthropic-ratelimit-requests-limit:
-      - '10000'
+      - '13000'
       anthropic-ratelimit-requests-remaining:
-      - '9999'
+      - '12999'
       anthropic-ratelimit-requests-reset:
-      - '2026-11-10T14:55:43Z'
+      - '2026-11-11T19:44:39Z'
       anthropic-ratelimit-tokens-limit:
       - '12000000'
       anthropic-ratelimit-tokens-remaining:
       - '12000000'
       anthropic-ratelimit-tokens-reset:
-      - '2026-11-10T14:55:45Z'
+      - '2026-11-11T19:44:40Z'
       cf-cache-status:
       - DYNAMIC
       cf-ray:
-      - a585e6595a8ca568-IAD
+      - a58fcaf73f0eaf78-IAD
       connection:
       - keep-alive
-      content-length:
-      - '617'
       content-security-policy:
       - default-src 'none'; frame-ancestors 'none'
       content-type:
       - application/json
       date:
-      - Tue, 10 Nov 2026 14:55:46 GMT
+      - Wed, 11 Nov 2026 19:44:41 GMT
       openai-organization: test_openai_org_id
       openai-project: test_openai_project_id
       request-id:
-      - req_011CguSYRj6pzLxzcSFSyyon
+      - req_011CgwiPFY3iM54vdZCFok5P
       server:
       - cloudflare
       server-timing:
-      - x-originResponse;dur=2490
+      - x-originResponse;dur=1450
       strict-transport-security:
       - max-age=31536000; includeSubDomains; preload
       traceresponse:
-      - 00-905efb7e0b94620fe20104c10d472277-b9deb37b062b69f3-01
+      - 00-0633681ba544e669323c91dc12a95e6f-873a3d178630999b-01
       transfer-encoding:
       - chunked
       vary:
