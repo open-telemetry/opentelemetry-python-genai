@@ -1305,3 +1305,45 @@ def test_tool_aexecute_closed_while_tool_is_pending_fails_the_span(
     (span,) = span_exporter.get_finished_spans()
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes[ErrorAttributes.ERROR_TYPE] == "GeneratorExit"
+
+
+def test_agent_run_stream_records_usage_from_completed_event(
+    instrument_agno,
+    span_exporter,
+) -> None:
+    """Test that stream usage includes cached prompt tokens."""
+    from dataclasses import dataclass
+
+    from agno.metrics import RunMetrics
+
+    @dataclass
+    class FakeCompletedChunk:
+        content: str = "done"
+        event: str = "RunCompletedEvent"
+        metrics: RunMetrics | None = None
+
+    agent = Agent(
+        name="test-stream-usage-agent", model=MockModel(id="mock-model")
+    )
+
+    def fake_stream(*args, **kwargs):
+        yield "chunk delta"
+        yield FakeCompletedChunk(
+            metrics=RunMetrics(
+                input_tokens=12,
+                output_tokens=3,
+                cache_read_tokens=1000,
+                cache_write_tokens=40,
+            )
+        )
+
+    with _patch_agent_stream(fake_stream):
+        list(agent.run("hello stream", stream=True))
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert (
+        span.attributes.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 1052
+    )
+    assert span.attributes.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 3

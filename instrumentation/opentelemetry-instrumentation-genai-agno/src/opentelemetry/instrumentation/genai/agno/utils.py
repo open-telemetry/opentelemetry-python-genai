@@ -38,6 +38,47 @@ def safe_int(val: Any) -> int | None:
         return None
 
 
+def total_input_tokens(
+    input_tokens: int | None,
+    cache_read_input_tokens: int | None,
+    cache_write_input_tokens: int | None,
+) -> int | None:
+    """agno reports cached prompt tokens outside ``input_tokens``; the
+    semantic conventions want ``gen_ai.usage.input_tokens`` to include them.
+
+    A zero total means agno had nothing to report, so it returns ``None``
+    rather than recording ``0`` on the span.
+    """
+    total = (
+        (input_tokens or 0)
+        + (cache_read_input_tokens or 0)
+        + (cache_write_input_tokens or 0)
+    )
+    return total or None
+
+
+def record_token_usage(invocation: Any, metrics: Any) -> None:
+    """Record agno run metrics as ``gen_ai.usage.*`` on an invocation.
+
+    agno keeps cached prompt tokens in ``cache_read_tokens`` and
+    ``cache_write_tokens`` instead of folding them into ``input_tokens``, so
+    the sum is what a span reports. Invocation types that carry no token
+    fields, such as workflows, are left alone.
+    """
+    if metrics is None or not hasattr(invocation, "input_tokens"):
+        return
+    input_tokens = total_input_tokens(
+        safe_int(getattr(metrics, "input_tokens", None)),
+        safe_int(getattr(metrics, "cache_read_tokens", None)),
+        safe_int(getattr(metrics, "cache_write_tokens", None)),
+    )
+    if input_tokens:
+        invocation.input_tokens = input_tokens
+    output_tokens = safe_int(getattr(metrics, "output_tokens", None))
+    if output_tokens:
+        invocation.output_tokens = output_tokens
+
+
 def safe_float(val: Any) -> float | None:
     """Safely convert a value to float or return None."""
     if val is None or isinstance(val, bool):
