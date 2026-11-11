@@ -23,13 +23,23 @@ from opentelemetry.instrumentation.genai.qwenpaw import QwenPawInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.test_util_genai.conformance import Scenario
+from opentelemetry.test_util_genai.conformance import (
+    ExpectedViolation,
+    Scenario,
+)
 from opentelemetry.test_util_genai.instrumentor import instrument
 
 
 class RuntimeErrorScenario(Scenario):
     expected_spans = {"invoke_agent": 1}
     expected_metrics = ("gen_ai.invoke_agent.duration",)
+    # The pinned registry does not yet define the util's agent exception event.
+    expected_violations = (
+        ExpectedViolation(
+            advice_id="missing_event",
+            message_substring="Event 'gen_ai.invoke_agent.exception' does not exist",
+        ),
+    )
 
     def run(
         self,
