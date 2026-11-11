@@ -11,6 +11,7 @@ from typing import Any
 from opentelemetry.instrumentation.genai.agno.utils import (
     _get_property_value,
     format_content,
+    record_token_usage,
 )
 from opentelemetry.util.genai.invocation import (
     LocalAgentInvocation,
@@ -49,14 +50,9 @@ class _AgentStreamMixin:
         if session_id and not self._self_agent_invocation.conversation_id:
             self._self_agent_invocation.conversation_id = str(session_id)
 
-        metrics = getattr(chunk, "metrics", None)
-        if metrics is not None:
-            if getattr(metrics, "input_tokens", None) is not None:
-                self._self_agent_invocation.input_tokens = metrics.input_tokens
-            if getattr(metrics, "output_tokens", None) is not None:
-                self._self_agent_invocation.output_tokens = (
-                    metrics.output_tokens
-                )
+        record_token_usage(
+            self._self_agent_invocation, getattr(chunk, "metrics", None)
+        )
 
         event_name = str(getattr(chunk, "event", ""))
         chunk_type = type(chunk).__name__
