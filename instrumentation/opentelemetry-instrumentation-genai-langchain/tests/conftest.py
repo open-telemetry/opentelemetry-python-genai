@@ -172,6 +172,22 @@ def fixture_us_amazon_nova_lite_v1_0():
     yield llm
 
 
+@pytest.fixture(scope="function", name="meta_llama3_8b_instruct")
+def fixture_meta_llama3_8b_instruct():
+    llm_model_value = "meta.llama3-8b-instruct-v1:0"
+    llm = ChatBedrock(
+        model_id=llm_model_value,
+        client=boto3.client(
+            "bedrock-runtime",
+            region_name="us-east-1",
+        ),
+        region_name="us-east-1",
+        temperature=0.1,
+        max_tokens=100,
+    )
+    yield llm
+
+
 @pytest.fixture(scope="function", name="chat_anthropic_claude_sonnet")
 def fixture_chat_anthropic_claude_sonnet():
     llm_model_value = "claude-sonnet-4-6"
@@ -239,6 +255,14 @@ def start_instrumentation(
 def environment():
     if not os.getenv("OPENAI_API_KEY"):
         os.environ["OPENAI_API_KEY"] = "test_openai_api_key"
+    if not (
+        os.getenv("AWS_ACCESS_KEY_ID")
+        or os.getenv("AWS_PROFILE")
+        or os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+        or os.path.exists(os.path.expanduser("~/.aws/credentials"))
+    ):
+        os.environ.setdefault("AWS_ACCESS_KEY_ID", "test_key")
+        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test_secret")
 
 
 @pytest.fixture(autouse=True)
@@ -283,7 +307,12 @@ _overwrite_response_headers = scrub_response_headers_overwrite(
 # Dropped rather than overwritten: the overwrite helper adds absent headers to
 # every response, and too many of them break replay of other providers.
 _drop_response_headers = scrub_response_headers(
-    ["anthropic-organization-id", "anthropic-workspace-id"]
+    [
+        "anthropic-organization-id",
+        "anthropic-workspace-id",
+        "content-length",
+        "x-amzn-requestid",
+    ]
 )
 
 
@@ -299,6 +328,7 @@ def vcr_config():
             ("authorization", "Bearer test_openai_api_key"),
             ("openai-organization", "test_openai_org_id"),
             ("openai-project", "test_openai_project_id"),
+            ("x-amz-security-token", "test_aws_token"),
             ("x-api-key", "test_key"),
             ("x-goog-api-key", "test_key"),
         ],

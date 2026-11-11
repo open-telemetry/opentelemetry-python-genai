@@ -1,0 +1,65 @@
+interactions:
+- request:
+    body: |-
+      {
+        "prompt": "<|begin_of_text|>\n<|start_header_id|>system<|end_header_id|>You are a helpful assistant!<|eot_id|>\n<|start_header_id|>user<|end_header_id|>What is the capital of France?<|eot_id|>\n<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "max_gen_len": 100,
+        "temperature": 0.1
+      }
+    headers:
+      Accept:
+      - !!binary |
+        YXBwbGljYXRpb24vanNvbg==
+      Content-Length:
+      - '286'
+      Content-Type:
+      - !!binary |
+        YXBwbGljYXRpb24vanNvbg==
+      User-Agent:
+      - !!binary |
+        Qm90bzMvMS40My4xMjMgbWQvQm90b2NvcmUjMS40My4xMjMgdWEvMi4xIG9zL2xpbnV4IzcuMS42
+        LTFyb2RldGUxLWFtZDY0IG1kL2FyY2gjeDg2XzY0IGxhbmcvcHl0aG9uIzMuMTQuMyBtZC9weWlt
+        cGwjQ1B5dGhvbiBtL24sWixELGIgY2ZnL3JldHJ5LW1vZGUjbGVnYWN5IEJvdG9jb3JlLzEuNDMu
+        MTIzIHgtY2xpZW50LWZyYW1ld29yazpsYW5nY2hhaW4tYXdz
+      X-Amz-Date:
+      - !!binary |
+        MjAyNjExMTFUMTkyNTMwWg==
+      amz-sdk-invocation-id:
+      - !!binary |
+        MmVjNzgyODEtNjk3NC00MDQ4LWI1OTgtYmZiZjFkZWU0Zjg3
+      amz-sdk-request:
+      - !!binary |
+        YXR0ZW1wdD0x
+      authorization:
+      - Bearer test_openai_api_key
+    method: POST
+    uri: https://bedrock-runtime.us-east-1.amazonaws.com/model/meta.llama3-8b-instruct-v1%3A0/invoke
+  response:
+    body:
+      string: |-
+        {
+          "generation": "You're asking about the City of Light! The capital of France is Paris!",
+          "prompt_token_count": 29,
+          "generation_token_count": 17,
+          "stop_reason": "stop"
+        }
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 11 Nov 2026 19:25:31 GMT
+      Set-Cookie: test_set_cookie
+      X-Amzn-Bedrock-Input-Token-Count:
+      - '29'
+      X-Amzn-Bedrock-Invocation-Latency:
+      - '559'
+      X-Amzn-Bedrock-Output-Token-Count:
+      - '17'
+      openai-organization: test_openai_org_id
+      openai-project: test_openai_project_id
+    status:
+      code: 200
+      message: OK
+version: 1

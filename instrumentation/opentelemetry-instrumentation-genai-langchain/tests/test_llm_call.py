@@ -632,6 +632,26 @@ def test_us_amazon_nova_lite_v1_0_bedrock_llm_call(
 
 
 @pytest.mark.vcr()
+def test_meta_llama3_8b_instruct_bedrock_llm_call(
+    span_exporter, start_instrumentation, meta_llama3_8b_instruct
+):
+    messages = [
+        SystemMessage(content="You are a helpful assistant!"),
+        HumanMessage(content="What is the capital of France?"),
+    ]
+
+    result = meta_llama3_8b_instruct.invoke(messages)
+
+    assert "Paris" in result.content
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert_bedrock_completion_attributes(
+        spans[0], result, model="meta.llama3-8b-instruct-v1:0"
+    )
+
+
+@pytest.mark.vcr()
 def test_chat_anthropic_claude_sonnet_llm_call(
     span_exporter, start_instrumentation, chat_anthropic_claude_sonnet
 ):
@@ -1319,14 +1339,13 @@ def assert_openai_completion_attributes_with_error(
 
 
 def assert_bedrock_completion_attributes(
-    span: ReadableSpan, response: Optional
+    span: ReadableSpan,
+    response: Optional,
+    model: str = "us.amazon.nova-lite-v1:0",
 ):
-    assert span.name == "chat us.amazon.nova-lite-v1:0"
+    assert span.name == f"chat {model}"
     assert span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME] == "chat"
-    assert (
-        span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL]
-        == "us.amazon.nova-lite-v1:0"
-    )
+    assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MODEL] == model
 
     assert span.attributes["gen_ai.provider.name"] == "aws.bedrock"
     assert span.attributes[gen_ai_attributes.GEN_AI_REQUEST_MAX_TOKENS] == 100

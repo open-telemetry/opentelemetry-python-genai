@@ -53,7 +53,7 @@ class InvokeModelScenario(Scenario):
             meter_provider=meter_provider,
             content_capture="SPAN_ONLY",
         ):
-            with vcr.use_cassette("test_invoke_model_titan_conformance.yaml"):
+            with vcr.use_cassette("test_invoke_model_llama_conformance.yaml"):
                 client = boto3.client(
                     "bedrock-runtime", region_name="us-east-1"
                 )

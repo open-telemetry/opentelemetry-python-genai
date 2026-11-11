@@ -71,7 +71,7 @@ class InvokeModelStreamingScenario(Scenario):
             content_capture="SPAN_ONLY",
         ):
             with vcr.use_cassette(
-                "test_invoke_model_stream_titan_conformance.yaml"
+                "test_invoke_model_stream_llama_conformance.yaml"
             ):
                 client = boto3.client(
                     "bedrock-runtime", region_name="us-east-1"
