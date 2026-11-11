@@ -315,7 +315,8 @@ async def test_async_converse_stream_success(
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
+    # inputTokens (10) excludes the cached tokens: 10 + 2 read + 1 written
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]
@@ -408,7 +409,7 @@ async def test_async_converse_stream_async_with_success(
     assert mock_stream.closed
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
-    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10
+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13
 
 
 @pytest.mark.asyncio
