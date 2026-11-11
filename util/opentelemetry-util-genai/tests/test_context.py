@@ -1877,6 +1877,45 @@ class TestEmbeddingContext(BaseContextTest):
             span.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 9
         )
 
+    def test_nested_embedding_layers_do_not_double_count_usage(self) -> None:
+        with self.handler.embedding(
+            "root-provider", request_model="root-model"
+        ):
+            with self.handler.embedding(
+                "framework-provider", request_model="root-model"
+            ) as framework:
+                with self.handler.embedding(
+                    "sdk-provider", request_model="root-model"
+                ) as sdk:
+                    sdk.input_tokens = 5
+                framework.input_tokens = 5
+
+        (span,) = self.span_exporter.get_finished_spans()
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 5
+        )
+
+    def test_nested_embedding_layer_aggregates_its_sdk_requests(self) -> None:
+        with self.handler.embedding(
+            "root-provider", request_model="root-model"
+        ):
+            with self.handler.embedding(
+                "framework-provider", request_model="root-model"
+            ):
+                with self.handler.embedding(
+                    "sdk-provider", request_model="root-model"
+                ) as first:
+                    first.input_tokens = 5
+                with self.handler.embedding(
+                    "sdk-provider", request_model="root-model"
+                ) as second:
+                    second.input_tokens = 4
+
+        (span,) = self.span_exporter.get_finished_spans()
+        self.assertEqual(
+            span.attributes.get(GenAI.GEN_AI_USAGE_INPUT_TOKENS), 9
+        )
+
     def test_root_precedence_over_nested_embedding(self) -> None:
         with self.handler.embedding(
             "root-provider",

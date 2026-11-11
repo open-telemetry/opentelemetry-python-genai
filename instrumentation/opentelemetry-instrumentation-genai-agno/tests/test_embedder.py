@@ -831,6 +831,76 @@ def test_embedder_dual_instrumentation_suppressed_inner(
         )
 
 
+def test_embedder_nested_dual_instrumentation_counts_each_request_once(
+    span_exporter, tracer_provider, logger_provider, meter_provider
+) -> None:
+    """Nested Agno and OpenAI layers do not double-count batch usage."""
+    pytest.importorskip("opentelemetry.instrumentation.genai.openai")
+    from unittest.mock import patch
+
+    import openai
+
+    from opentelemetry.instrumentation.genai.agno import AgnoInstrumentor
+    from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
+    from opentelemetry.test_util_genai.instrumentor import instrument
+    from opentelemetry.util.genai.handler import TelemetryHandler
+
+    responses = [
+        _create_batch_response([[0.1, 0.2], [0.3, 0.4]], {"prompt_tokens": 5}),
+        _create_batch_response([[0.5, 0.6]], {"prompt_tokens": 4}),
+    ]
+    with (
+        instrument(
+            AgnoInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ),
+        instrument(
+            OpenAIInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ),
+    ):
+        client = openai.AsyncOpenAI(api_key="fake")
+        with patch.object(
+            client, "post", new=AsyncMock(side_effect=responses)
+        ):
+            embedder = OpenAIEmbedder(
+                api_key="fake",
+                id="text-embedding-3-small",
+                async_client=client,
+                batch_size=2,
+            )
+            handler = TelemetryHandler(
+                tracer_provider=tracer_provider,
+                logger_provider=logger_provider,
+                meter_provider=meter_provider,
+            )
+
+            async def _test() -> None:
+                with handler.embedding(
+                    "outer", request_model="text-embedding-3-small"
+                ):
+                    (
+                        embeddings,
+                        _,
+                    ) = await embedder.async_get_embeddings_batch_and_usage(
+                        ["first", "second", "third"]
+                    )
+                assert embeddings == [
+                    [0.1, 0.2],
+                    [0.3, 0.4],
+                    [0.5, 0.6],
+                ]
+
+            asyncio.run(_test())
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.attributes.get(GEN_AI_USAGE_INPUT_TOKENS) == 9
+
+
 def test_embedder_base64_encoding_dimensions(
     instrument_agno,
     span_exporter,

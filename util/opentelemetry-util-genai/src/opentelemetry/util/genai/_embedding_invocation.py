@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final
 
@@ -236,6 +237,11 @@ class EmbeddingInvocation(GenAIInvocation):
         self._record_client_metrics()
 
 
+_active_suppressed_embedding: ContextVar[
+    SuppressedEmbeddingInvocation | None
+] = ContextVar("_active_suppressed_embedding", default=None)
+
+
 class SuppressedEmbeddingInvocation(EmbeddingInvocation):
     """Represents an embedding invocation running inside an active embedding context.
 
@@ -272,6 +278,8 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
             context=context,
             _attach_to_context=_attach_to_context,
         )
+        self._parent_suppressed = _active_suppressed_embedding.get()
+        self._suppression_token = _active_suppressed_embedding.set(self)
 
     def publish_to_context(self, data: EmbeddingData) -> None:
         """Publish invocation attributes to the active embedding context."""
@@ -291,11 +299,17 @@ class SuppressedEmbeddingInvocation(EmbeddingInvocation):
         if self._finished:
             return
         self._finished = True
-        ctx_data = get_value(
-            CLIENT_EMBEDDING_CONTEXT_KEY, context=self._span_context
-        )
-        if isinstance(ctx_data, EmbeddingData):
-            self.publish_to_context(ctx_data)
+        try:
+            if self._parent_suppressed is not None:
+                self.publish_to_context(self._parent_suppressed._data)
+                return
+            ctx_data = get_value(
+                CLIENT_EMBEDDING_CONTEXT_KEY, context=self._span_context
+            )
+            if isinstance(ctx_data, EmbeddingData):
+                self.publish_to_context(ctx_data)
+        finally:
+            _active_suppressed_embedding.reset(self._suppression_token)
 
     def _apply_finish(self, error: Error | None = None) -> None:
         pass
