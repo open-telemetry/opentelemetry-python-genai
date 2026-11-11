@@ -231,8 +231,8 @@ def _dump_model(value: object) -> object | None:
     if is_dataclass(value) and not isinstance(value, type):
         dumped = {f.name: getattr(value, f.name) for f in fields(value)}
         if type(value).__module__ == _GENAI_TYPES_MODULE:
-            # Unset optional fields are left out. User dataclasses, such as
-            # those inside tool payloads, keep their None values.
+            # User dataclasses, such as those inside tool payloads, keep
+            # their None values.
             unset = _unset_when_none(type(value))
             dumped = {
                 k: v
