@@ -629,6 +629,7 @@ def test_invoke_model_mistral(
         "max_tokens": 100,
         "temperature": 0.7,
         "top_p": 0.9,
+        "stop": ["END", "STOP"],
     }
     response_body = {
         "outputs": [
@@ -672,6 +673,11 @@ def test_invoke_model_mistral(
     span = spans[0]
 
     assert span.name == "chat mistral.mistral-7b-instruct-v0:2"
+    stop_sequences = span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
+    ]
+    assert stop_sequences == ("END", "STOP")
+    assert all(isinstance(sequence, str) for sequence in stop_sequences)
     assert span.attributes[GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS] == (
         "stop",
     )
