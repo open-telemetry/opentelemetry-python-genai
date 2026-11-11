@@ -137,8 +137,13 @@ class InteractionsServerToolCallingScenario(Scenario):
             == "google_search"
         )
         assert responses[0]["server_tool_call_response"]["is_error"] is False
-        assert isinstance(
-            responses[0]["server_tool_call_response"]["result"], list
+        results = responses[0]["server_tool_call_response"]["result"]
+        assert isinstance(results, list)
+        assert len(results) == 5
+        assert all(
+            isinstance(r.get("search_suggestions"), str)
+            and "OpenTelemetry" in r["search_suggestions"]
+            for r in results
         )
 
     def run(

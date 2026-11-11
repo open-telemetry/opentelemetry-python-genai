@@ -251,17 +251,17 @@ def start_instrumentation(
 
 
 @pytest.fixture(autouse=True)
-def environment():
+def environment(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
     if not os.getenv("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = "test_openai_api_key"
-    if not (
-        os.getenv("AWS_ACCESS_KEY_ID")
-        or os.getenv("AWS_PROFILE")
-        or os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
-        or os.path.exists(os.path.expanduser("~/.aws/credentials"))
-    ):
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", "test_key")
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test_secret")
+        monkeypatch.setenv("OPENAI_API_KEY", "test_openai_api_key")
+    vcr_record = request.config.getoption("--vcr-record", default=None)
+    if vcr_record in (None, "none"):
+        if not os.getenv("AWS_ACCESS_KEY_ID"):
+            monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test_key")
+        if not os.getenv("AWS_SECRET_ACCESS_KEY"):
+            monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test_secret")
 
 
 @pytest.fixture(autouse=True)

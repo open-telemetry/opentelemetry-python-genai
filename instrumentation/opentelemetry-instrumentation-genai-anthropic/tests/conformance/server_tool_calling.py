@@ -58,7 +58,18 @@ class ServerToolCallingScenario(Scenario):
         assert (
             responses[0]["server_tool_call_response"]["type"] == "web_search"
         )
-        assert responses[0]["server_tool_call_response"]["content"]
+        results = responses[0]["server_tool_call_response"]["content"]
+        assert isinstance(results, list)
+        assert len(results) == 10
+        assert all(r["type"] == "web_search_result" for r in results)
+        assert results[0]["title"] == "What is OpenTelemetry?"
+        assert (
+            results[0]["url"]
+            == "https://cloud.google.com/learn/what-is-opentelemetry"
+        )
+        assert results[0]["page_age"] == "2166 days ago"
+        assert isinstance(results[0]["encrypted_content"], str)
+        assert results[0]["encrypted_content"]
 
     def run(
         self,
