@@ -2,7 +2,9 @@
 interactions:
 - request:
     body: '{"messages":[{"role":"user","content":"Hello!"}],"model":"gpt-4o-mini","stream":false,"temperature":0.1,"tool_choice":null,"tools":null}'
-    headers: {}
+    headers:
+      content-type:
+      - application/json
     method: POST
     uri: https://api.openai.com/v1/chat/completions
   response:
