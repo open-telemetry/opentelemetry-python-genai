@@ -12,7 +12,7 @@ import urllib.parse
 from base64 import b64decode, b64encode
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from functools import lru_cache, partial
@@ -129,21 +129,41 @@ def fq_exception_type(exception: BaseException) -> str:
 
 
 @lru_cache(maxsize=128)
-def _optional_field_names(cls: type) -> frozenset[str]:
-    return frozenset(
+def _field_kinds(cls: type) -> tuple[frozenset[str], frozenset[str]]:
+    """Return the names of the optional fields and of the ``Any`` fields."""
+    hints = get_type_hints(cls)
+    optional = frozenset(
         name
-        for name, hint in get_type_hints(cls).items()
+        for name, hint in hints.items()
         if get_origin(hint) in (Union, UnionType)
         and type(None) in get_args(hint)
     )
+    payload = frozenset(name for name, hint in hints.items() if hint is Any)
+    return optional, payload
+
+
+@dataclass
+class _Payload:
+    value: Any
+
+
+def _copy_payload(value: object) -> object:
+    """Copy a user payload exactly as ``dataclasses.asdict`` does."""
+    return asdict(_Payload(value))["value"]
 
 
 def _asdict_without_optional_none(value: object) -> object:
-    """Copy dataclass content, omitting None only for optional dataclass fields."""
+    """Copy dataclass content, omitting None only for optional dataclass fields.
+
+    Fields typed ``Any`` hold user payloads (for example tool call
+    arguments), which are copied unchanged, keeping every None.
+    """
     if is_dataclass(value) and not isinstance(value, type):
-        optional = _optional_field_names(type(value))
+        optional, payload = _field_kinds(type(value))
         return {
-            field.name: _asdict_without_optional_none(item)
+            field.name: _copy_payload(item)
+            if field.name in payload
+            else _asdict_without_optional_none(item)
             for field in fields(value)
             if (item := getattr(value, field.name)) is not None
             or field.name not in optional

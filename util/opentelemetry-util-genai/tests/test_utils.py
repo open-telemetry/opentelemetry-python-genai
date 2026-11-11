@@ -1701,6 +1701,33 @@ class TestMessageModels(unittest.TestCase):
             copied, Pair({"content": "hello", "type": "text"}, None)
         )
 
+    def test_dataclass_payload_keeps_none(self):
+        @dataclass
+        class Result:
+            detail: str | None = None
+            missing: "UndefinedName | None" = None  # noqa: F821
+
+        part = ToolCallRequestPart(
+            arguments={"result": Result()}, name="tool", id=None
+        )
+        response = ToolCallResponsePart(response=[Result()], id="call")
+        self.assertEqual(
+            _asdict_without_optional_none(part),
+            {
+                "arguments": {"result": {"detail": None, "missing": None}},
+                "name": "tool",
+                "type": "tool_call",
+            },
+        )
+        self.assertEqual(
+            _asdict_without_optional_none(response),
+            {
+                "response": [{"detail": None, "missing": None}],
+                "id": "call",
+                "type": "tool_call_response",
+            },
+        )
+
     def test_optional_annotation_forms(self):
         @dataclass
         class Payload:
