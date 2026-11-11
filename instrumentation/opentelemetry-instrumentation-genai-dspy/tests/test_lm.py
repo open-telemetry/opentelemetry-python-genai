@@ -14,14 +14,21 @@ from unittest import mock
 import dspy
 import pytest
 from dspy.utils import DummyLM
-from litellm.types.utils import (
-    CachedTokensDetails,
-    CompletionTokensDetailsWrapper,
-    PromptTokensDetailsWrapper,
-)
-from litellm.types.utils import (
-    Usage as LiteLLMUsage,
-)
+
+try:
+    from litellm.types.utils import (
+        CachedTokensDetails,
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+    )
+    from litellm.types.utils import (
+        Usage as LiteLLMUsage,
+    )
+except ModuleNotFoundError:
+    CachedTokensDetails = None
+    CompletionTokensDetailsWrapper = None
+    PromptTokensDetailsWrapper = None
+    LiteLLMUsage = None
 
 from opentelemetry.instrumentation.genai.dspy import DSPyInstrumentor
 from opentelemetry.instrumentation.genai.dspy.utils import (
@@ -1532,6 +1539,9 @@ class DetailedUsageLM(FakeLM):
             },
             (),
             id="prompt_and_completion_details",
+            marks=pytest.mark.skipif(
+                LiteLLMUsage is None, reason="requires litellm"
+            ),
         ),
         pytest.param(
             {
