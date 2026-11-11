@@ -1,1 +1,1 @@
-Omit unset optional fields from GenAI message, system instruction, and tool definition JSON.
+Omit unset optional fields of GenAI message types when converting them with `object_to_any_value`, instead of emitting `None`.

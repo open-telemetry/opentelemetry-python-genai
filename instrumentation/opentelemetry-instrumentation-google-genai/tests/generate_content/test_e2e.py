@@ -493,6 +493,7 @@ def test_upload_hook_non_streaming(
                 }
             ],
             "role": "user",
+            "name": None,
         }
     ]
     expected_output = [
@@ -505,6 +506,7 @@ def test_upload_hook_non_streaming(
                 }
             ],
             "finish_reason": "stop",
+            "name": None,
         }
     ]
     _ = generate_content(

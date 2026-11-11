@@ -8,7 +8,7 @@ from abc import abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Token
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from types import TracebackType
 from typing import Any, ClassVar, Self, TypeAlias, cast
 
@@ -53,7 +53,6 @@ from opentelemetry.util.genai.types import (
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
-    _asdict_without_optional_none,
     gen_ai_json_dumps,
     get_content_capturing_mode,
     object_to_any_value,
@@ -559,7 +558,7 @@ def get_content_attributes(
     )
 
     def serialize(items: Sequence[Any]) -> Any:
-        dicts = [_asdict_without_optional_none(item) for item in items]
+        dicts = [asdict(item) for item in items]
         return gen_ai_json_dumps(dicts) if for_span else dicts
 
     if mode not in allowed_modes:

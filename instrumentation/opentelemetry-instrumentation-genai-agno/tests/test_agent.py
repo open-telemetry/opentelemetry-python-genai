@@ -1829,6 +1829,7 @@ def test_continue_run_captures_external_tool_result(
     assert messages == [
         {
             "role": "tool",
+            "name": None,
             "parts": [
                 {
                     "type": "tool_call_response",
@@ -1917,6 +1918,7 @@ def test_acontinue_run_captures_external_tool_result(
     assert messages == [
         {
             "role": "tool",
+            "name": None,
             "parts": [
                 {
                     "type": "tool_call_response",

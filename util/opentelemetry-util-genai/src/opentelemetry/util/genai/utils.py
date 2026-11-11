@@ -11,13 +11,11 @@ import os
 import urllib.parse
 from base64 import b64decode, b64encode
 from collections.abc import Callable, Iterable, Mapping
-from copy import deepcopy
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
-from functools import lru_cache, partial
-from types import UnionType
-from typing import Any, Union, cast, get_args, get_origin, get_type_hints
+from functools import cache, lru_cache, partial
+from typing import Any, cast, get_type_hints
 from uuid import UUID
 
 from opentelemetry.util.genai.environment_variables import (
@@ -128,64 +126,6 @@ def fq_exception_type(exception: BaseException) -> str:
     return qualname
 
 
-@lru_cache(maxsize=128)
-def _field_kinds(cls: type) -> tuple[frozenset[str], frozenset[str]]:
-    """Return the names of the optional fields and of the ``Any`` fields."""
-    hints = get_type_hints(cls)
-    optional = frozenset(
-        name
-        for name, hint in hints.items()
-        if get_origin(hint) in (Union, UnionType)
-        and type(None) in get_args(hint)
-    )
-    payload = frozenset(name for name, hint in hints.items() if hint is Any)
-    return optional, payload
-
-
-@dataclass
-class _Payload:
-    value: Any
-
-
-def _copy_payload(value: object) -> object:
-    """Copy a user payload exactly as ``dataclasses.asdict`` does."""
-    return asdict(_Payload(value))["value"]
-
-
-def _asdict_without_optional_none(value: object) -> object:
-    """Copy dataclass content, omitting None only for optional dataclass fields.
-
-    Fields typed ``Any`` hold user payloads (for example tool call
-    arguments), which are copied unchanged, keeping every None.
-    """
-    if is_dataclass(value) and not isinstance(value, type):
-        optional, payload = _field_kinds(type(value))
-        return {
-            field.name: _copy_payload(item)
-            if field.name in payload
-            else _asdict_without_optional_none(item)
-            for field in fields(value)
-            if (item := getattr(value, field.name)) is not None
-            or field.name not in optional
-        }
-    if isinstance(value, dict):
-        mapping = cast("dict[object, object]", value)
-        return {
-            _asdict_without_optional_none(key): _asdict_without_optional_none(
-                item
-            )
-            for key, item in mapping.items()
-        }
-    if isinstance(value, (list, tuple)):
-        sequence = cast("list[object] | tuple[object, ...]", value)
-        items = [_asdict_without_optional_none(item) for item in sequence]
-        factory = cast(Any, type(sequence))
-        if isinstance(sequence, tuple) and hasattr(sequence, "_fields"):
-            return factory(*items)
-        return factory(items)
-    return deepcopy(value)
-
-
 class _GenAiJsonEncoder(json.JSONEncoder):
     def default(self, o: Any) -> Any:
         if is_dataclass(o) and not isinstance(o, type):
@@ -274,9 +214,32 @@ def _sanitize_for_any_value(
         return _OMIT
 
 
+_GENAI_TYPES_MODULE = "opentelemetry.util.genai.types"
+
+
+@cache
+def _unset_when_none(cls: type) -> frozenset[str]:
+    """Fields of a util-genai type for which None means "not set".
+
+    Fields typed ``Any`` hold a payload, so None there is a real value.
+    """
+    hints = get_type_hints(cls)
+    return frozenset(f.name for f in fields(cls) if hints[f.name] is not Any)
+
+
 def _dump_model(value: object) -> object | None:
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: getattr(value, f.name) for f in fields(value)}
+        dumped = {f.name: getattr(value, f.name) for f in fields(value)}
+        if type(value).__module__ == _GENAI_TYPES_MODULE:
+            # Unset optional fields are left out. User dataclasses, such as
+            # those inside tool payloads, keep their None values.
+            unset = _unset_when_none(type(value))
+            dumped = {
+                k: v
+                for k, v in dumped.items()
+                if v is not None or k not in unset
+            }
+        return dumped
     for method_name in ("model_dump", "dict", "to_dict"):
         fn = getattr(value, method_name, None)
         if callable(fn):

@@ -410,6 +410,7 @@ async def test_async_chat_completion_multiple_choices(
                     }
                 ],
                 "finish_reason": "stop",
+                "name": None,
             },
             {
                 "role": "assistant",
@@ -420,6 +421,7 @@ async def test_async_chat_completion_multiple_choices(
                     }
                 ],
                 "finish_reason": "stop",
+                "name": None,
             },
         ]
 
@@ -929,6 +931,7 @@ async def chat_completion_tool_call(
                         },
                     ],
                     "finish_reason": "tool_call",
+                    "name": None,
                 }
             ]
             assert_messages_attribute(
@@ -958,6 +961,7 @@ async def chat_completion_tool_call(
                             "response": tool_call_result_0["content"],
                         }
                     ],
+                    "name": None,
                 },
                 {
                     "role": "tool",
@@ -970,6 +974,7 @@ async def chat_completion_tool_call(
                             "response": tool_call_result_1["content"],
                         }
                     ],
+                    "name": None,
                 },
             ]
 
@@ -991,6 +996,7 @@ async def chat_completion_tool_call(
                             },
                         ],
                         "finish_reason": "stop",
+                        "name": None,
                     }
                 ],
             )
@@ -1443,6 +1449,7 @@ async def test_async_chat_completion_multiple_choices_streaming(
                     }
                 ],
                 "finish_reason": "stop",
+                "name": None,
             },
             {
                 "role": "assistant",
@@ -1453,6 +1460,7 @@ async def test_async_chat_completion_multiple_choices_streaming(
                     }
                 ],
                 "finish_reason": "stop",
+                "name": None,
             },
         ]
         assert_messages_attribute(
@@ -1691,6 +1699,7 @@ async def async_chat_completion_multiple_tools_streaming(
                         },
                     ],
                     "finish_reason": "tool_call",
+                    "name": None,
                 }
             ]
             assert_messages_attribute(

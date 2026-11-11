@@ -6,6 +6,7 @@
 import asyncio
 import inspect
 import json
+from dataclasses import asdict
 
 import pytest
 
@@ -45,6 +46,7 @@ from opentelemetry.semconv._incubating.attributes import (
 )
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.trace import StatusCode
+from opentelemetry.util.genai.types import OutputMessage, TextPart
 
 from .conftest import (
     assert_multimodal_input,
@@ -788,10 +790,13 @@ async def test_async_messages_stream_interrupted_mid_iteration(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            {
-                "role": "assistant",
-                "parts": [{"type": "text", "content": "Hello."}],
-            }
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello.")],
+                    finish_reason=None,
+                )
+            )
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -1265,10 +1270,13 @@ async def test_async_messages_create_stream_propagation_error(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            {
-                "role": "assistant",
-                "parts": [{"type": "text", "content": "Hello!"}],
-            }
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello!")],
+                    finish_reason=None,
+                )
+            )
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
@@ -2535,10 +2543,13 @@ async def test_async_messages_stream_text_stream_user_exception(
         assert _load_span_messages(
             span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
         ) == [
-            {
-                "role": "assistant",
-                "parts": [{"type": "text", "content": "Hello."}],
-            }
+            asdict(
+                OutputMessage(
+                    role="assistant",
+                    parts=[TextPart(content="Hello.")],
+                    finish_reason=None,
+                )
+            )
         ]
     else:
         assert GenAIAttributes.GEN_AI_OUTPUT_MESSAGES not in span.attributes
