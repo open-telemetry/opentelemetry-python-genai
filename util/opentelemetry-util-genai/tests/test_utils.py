@@ -43,6 +43,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    FunctionToolDefinition,
     GenericPart,
     InputMessage,
     MessagePart,
@@ -2162,11 +2163,7 @@ class TestObjectToAnyValue(unittest.TestCase):
                 "role": "user",
                 "parts": [
                     {"content": "hi", "type": "text"},
-                    {
-                        "arguments": None,
-                        "name": "get_time",
-                        "type": "tool_call",
-                    },
+                    {"name": "get_time", "type": "tool_call"},
                     {"content": b"x", "modality": "image", "type": "blob"},
                 ],
             },
@@ -2185,7 +2182,17 @@ class TestObjectToAnyValue(unittest.TestCase):
         )
         self.assertEqual(object_to_any_value(RetrievalDocument()), {})
 
-    def test_genai_types_keep_none_payload(self):
+    def test_genai_types_omit_unset_tool_definition_parameters(self):
+        self.assertEqual(
+            object_to_any_value(
+                FunctionToolDefinition(
+                    name="get_time", description=None, parameters=None
+                )
+            ),
+            {"name": "get_time", "type": "function"},
+        )
+
+    def test_tool_response_keeps_none(self):
         self.assertEqual(
             object_to_any_value(ToolCallResponsePart(response=None, id="c1")),
             {"response": None, "id": "c1", "type": "tool_call_response"},

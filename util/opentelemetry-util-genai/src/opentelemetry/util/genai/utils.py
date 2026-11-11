@@ -14,8 +14,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
-from functools import cache, lru_cache, partial
-from typing import Any, cast, get_type_hints
+from functools import lru_cache, partial
+from typing import Any, cast
 from uuid import UUID
 
 from opentelemetry.util.genai.environment_variables import (
@@ -26,6 +26,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     MessagePart,
     Modality,
+    ToolCallResponsePart,
     UriPart,
 )
 from opentelemetry.util.types import AnyValue
@@ -217,27 +218,19 @@ def _sanitize_for_any_value(
 _GENAI_TYPES_MODULE = "opentelemetry.util.genai.types"
 
 
-@cache
-def _unset_when_none(cls: type) -> frozenset[str]:
-    """Fields of a util-genai type for which None means "not set".
-
-    Fields typed ``Any`` hold a payload, so None there is a real value.
-    """
-    hints = get_type_hints(cls)
-    return frozenset(f.name for f in fields(cls) if hints[f.name] is not Any)
-
-
 def _dump_model(value: object) -> object | None:
     if is_dataclass(value) and not isinstance(value, type):
         dumped = {f.name: getattr(value, f.name) for f in fields(value)}
         if type(value).__module__ == _GENAI_TYPES_MODULE:
-            # User dataclasses, such as those inside tool payloads, keep
-            # their None values.
-            unset = _unset_when_none(type(value))
+            # None means "not set" in util-genai types. A tool response is
+            # required by semconv, so a None response is kept as null. User
+            # dataclasses, such as those inside tool payloads, keep their
+            # None values.
+            is_tool_response = isinstance(value, ToolCallResponsePart)
             dumped = {
                 k: v
                 for k, v in dumped.items()
-                if v is not None or k not in unset
+                if v is not None or (is_tool_response and k == "response")
             }
         return dumped
     for method_name in ("model_dump", "dict", "to_dict"):
