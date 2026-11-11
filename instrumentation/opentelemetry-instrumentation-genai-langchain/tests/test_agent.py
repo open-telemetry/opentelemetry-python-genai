@@ -5,15 +5,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
+from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.tools import BaseTool, StructuredTool, tool
 from langgraph.prebuilt import ToolNode, create_react_agent
-from tests._api import FakeChatModel
+from tests._api import FakeChatModel, FakeRetriever, finished_span
 from tests._api import invoke as _invoke
 
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
@@ -83,6 +84,7 @@ async def test_native_agent_call_counts(
     agent = create_react_agent(
         runnable,
         ToolNode([calculate], handle_tool_errors=False) if use_tool else [],
+        name="counter-agent",
     )
     inputs = {"messages": [("user", "calculate")]}
 
@@ -103,13 +105,8 @@ async def test_native_agent_call_counts(
     else:
         await run()
     spans = span_exporter.get_finished_spans()
-    (agent_span,) = [
-        span
-        for span in spans
-        if span.parent is None
-        and span.attributes[gen_ai_attributes.GEN_AI_OPERATION_NAME]
-        == "invoke_agent"
-    ]
+    agent_span = finished_span(span_exporter, "invoke_agent counter-agent")
+    assert agent_span.parent is None
     assert agent_span.status.status_code == (
         StatusCode.ERROR if failure else StatusCode.UNSET
     )
@@ -133,6 +130,21 @@ async def test_native_agent_call_counts(
         assert (
             chats[0].attributes[error_attributes.ERROR_TYPE] == "RuntimeError"
         )
+    _assert_agent_counts(
+        metric_reader,
+        {
+            "counter-agent": (
+                inference_calls,
+                int(use_tool and failure != "model"),
+            )
+        },
+    )
+
+
+def _assert_agent_counts(
+    metric_reader: InMemoryMetricReader,
+    expected: dict[str, tuple[int, int]],
+) -> None:
     data = metric_reader.get_metrics_data()
     assert data is not None
     metrics = {
@@ -141,14 +153,165 @@ async def test_native_agent_call_counts(
         for scope in resource.scope_metrics
         for metric in scope.metrics
     }
-    for name, total in (
-        ("gen_ai.invoke_agent.inference_calls", inference_calls),
+    for index, name in enumerate(
         (
+            "gen_ai.invoke_agent.inference_calls",
             "gen_ai.invoke_agent.tool_calls",
-            int(use_tool and failure != "model"),
-        ),
+        )
     ):
-        (point,) = metrics[name].data.data_points
-        assert point.count == 1
-        assert type(point.sum) is int
-        assert point.sum == total
+        points = metrics[name].data.data_points
+        assert len(points) == len(expected)
+        assert {
+            point.attributes[gen_ai_attributes.GEN_AI_AGENT_NAME]: point.sum
+            for point in points
+        } == {agent: counts[index] for agent, counts in expected.items()}
+        for point in points:
+            assert point.count == 1
+            assert type(point.sum) is int
+
+
+def _agent_with_tool(agent_tool: BaseTool, name: str) -> Runnable:
+    return create_react_agent(
+        FakeChatModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": agent_tool.name, "args": {}, "id": "1"}
+                    ],
+                ),
+                AIMessage(content="done"),
+            ]
+        ),
+        [agent_tool],
+        name=name,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_agent_counter_ownership(
+    asynchronous: bool,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    inputs = {"messages": [("user", "hi")]}
+    inner = create_react_agent(
+        FakeChatModel(responses=[AIMessage(content="inner answer")]),
+        [],
+        name="inner-agent",
+    )
+    nested_model = FakeChatModel(
+        responses=[AIMessage(content="nested answer")], model_name="tool-model"
+    )
+    retriever = FakeRetriever(
+        model=FakeChatModel(
+            responses=[AIMessage(content="retrieved answer")],
+            model_name="retrieval-model",
+        )
+    )
+
+    @tool
+    def nested_calculation() -> str:
+        """Return a nested calculation."""
+        return "42"
+
+    def delegate() -> str:
+        nested_model.invoke("hi")
+        nested_calculation.invoke({})
+        retriever.invoke("hi")
+        inner.invoke(inputs)
+        return "42"
+
+    async def adelegate() -> str:
+        await nested_model.ainvoke("hi")
+        await nested_calculation.ainvoke({})
+        await retriever.ainvoke("hi")
+        await inner.ainvoke(inputs)
+        return "42"
+
+    dispatch = StructuredTool.from_function(
+        func=delegate, coroutine=adelegate, description="Delegate the work."
+    )
+    await _invoke(
+        _agent_with_tool(dispatch, "outer-agent"), inputs, asynchronous
+    )
+
+    dispatch_span = finished_span(span_exporter, "execute_tool delegate")
+    retrieval_span = finished_span(span_exporter, "retrieval")
+    for name, parent in (
+        ("invoke_agent inner-agent", dispatch_span),
+        ("chat tool-model", dispatch_span),
+        ("execute_tool nested_calculation", dispatch_span),
+        ("retrieval", dispatch_span),
+        ("chat retrieval-model", retrieval_span),
+    ):
+        assert finished_span(span_exporter, name).parent == parent.context
+    _assert_agent_counts(
+        metric_reader, {"outer-agent": (2, 1), "inner-agent": (1, 0)}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["sync-close", "async-close", "cancel"])
+async def test_native_agent_partial_call_counts(
+    ending: str,
+    span_exporter: InMemorySpanExporter,
+    metric_reader: InMemoryMetricReader,
+    instrument_langchain: None,
+) -> None:
+    started = asyncio.Event()
+
+    def calculate() -> str:
+        started.set()
+        return "42"
+
+    async def acalculate() -> str:
+        started.set()
+        await asyncio.sleep(60)
+        return "42"
+
+    calculation = StructuredTool.from_function(
+        func=calculate,
+        coroutine=acalculate,
+        description="Calculate an answer.",
+    )
+    agent = _agent_with_tool(calculation, "partial-agent")
+    inputs = {"messages": [("user", "calculate")]}
+    if ending == "sync-close":
+        stream = agent.stream(inputs, stream_mode="updates")
+        try:
+            assert next(stream)
+        finally:
+            stream.close()
+    elif ending == "async-close":
+        stream = agent.astream(inputs, stream_mode="updates")
+        try:
+            assert await anext(stream)
+        finally:
+            await stream.aclose()
+    else:
+
+        async def consume() -> None:
+            async for _ in agent.astream(inputs):
+                pass
+
+        task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+
+    assert started.is_set() == (ending == "cancel")
+    span = finished_span(span_exporter, "invoke_agent partial-agent")
+    if ending == "cancel":
+        assert (
+            span.attributes[error_attributes.ERROR_TYPE]
+            == "asyncio.exceptions.CancelledError"
+        )
+    _assert_agent_counts(
+        metric_reader, {"partial-agent": (1, int(ending == "cancel"))}
+    )
