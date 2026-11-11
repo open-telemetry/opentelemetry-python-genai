@@ -519,6 +519,7 @@ def extract_invoke_model_request(
             body.get("topK"),
             body.get("k"),
             inf_config.get("top_k") if inf_config else None,
+            inf_config.get("topK") if inf_config else None,
         )
     )
 
@@ -531,6 +532,7 @@ def extract_invoke_model_request(
             body.get("maxTokens"),
             text_gen_config.get("maxTokenCount") if text_gen_config else None,
             inf_config.get("max_new_tokens") if inf_config else None,
+            inf_config.get("maxTokens") if inf_config else None,
         )
     )
 

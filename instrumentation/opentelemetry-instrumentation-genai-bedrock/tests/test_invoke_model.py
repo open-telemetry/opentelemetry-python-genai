@@ -274,17 +274,23 @@ def test_invoke_model_titan_text(
     )
 
 
-@pytest.mark.parametrize("top_p", [0.0, 0.9])
+@pytest.mark.parametrize(
+    "top_p,top_k,max_tokens", [(0.0, 0, 0), (0.9, 40, 100)]
+)
 def test_invoke_model_nova_request_settings(
     bedrock_client,
     instrument_no_content,
     span_exporter,
     top_p: float,
+    top_k: int,
+    max_tokens: int,
 ) -> None:
     request_body = {
         "messages": [{"role": "user", "content": [{"text": "Hello"}]}],
         "inferenceConfig": {
             "topP": top_p,
+            "topK": top_k,
+            "maxTokens": max_tokens,
             "stopSequences": ["END", "STOP"],
         },
     }
@@ -324,6 +330,14 @@ def test_invoke_model_nova_request_settings(
     actual_top_p = span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_P]
     assert actual_top_p == top_p
     assert isinstance(actual_top_p, float)
+    actual_top_k = span.attributes[GenAIAttributes.GEN_AI_REQUEST_TOP_K]
+    assert actual_top_k == top_k
+    assert isinstance(actual_top_k, int)
+    actual_max_tokens = span.attributes[
+        GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS
+    ]
+    assert actual_max_tokens == max_tokens
+    assert isinstance(actual_max_tokens, int)
     stop_sequences = span.attributes[
         GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES
     ]
