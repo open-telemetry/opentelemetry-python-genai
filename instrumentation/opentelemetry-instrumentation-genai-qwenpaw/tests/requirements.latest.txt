@@ -13,6 +13,6 @@
 # limitations under the License.
 
 qwenpaw==2.2.2.post1
-wrapt>=2.5.1
--e util/opentelemetry-util-genai
+wrapt>=2.5.2
+-e util/opentelemetry-util-genai[wrapt]
 -e instrumentation/opentelemetry-instrumentation-genai-qwenpaw
