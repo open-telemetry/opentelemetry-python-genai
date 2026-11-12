@@ -32,6 +32,7 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.invocation import RealtimeInferenceInvocation
 from opentelemetry.util.genai.types import (
     BlobPart,
     InputMessage,
@@ -91,6 +92,7 @@ def test_realtime_session_events_and_invocations():
             server_address="generativelanguage.googleapis.com",
             server_port=443,
         ) as inv:
+            assert isinstance(inv, RealtimeInferenceInvocation)
             inv.output_type = "speech"
             inv.finish_reasons = ["stop"]
             inv.input_messages = [
@@ -162,11 +164,12 @@ def test_realtime_session_events_and_invocations():
     }
 
     logs = log_exporter.get_finished_logs()
-    started = next(
-        l.log_record
-        for l in logs
-        if l.log_record.event_name == "gen_ai.client.realtime_session.started"
-    )
+    event_names = [l.log_record.event_name for l in logs]
+    assert event_names == [
+        "gen_ai.client.realtime_session.started",
+        "gen_ai.client.realtime_session.ended",
+    ]
+    started = logs[0].log_record
     assert started.severity_number == SeverityNumber.INFO
     assert started.body is None
     assert (
@@ -174,11 +177,7 @@ def test_realtime_session_events_and_invocations():
         == "generativelanguage.googleapis.com"
     )
 
-    ended = next(
-        l.log_record
-        for l in logs
-        if l.log_record.event_name == "gen_ai.client.realtime_session.ended"
-    )
+    ended = logs[1].log_record
     assert ended.severity_number == SeverityNumber.WARN
     assert ended.body is None
     assert ended.attributes[error_attributes.ERROR_TYPE] == "ConnectionError"

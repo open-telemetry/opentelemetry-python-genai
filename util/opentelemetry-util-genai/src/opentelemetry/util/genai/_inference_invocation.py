@@ -150,6 +150,7 @@ class InferenceInvocation(GenAIInvocation):
 
     _records_stream_telemetry = True
     _exception_event_name = "gen_ai.client.inference.exception"
+    _emit_operation_details_event = True
 
     # Set once the invocation is handed to a stream wrapper.
     _request_stream: bool | None = None
@@ -229,10 +230,13 @@ class InferenceInvocation(GenAIInvocation):
         self._server_port: int | None = server_port
         self.data.attributes = self.attributes
         self.data.metric_attributes = self.metric_attributes
-        self._emit_event: bool = self._logger.enabled(
-            context=self._span_context,
-            severity_number=SeverityNumber.DEBUG,
-            event_name="gen_ai.client.inference.operation.details",
+        self._emit_event: bool = (
+            self._emit_operation_details_event
+            and self._logger.enabled(
+                context=self._span_context,
+                severity_number=SeverityNumber.DEBUG,
+                event_name="gen_ai.client.inference.operation.details",
+            )
         )
 
     @property
