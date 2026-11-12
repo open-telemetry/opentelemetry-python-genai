@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ from opentelemetry.util.genai.types import (
     UriPart,
 )
 from opentelemetry.util.genai.utils import (
+    decode_base64,
     gen_ai_json_dumps,
     get_argument,
     image_from_url,
@@ -102,16 +103,88 @@ _GOOGLE_PROVIDERS = (
     GenAiProviderNameValues.GCP_VERTEX_AI.value,
 )
 
+_UNCACHED_INPUT_PROVIDERS = (
+    GenAiProviderNameValues.ANTHROPIC.value,
+    GenAiProviderNameValues.AWS_BEDROCK.value,
+)
+
+_UNCACHED_INPUT_CLASSES = frozenset(
+    {"Claude", "Anthropic", "AnthropicClaude", "AwsBedrock", "Bedrock"}
+)
+
+_TOKEN_USAGE_ATTRS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "audio_input_tokens",
+    "audio_output_tokens",
+)
+
+
+def has_model_token_usage(metrics: Any) -> bool:
+    """Return True if an Agno metrics object has any positive token usage counts."""
+    if metrics is None:
+        return False
+    return any(
+        (val := safe_int(getattr(metrics, attr, None))) is not None and val > 0
+        for attr in _TOKEN_USAGE_ATTRS
+    )
+
+
+def _uses_uncached_input_tokens(
+    invocation: InferenceInvocation,
+    model: Model | None = None,
+) -> bool:
+    if invocation.provider in _UNCACHED_INPUT_PROVIDERS:
+        return True
+    if model is not None:
+        for cls in type(model).__mro__:
+            if cls.__name__ in _UNCACHED_INPUT_CLASSES:
+                return True
+    return False
+
 
 def record_model_token_usage(
     invocation: InferenceInvocation,
     metrics: Any,
+    model: Model | None = None,
 ) -> None:
     """Populate token usage fields on an InferenceInvocation from Agno metrics."""
     if metrics is None:
         return
-    if (tok := safe_int(getattr(metrics, "input_tokens", None))) is not None:
-        invocation.input_tokens = tok
+    input_tokens = safe_int(getattr(metrics, "input_tokens", None))
+    cache_read_tokens = safe_int(getattr(metrics, "cache_read_tokens", None))
+    cache_write_tokens = safe_int(getattr(metrics, "cache_write_tokens", None))
+    if cache_read_tokens is not None and cache_read_tokens > 0:
+        invocation.cache_read_input_tokens = cache_read_tokens
+    if cache_write_tokens is not None and cache_write_tokens > 0:
+        invocation.cache_write_input_tokens = cache_write_tokens
+
+    if _uses_uncached_input_tokens(invocation, model):
+        cache_read_count = (
+            cache_read_tokens
+            if cache_read_tokens is not None and cache_read_tokens > 0
+            else 0
+        )
+        cache_write_count = (
+            cache_write_tokens
+            if cache_write_tokens is not None and cache_write_tokens > 0
+            else 0
+        )
+        if (
+            input_tokens is not None
+            or cache_read_count > 0
+            or cache_write_count > 0
+        ):
+            input_tokens = (
+                (input_tokens or 0) + cache_read_count + cache_write_count
+            )
+    if input_tokens is not None:
+        invocation.input_tokens = input_tokens
+
     output_tokens = safe_int(getattr(metrics, "output_tokens", None))
     reasoning_tokens = safe_int(getattr(metrics, "reasoning_tokens", None))
     if reasoning_tokens is not None and reasoning_tokens > 0:
@@ -120,14 +193,6 @@ def record_model_token_usage(
             output_tokens = (output_tokens or 0) + reasoning_tokens
     if output_tokens is not None:
         invocation.output_tokens = output_tokens
-    if (
-        tok := safe_int(getattr(metrics, "cache_read_tokens", None))
-    ) is not None and tok > 0:
-        invocation.cache_read_input_tokens = tok
-    if (
-        tok := safe_int(getattr(metrics, "cache_write_tokens", None))
-    ) is not None and tok > 0:
-        invocation.cache_write_input_tokens = tok
     if (
         tok := safe_int(getattr(metrics, "audio_input_tokens", None))
     ) is not None and tok > 0:
@@ -550,7 +615,7 @@ def extract_model_finish_reasons(
         ) or _get_property_value(provider_data, "stop_reason")
         if raw_reason is not None:
             r = str(raw_reason).lower()
-            if r in ("stop", "end_turn"):
+            if r in ("stop", "end_turn", "stop_sequence"):
                 return ["stop"]
             if r in ("tool_calls", "tool_use", "function_call"):
                 return ["tool_call"]
@@ -560,22 +625,7 @@ def extract_model_finish_reasons(
                 return ["content_filter"]
             return [r]
 
-    tool_calls = (
-        _get_property_value(assistant_message, "tool_calls")
-        if assistant_message is not None
-        else None
-    ) or (
-        _get_property_value(stream_data, "response_tool_calls")
-        if stream_data is not None
-        else None
-    )
-    if tool_calls:
-        return ["tool_call"]
-    if stream_data is not None and not has_model_output_content(
-        assistant_message
-    ):
-        return ["interrupted"]
-    return ["stop"]
+    return []
 
 
 _FORMAT_MIME_TYPES: dict[str, str] = {
@@ -716,26 +766,59 @@ def _append_media_items(
         parts.append(part)
 
 
-def _extract_media_parts(obj: Message | ModelResponse) -> list[MessagePart]:
+def _extract_media_parts(
+    obj: Message | ModelResponse,
+    stream_data: MessageData | None = None,
+) -> list[MessagePart]:
     parts: list[MessagePart] = []
     _append_media_items(parts, obj.images, Modality.IMAGE)
-    _append_media_items(
-        parts, getattr(obj, "image_output", None), Modality.IMAGE
+    image_output = getattr(obj, "image_output", None) or (
+        getattr(stream_data, "response_image", None)
+        if stream_data is not None
+        else None
     )
+    _append_media_items(parts, image_output, Modality.IMAGE)
+
     _append_media_items(parts, obj.audio, Modality.AUDIO)
     _append_media_items(parts, getattr(obj, "audios", None), Modality.AUDIO)
-    _append_media_items(
-        parts, getattr(obj, "audio_output", None), Modality.AUDIO
+    audio_output = getattr(obj, "audio_output", None) or (
+        getattr(stream_data, "response_audio", None)
+        if stream_data is not None
+        else None
     )
+    _append_media_items(parts, audio_output, Modality.AUDIO)
+
     _append_media_items(parts, obj.videos, Modality.VIDEO)
-    _append_media_items(
-        parts, getattr(obj, "video_output", None), Modality.VIDEO
+    video_output = getattr(obj, "video_output", None) or (
+        getattr(stream_data, "response_video", None)
+        if stream_data is not None
+        else None
     )
+    _append_media_items(parts, video_output, Modality.VIDEO)
+
     _append_media_items(parts, obj.files, Modality.DOCUMENT)
-    _append_media_items(
-        parts, getattr(obj, "file_output", None), Modality.DOCUMENT
+    file_output = getattr(obj, "file_output", None) or (
+        getattr(stream_data, "response_file", None)
+        if stream_data is not None
+        else None
     )
+    _append_media_items(parts, file_output, Modality.DOCUMENT)
     return parts
+
+
+def has_stream_data_content(stream_data: MessageData | None) -> bool:
+    """Return True if MessageData has accumulated text, reasoning, tool calls, or media."""
+    if stream_data is None:
+        return False
+    return bool(
+        stream_data.response_content
+        or stream_data.response_reasoning_content
+        or stream_data.response_tool_calls
+        or stream_data.response_audio
+        or stream_data.response_image
+        or stream_data.response_video
+        or getattr(stream_data, "response_file", None)
+    )
 
 
 def has_model_output_content(obj: Message | ModelResponse | None) -> bool:
@@ -758,19 +841,76 @@ def has_model_output_content(obj: Message | ModelResponse | None) -> bool:
     )
 
 
+def _normalize_stream_tool_calls(
+    raw_tool_calls: Sequence[Any],
+    model: Model | None = None,
+) -> list[Any]:
+    tool_calls: list[Any] = list(raw_tool_calls)
+    if model is not None:
+        parse_fn = getattr(model, "parse_tool_calls", None)
+        if callable(parse_fn):
+            try:
+                parsed = parse_fn(tool_calls)
+                if isinstance(parsed, list):
+                    tool_calls = cast(list[Any], parsed)
+            except Exception:
+                pass
+    if any(not isinstance(tc, Mapping) for tc in tool_calls):
+        merged: list[dict[str, Any]] = []
+        for tc in tool_calls:
+            if isinstance(tc, Mapping):
+                merged.append(dict(cast(Mapping[str, Any], tc)))
+                continue
+            idx = safe_int(getattr(tc, "index", None)) or 0
+            tc_id = getattr(tc, "id", None)
+            tc_type = getattr(tc, "type", None)
+            fn = getattr(tc, "function", None)
+            fn_name = (
+                _get_property_value(fn, "name") if fn is not None else None
+            )
+            fn_args = (
+                _get_property_value(fn, "arguments")
+                if fn is not None
+                else None
+            )
+            if len(merged) <= idx:
+                merged.extend({} for _ in range(idx - len(merged) + 1))
+            entry = merged[idx]
+            if not entry:
+                entry["id"] = tc_id
+                entry["type"] = tc_type
+                entry["function"] = {
+                    "name": str(fn_name) if fn_name else "",
+                    "arguments": str(fn_args) if fn_args else "",
+                }
+            else:
+                if fn_name:
+                    entry["function"]["name"] += str(fn_name)
+                if fn_args:
+                    entry["function"]["arguments"] += str(fn_args)
+                if tc_id:
+                    entry["id"] = tc_id
+                if tc_type:
+                    entry["type"] = tc_type
+        return [e for e in merged if e]
+    return tool_calls
+
+
 def _extract_tool_call_parts(
-    tool_calls: list[dict[str, Any]] | None,
+    tool_calls: Sequence[Any] | None,
 ) -> list[MessagePart]:
     parts: list[MessagePart] = []
     if not tool_calls:
         return parts
     for tc in tool_calls:
-        tc_id = tc.get("id")
-        fn: dict[str, Any] | None = tc.get("function")
-        target = fn or tc
-        fn_name_val = target.get("name")
+        tc_id = _get_property_value(tc, "id")
+        fn = _get_property_value(tc, "function")
+        target = fn if fn is not None else tc
+        fn_name_val = _get_property_value(target, "name")
         fn_name = str(fn_name_val) if fn_name_val else ""
-        fn_args = tool_arguments_to_any_value(target.get("arguments"))
+        fn_args = tool_arguments_to_any_value(
+            _get_property_value(target, "arguments")
+        )
         parts.append(
             ToolCallRequestPart(
                 id=str(tc_id) if tc_id is not None else None,
@@ -779,6 +919,231 @@ def _extract_tool_call_parts(
             )
         )
     return parts
+
+
+def _content_block_to_part(item: Any) -> MessagePart | None:
+    if isinstance(item, str):
+        return TextPart(content=item) if item else None
+
+    part_type = _get_property_value(item, "type")
+    text = _get_property_value(item, "text")
+    if part_type in ("text", "input_text", "output_text") or (
+        part_type is None and isinstance(text, str)
+    ):
+        if isinstance(text, str) and text:
+            return TextPart(content=text)
+        return None
+
+    if part_type in ("thinking", "reasoning"):
+        reasoning = (
+            _get_property_value(item, "thinking")
+            or _get_property_value(item, "reasoning")
+            or text
+        )
+        if isinstance(reasoning, str) and reasoning:
+            return ReasoningPart(content=reasoning)
+        return None
+
+    if part_type == "refusal":
+        refusal = _get_property_value(item, "refusal")
+        if isinstance(refusal, str) and refusal:
+            return TextPart(content=refusal)
+        return None
+
+    if part_type in ("image_url", "input_image"):
+        image_url = _get_property_value(item, "image_url")
+        if not isinstance(image_url, str):
+            image_url = _get_property_value(image_url, "url")
+        if isinstance(image_url, str) and image_url:
+            return image_from_url(image_url)
+        file_id = _get_property_value(item, "file_id")
+        if isinstance(file_id, str) and file_id:
+            mime = _get_property_value(item, "mime_type")
+            return FilePart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.IMAGE,
+                file_id=file_id,
+            )
+        return None
+
+    if part_type == "image":
+        source = _get_property_value(item, "source")
+        if isinstance(source, Mapping):
+            source_type = _get_property_value(source, "type")
+            if source_type == "base64":
+                data = _get_property_value(source, "data")
+                media_type = _get_property_value(source, "media_type")
+                if (
+                    isinstance(data, str)
+                    and (decoded := decode_base64(data)) is not None
+                ):
+                    return BlobPart(
+                        mime_type=media_type
+                        if isinstance(media_type, str)
+                        else None,
+                        modality=Modality.IMAGE,
+                        content=decoded,
+                    )
+                return None
+            if source_type == "url":
+                src_url = _get_property_value(source, "url")
+                if isinstance(src_url, str) and src_url:
+                    return image_from_url(src_url)
+                return None
+            if source_type == "file":
+                src_file_id = _get_property_value(source, "file_id")
+                media_type = _get_property_value(source, "media_type")
+                if isinstance(src_file_id, str) and src_file_id:
+                    return FilePart(
+                        mime_type=media_type
+                        if isinstance(media_type, str)
+                        else None,
+                        modality=Modality.IMAGE,
+                        file_id=src_file_id,
+                    )
+                return None
+        b64_data = _get_property_value(item, "base64") or _get_property_value(
+            item, "data"
+        )
+        mime = _get_property_value(item, "mime_type") or _get_property_value(
+            item, "media_type"
+        )
+        if (
+            isinstance(b64_data, str)
+            and (decoded := decode_base64(b64_data)) is not None
+        ):
+            return BlobPart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.IMAGE,
+                content=decoded,
+            )
+        img_url = _get_property_value(item, "url")
+        if isinstance(img_url, str) and img_url:
+            return image_from_url(img_url)
+        img_file_id = _get_property_value(
+            item, "file_id"
+        ) or _get_property_value(item, "id")
+        if isinstance(img_file_id, str) and img_file_id:
+            return FilePart(
+                mime_type=mime if isinstance(mime, str) else None,
+                modality=Modality.IMAGE,
+                file_id=img_file_id,
+            )
+        return None
+
+    if part_type in ("input_audio", "audio"):
+        audio_obj = _get_property_value(item, "input_audio") or item
+        data = _get_property_value(audio_obj, "data")
+        if (
+            isinstance(data, str)
+            and (decoded := decode_base64(data)) is not None
+        ):
+            fmt = _get_property_value(audio_obj, "format")
+            mime = (
+                _FORMAT_MIME_TYPES.get(fmt.lower().lstrip("."))
+                if isinstance(fmt, str)
+                else None
+            )
+            return BlobPart(
+                mime_type=mime,
+                modality=Modality.AUDIO,
+                content=decoded,
+            )
+        audio_url = _get_property_value(audio_obj, "url")
+        if isinstance(audio_url, str) and audio_url:
+            return image_from_url(audio_url, modality=Modality.AUDIO)
+        return None
+
+    if part_type in ("file", "input_file", "document"):
+        file_obj = _get_property_value(item, "file") or item
+        filename = _get_property_value(file_obj, "filename")
+        mime_type = _get_property_value(file_obj, "mime_type")
+        if not isinstance(mime_type, str):
+            mime_type = (
+                mimetypes.guess_type(filename)[0]
+                if isinstance(filename, str) and filename
+                else None
+            )
+        file_id = _get_property_value(
+            file_obj, "file_id"
+        ) or _get_property_value(file_obj, "id")
+        if isinstance(file_id, str) and file_id:
+            return FilePart(
+                mime_type=mime_type,
+                modality=Modality.DOCUMENT,
+                file_id=file_id,
+            )
+        file_data = _get_property_value(
+            file_obj, "file_data"
+        ) or _get_property_value(file_obj, "data")
+        if isinstance(file_data, str) and file_data:
+            if file_data.startswith("data:"):
+                return image_from_url(file_data, modality=Modality.DOCUMENT)
+            if (decoded := decode_base64(file_data)) is not None:
+                return BlobPart(
+                    mime_type=mime_type,
+                    modality=Modality.DOCUMENT,
+                    content=decoded,
+                )
+        file_url = _get_property_value(file_obj, "url") or _get_property_value(
+            file_obj, "uri"
+        )
+        if isinstance(file_url, str) and file_url:
+            return UriPart(
+                mime_type=mime_type,
+                modality=Modality.DOCUMENT,
+                uri=file_url,
+            )
+        return None
+
+    if part_type == "tool_use":
+        tc_id = _get_property_value(item, "id")
+        tc_name = _get_property_value(item, "name")
+        tc_input = _get_property_value(item, "input")
+        return ToolCallRequestPart(
+            id=str(tc_id) if tc_id is not None else None,
+            name=str(tc_name) if tc_name else "",
+            arguments=tool_arguments_to_any_value(tc_input),
+        )
+
+    if part_type == "tool_result":
+        tr_id = _get_property_value(
+            item, "tool_use_id"
+        ) or _get_property_value(item, "id")
+        tr_content = _get_property_value(item, "content")
+        return ToolCallResponsePart(
+            id=str(tr_id) if tr_id is not None else None,
+            response=object_to_any_value(tr_content),
+        )
+
+    return None
+
+
+def _content_to_parts(
+    content: Any,
+    *,
+    allow_empty_text: bool = False,
+) -> list[MessagePart]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        if content or allow_empty_text:
+            return [TextPart(content=content)]
+        return []
+    if isinstance(content, Sequence) and not isinstance(
+        content, (bytes, bytearray)
+    ):
+        parts: list[MessagePart] = []
+        for item in cast(Sequence[Any], content):
+            if (part := _content_block_to_part(item)) is not None:
+                parts.append(part)
+        if not parts and allow_empty_text:
+            return [TextPart(content="")]
+        return parts
+    formatted = format_content(content)
+    if formatted or allow_empty_text:
+        return [TextPart(content=formatted)]
+    return []
 
 
 def format_model_input_messages(
@@ -799,11 +1164,10 @@ def format_model_input_messages(
                     id=str(msg.tool_call_id)
                     if msg.tool_call_id is not None
                     else None,
-                    response=format_content(msg.content)
-                    if msg.content is not None
-                    else "",
+                    response=object_to_any_value(msg.content),
                 )
             )
+            parts.extend(_extract_media_parts(msg))
             result.append(
                 InputMessage(role=Role.TOOL.value, parts=parts, name=name_str)
             )
@@ -820,9 +1184,12 @@ def format_model_input_messages(
 
         # Main content
         if msg.content is not None:
-            formatted_content = format_content(msg.content)
-            if formatted_content or (not parts and not media_parts):
-                parts.append(TextPart(content=formatted_content))
+            parts.extend(
+                _content_to_parts(
+                    msg.content,
+                    allow_empty_text=not parts and not media_parts,
+                )
+            )
 
         parts.extend(media_parts)
 
@@ -842,8 +1209,8 @@ def format_model_input_messages(
 
 def format_model_output_message(
     assistant_message: Message | ModelResponse,
-    finish_reason: str = "stop",
     stream_data: MessageData | None = None,
+    model: Model | None = None,
 ) -> OutputMessage:
     """Format an Agno assistant message into an OutputMessage."""
     parts: list[MessagePart] = []
@@ -862,14 +1229,19 @@ def format_model_output_message(
         else assistant_message.content
     )
     if content is not None:
-        formatted = format_content(content)
-        if formatted:
-            parts.append(TextPart(content=formatted))
+        parts.extend(_content_to_parts(content))
 
-    parts.extend(_extract_media_parts(assistant_message))
-    tool_calls = assistant_message.tool_calls or (
-        stream_data.response_tool_calls if stream_data else None
+    parts.extend(
+        _extract_media_parts(assistant_message, stream_data=stream_data)
     )
+    if assistant_message.tool_calls:
+        tool_calls: Sequence[Any] | None = assistant_message.tool_calls
+    elif stream_data and stream_data.response_tool_calls:
+        tool_calls = _normalize_stream_tool_calls(
+            stream_data.response_tool_calls, model=model
+        )
+    else:
+        tool_calls = None
     parts.extend(_extract_tool_call_parts(tool_calls))
 
     if not parts:
@@ -881,6 +1253,5 @@ def format_model_output_message(
     return OutputMessage(
         role=Role.ASSISTANT.value,
         parts=parts,
-        finish_reason=finish_reason,
         name=name_str,
     )
