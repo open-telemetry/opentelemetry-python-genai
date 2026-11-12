@@ -60,6 +60,11 @@ from opentelemetry.util.genai._inference_invocation import (
     SuppressedInferenceInvocation,
 )
 from opentelemetry.util.genai._instruments import _Instruments
+from opentelemetry.util.genai._realtime_invocation import (
+    REALTIME_INFERENCE_OPERATION_NAME,
+    emit_realtime_session_ended_event,
+    emit_realtime_session_started_event,
+)
 from opentelemetry.util.genai._retrieval_invocation import (
     SuppressedRetrievalInvocation,
 )
@@ -75,6 +80,7 @@ from opentelemetry.util.genai.invocation import (
     CLIENT_RETRIEVAL_CONTEXT_KEY,
     EmbeddingData,
     EmbeddingInvocation,
+    Error,
     FetchResponseData,
     FetchResponseInvocation,
     InferenceData,
@@ -84,6 +90,7 @@ from opentelemetry.util.genai.invocation import (
     RetrievalData,
     RetrievalInvocation,
     ToolInvocation,
+    UserSpeechInvocation,
     WorkflowInvocation,
 )
 from opentelemetry.util.genai.types import (
@@ -240,6 +247,7 @@ class TelemetryHandler:
         context: Context | None = None,
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
+        realtime_session_id: str | None = None,
     ) -> InferenceInvocation:
         """Returns an Inference invocation. Starts span when called.
 
@@ -278,6 +286,103 @@ class TelemetryHandler:
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
+            realtime_session_id=realtime_session_id,
+        )
+
+    def realtime_inference(
+        self,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        realtime_session_id: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+        conversation_id: str | None = None,
+    ) -> InferenceInvocation:
+        """Returns a ``realtime_inference`` invocation. Starts span when called."""
+        return self.inference(
+            provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            operation_name=REALTIME_INFERENCE_OPERATION_NAME,
+            error_type_resolver=error_type_resolver,
+            context=context,
+            _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
+            realtime_session_id=realtime_session_id,
+        )
+
+    def user_speech(
+        self,
+        *,
+        provider: str | None = None,
+        realtime_session_id: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+    ) -> UserSpeechInvocation:
+        """Returns a ``user_speech`` invocation (INTERNAL span kind). Starts span when called."""
+        return UserSpeechInvocation(
+            self._tracer,
+            self._instruments,
+            self._logger,
+            self._completion_hook,
+            provider=provider,
+            realtime_session_id=realtime_session_id,
+            error_type_resolver=error_type_resolver,
+            content_capturing_mode=self._content_capturing_mode,
+            context=context,
+            _attach_to_context=_attach_to_context,
+        )
+
+    def emit_realtime_session_started(
+        self,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        realtime_session_id: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Emit a ``gen_ai.client.realtime_session.started`` event."""
+        emit_realtime_session_started_event(
+            self._logger,
+            provider,
+            request_model=request_model,
+            realtime_session_id=realtime_session_id,
+            server_address=server_address,
+            server_port=server_port,
+            context=context,
+        )
+
+    def emit_realtime_session_ended(
+        self,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        realtime_session_id: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        error: Error | BaseException | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        context: Context | None = None,
+    ) -> None:
+        """Emit a ``gen_ai.client.realtime_session.ended`` event."""
+        emit_realtime_session_ended_event(
+            self._logger,
+            provider,
+            request_model=request_model,
+            realtime_session_id=realtime_session_id,
+            server_address=server_address,
+            server_port=server_port,
+            error=error,
+            error_type_resolver=error_type_resolver,
+            context=context,
         )
 
     def embedding(
