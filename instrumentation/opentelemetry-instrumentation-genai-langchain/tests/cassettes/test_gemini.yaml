@@ -45,7 +45,7 @@ interactions:
       x-goog-api-key:
       - test_key
     method: POST
-    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+    uri: https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent
   response:
     body:
       string: |-
