@@ -27,6 +27,7 @@ from .conformance.embedding import EmbeddingScenario
 from .conformance.fetch_response import FetchResponseScenario
 from .conformance.generate_content import GenerateContentScenario
 from .conformance.inference import InferenceScenario
+from .conformance.live import LiveScenario
 from .conformance.server_tool_calling import (
     GenerateContentServerToolCallingScenario,
     InteractionsServerToolCallingScenario,
@@ -44,6 +45,7 @@ from .conformance.tool_calling import ToolCallingScenario
         FetchResponseScenario(),
         GenerateContentServerToolCallingScenario(),
         InteractionsServerToolCallingScenario(),
+        LiveScenario(),
     ],
     ids=lambda s: type(s).__name__,
 )

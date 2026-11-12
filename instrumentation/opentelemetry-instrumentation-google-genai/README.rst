@@ -48,7 +48,7 @@ Check out the `manual example <examples/manual>`_ for more details.
 Instrumenting all clients
 *************************
 
-When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create`` and ``interactions.get`` operations.
+When using the instrumentor, all clients will automatically trace GenAI ``generate_content``, ``embed_content``, ``interactions.create``, ``interactions.get``, and ``aio.live.connect`` operations.
 You can also optionally capture prompts and responses as log events.
 
 Make sure to configure OpenTelemetry tracing, logging, and metrics to capture all telemetry emitted by the instrumentation.
@@ -89,6 +89,21 @@ This controls whether the following content is captured on spans and/or events:
 - Output messages from the LLM.
 - System Instructions
 - The result of tool calls and the tool call parameters (other tool call details and tool definitions are always captured).
+
+Truncating binary payloads (e.g. audio / image blobs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Inline binary media (such as realtime PCM audio chunks or inline images) is only buffered and recorded when content capture is enabled (``EVENT_ONLY``, ``SPAN_ONLY``, or ``SPAN_AND_EVENT``). It is stored on ``BlobPart.content`` as raw ``bytes``.
+
+When messages are emitted as structured ``AnyValue`` maps/lists (on log events today, and on spans once `open-telemetry/opentelemetry-python-genai#1013 <https://github.com/open-telemetry/opentelemetry-python-genai/pull/1013>`_ lands), ``BlobPart.content`` is passed to the OpenTelemetry SDK as raw ``bytes``. You can cap the size of each binary payload (and string field) without corrupting the surrounding message structure by configuring OpenTelemetry attribute value length limits:
+
+- **Global (spans and log events)**: ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT``
+- **Spans**: ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` or ``TracerProvider(span_limits=SpanLimits(max_span_attribute_length=...))`` (requires `#1013 <https://github.com/open-telemetry/opentelemetry-python-genai/pull/1013>`_)
+- **Log events**: ``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT`` or ``LoggerProvider(log_record_limits=LogRecordLimits(max_log_record_attribute_length=...))``
+
+.. note::
+
+   Truncating ``bytes`` and ``bytearray`` attribute values requires `open-telemetry/opentelemetry-python#5855 <https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased version of ``opentelemetry-api``).
 
 
 Configuration recording
