@@ -34,6 +34,10 @@ AGENT_SPAN = "invoke_agent claude-agent-sdk"
 OTHER_ERROR = "_OTHER"
 
 
+class CallerError(Exception):
+    """A caller-side failure raised while the stream is being consumed."""
+
+
 def claude_agent_sdk_instrumentor():
     from opentelemetry.instrumentation.genai.claude_agent_sdk import (
         ClaudeAgentSDKInstrumentor,
@@ -182,8 +186,35 @@ def test_finish_reason_exported_from_result(
     run_query(single_turn())
 
     span = agent_spans(span_exporter)[0]
-    # The ResultMessage carries the run's terminal stop reason.
-    assert span.attributes["gen_ai.response.finish_reasons"] == ("end_turn",)
+    # The ResultMessage carries the run's terminal stop reason, mapped to the
+    # util's FinishReason vocabulary.
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("stop",)
+
+
+@pytest.mark.skipif(
+    not _result_reports_stop_reason(),
+    reason="this claude-agent-sdk release does not report stop_reason",
+)
+@pytest.mark.parametrize(
+    ("raw_reason", "expected"),
+    [
+        ("end_turn", "stop"),
+        ("stop_sequence", "stop"),
+        ("max_tokens", "length"),
+        ("tool_use", "tool_call"),
+        ("pause_turn", "pause_turn"),
+    ],
+)
+def test_finish_reason_normalized_to_finish_reason_vocabulary(
+    span_exporter, instrument_claude_agent_sdk, raw_reason, expected
+) -> None:
+    messages = single_turn()
+    messages[-1] = result(stop_reason=raw_reason)
+
+    run_query(messages)
+
+    span = agent_spans(span_exporter)[0]
+    assert span.attributes["gen_ai.response.finish_reasons"] == (expected,)
 
 
 @pytest.mark.skipif(
@@ -306,8 +337,28 @@ def test_tool_result_error_marks_tool_span_failed(
     # A tool-result error flag is not a raised exception: report the semconv
     # fallback type and never fabricate an exception event.
     assert tool.attributes["error.type"] == OTHER_ERROR
-    assert tool.status.description == "hello"
+    # The raw result is user data; with capture off it must not leak into the
+    # span status description.
+    assert not tool.status.description
     assert exception_events(tool) == []
+
+
+def test_tool_result_error_description_only_with_capture(
+    span_exporter, tracer_provider, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        run_query(single_turn(tool_error=True))
+    finally:
+        instrumentor.uninstrument()
+
+    (tool,) = tool_spans(span_exporter)
+    assert tool.status.status_code.name == "ERROR"
+    assert tool.status.description == "hello"
 
 
 def test_stream_error_marks_agent_and_tool_failed(
@@ -554,6 +605,37 @@ def test_caller_context_restored_between_reads(
     assert agent.parent.span_id == caller_id
 
 
+def test_caller_exception_inside_context_finalizes_both_spans(
+    span_exporter, tracer_provider, instrument_claude_agent_sdk
+) -> None:
+    tracer = tracer_provider.get_tracer("test")
+
+    async def _run() -> tuple[int, int]:
+        with tracer.start_as_current_span("caller") as caller:
+            with pytest.raises(CallerError):
+                async with open_stream(single_turn()) as stream:
+                    seen = 0
+                    async for _ in stream:
+                        seen += 1
+                        if seen == 2:
+                            # A tool_use block has been seen, so the tool span
+                            # is still pending when the caller raises.
+                            raise CallerError("caller failed")
+            current = trace.get_current_span().get_span_context()
+            return caller.get_span_context().span_id, current.span_id
+
+    caller_id, current_id = anyio.run(_run)
+
+    # __aexit__ finalizes telemetry and restores the caller's context.
+    assert current_id == caller_id
+    (agent,) = agent_spans(span_exporter)
+    (tool,) = tool_spans(span_exporter)
+    assert agent.status.status_code.name == "ERROR"
+    assert agent.attributes["error.type"].endswith("CallerError")
+    assert tool.status.status_code.name == "ERROR"
+    assert tool.attributes["error.type"].endswith("CallerError")
+
+
 def test_cancellation_marks_agent_span_failed(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
@@ -584,3 +666,23 @@ def test_closing_twice_does_not_duplicate_spans(
 
     assert len(agent_spans(span_exporter)) == 1
     assert len(tool_spans(span_exporter)) <= 1
+
+
+def test_close_before_first_read_does_not_start_agent(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    async def _run() -> None:
+        stream = open_stream(single_turn())
+        # Closing before the first read finalizes the wrapper with no agent.
+        await stream.aclose()
+        assert stream._self_agent is None
+        try:
+            await stream.__anext__()
+        except StopAsyncIteration:
+            pass
+        # A late read must not create an invocation that no finalizer can end.
+        assert stream._self_agent is None
+
+    anyio.run(_run)
+
+    assert agent_spans(span_exporter) == []

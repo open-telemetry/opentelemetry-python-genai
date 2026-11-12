@@ -97,6 +97,7 @@ STREAM = [
         "is_error": False,
         "num_turns": 1,
         "result": "Done: hello",
+        "stop_reason": "end_turn",
         "total_cost_usd": 0.0,
         "usage": {"input_tokens": 20, "output_tokens": 38},
     },
@@ -205,6 +206,11 @@ class InvokeAgentScenario(Scenario):
         attributes = {
             attr["name"]: attr["value"] for attr in agent["attributes"]
         }
+        # The SDK's end_turn is normalized to the util's FinishReason value.
+        assert attributes.get("gen_ai.response.finish_reasons") == ["stop"], (
+            "finish reasons must use the FinishReason vocabulary: "
+            f"{attributes.get('gen_ai.response.finish_reasons')}"
+        )
         # Tool calls and their results must appear as message parts, not be
         # flattened into one text blob.
         outputs = json.loads(attributes["gen_ai.output.messages"])

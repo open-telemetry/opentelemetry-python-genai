@@ -52,6 +52,15 @@ from opentelemetry.util.genai.types import (
 
 DEFAULT_AGENT_NAME = "claude-agent-sdk"
 
+# SDK stop reasons mapped to the util's FinishReason vocabulary. Unknown values
+# are exported unchanged, matching the Anthropic instrumentation.
+_FINISH_REASONS = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_call",
+}
+
 
 def _usage_of(message: Any) -> dict[str, Any]:
     raw: Any = getattr(message, "usage", None)
@@ -77,6 +86,11 @@ def _input_tokens(usage: dict[str, Any]) -> int | None:
     if all(component is None for component in components):
         return None
     return sum(component or 0 for component in components)
+
+
+def _finish_reason(stop_reason: str) -> str:
+    """Map the SDK stop reason to the util's ``FinishReason`` vocabulary."""
+    return _FINISH_REASONS.get(stop_reason, stop_reason)
 
 
 def _result_error(chunk: Any) -> Error:
@@ -131,7 +145,10 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
     async def _advance(self, read: Any) -> Any:
         # Start here rather than at construction so the span is parented by the
         # context that consumes the stream and its duration starts at the read.
-        self._start_agent()
+        # Once the wrapper has finalized (for example, closed before the first
+        # read), no later invocation would be ended, so none is started.
+        if not self._self_finalized:
+            self._start_agent()
         return await super()._advance(read)
 
     def _start_agent(self) -> None:
@@ -243,7 +260,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             self._self_result_usage = usage
         stop_reason = getattr(chunk, "stop_reason", None)
         if stop_reason:
-            self._self_agent.finish_reasons = [stop_reason]
+            self._self_agent.finish_reasons = [_finish_reason(stop_reason)]
         # The SDK reports a failed run through ``is_error`` without raising, so
         # the run error has to be kept for finalization.
         if getattr(chunk, "is_error", False):
@@ -282,9 +299,14 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
         if getattr(block, "is_error", None):
             # A tool-result error flag is not a Python exception: reporting one
             # would fabricate exception.type and a stack trace that never existed.
+            # The raw result can be user data, so it is only a description when
+            # content capture is explicitly enabled.
             invocation.fail(
                 Error(
-                    message=content if isinstance(content, str) else None,
+                    message=content
+                    if invocation.should_capture_content
+                    and isinstance(content, str)
+                    else None,
                     type=ErrorTypeValues.OTHER.value,
                 )
             )
