@@ -25,6 +25,10 @@ from .interactions import (
     instrument_interactions,
     uninstrument_interactions,
 )
+from .live import (
+    instrument_live,
+    uninstrument_live,
+)
 
 
 class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
@@ -33,6 +37,7 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
     _generate_content_snapshot: object | None = None
     _interactions_snapshot: object | None = None
     _embedding_snapshot: object | None = None
+    _live_snapshot: object | None = None
 
     def __init__(
         self, generate_content_config_key_allowlist: AllowList | None = None
@@ -78,6 +83,7 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
             telemetry_handler,
         )
         self._embedding_snapshot = instrument_embeddings(telemetry_handler)
+        self._live_snapshot = instrument_live(telemetry_handler)
 
     def _uninstrument(self, **kwargs: Any):
         if self._generate_content_snapshot is not None:
@@ -89,3 +95,6 @@ class GoogleGenAiSdkInstrumentor(BaseInstrumentor):
         if self._embedding_snapshot is not None:
             uninstrument_embeddings(self._embedding_snapshot)
             self._embedding_snapshot = None
+        if self._live_snapshot is not None:
+            uninstrument_live(self._live_snapshot)
+            self._live_snapshot = None
