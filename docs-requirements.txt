@@ -9,10 +9,10 @@ wrapt>=2.5.2,<3.0.0
 # Required by instrumentation packages
 agno>=3.1.12
 anthropic>=2.6.0
-boto3>=1.43.123
-claude-agent-sdk>=0.2.177
+boto3>=1.43.126
+claude-agent-sdk>=0.2.179
 google-genai>=2.34.0
-langchain>=1.4.8
+langchain>=1.4.9
 llama-index-core>=0.14.25
 openai>=3.42.1
 openai-agents>=0.24.0
