@@ -24,6 +24,11 @@ are generated.
 ``interactions.get`` emits a ``fetch_response`` span. A fetch performs no inference, so the token
 counts carried by the fetched interaction describe its original generation and are not recorded.
 
+An ``interactions.create`` call that the SDK automatically continues across several requests emits
+one span. Its token counts are summed across those requests, so ``gen_ai.usage.input_tokens``
+includes the prompt re-sent with each one; the prompt size alone is recorded as
+``gcp.gen_ai.usage.initial_input_tokens``.
+
 Installation
 ------------
 

@@ -8,7 +8,6 @@ import logging
 import math
 from collections.abc import (
     AsyncIterable,
-    Awaitable,
     Callable,
     Iterable,
     Mapping,
@@ -95,6 +94,15 @@ except ImportError:
             pass
 
 
+try:
+    # Google GenAI >= 2.34.0
+    from google.genai.errors import ContinuationInterruptedError
+except ImportError:
+
+    class ContinuationInterruptedError(Exception):
+        partial_interaction: Interaction | None = None
+
+
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.google_genai._error_type import (
@@ -102,6 +110,9 @@ from opentelemetry.instrumentation.google_genai._error_type import (
 )
 from opentelemetry.instrumentation.google_genai.client_info import (
     get_client_info as _get_client_info,
+)
+from opentelemetry.instrumentation.google_genai.custom_semconv import (
+    GCP_GENAI_USAGE_INITIAL_INPUT_TOKENS,
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -163,13 +174,17 @@ _INTERACTION_STATUS_FINISH_REASONS: dict[str, str] = {
 
 
 class _InteractionsMethodsSnapshot:
-    def __init__(self) -> None:
-        self._original_create = InteractionsResource.create
-        self._original_create_code = InteractionsResource.create.__code__
-        self._original_async_create = AsyncInteractionsResource.create
-        self._original_async_create_code = (
-            AsyncInteractionsResource.create.__code__
-        )
+    def __init__(
+        self,
+        create_class: type[InteractionsResource],
+        async_create_class: type[AsyncInteractionsResource],
+    ) -> None:
+        self._create_class = create_class
+        self._async_create_class = async_create_class
+        self._original_create = create_class.create
+        self._original_create_code = create_class.create.__code__
+        self._original_async_create = async_create_class.create
+        self._original_async_create_code = async_create_class.create.__code__
         self._original_get = InteractionsResource.get
         self._original_get_code = InteractionsResource.get.__code__
         self._original_async_get = AsyncInteractionsResource.get
@@ -179,8 +194,8 @@ class _InteractionsMethodsSnapshot:
         self._original_create.__code__ = self._original_create_code
         self._original_async_create.__code__ = self._original_async_create_code
 
-        InteractionsResource.create = self._original_create
-        AsyncInteractionsResource.create = self._original_async_create
+        self._create_class.create = self._original_create
+        self._async_create_class.create = self._original_async_create
 
         self._original_get.__code__ = self._original_get_code
         self._original_async_get.__code__ = self._original_async_get_code
@@ -202,30 +217,16 @@ def _apply_interaction_response_attributes(
     invocation: InferenceInvocation | RemoteAgentInvocation,
     telemetry_handler: TelemetryHandler,
     streamed_parts: list[MessagePart] | None = None,
+    hop_usages: Sequence[Usage] | None = None,
 ) -> None:
     if isinstance(invocation, InferenceInvocation):
         invocation.response_model_name = response.model
         if getattr(response, "id", None):
             invocation.response_id = response.id
 
-    usage = response.usage or Usage()
-
-    invocation.input_tokens = usage.total_input_tokens
-    invocation.output_tokens = usage.total_output_tokens
-    invocation.cache_read_input_tokens = usage.total_cached_tokens
-
-    if isinstance(invocation, InferenceInvocation):
-        invocation.thinking_tokens = usage.total_thought_tokens
-
-        invocation.set_input_tokens(
-            _modality_tokens(usage, "input_tokens_by_modality")
-        )
-        invocation.set_output_tokens(
-            _modality_tokens(usage, "output_tokens_by_modality")
-        )
-        invocation.set_cache_read_input_tokens(
-            _modality_tokens(usage, "cached_tokens_by_modality")
-        )
+    if hop_usages is None:
+        hop_usages = [response.usage] if response.usage is not None else []
+    _apply_usage(invocation, hop_usages)
 
     finish_reason = _interaction_finish_reason(_get_field(response, "status"))
     if finish_reason:
@@ -240,14 +241,82 @@ def _apply_interaction_response_attributes(
         invocation.output_messages = messages
 
 
-def _modality_tokens(usage: Any, name: str) -> ModalityTokens | None:
-    entries = _get_field(usage, name)
-    if entries is None:
+def _apply_usage(
+    invocation: InferenceInvocation | RemoteAgentInvocation,
+    hop_usages: Sequence[Usage],
+) -> None:
+    """Record token usage summed across automatic continuation hops.
+
+    Every hop re-prefills and bills the prompt, so the summed input tokens
+    exceed the prompt size; the first hop's input tokens are recorded
+    separately as that size.
+    """
+    if not hop_usages:
+        return
+    invocation.input_tokens = _sum_tokens(
+        usage.total_input_tokens for usage in hop_usages
+    )
+    invocation.output_tokens = _sum_tokens(
+        usage.total_output_tokens for usage in hop_usages
+    )
+    invocation.cache_read_input_tokens = _sum_tokens(
+        usage.total_cached_tokens for usage in hop_usages
+    )
+    initial_input_tokens = _initial_input_tokens(hop_usages[0])
+    if initial_input_tokens is not None:
+        invocation.attributes[GCP_GENAI_USAGE_INITIAL_INPUT_TOKENS] = (
+            initial_input_tokens
+        )
+
+    if isinstance(invocation, InferenceInvocation):
+        invocation.thinking_tokens = _sum_tokens(
+            usage.total_thought_tokens for usage in hop_usages
+        )
+        invocation.set_input_tokens(
+            _modality_tokens(hop_usages, "input_tokens_by_modality")
+        )
+        invocation.set_output_tokens(
+            _modality_tokens(hop_usages, "output_tokens_by_modality")
+        )
+        invocation.set_cache_read_input_tokens(
+            _modality_tokens(hop_usages, "cached_tokens_by_modality")
+        )
+
+
+def _sum_tokens(counts: Iterable[int | None]) -> int | None:
+    present = [count for count in counts if count is not None]
+    return sum(present) if present else None
+
+
+def _initial_input_tokens(first_hop_usage: Usage) -> int | None:
+    # `initial_input_tokens` only exists from google-genai 2.34; the SDK falls
+    # back to the first hop's input tokens when merging hops, and so do we.
+    initial = _get_field(first_hop_usage, "initial_input_tokens")
+    if isinstance(initial, int):
+        return initial
+    return first_hop_usage.total_input_tokens
+
+
+def _modality_tokens(
+    hop_usages: Sequence[Usage], name: str
+) -> ModalityTokens | None:
+    totals: dict[str, int | None] = {}
+    reported = False
+    for usage in hop_usages:
+        entries = _get_field(usage, name)
+        if entries is None:
+            continue
+        reported = True
+        for entry in entries:
+            modality = _get_field(entry, "modality") or ""
+            tokens = _get_field(entry, "tokens")
+            if modality not in totals:
+                totals[modality] = tokens
+            else:
+                totals[modality] = _sum_tokens((totals[modality], tokens))
+    if not reported:
         return None
-    return [
-        (_get_field(entry, "modality") or "", _get_field(entry, "tokens"))
-        for entry in entries
-    ]
+    return list(totals.items())
 
 
 def _get_field(obj: Any, name: str) -> Any:
@@ -383,6 +452,9 @@ def _interactions_input_to_messages(
             continue
 
         item_type = _get_field(item, "type")
+        if item_type is None and isinstance(item, dict) and "text" in item:
+            # The SDK types untyped content blocks as text before sending.
+            item_type = "text"
         message_part = None
         if isinstance(item, dict):
             message_part = _interaction_item_to_part(item)
@@ -591,9 +663,12 @@ class _InteractionStreamMixin:
                     )
             return
         if interaction := _interaction_from_event(chunk):
-            self._self_last_interaction = interaction
+            self._process_completed_interaction(interaction)
         else:
             self._process_other_event(chunk)
+
+    def _process_completed_interaction(self, interaction: Interaction) -> None:
+        self._self_last_interaction = interaction
 
     def _process_other_event(self, chunk: InteractionSSEEvent) -> None:
         """Handle an event that is neither a step nor the completion."""
@@ -630,9 +705,20 @@ class _InteractionStreamMixin:
 
 
 class _CreateStreamMixin(_InteractionStreamMixin):
-    """Records a streamed ``interactions.create``."""
+    """Records a streamed ``interactions.create``.
+
+    With automatic continuation, each hop ends in its own completion event
+    carrying that hop's usage, so usage is summed over all of them and the rest
+    is taken from the last one.
+    """
 
     _self_invocation: InferenceInvocation | RemoteAgentInvocation
+    _self_hop_usages: list[Usage]
+
+    def _process_completed_interaction(self, interaction: Interaction) -> None:
+        super()._process_completed_interaction(interaction)
+        if interaction.usage is not None:
+            self._self_hop_usages.append(interaction.usage)
 
     def _record_interaction(
         self, interaction: Interaction, streamed_parts: list[MessagePart]
@@ -642,11 +728,16 @@ class _CreateStreamMixin(_InteractionStreamMixin):
             self._self_invocation,
             self._self_telemetry_handler,
             streamed_parts=streamed_parts,
+            hop_usages=self._self_hop_usages,
         )
 
     def _on_stream_end(self) -> None:
         self._record_response()
         self._self_invocation.stop()
+
+    def _on_stream_error(self, error: BaseException) -> None:
+        _apply_usage(self._self_invocation, self._self_hop_usages)
+        super()._on_stream_error(error)
 
 
 class InteractionsStreamWrapper(
@@ -660,6 +751,7 @@ class InteractionsStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        self._self_hop_usages = []
         self._init_stream_state(telemetry_handler)
 
 
@@ -674,25 +766,8 @@ class AsyncInteractionsStreamWrapper(
     ) -> None:
         super().__init__(stream, invocation=invocation)
         self._self_invocation = invocation
+        self._self_hop_usages = []
         self._init_stream_state(telemetry_handler)
-        self._self_stream_close: Callable[[], Awaitable[object]] | None = (
-            getattr(stream, "close", None)
-        )
-        self._self_closing = False
-
-    async def _close(self) -> None:
-        # google-genai >= 2.34 replaces the stream's `close` with one that
-        # calls the `close` it read from this wrapper, which would recurse.
-        # Close the stream directly on the re-entrant call. See #1032.
-        if self._self_closing:
-            if self._self_stream_close is not None:
-                await self._self_stream_close()
-            return
-        self._self_closing = True
-        try:
-            await super()._close()
-        finally:
-            self._self_closing = False
 
 
 def _maybe_json(value: str) -> Any:
@@ -1208,6 +1283,18 @@ def _start_interactions_invocation(
     return invocation
 
 
+def _fail_interactions_create(
+    invocation: InferenceInvocation | RemoteAgentInvocation,
+    error: BaseException,
+) -> None:
+    if isinstance(error, ContinuationInterruptedError):
+        partial = error.partial_interaction
+        if partial is not None and partial.usage is not None:
+            # The hops that completed before the failure were billed.
+            _apply_usage(invocation, [partial.usage])
+    invocation.fail(error)
+
+
 def _create_instrumented_interactions_create(
     telemetry_handler: TelemetryHandler,
 ) -> Callable[
@@ -1232,6 +1319,9 @@ def _create_instrumented_interactions_create(
 
         try:
             response = wrapped(*args, **kwargs)
+            if _is_unparsed_response(response):
+                invocation.stop()
+                return response
             if _is_interaction_stream(response, request):
                 invocation.suspend()
                 return InteractionsStreamWrapper(
@@ -1245,7 +1335,7 @@ def _create_instrumented_interactions_create(
             invocation.stop()
             return response
         except BaseException as exc:
-            invocation.fail(exc)
+            _fail_interactions_create(invocation, exc)
             raise
 
     return instrumented_interactions_create
@@ -1275,6 +1365,9 @@ def _create_instrumented_async_interactions_create(
 
         try:
             response = await wrapped(*args, **kwargs)
+            if _is_unparsed_response(response):
+                invocation.stop()
+                return response
             if _is_interaction_stream(response, request):
                 invocation.suspend()
                 return AsyncInteractionsStreamWrapper(
@@ -1292,7 +1385,7 @@ def _create_instrumented_async_interactions_create(
             invocation.stop()
             return response
         except BaseException as exc:
-            invocation.fail(exc)
+            _fail_interactions_create(invocation, exc)
             raise
 
     return instrumented_interactions_create
@@ -1307,12 +1400,12 @@ def _is_fetched_interaction(result: object) -> bool:
 
 
 def _is_unparsed_response(result: object) -> bool:
-    """Whether a ``get`` result is a response whose body is still unread.
+    """Whether a ``create`` or ``get`` result's body is still unread.
 
-    ``with_raw_response`` and ``with_streaming_response`` route through this
-    same method but hand back an unparsed response (which exposes ``parse``) or
-    a context manager. Reading either here would consume a body the caller has
-    not asked for yet, so they are recorded as request-only spans.
+    ``with_raw_response`` and ``with_streaming_response`` route through the
+    same methods but hand back an unparsed response (which exposes ``parse``)
+    or a context manager. Reading either here would consume a body the caller
+    has not asked for yet, so they are recorded as request-only spans.
     """
     return hasattr(result, "parse")
 
@@ -1500,13 +1593,29 @@ def uninstrument_interactions(snapshot: object) -> None:
     snapshot.restore()
 
 
+def _create_resource_classes() -> tuple[
+    type[InteractionsResource], type[AsyncInteractionsResource]
+]:
+    try:
+        # Google GenAI >= 2.9.0. `client.interactions` is this subclass, whose
+        # `create` calls the base one once per automatic continuation hop.
+        from google.genai._gaos.google_genai import (
+            AsyncGeminiNextGenInteractions,
+            GeminiNextGenInteractions,
+        )
+    except ImportError:
+        return InteractionsResource, AsyncInteractionsResource
+    return GeminiNextGenInteractions, AsyncGeminiNextGenInteractions
+
+
 def instrument_interactions(
     telemetry_handler: TelemetryHandler,
 ) -> object | None:
     if not _HAS_INTERACTIONS:
         return None
 
-    snapshot = _InteractionsMethodsSnapshot()
+    create_class, async_create_class = _create_resource_classes()
+    snapshot = _InteractionsMethodsSnapshot(create_class, async_create_class)
 
     try:
         import google.genai._interactions.resources.interactions  # noqa: F401
@@ -1521,14 +1630,14 @@ def instrument_interactions(
         async_class = "AsyncInteractions"
 
     wrapped = wrap_function_wrapper(
-        module_path,
-        f"{sync_class}.create",
+        create_class,
+        "create",
         _create_instrumented_interactions_create(telemetry_handler),
     )
     _set_co_filename(wrapped)
     wrapped2 = wrap_function_wrapper(
-        module_path,
-        f"{async_class}.create",
+        async_create_class,
+        "create",
         _create_instrumented_async_interactions_create(telemetry_handler),
     )
     _set_co_filename(wrapped2)

@@ -122,6 +122,8 @@ def create_mock_interaction(
     # auto-creates `model_copy`, so the caller would get a different mock.
     del mock_usage.model_copy
     del mock_interaction.model_copy
+    # Only an unread raw response exposes `parse`.
+    del mock_interaction.parse
 
     return mock_interaction
 
