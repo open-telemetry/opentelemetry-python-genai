@@ -96,6 +96,10 @@ class LiveScenario(Scenario):
             advice_id="missing_event",
             message_substring="gen_ai.client.realtime_session.ended",
         ),
+        ExpectedViolation(
+            advice_id="missing_attribute",
+            message_substring="gen_ai.realtime_session.id",
+        ),
     )
 
     def run(
@@ -198,6 +202,7 @@ class LiveScenario(Scenario):
         inf_span = inf_spans[0]
         assert _attr(inf_span, "gen_ai.output.type") == "speech"
         assert _attr(inf_span, "gen_ai.request.max_tokens") == 128
+        assert _attr(inf_span, "gen_ai.realtime_session.id")
         assert _part_types(_attr(inf_span, "gen_ai.input.messages")) == [
             "blob",
             "transcription",
@@ -212,5 +217,7 @@ class LiveScenario(Scenario):
             for entry in report["samples"]
             if "log" in entry and "event_name" in entry["log"]
         }
-        assert "gen_ai.client.realtime_session.started" in event_names
-        assert "gen_ai.client.realtime_session.ended" in event_names
+        assert event_names == {
+            "gen_ai.client.realtime_session.started",
+            "gen_ai.client.realtime_session.ended",
+        }

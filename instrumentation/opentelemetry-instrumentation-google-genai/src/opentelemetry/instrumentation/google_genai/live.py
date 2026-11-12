@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
@@ -41,7 +42,7 @@ from opentelemetry.semconv.attributes.error_attributes import ErrorTypeValues
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.invocation import (
     Error,
-    InferenceInvocation,
+    RealtimeInferenceInvocation,
     UserSpeechInvocation,
 )
 from opentelemetry.util.genai.types import (
@@ -281,7 +282,7 @@ def _is_interaction_complete(
 
 @dataclass
 class _ActiveGeneration:
-    invocation: InferenceInvocation
+    invocation: RealtimeInferenceInvocation
     input_messages: list[InputMessage] = field(default_factory=list)
     completed_output_messages: list[OutputMessage] = field(
         default_factory=list
@@ -428,18 +429,32 @@ class _LiveSessionTracker:
         if self._telemetry_handler.should_capture_content():
             combined = b"".join(self._pending_audio_chunks)
             mime_type = self._pending_audio_mime_type or "audio/pcm"
-            self._pending_input_messages.append(
-                InputMessage(
-                    role="user",
-                    parts=[
-                        BlobPart(
-                            mime_type=mime_type,
-                            modality=Modality.AUDIO,
-                            content=combined,
-                        )
-                    ],
+            if (
+                self._pending_input_messages
+                and self._pending_input_messages[-1].role == "user"
+                and len(self._pending_input_messages[-1].parts) == 1
+                and isinstance(
+                    last_part := self._pending_input_messages[-1].parts[0],
+                    BlobPart,
                 )
-            )
+                and last_part.modality == Modality.AUDIO
+                and last_part.mime_type == mime_type
+                and isinstance(last_part.content, bytes)
+            ):
+                last_part.content = last_part.content + combined
+            else:
+                self._pending_input_messages.append(
+                    InputMessage(
+                        role="user",
+                        parts=[
+                            BlobPart(
+                                mime_type=mime_type,
+                                modality=Modality.AUDIO,
+                                content=combined,
+                            )
+                        ],
+                    )
+                )
         self._pending_audio_chunks.clear()
         self._pending_audio_mime_type = None
 
@@ -646,8 +661,8 @@ class _LiveSessionTracker:
             self.tool_definitions = _extract_tool_definitions(tools)
 
     def ensure_active_generation(self) -> _ActiveGeneration:
-        self._flush_pending_audio()
         if self._active_gen is None:
+            self._flush_pending_audio()
             invocation = self._telemetry_handler.realtime_inference(
                 self.provider,
                 request_model=self.request_model,
@@ -1147,7 +1162,10 @@ async def _connect_context_manager(
     tracker: _LiveSessionTracker | None = None
     try:
         async with original_connect(live_instance, *args, **kwargs) as session:
-            realtime_session_id = getattr(session, "session_id", None) or None
+            raw_session_id = getattr(session, "session_id", None)
+            realtime_session_id = (
+                str(raw_session_id) if raw_session_id else str(uuid.uuid4())
+            )
             telemetry_handler.emit_realtime_session_started(
                 provider,
                 request_model=request_model_name,

@@ -308,12 +308,13 @@ async def test_live_voice_turn_spans_events_and_metrics(
     sys_instr = json.loads(attrs[GenAI.GEN_AI_SYSTEM_INSTRUCTIONS])
     assert sys_instr == [{"type": "text", "content": "Be concise."}]
 
-    # Verify events: started, inference operation details, ended
+    # Verify events: only realtime_session.started and realtime_session.ended
     logs = log_exporter.get_finished_logs()
     event_names = [log.log_record.event_name for log in logs]
-    assert "gen_ai.client.realtime_session.started" in event_names
-    assert "gen_ai.client.realtime_session.ended" in event_names
-    assert "gen_ai.client.inference.operation.details" in event_names
+    assert event_names == [
+        "gen_ai.client.realtime_session.started",
+        "gen_ai.client.realtime_session.ended",
+    ]
 
     started_log = next(
         l.log_record
@@ -1493,3 +1494,120 @@ async def test_live_caught_receive_error_marks_session_ended_event_as_error(
     assert (
         ended_log.attributes[ErrorAttributes.ERROR_TYPE] == "ConnectionError"
     )
+
+
+@pytest.mark.asyncio
+async def test_live_fallback_session_id_and_continuous_audio_coalescing(
+    span_exporter,
+    log_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_AND_EVENT"
+    )
+    messages: list[genai_types.LiveServerMessage | BaseException] = [
+        # Turn 1: multiple model output chunks while mic audio is streaming concurrently
+        genai_types.LiveServerMessage(
+            server_content=genai_types.LiveServerContent(
+                model_turn=genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(text="First chunk ")],
+                ),
+            )
+        ),
+        genai_types.LiveServerMessage(
+            server_content=genai_types.LiveServerContent(
+                model_turn=genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(text="second chunk ")],
+                ),
+            )
+        ),
+        genai_types.LiveServerMessage(
+            server_content=genai_types.LiveServerContent(
+                model_turn=genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(text="done.")],
+                ),
+                turn_complete=True,
+            )
+        ),
+        # Turn 2: model responds to the continuous audio sent during Turn 1
+        genai_types.LiveServerMessage(
+            server_content=genai_types.LiveServerContent(
+                input_transcription=genai_types.Transcription(
+                    text="Follow up question"
+                ),
+                model_turn=genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(text="Follow up answer.")],
+                ),
+                turn_complete=True,
+            )
+        ),
+    ]
+    fake_session = _FakeAsyncSession(messages, session_id=None)
+
+    with patch.object(AsyncLive, "connect", _make_fake_connect(fake_session)):
+        with instrument(
+            GoogleGenAiSdkInstrumentor(),
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+        ):
+            live = AsyncLive(api_client=None)  # type: ignore[arg-type]
+            async with live.connect(
+                model="gemini-2.5-flash-native-audio-preview-12-2025",
+            ) as session:
+                # Start Turn 1
+                await session._receive()
+                # Continuous mic audio arrives interleaved with Turn 1 server chunks
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x01\x02", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session._receive()
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x03\x04", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session._receive()  # Turn 1 completes
+                await session.send_realtime_input(
+                    audio=genai_types.Blob(
+                        data=b"\x05\x06", mime_type="audio/pcm;rate=16000"
+                    )
+                )
+                await session._receive()  # Turn 2 completes
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    span1, span2 = spans[0], spans[1]
+
+    session_id = span1.attributes.get("gen_ai.realtime_session.id")
+    assert isinstance(session_id, str) and len(session_id) > 0
+    assert span2.attributes.get("gen_ai.realtime_session.id") == session_id
+
+    logs = log_exporter.get_finished_logs()
+    for log in logs:
+        assert (
+            log.log_record.attributes.get("gen_ai.realtime_session.id")
+            == session_id
+        )
+
+    # Turn 1 had no prior input messages; all mic audio sent during Turn 1 belongs
+    # to Turn 2 as a single coalesced user InputMessage.
+    assert GenAI.GEN_AI_INPUT_MESSAGES not in span1.attributes
+    turn2_in = json.loads(span2.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    assert len(turn2_in) == 1
+    assert turn2_in[0]["role"] == "user"
+    assert [p["type"] for p in turn2_in[0]["parts"]] == [
+        "blob",
+        "transcription",
+    ]
+    assert turn2_in[0]["parts"][0]["content"] == "AQIDBAUG"
+    assert turn2_in[0]["parts"][1]["content"] == "Follow up question"
