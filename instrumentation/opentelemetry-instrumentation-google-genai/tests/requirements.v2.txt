@@ -15,4 +15,4 @@
 google-genai==2.8.0
 
 -e instrumentation/opentelemetry-instrumentation-google-genai[instruments]
--e util/opentelemetry-util-genai[upload]
+-e util/opentelemetry-util-genai[upload,wrapt]
