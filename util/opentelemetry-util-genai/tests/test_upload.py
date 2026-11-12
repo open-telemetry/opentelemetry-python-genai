@@ -410,6 +410,33 @@ class TestUploadCompletionHookIntegration(TestBase):
         # Content should not have been overwritten.
         self.assert_fsspec_equal(expected_file_name, "asg")
 
+    def test_tool_definitions_with_different_uploads_get_different_refs(self):
+        def tool_definitions_ref(parameters: Any) -> str:
+            record = LogRecord()
+            self.hook.on_completion(
+                inputs=[],
+                outputs=[],
+                system_instruction=[],
+                tool_definitions=[
+                    types.FunctionToolDefinition(
+                        name="some_tool",
+                        description=None,
+                        parameters=parameters,
+                        type="function",
+                    ),
+                ],
+                log_record=record,
+            )
+            assert record.attributes is not None
+            return record.attributes["gen_ai.tool.definitions_ref"]
+
+        # json.dumps writes both keys as "1", but the upload drops the
+        # mapping with a non-str key, so the two files differ.
+        self.assertNotEqual(
+            tool_definitions_ref({1: "x"}), tool_definitions_ref({"1": "x"})
+        )
+        self.hook.shutdown()
+
     def test_upload_completions(self):
         tracer = self.tracer_provider.get_tracer(__name__)
         log_record = LogRecord()

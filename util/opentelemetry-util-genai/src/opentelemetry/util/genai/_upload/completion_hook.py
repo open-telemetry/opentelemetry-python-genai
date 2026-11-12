@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import logging
@@ -102,9 +101,12 @@ def hash_tool_definitions(
     if not tool_definitions:
         return None
     try:
+        # Hash the same representation that gets uploaded, so two definitions
+        # share a file name only if they produce the same file contents.
         tool_dicts = [
-            {k: v for k, v in dataclasses.asdict(t).items() if v is not None}
+            converted
             for t in tool_definitions
+            if isinstance(converted := object_to_any_value(t), dict)
         ]
 
         encoded_tools = json.dumps(
