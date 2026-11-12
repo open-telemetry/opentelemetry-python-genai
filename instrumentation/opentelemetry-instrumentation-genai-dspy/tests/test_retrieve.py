@@ -549,7 +549,7 @@ def test_embeddings_and_embeddings_with_scores_retrieval(
     emb_docs = emb_attrs.get(GenAI.GEN_AI_RETRIEVAL_DOCUMENTS)
     assert len(emb_docs) == 2
     assert emb_docs[0]["id"] is not None
-    assert emb_docs[0]["score"] is None
+    assert "score" not in emb_docs[0]
 
     scores_attrs = spans[1].attributes or {}
     assert (

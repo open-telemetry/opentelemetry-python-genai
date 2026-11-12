@@ -214,20 +214,11 @@ def _normalize_sample_value(val: Any) -> Any:
 def _enrich_attributes(
     sample_attrs: list[dict[str, Any]], attrs: Mapping[str, Any]
 ) -> None:
-    from opentelemetry.test_util_genai.content import (
-        SCHEMA_FILES,
-        validate_content_attribute,
-    )
-
     for attr_entry in sample_attrs:
         name = attr_entry.get("name")
         if name not in attrs:
             continue
-        raw_val = attrs[name]
-        if name in SCHEMA_FILES:
-            attr_entry["value"] = validate_content_attribute(name, raw_val)
-        elif isinstance(raw_val, (dict, list, tuple, bytes)):
-            attr_entry["value"] = _normalize_sample_value(raw_val)
+        attr_entry["value"] = _normalize_sample_value(attrs[name])
 
 
 def _sample_scalar_attrs(
@@ -240,50 +231,117 @@ def _sample_scalar_attrs(
     }
 
 
+def _span_matches_sample(
+    span: ReadableSpan,
+    sample_span: dict[str, Any],
+    sample_scalars: dict[str, Any],
+) -> bool:
+    if span.name != sample_span.get("name"):
+        return False
+    sample_kind = sample_span.get("kind")
+    if sample_kind and span.kind.name.lower() != str(sample_kind).lower():
+        return False
+    sample_status = (sample_span.get("status") or {}).get("code")
+    if (
+        sample_status
+        and span.status.status_code.name.lower() != str(sample_status).lower()
+    ):
+        return False
+    span_attrs = span.attributes or {}
+    return all(
+        k in span_attrs and span_attrs[k] == v
+        for k, v in sample_scalars.items()
+    )
+
+
 def _match_span(
     sample_span: dict[str, Any],
     remaining_spans: list[ReadableSpan],
-) -> ReadableSpan | None:
-    sample_name = sample_span.get("name")
+) -> ReadableSpan:
     sample_scalars = _sample_scalar_attrs(sample_span.get("attributes", []))
-    for idx, span in enumerate(remaining_spans):
-        if span.name != sample_name:
-            continue
-        span_attrs = span.attributes or {}
-        if all(
-            span_attrs.get(k) == v
-            for k, v in sample_scalars.items()
-            if k in span_attrs
-            and isinstance(span_attrs[k], (str, int, float, bool))
-        ):
-            return remaining_spans.pop(idx)
-    for idx, span in enumerate(remaining_spans):
-        if span.name == sample_name:
-            return remaining_spans.pop(idx)
-    return remaining_spans.pop(0) if remaining_spans else None
+    matches = [
+        idx
+        for idx, span in enumerate(remaining_spans)
+        if _span_matches_sample(span, sample_span, sample_scalars)
+    ]
+    assert matches, (
+        f"Could not correlate report span {sample_span.get('name')!r} "
+        f"(scalars={sample_scalars}) with any finished span"
+    )
+    if len(matches) > 1:
+        matched_attrs = [
+            dict(remaining_spans[i].attributes or {}) for i in matches
+        ]
+        assert all(a == matched_attrs[0] for a in matched_attrs[1:]), (
+            f"Ambiguous report span {sample_span.get('name')!r} "
+            f"(scalars={sample_scalars}) matched {len(matches)} distinct spans"
+        )
+    return remaining_spans.pop(matches[0])
+
+
+def _log_matches_sample(
+    log: Any,
+    sample_log: dict[str, Any],
+    sample_scalars: dict[str, Any],
+) -> bool:
+    log_record = getattr(log, "log_record", log)
+    sample_span_id = sample_log.get("span_id")
+    sample_trace_id = sample_log.get("trace_id")
+    sample_event_name = sample_log.get("event_name")
+    span_id = getattr(log_record, "span_id", None)
+    trace_id = getattr(log_record, "trace_id", None)
+    event_name = getattr(log_record, "event_name", None)
+    if sample_span_id and (
+        not isinstance(span_id, int) or f"{span_id:016x}" != sample_span_id
+    ):
+        return False
+    if sample_trace_id and (
+        not isinstance(trace_id, int) or f"{trace_id:032x}" != sample_trace_id
+    ):
+        return False
+    if sample_event_name and event_name != sample_event_name:
+        return False
+    log_attrs = getattr(log_record, "attributes", None) or {}
+    return all(
+        k in log_attrs and log_attrs[k] == v for k, v in sample_scalars.items()
+    )
 
 
 def _match_log(
     sample_log: dict[str, Any],
     remaining_logs: list[Any],
-) -> Any | None:
-    sample_span_id = sample_log.get("span_id")
-    sample_trace_id = sample_log.get("trace_id")
-    sample_event_name = sample_log.get("event_name")
-    for idx, log in enumerate(remaining_logs):
-        log_record = getattr(log, "log_record", log)
-        span_id = getattr(log_record, "span_id", None)
-        trace_id = getattr(log_record, "trace_id", None)
-        event_name = getattr(log_record, "event_name", None)
-        if (
-            isinstance(span_id, int)
-            and isinstance(trace_id, int)
-            and f"{span_id:016x}" == sample_span_id
-            and f"{trace_id:032x}" == sample_trace_id
-            and (not sample_event_name or event_name == sample_event_name)
-        ):
-            return remaining_logs.pop(idx)
-    return remaining_logs.pop(0) if remaining_logs else None
+) -> Any:
+    sample_scalars = _sample_scalar_attrs(sample_log.get("attributes", []))
+    matches = [
+        idx
+        for idx, log in enumerate(remaining_logs)
+        if _log_matches_sample(log, sample_log, sample_scalars)
+    ]
+    assert matches, (
+        f"Could not correlate report log {sample_log.get('event_name')!r} "
+        f"(span_id={sample_log.get('span_id')}, scalars={sample_scalars}) "
+        "with any finished log record"
+    )
+    if len(matches) > 1:
+        matched_attrs = [
+            dict(
+                getattr(
+                    getattr(
+                        remaining_logs[i], "log_record", remaining_logs[i]
+                    ),
+                    "attributes",
+                    None,
+                )
+                or {}
+            )
+            for i in matches
+        ]
+        assert all(a == matched_attrs[0] for a in matched_attrs[1:]), (
+            f"Ambiguous report log {sample_log.get('event_name')!r} "
+            f"(span_id={sample_log.get('span_id')}, scalars={sample_scalars}) "
+            f"matched {len(matches)} distinct log records"
+        )
+    return remaining_logs.pop(matches[0])
 
 
 def _enrich_report_samples(
@@ -291,10 +349,9 @@ def _enrich_report_samples(
     finished_spans: Sequence[ReadableSpan],
     finished_logs: Sequence[Any],
 ) -> None:
-    # Weaver v0.26.1 drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
+    # Weaver drops KvlistValue (maps) during OTLP-to-JSON conversion, resulting in
     # empty lists [] or None for structured content attributes (messages, tool definitions).
-    # Re-hydrate them from the emitted spans/logs matched by identity and validate
-    # structured content attributes against the pinned semconv JSON schemas.
+    # Re-hydrate them from the emitted spans/logs so scenario validate() checks succeed.
     remaining_spans = list(finished_spans)
     remaining_logs = list(finished_logs)
     for entry in report.get("samples", []):
