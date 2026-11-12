@@ -43,6 +43,9 @@ from opentelemetry.util.genai._invocation import (
     Error,
     GenAIInvocation,
 )
+from opentelemetry.util.genai._realtime_invocation import (
+    UserSpeechInvocation,
+)
 from opentelemetry.util.genai._retrieval_invocation import (
     CLIENT_RETRIEVAL_CONTEXT_KEY,
     RetrievalData,
@@ -76,5 +79,6 @@ __all__ = [
     "RetrievalData",
     "RetrievalInvocation",
     "ToolInvocation",
+    "UserSpeechInvocation",
     "WorkflowInvocation",
 ]
