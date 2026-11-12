@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import io
 import json
 import threading
@@ -33,7 +34,9 @@ from opentelemetry.trace import StatusCode
 MODEL = "openai/gpt-4o-mini"
 PROMPT = "Describe the weather."
 ANSWER = "This is a response from the mock server."
-ENGINES = ["lm15", "litellm"] if hasattr(dspy, "lm15") else ["litellm"]
+ENGINES = ["lm15"] if hasattr(dspy, "lm15") else []
+if importlib.util.find_spec("litellm"):
+    ENGINES.append("litellm")
 
 
 @dataclass
