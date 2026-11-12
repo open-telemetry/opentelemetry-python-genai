@@ -96,7 +96,9 @@ def _handler() -> tuple[OpenTelemetryLangChainCallbackHandler, mock.MagicMock]:
     telemetry.workflow.return_value = workflow
 
     def make_agent(*args: Any, **kwargs: Any) -> mock.MagicMock:
-        return mock.MagicMock(spec=LocalAgentInvocation)
+        return mock.MagicMock(
+            spec=LocalAgentInvocation, inference_calls=None, tool_calls=None
+        )
 
     telemetry.invoke_local_agent.side_effect = make_agent
 
