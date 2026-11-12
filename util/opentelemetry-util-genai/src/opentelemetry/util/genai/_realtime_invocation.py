@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord, SeverityNumber
-from opentelemetry.context import Context, get_current
+from opentelemetry.context import Context, get_current, get_value
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -16,8 +16,17 @@ from opentelemetry.semconv.attributes import (
     server_attributes,
 )
 from opentelemetry.trace import SpanKind, Tracer
+from opentelemetry.util.genai._inference_invocation import (
+    CLIENT_INFERENCE_CONTEXT_KEY,
+    InferenceInvocation,
+    SuppressedInferenceInvocation,
+)
 from opentelemetry.util.genai._instruments import _Instruments
-from opentelemetry.util.genai._invocation import Error, GenAIInvocation
+from opentelemetry.util.genai._invocation import (
+    Error,
+    GenAIInvocation,
+    _resolve_suppressed_content_and_hook,
+)
 from opentelemetry.util.genai.completion_hook import CompletionHook
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
@@ -34,6 +43,111 @@ REALTIME_SESSION_ENDED_EVENT_NAME: Final = (
     "gen_ai.client.realtime_session.ended"
 )
 GEN_AI_REALTIME_SESSION_ID: Final = "gen_ai.realtime_session.id"
+
+
+class RealtimeInferenceInvocation(InferenceInvocation):
+    """Represents a single realtime inference generation turn.
+
+    Use ``handler.realtime_inference(provider)`` rather than constructing this directly.
+    Unlike ``InferenceInvocation``, ``realtime_inference`` does not emit a
+    ``gen_ai.client.inference.operation.details`` event.
+    """
+
+    _emit_operation_details_event = False
+
+    def __init__(
+        self,
+        tracer: Tracer,
+        instruments: _Instruments,
+        logger: Logger,
+        completion_hook: CompletionHook,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        realtime_session_id: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
+        start_span: bool = True,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+        conversation_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            tracer,
+            instruments,
+            logger,
+            completion_hook,
+            provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            operation_name=REALTIME_INFERENCE_OPERATION_NAME,
+            error_type_resolver=error_type_resolver,
+            content_capturing_mode=content_capturing_mode,
+            start_span=start_span,
+            context=context,
+            _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
+            realtime_session_id=realtime_session_id,
+        )
+
+    def _maybe_create_event(self) -> LogRecord | None:
+        return None
+
+
+class SuppressedRealtimeInferenceInvocation(
+    RealtimeInferenceInvocation, SuppressedInferenceInvocation
+):
+    """Represents a realtime inference invocation running inside an active inference context."""
+
+    def __init__(
+        self,
+        tracer: Tracer,
+        instruments: _Instruments,
+        logger: Logger,
+        completion_hook: CompletionHook,
+        provider: str,
+        *,
+        request_model: str | None = None,
+        server_address: str | None = None,
+        server_port: int | None = None,
+        realtime_session_id: str | None = None,
+        error_type_resolver: ErrorTypeResolver | None = None,
+        content_capturing_mode: ContentCapturingMode | None = None,
+        context: Context | None = None,
+        _attach_to_context: bool = True,
+        conversation_id: str | None = None,
+    ) -> None:
+        ctx_data = get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context)
+        (
+            self._capture_content_to_context,
+            self._upload_completion,
+            effective_content_mode,
+            effective_completion_hook,
+        ) = _resolve_suppressed_content_and_hook(
+            ctx_data, content_capturing_mode, completion_hook
+        )
+
+        RealtimeInferenceInvocation.__init__(
+            self,
+            tracer,
+            instruments,
+            logger,
+            effective_completion_hook,
+            provider,
+            request_model=request_model,
+            server_address=server_address,
+            server_port=server_port,
+            realtime_session_id=realtime_session_id,
+            error_type_resolver=error_type_resolver,
+            content_capturing_mode=effective_content_mode,
+            start_span=False,
+            context=context,
+            _attach_to_context=_attach_to_context,
+            conversation_id=conversation_id,
+        )
 
 
 @dataclass

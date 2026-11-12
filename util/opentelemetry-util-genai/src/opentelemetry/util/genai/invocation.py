@@ -44,6 +44,7 @@ from opentelemetry.util.genai._invocation import (
     GenAIInvocation,
 )
 from opentelemetry.util.genai._realtime_invocation import (
+    RealtimeInferenceInvocation,
     UserSpeechInvocation,
 )
 from opentelemetry.util.genai._retrieval_invocation import (
@@ -75,6 +76,7 @@ __all__ = [
     "InferenceData",
     "InferenceInvocation",
     "LocalAgentInvocation",
+    "RealtimeInferenceInvocation",
     "RemoteAgentInvocation",
     "RetrievalData",
     "RetrievalInvocation",

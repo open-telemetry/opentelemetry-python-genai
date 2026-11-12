@@ -61,7 +61,7 @@ from opentelemetry.util.genai._inference_invocation import (
 )
 from opentelemetry.util.genai._instruments import _Instruments
 from opentelemetry.util.genai._realtime_invocation import (
-    REALTIME_INFERENCE_OPERATION_NAME,
+    SuppressedRealtimeInferenceInvocation,
     emit_realtime_session_ended_event,
     emit_realtime_session_started_event,
 )
@@ -86,6 +86,7 @@ from opentelemetry.util.genai.invocation import (
     InferenceData,
     InferenceInvocation,
     LocalAgentInvocation,
+    RealtimeInferenceInvocation,
     RemoteAgentInvocation,
     RetrievalData,
     RetrievalInvocation,
@@ -247,7 +248,6 @@ class TelemetryHandler:
         context: Context | None = None,
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
-        realtime_session_id: str | None = None,
     ) -> InferenceInvocation:
         """Returns an Inference invocation. Starts span when called.
 
@@ -286,7 +286,6 @@ class TelemetryHandler:
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
-            realtime_session_id=realtime_session_id,
         )
 
     def realtime_inference(
@@ -301,19 +300,31 @@ class TelemetryHandler:
         context: Context | None = None,
         _attach_to_context: bool = True,
         conversation_id: str | None = None,
-    ) -> InferenceInvocation:
+    ) -> RealtimeInferenceInvocation:
         """Returns a ``realtime_inference`` invocation. Starts span when called."""
-        return self.inference(
-            provider,
+        invocation_cls: type[RealtimeInferenceInvocation] = (
+            SuppressedRealtimeInferenceInvocation
+            if isinstance(
+                get_value(CLIENT_INFERENCE_CONTEXT_KEY, context=context),
+                InferenceData,
+            )
+            else RealtimeInferenceInvocation
+        )
+        return invocation_cls(
+            self._tracer,
+            self._instruments,
+            self._logger,
+            self._completion_hook,
+            provider=provider,
             request_model=request_model,
             server_address=server_address,
             server_port=server_port,
-            operation_name=REALTIME_INFERENCE_OPERATION_NAME,
+            realtime_session_id=realtime_session_id,
             error_type_resolver=error_type_resolver,
+            content_capturing_mode=self._content_capturing_mode,
             context=context,
             _attach_to_context=_attach_to_context,
             conversation_id=conversation_id,
-            realtime_session_id=realtime_session_id,
         )
 
     def user_speech(
