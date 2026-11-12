@@ -51,7 +51,6 @@ from opentelemetry.util.genai.types import (
 )
 
 DEFAULT_AGENT_NAME = "claude-agent-sdk"
-UNOBSERVED_TOOL_RESULT = "tool result was not observed"
 
 
 def _usage_of(message: Any) -> dict[str, Any]:
@@ -122,8 +121,10 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
         self._self_outputs: list[OutputMessage] = []
         self._self_result_usage: dict[str, Any] | None = None
         self._self_result_error: Error | None = None
-        self._self_assistant_input = 0
-        self._self_assistant_output = 0
+        # None until an assistant message reports the component, so a missing
+        # component stays missing instead of being exported as a zero.
+        self._self_assistant_input: int | None = None
+        self._self_assistant_output: int | None = None
         # tool_use id -> ToolInvocation, for tools executed outside this process
         self._self_pending_tools: dict[str, Any] = {}
 
@@ -178,8 +179,16 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
 
     def _handle_assistant(self, chunk: Any) -> None:
         usage = _usage_of(chunk)
-        self._self_assistant_input += _input_tokens(usage) or 0
-        self._self_assistant_output += usage.get("output_tokens") or 0
+        input_tokens = _input_tokens(usage)
+        if input_tokens is not None:
+            self._self_assistant_input = (
+                self._self_assistant_input or 0
+            ) + input_tokens
+        output_tokens = usage.get("output_tokens")
+        if output_tokens is not None:
+            self._self_assistant_output = (
+                self._self_assistant_output or 0
+            ) + output_tokens
 
         capture = bool(self._self_agent.should_capture_content)
         parts: list[Any] = []
@@ -234,7 +243,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             self._self_result_usage = usage
         stop_reason = getattr(chunk, "stop_reason", None)
         if stop_reason:
-            self._self_agent.response_finish_reasons = [stop_reason]
+            self._self_agent.finish_reasons = [stop_reason]
         # The SDK reports a failed run through ``is_error`` without raising, so
         # the run error has to be kept for finalization.
         if getattr(chunk, "is_error", False):
@@ -282,17 +291,21 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
         else:
             invocation.stop()
 
-    def _finalize_pending_tools(self) -> None:
-        """Finish tool spans whose result never arrived in the stream."""
+    def _finalize_pending_tools(
+        self, error: BaseException | None = None
+    ) -> None:
+        """Finish tool spans whose result never arrived in the stream.
+
+        A stream failure is the observed failure of the pending tool, so it is
+        reported with that cause. An ordinary end or caller close observes no
+        tool error, so those spans end UNSET rather than as failures.
+        """
         while self._self_pending_tools:
             _, invocation = self._self_pending_tools.popitem()
-            # The interval never closed, so success cannot be claimed.
-            invocation.fail(
-                Error(
-                    message=UNOBSERVED_TOOL_RESULT,
-                    type=ErrorTypeValues.OTHER.value,
-                )
-            )
+            if error is not None:
+                invocation.fail(error)
+            else:
+                invocation.stop()
 
     def _apply_usage(self) -> None:
         invocation = self._self_agent
@@ -301,7 +314,9 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             invocation.input_tokens = _input_tokens(usage)
             invocation.output_tokens = usage.get("output_tokens")
             return
-        if self._self_assistant_input or self._self_assistant_output:
+        if self._self_assistant_input is not None or (
+            self._self_assistant_output is not None
+        ):
             invocation.input_tokens = self._self_assistant_input
             invocation.output_tokens = self._self_assistant_output
 
@@ -327,7 +342,7 @@ class ClaudeAgentStreamWrapper(AsyncStreamWrapper[Any]):
             return
         self._apply_usage()
         self._apply_output()
-        self._finalize_pending_tools()
+        self._finalize_pending_tools(error)
         self._self_agent.fail(error)
 
 

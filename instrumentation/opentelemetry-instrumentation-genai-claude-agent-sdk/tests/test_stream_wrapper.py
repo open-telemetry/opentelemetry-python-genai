@@ -71,6 +71,24 @@ def run_query(
     anyio.run(_run)
 
 
+def thinking_turn() -> list[dict[str, Any]]:
+    """One turn whose assistant message carries a thinking block."""
+    return [
+        _message(),
+        assistant(
+            [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me read the file first.",
+                    "signature": "sig-1",
+                },
+                {"type": "text", "text": "Reading the file."},
+            ],
+            stop_reason="end_turn",
+        ),
+    ]
+
+
 def agent_spans(span_exporter) -> list[Any]:
     return [
         span
@@ -147,6 +165,27 @@ def _assistant_reports_usage() -> bool:
     return "usage" in inspect.signature(sdk_types.AssistantMessage).parameters
 
 
+def _result_reports_stop_reason() -> bool:
+    """True when this SDK release parses stop_reason onto ResultMessage."""
+    return (
+        "stop_reason" in inspect.signature(sdk_types.ResultMessage).parameters
+    )
+
+
+@pytest.mark.skipif(
+    not _result_reports_stop_reason(),
+    reason="this claude-agent-sdk release does not report stop_reason",
+)
+def test_finish_reason_exported_from_result(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    run_query(single_turn())
+
+    span = agent_spans(span_exporter)[0]
+    # The ResultMessage carries the run's terminal stop reason.
+    assert span.attributes["gen_ai.response.finish_reasons"] == ("end_turn",)
+
+
 @pytest.mark.skipif(
     not _assistant_reports_usage(),
     reason="this claude-agent-sdk release reports usage only on ResultMessage",
@@ -170,6 +209,56 @@ def test_usage_falls_back_to_assistant_messages_without_result(
     span = agent_spans(span_exporter)[0]
     assert span.attributes["gen_ai.usage.input_tokens"] == 7
     assert span.attributes["gen_ai.usage.output_tokens"] == 9
+
+
+@pytest.mark.skipif(
+    not _assistant_reports_usage(),
+    reason="this claude-agent-sdk release reports usage only on ResultMessage",
+)
+def test_usage_fallback_exports_reported_zeros(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    # (0, 0) is a reported value, not the absence of one: both attributes must
+    # be exported even though neither total is nonzero.
+    run_query(
+        [
+            _message(),
+            assistant(
+                [{"type": "text", "text": "hi"}],
+                usage=(0, 0),
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    span = agent_spans(span_exporter)[0]
+    assert span.attributes["gen_ai.usage.input_tokens"] == 0
+    assert span.attributes["gen_ai.usage.output_tokens"] == 0
+
+
+@pytest.mark.skipif(
+    not _assistant_reports_usage(),
+    reason="this claude-agent-sdk release reports usage only on ResultMessage",
+)
+def test_usage_fallback_does_not_invent_missing_component(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    messages = [
+        _message(),
+        assistant(
+            [{"type": "text", "text": "hi"}],
+            usage=(7, 9),
+            stop_reason="end_turn",
+        ),
+    ]
+    # Only the input component is observed; the output total stays unknown.
+    del messages[1]["message"]["usage"]["output_tokens"]
+
+    run_query(messages)
+
+    span = agent_spans(span_exporter)[0]
+    assert span.attributes["gen_ai.usage.input_tokens"] == 7
+    assert "gen_ai.usage.output_tokens" not in span.attributes
 
 
 def test_builtin_tool_span_nests_under_agent(
@@ -235,7 +324,9 @@ def test_stream_error_marks_agent_and_tool_failed(
     # Exception; the span must report whichever reached the caller.
     assert agent.attributes["error.type"] == type(excinfo.value).__name__
     assert tool.status.status_code.name == "ERROR"
-    assert tool.attributes["error.type"] == OTHER_ERROR
+    # The pending tool observes the same failure that broke the stream, so it
+    # reports that exception class rather than a generic fallback.
+    assert tool.attributes["error.type"] == type(excinfo.value).__name__
 
 
 def test_result_error_marks_agent_span_failed(
@@ -284,7 +375,7 @@ def test_caller_closing_early_ends_span(
     assert spans[0].status.status_code.name == "UNSET"
 
 
-def test_closing_with_pending_tool_fails_tool_span(
+def test_closing_with_pending_tool_leaves_tool_span_unset(
     span_exporter, instrument_claude_agent_sdk
 ) -> None:
     messages = [
@@ -317,10 +408,10 @@ def test_closing_with_pending_tool_fails_tool_span(
     (tool,) = tool_spans(span_exporter)
     assert len(agent_spans(span_exporter)) == 1
     assert len(tool_spans(span_exporter)) == 1
-    # The tool_result never arrived, so the interval cannot claim success.
-    assert tool.status.status_code.name == "ERROR"
-    assert tool.attributes["error.type"] == OTHER_ERROR
-    assert tool.status.description == "tool result was not observed"
+    # The caller closed without an error, and no tool_result was observed: the
+    # tool interval ends UNSET instead of being recorded as a tool failure.
+    assert tool.status.status_code.name == "UNSET"
+    assert "error.type" not in tool.attributes
 
 
 def test_output_messages_captured_when_enabled(
@@ -356,6 +447,37 @@ def test_output_messages_captured_when_enabled(
         {"response": "hello", "id": "toolu_1", "type": "tool_call_response"}
     ]
     assert messages[2]["parts"] == [{"content": "Done: hello", "type": "text"}]
+
+
+def test_thinking_block_captured_as_reasoning_part(
+    span_exporter, tracer_provider, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    instrumentor = claude_agent_sdk_instrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        run_query(thinking_turn())
+    finally:
+        instrumentor.uninstrument()
+
+    span = agent_spans(span_exporter)[0]
+    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    assert messages[0]["parts"][0] == {
+        "content": "Let me read the file first.",
+        "type": "reasoning",
+    }
+
+
+def test_thinking_block_not_captured_by_default(
+    span_exporter, instrument_claude_agent_sdk
+) -> None:
+    run_query(thinking_turn())
+
+    span = agent_spans(span_exporter)[0]
+    # Without content capture even the reasoning part stays off the span.
+    assert "gen_ai.output.messages" not in span.attributes
 
 
 def test_input_prompt_captured_when_enabled(

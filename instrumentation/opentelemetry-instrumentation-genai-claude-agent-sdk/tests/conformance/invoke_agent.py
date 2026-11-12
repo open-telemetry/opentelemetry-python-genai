@@ -45,6 +45,11 @@ STREAM = [
             "role": "assistant",
             "model": "claude-sonnet-4-5",
             "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "I should read the file first.",
+                    "signature": "sig-1",
+                },
                 {"type": "text", "text": "Reading the file."},
                 {
                     "type": "tool_use",
@@ -208,9 +213,20 @@ class InvokeAgentScenario(Scenario):
             "tool",
             "assistant",
         ], f"unexpected output messages: {outputs}"
-        assert {"type": "tool_call", "name": "Read"} <= outputs[0]["parts"][
-            1
-        ], f"the tool call is missing from the assistant message: {outputs[0]}"
+        first_parts = outputs[0]["parts"]
+        # The thinking block is a reasoning part, not extra text and not lost.
+        assert first_parts[0] == {
+            "content": "I should read the file first.",
+            "type": "reasoning",
+        }, (
+            f"the thinking block is missing from the assistant message: {first_parts}"
+        )
+        tool_call = next(
+            part for part in first_parts if part["type"] == "tool_call"
+        )
+        assert tool_call["name"] == "Read", (
+            f"the tool call is missing from the assistant message: {first_parts}"
+        )
         assert outputs[1]["parts"][0]["type"] == "tool_call_response", (
             f"the tool result is missing from the tool message: {outputs[1]}"
         )
