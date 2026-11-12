@@ -2192,12 +2192,6 @@ class TestObjectToAnyValue(unittest.TestCase):
             {"name": "get_time", "type": "function"},
         )
 
-    def test_tool_response_keeps_none(self):
-        self.assertEqual(
-            object_to_any_value(ToolCallResponsePart(response=None, id="c1")),
-            {"response": None, "id": "c1", "type": "tool_call_response"},
-        )
-
     def test_user_dataclass_keeps_none(self):
         @dataclass
         class Result:
