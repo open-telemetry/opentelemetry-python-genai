@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agno.agent import RunOutput
-    from agno.models.base import MessageData
+    from agno.models.base import MessageData, Model
     from agno.models.message import Message
     from agno.models.response import ModelResponse
     from agno.run.workflow import WorkflowRunOutput
@@ -24,9 +24,10 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     format_content,
     format_model_output_message,
     has_model_output_content,
+    has_model_token_usage,
+    has_stream_data_content,
     populate_provider_data,
     record_model_token_usage,
-    safe_int,
 )
 from opentelemetry.util.genai.invocation import (
     InferenceInvocation,
@@ -338,37 +339,40 @@ class AsyncAgnoWorkflowStreamWrapper(
         self._self_on_close = on_close
 
 
-def _has_usage(metrics: Any) -> bool:
-    if metrics is None:
-        return False
-    in_tok = safe_int(getattr(metrics, "input_tokens", None))
-    out_tok = safe_int(getattr(metrics, "output_tokens", None))
-    tot_tok = safe_int(getattr(metrics, "total_tokens", None))
-    return bool(
-        (in_tok is not None and in_tok > 0)
-        or (out_tok is not None and out_tok > 0)
-        or (tot_tok is not None and tot_tok > 0)
-    )
-
-
 class _ModelStreamMixin:
     _self_invocation: InferenceInvocation
     _self_assistant_message: Message | None
     _self_stream_data: MessageData | None
+    _self_model: Model | None
 
     def _process_chunk(self, chunk: ModelResponse) -> None:
         populate_provider_data(self._self_invocation, chunk.provider_data)
 
     def _finalize_telemetry(self, error: BaseException | None = None) -> None:
+        if self._self_assistant_message is not None:
+            populate_provider_data(
+                self._self_invocation,
+                getattr(self._self_assistant_message, "provider_data", None),
+            )
+        if self._self_stream_data is not None:
+            populate_provider_data(
+                self._self_invocation,
+                self._self_stream_data.response_provider_data,
+            )
+
         metrics = getattr(self._self_assistant_message, "metrics", None)
-        if _has_usage(metrics):
-            record_model_token_usage(self._self_invocation, metrics)
+        if has_model_token_usage(metrics):
+            record_model_token_usage(
+                self._self_invocation, metrics, model=self._self_model
+            )
         elif self._self_stream_data is not None:
             sd_metrics = getattr(
                 self._self_stream_data, "response_metrics", None
             )
-            if _has_usage(sd_metrics):
-                record_model_token_usage(self._self_invocation, sd_metrics)
+            if has_model_token_usage(sd_metrics):
+                record_model_token_usage(
+                    self._self_invocation, sd_metrics, model=self._self_model
+                )
 
         finish_reasons = (
             ["error"]
@@ -377,28 +381,19 @@ class _ModelStreamMixin:
                 self._self_assistant_message, self._self_stream_data
             )
         )
-        self._self_invocation.finish_reasons = finish_reasons
+        if finish_reasons:
+            self._self_invocation.finish_reasons = finish_reasons
 
         if self._self_invocation.should_capture_content:
-            has_stream_data_content = (
-                self._self_stream_data is not None
-                and bool(
-                    self._self_stream_data.response_content
-                    or self._self_stream_data.response_reasoning_content
-                    or self._self_stream_data.response_tool_calls
-                )
-            )
             if self._self_assistant_message is not None and (
                 has_model_output_content(self._self_assistant_message)
-                or has_stream_data_content
+                or has_stream_data_content(self._self_stream_data)
             ):
                 self._self_invocation.output_messages = [
                     format_model_output_message(
                         self._self_assistant_message,
-                        finish_reason=finish_reasons[0]
-                        if finish_reasons
-                        else "stop",
                         stream_data=self._self_stream_data,
+                        model=self._self_model,
                     )
                 ]
 
@@ -423,11 +418,13 @@ class AgnoModelStreamWrapper(_ModelStreamMixin, SyncStreamWrapper[Any]):
         invocation: InferenceInvocation,
         assistant_message: Message | None = None,
         stream_data: MessageData | None = None,
+        model: Model | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
         invocation.suspend()
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
+        self._self_model = model
 
 
 class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
@@ -439,8 +436,10 @@ class AsyncAgnoModelStreamWrapper(_ModelStreamMixin, AsyncStreamWrapper[Any]):
         invocation: InferenceInvocation,
         assistant_message: Message | None = None,
         stream_data: MessageData | None = None,
+        model: Model | None = None,
     ) -> None:
         super().__init__(stream, invocation=invocation)
         invocation.suspend()
         self._self_assistant_message = assistant_message
         self._self_stream_data = stream_data
+        self._self_model = model

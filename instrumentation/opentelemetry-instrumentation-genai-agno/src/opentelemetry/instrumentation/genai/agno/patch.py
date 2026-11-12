@@ -71,6 +71,7 @@ from opentelemetry.instrumentation.genai.agno.utils import (
     format_model_output_message,
     format_retrieval_document,
     has_model_output_content,
+    has_model_token_usage,
     populate_provider_data,
     prepare_tool_definitions,
     record_model_token_usage,
@@ -1833,11 +1834,11 @@ def _start_model_inference(
 
     invocation.seed = safe_int(getattr(instance, "seed", None))
 
-    if tools:
-        invocation.tool_definitions = prepare_tool_definitions(tools)
-
-    if invocation.should_capture_content and messages:
-        invocation.input_messages = format_model_input_messages(messages)
+    if invocation.should_capture_content:
+        if tools:
+            invocation.tool_definitions = prepare_tool_definitions(tools)
+        if messages:
+            invocation.input_messages = format_model_input_messages(messages)
 
     return invocation, assistant_message, stream_data
 
@@ -1845,6 +1846,7 @@ def _start_model_inference(
 def _populate_model_response_telemetry(
     invocation: InferenceInvocation,
     assistant_message: Message | None,
+    model: Model | None = None,
 ) -> None:
     """Populate final response telemetry on an InferenceInvocation."""
     provider_data = (
@@ -1856,23 +1858,12 @@ def _populate_model_response_telemetry(
 
     if assistant_message is not None:
         metrics = getattr(assistant_message, "metrics", None)
-        if metrics is not None and any(
-            (val := safe_int(getattr(metrics, attr, None))) is not None
-            and val > 0
-            for attr in (
-                "input_tokens",
-                "output_tokens",
-                "cache_read_tokens",
-                "cache_write_tokens",
-                "reasoning_tokens",
-                "audio_input_tokens",
-                "audio_output_tokens",
-            )
-        ):
-            record_model_token_usage(invocation, metrics)
+        if has_model_token_usage(metrics):
+            record_model_token_usage(invocation, metrics, model=model)
 
     finish_reasons = extract_model_finish_reasons(assistant_message)
-    invocation.finish_reasons = finish_reasons
+    if finish_reasons:
+        invocation.finish_reasons = finish_reasons
 
     if (
         invocation.should_capture_content
@@ -1882,7 +1873,7 @@ def _populate_model_response_telemetry(
         invocation.output_messages = [
             format_model_output_message(
                 assistant_message,
-                finish_reason=finish_reasons[0] if finish_reasons else "stop",
+                model=model,
             )
         ]
 
@@ -1908,6 +1899,7 @@ def _model_process_response(
         _populate_model_response_telemetry(
             invocation,
             assistant_message=assistant_message,
+            model=instance,
         )
         invocation.stop()
         return result
@@ -1936,6 +1928,7 @@ def _model_aprocess_response(
         _populate_model_response_telemetry(
             invocation,
             assistant_message=assistant_message,
+            model=instance,
         )
         invocation.stop()
         return result
@@ -1966,6 +1959,7 @@ def _model_process_response_stream(
             invocation=invocation,
             assistant_message=assistant_message,
             stream_data=stream_data,
+            model=instance,
         )
 
     return traced_method
@@ -1994,6 +1988,7 @@ def _model_aprocess_response_stream(
             invocation=invocation,
             assistant_message=assistant_message,
             stream_data=stream_data,
+            model=instance,
         )
 
     return traced_method
