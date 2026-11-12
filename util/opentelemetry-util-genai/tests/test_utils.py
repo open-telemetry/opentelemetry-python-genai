@@ -43,6 +43,7 @@ from opentelemetry.util.genai.types import (
     ContentCapturingMode,
     File,
     FilePart,
+    FunctionToolDefinition,
     GenericPart,
     InputMessage,
     MessagePart,
@@ -50,10 +51,13 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
     ReasoningPart,
+    RetrievalDocument,
     Role,
     SystemInstructionPart,
     Text,
     TextPart,
+    ToolCallRequestPart,
+    ToolCallResponsePart,
     Uri,
     UriPart,
 )
@@ -2143,6 +2147,65 @@ class TestObjectToAnyValue(unittest.TestCase):
         value = WithGenerator(name="a", items=(i for i in range(2)))
         self.assertEqual(object_to_any_value(value), {"name": "a"})
         self.assertEqual(list(cast(Any, value.items)), [0, 1])
+
+    def test_genai_types_omit_unset_optional_fields(self):
+        message = InputMessage(
+            role="user",
+            parts=[
+                TextPart(content="hi"),
+                ToolCallRequestPart(arguments=None, name="get_time", id=None),
+                BlobPart(content=b"x", mime_type=None, modality="image"),
+            ],
+        )
+        self.assertEqual(
+            object_to_any_value(message),
+            {
+                "role": "user",
+                "parts": [
+                    {"content": "hi", "type": "text"},
+                    {"name": "get_time", "type": "tool_call"},
+                    {"content": b"x", "modality": "image", "type": "blob"},
+                ],
+            },
+        )
+        self.assertEqual(
+            object_to_any_value(
+                OutputMessage(role="assistant", parts=[], finish_reason="stop")
+            ),
+            {"role": "assistant", "parts": [], "finish_reason": "stop"},
+        )
+
+    def test_genai_types_keep_set_falsy_fields(self):
+        self.assertEqual(
+            object_to_any_value(RetrievalDocument(id="", score=0.0)),
+            {"id": "", "score": 0.0},
+        )
+        self.assertEqual(object_to_any_value(RetrievalDocument()), {})
+
+    def test_genai_types_omit_unset_tool_definition_parameters(self):
+        self.assertEqual(
+            object_to_any_value(
+                FunctionToolDefinition(
+                    name="get_time", description=None, parameters=None
+                )
+            ),
+            {"name": "get_time", "type": "function"},
+        )
+
+    def test_user_dataclass_keeps_none(self):
+        @dataclass
+        class Result:
+            detail: str | None
+
+        result = Result(detail=None)
+        expected = {"detail": None}
+        self.assertEqual(object_to_any_value(result), expected)
+        self.assertEqual(
+            object_to_any_value(
+                ToolCallResponsePart(response=result, id=None)
+            ),
+            {"response": expected, "type": "tool_call_response"},
+        )
 
     def test_model_non_any_value_fields_converted(self):
         class Model:

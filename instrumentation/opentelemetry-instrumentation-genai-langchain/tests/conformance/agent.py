@@ -46,6 +46,8 @@ class AgentScenario(Scenario):
         "gen_ai.client.token.usage",
         "gen_ai.invoke_agent.duration",
         "gen_ai.execute_tool.duration",
+        "gen_ai.invoke_agent.inference_calls",
+        "gen_ai.invoke_agent.tool_calls",
     )
     # langchain can't populate server.address on chat spans.
     # invoke_agent provider is unknown at span creation; ls_provider is only
@@ -102,6 +104,21 @@ class AgentScenario(Scenario):
 
     def validate(self, report: LiveCheckReport) -> None:
         super().validate(report)
+        metrics = {
+            entry["metric"]["name"]: entry["metric"]
+            for entry in report["samples"]
+            if "metric" in entry
+        }
+        for name, total in (
+            ("gen_ai.invoke_agent.inference_calls", 3),
+            ("gen_ai.invoke_agent.tool_calls", 2),
+        ):
+            metric = metrics[name]
+            assert metric["instrument"] == "histogram"
+            (point,) = metric["data_points"]
+            assert point["count"] == 1
+            assert type(point["sum"]) is float
+            assert point["sum"] == total
         agent_spans = [
             entry["span"]
             for entry in report["samples"]
