@@ -200,6 +200,17 @@ To suppress these events while keeping a ``LoggerProvider`` active, configure yo
 ``LogRecordProcessor`` to filter them out (see `examples/suppress-inference-event
 <https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/examples/suppress-inference-event>`_).
 
+When content capture is enabled, ``BlobPart.content`` carries raw ``bytes`` inside structured
+``AnyValue`` message dictionaries (on log events today, and on spans once
+`open-telemetry/opentelemetry-python-genai#1013 <https://github.com/open-telemetry/opentelemetry-python-genai/pull/1013>`_
+lands). To truncate large ``bytes`` (and ``str``) values without corrupting the surrounding message
+structure, set ``OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`` (or ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`` /
+``OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT``), or configure ``SpanLimits(max_span_attribute_length=...)`` /
+``LogRecordLimits(max_log_record_attribute_length=...)``. Note that truncating ``bytes`` / ``bytearray``
+attribute values requires `open-telemetry/opentelemetry-python#5855
+<https://github.com/open-telemetry/opentelemetry-python/pull/5855>`_ (currently in an unreleased
+version of ``opentelemetry-api``).
+
 When an inference, embeddings, retrieval, fetch response, agent invocation, or tool execution
 operation fails with an exception, the package also emits the operation's exception event (for
 example ``gen_ai.client.inference.exception``) with ``WARN`` severity, carrying ``exception.type``,
