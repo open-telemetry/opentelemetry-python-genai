@@ -25,10 +25,8 @@ classifiers = [
   "Programming Language :: Python :: 3.15",
 ]
 dependencies = [
-  "opentelemetry-instrumentation >= 0.64b0, <1",
   "opentelemetry-semantic-conventions >= 0.64b0, <1",
   "opentelemetry-api ~= 1.45",
-  "wrapt >= 1.17.0, < 3.0.0",
 ]
 
 [project.entry-points.opentelemetry_genai_completion_hook]
@@ -37,6 +35,7 @@ upload = "opentelemetry.util.genai._upload:upload_completion_hook"
 [project.optional-dependencies]
 test = ["pytest>=7.0.0"]
 upload = ["fsspec>=2026.6.0"]
+wrapt = ["wrapt >= 1.17.0, < 3.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/util/opentelemetry-util-genai"

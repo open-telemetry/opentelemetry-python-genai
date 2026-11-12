@@ -390,7 +390,8 @@ def test_extract_converse_response_no_content(tracer_provider) -> None:
         )
         assert not invocation.output_messages
         assert invocation.finish_reasons == ["stop"]
-        assert invocation.input_tokens == 5
+        # inputTokens (5) excludes the cached tokens: 5 + 3 read + 7 written
+        assert invocation.input_tokens == 15
         assert invocation.output_tokens == 2
         assert invocation.cache_read_input_tokens == 3
         assert invocation.cache_creation_input_tokens == 7

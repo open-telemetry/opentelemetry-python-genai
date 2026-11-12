@@ -1,0 +1,44 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "no-such-model:1b",
+        "input": [
+          "OpenTelemetry",
+          "Ollama embeddings"
+        ]
+      }
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '74'
+      content-type:
+      - application/json
+      host:
+      - localhost:11434
+      user-agent:
+      - ollama-python
+    method: POST
+    uri: http://localhost:11434/api/embed
+  response:
+    body:
+      string: |-
+        {
+          "error": "model \"no-such-model:1b\" not found, try pulling it first"
+        }
+    headers:
+      content-length:
+      - '70'
+      content-type:
+      - application/json; charset=utf-8
+      date:
+      - Sun, 01 Nov 2026 14:54:01 GMT
+    status:
+      code: 404
+      message: Not Found
+version: 1
